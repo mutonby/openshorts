@@ -1,6 +1,6 @@
-# AutoCrop-Vertical: A Smart Video Cropper for Social Media
+# AutoCrop-Vertical: A Smart Video Cropper for Social Media (Horizontal -> Vertical)
 
-![Demo of AutoCrop-Vertical](https://raw.githubusercontent.com/kamilstanuch/AutoCrop-Vertical/main/churchil_queen_vertical_short.gif)
+![Demo of AutoCrop-Vertical](https://github.com/kamilstanuch/Autocrop-vertical/blob/main/churchil_queen_vertical_short.gif?raw=true)
 
 AutoCrop-Vertical is a Python script that automatically converts horizontal videos into a vertical format suitable for platforms like TikTok, Instagram Reels, and YouTube Shorts.
 
