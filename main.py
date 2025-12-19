@@ -195,11 +195,43 @@ def download_youtube_video(url, output_dir="."):
     
     # 1. Handle Cookies from ENV (Easier for deployment)
     cookies_path = '/app/cookies.txt'
-    if os.environ.get("YOUTUBE_COOKIES") and not os.path.exists(cookies_path):
+    
+    # Check for JSON cookies first (from user input)
+    if os.environ.get("YOUTUBE_COOKIES"):
         print("🍪 Found YOUTUBE_COOKIES env var, creating cookies.txt...")
         try:
-            with open(cookies_path, 'w') as f:
-                f.write(os.environ.get("YOUTUBE_COOKIES"))
+            cookies_content = os.environ.get("YOUTUBE_COOKIES")
+            # If it looks like JSON, convert to Netscape format
+            if cookies_content.strip().startswith('['):
+                import json
+                try:
+                    cookies_json = json.loads(cookies_content)
+                    with open(cookies_path, 'w') as f:
+                        f.write("# Netscape HTTP Cookie File\n")
+                        for cookie in cookies_json:
+                            domain = cookie.get('domain', '')
+                            # Initial dot is required for some tools
+                            if not domain.startswith('.'):
+                                domain = '.' + domain
+                            
+                            flag = 'TRUE' if domain.startswith('.') else 'FALSE'
+                            path = cookie.get('path', '/')
+                            secure = 'TRUE' if cookie.get('secure', False) else 'FALSE'
+                            expiration = str(int(cookie.get('expirationDate', 0))) if cookie.get('expirationDate') else '0'
+                            name = cookie.get('name', '')
+                            value = cookie.get('value', '')
+                            
+                            f.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expiration}\t{name}\t{value}\n")
+                    print("✅ Converted JSON cookies to Netscape format.")
+                except json.JSONDecodeError:
+                     # Fallback if not valid JSON, assume it's already Netscape
+                     with open(cookies_path, 'w') as f:
+                        f.write(cookies_content)
+            else:
+                 # Assume Netscape format
+                 with open(cookies_path, 'w') as f:
+                    f.write(cookies_content)
+                    
         except Exception as e:
             print(f"⚠️ Failed to write cookies file: {e}")
 
