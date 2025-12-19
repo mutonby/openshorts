@@ -201,34 +201,59 @@ def download_youtube_video(url, output_dir="."):
         print("🍪 Found YOUTUBE_COOKIES env var, creating cookies.txt...")
         try:
             cookies_content = os.environ.get("YOUTUBE_COOKIES")
-            # If it looks like JSON, convert to Netscape format
-            if cookies_content.strip().startswith('['):
+            
+            # Helper to check if string looks like JSON list
+            clean_content = cookies_content.strip()
+            
+            # More robust check: does it look like a JSON list?
+            # It might have newlines or be compacted.
+            is_json = False
+            if clean_content.startswith('[') and clean_content.endswith(']'):
+                is_json = True
+            
+            if is_json:
                 import json
                 try:
-                    cookies_json = json.loads(cookies_content)
+                    cookies_json = json.loads(clean_content)
                     with open(cookies_path, 'w') as f:
                         f.write("# Netscape HTTP Cookie File\n")
                         for cookie in cookies_json:
                             domain = cookie.get('domain', '')
-                            # Initial dot is required for some tools
-                            if not domain.startswith('.'):
+                            if not domain: continue
+                            
+                            # Ensure initial dot for domain matching if not present
+                            # but only if it's not an IP or exact host
+                            if not domain.startswith('.') and 'youtube' in domain:
                                 domain = '.' + domain
                             
+                            # Netscape format requires:
+                            # domain flag path secure expiration name value
                             flag = 'TRUE' if domain.startswith('.') else 'FALSE'
                             path = cookie.get('path', '/')
                             secure = 'TRUE' if cookie.get('secure', False) else 'FALSE'
-                            expiration = str(int(cookie.get('expirationDate', 0))) if cookie.get('expirationDate') else '0'
+                            
+                            # Expiration must be integer timestamp
+                            expiration_val = cookie.get('expirationDate')
+                            expiration = '0'
+                            if expiration_val is not None:
+                                try:
+                                    expiration = str(int(float(expiration_val)))
+                                except ValueError:
+                                    expiration = '0'
+
                             name = cookie.get('name', '')
                             value = cookie.get('value', '')
                             
                             f.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expiration}\t{name}\t{value}\n")
                     print("✅ Converted JSON cookies to Netscape format.")
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as e:
+                     print(f"⚠️ JSON Decode Error: {e}. Content start: {clean_content[:20]}...")
                      # Fallback if not valid JSON, assume it's already Netscape
                      with open(cookies_path, 'w') as f:
                         f.write(cookies_content)
             else:
                  # Assume Netscape format
+                 print("ℹ️ Cookie content does not look like JSON list, assuming Netscape format.")
                  with open(cookies_path, 'w') as f:
                     f.write(cookies_content)
                     
