@@ -3,6 +3,7 @@ import cv2
 import scenedetect
 import subprocess
 import argparse
+import re
 from scenedetect import VideoManager, SceneManager
 from scenedetect.detectors import ContentDetector
 from ultralytics import YOLO
@@ -10,6 +11,7 @@ import torch
 import os
 import numpy as np
 from tqdm import tqdm
+import yt_dlp
 
 # --- Constants ---
 ASPECT_RATIO = 9 / 16
@@ -129,16 +131,112 @@ def get_video_resolution(video_path):
     cap.release()
     return width, height
 
+
+def sanitize_filename(filename):
+    """Remove invalid characters from filename."""
+    # Remove invalid characters for filenames
+    filename = re.sub(r'[<>:"/\\|?*]', '', filename)
+    # Replace spaces with underscores
+    filename = filename.replace(' ', '_')
+    # Limit length
+    return filename[:100]
+
+
+def download_youtube_video(url, output_dir="."):
+    """
+    Downloads a YouTube video using yt-dlp.
+    Returns the path to the downloaded video and the video title.
+    """
+    print("📥 Downloading video from YouTube...")
+    step_start_time = time.time()
+    
+    # First, get video info to determine the title
+    ydl_opts_info = {
+        'quiet': True,
+        'no_warnings': True,
+    }
+    
+    with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
+        info = ydl.extract_info(url, download=False)
+        video_title = info.get('title', 'youtube_video')
+        sanitized_title = sanitize_filename(video_title)
+    
+    # Download the video
+    # Force H.264 codec (avc1) instead of AV1 for better compatibility with OpenCV
+    output_template = os.path.join(output_dir, f'{sanitized_title}.%(ext)s')
+    
+    # Delete existing file if present (to force re-download with correct codec)
+    expected_file = os.path.join(output_dir, f'{sanitized_title}.mp4')
+    if os.path.exists(expected_file):
+        os.remove(expected_file)
+        print(f"🗑️  Removed existing file to re-download with H.264 codec")
+    
+    ydl_opts = {
+        'format': 'bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/bestvideo[vcodec^=avc1]+bestaudio/best[ext=mp4]/best',
+        'outtmpl': output_template,
+        'merge_output_format': 'mp4',
+        'quiet': False,
+        'no_warnings': True,
+        'overwrites': True,  # Force overwrite if file exists
+    }
+    
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+    
+    # Find the downloaded file
+    downloaded_file = os.path.join(output_dir, f'{sanitized_title}.mp4')
+    
+    if not os.path.exists(downloaded_file):
+        # Try to find any file matching the pattern
+        for f in os.listdir(output_dir):
+            if f.startswith(sanitized_title) and f.endswith('.mp4'):
+                downloaded_file = os.path.join(output_dir, f)
+                break
+    
+    step_end_time = time.time()
+    print(f"✅ Video downloaded in {step_end_time - step_start_time:.2f}s: {downloaded_file}")
+    
+    return downloaded_file, sanitized_title
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Smartly crops a horizontal video into a vertical one.")
-    parser.add_argument('-i', '--input', type=str, required=True, help="Path to the input video file.")
-    parser.add_argument('-o', '--output', type=str, required=True, help="Path to the output video file.")
+    
+    # Create mutually exclusive group for input source
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument('-i', '--input', type=str, help="Path to the input video file.")
+    input_group.add_argument('-u', '--url', type=str, help="YouTube URL to download and process.")
+    
+    parser.add_argument('-o', '--output', type=str, help="Path to the output video file. (Auto-generated if not provided with --url)")
+    parser.add_argument('--keep-original', action='store_true', help="Keep the downloaded YouTube video after processing.")
     args = parser.parse_args()
 
     script_start_time = time.time()
-
-    input_video = args.input
-    final_output_video = args.output
+    
+    downloaded_video = None  # Track if we downloaded a video
+    
+    # Handle YouTube URL
+    if args.url:
+        # Determine output directory
+        output_dir = os.path.dirname(args.output) if args.output else "."
+        if output_dir == "":
+            output_dir = "."
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Download the video
+        input_video, video_title = download_youtube_video(args.url, output_dir)
+        downloaded_video = input_video
+        
+        # Generate output filename if not provided
+        if args.output:
+            final_output_video = args.output
+        else:
+            final_output_video = os.path.join(output_dir, f"{video_title}_vertical.mp4")
+    else:
+        if not args.output:
+            parser.error("--output is required when using --input")
+        input_video = args.input
+        final_output_video = args.output
     
     # Define temporary file paths based on the output name
     base_name = os.path.splitext(final_output_video)[0]
@@ -288,6 +386,11 @@ if __name__ == '__main__':
     # Clean up temp files
     os.remove(temp_video_output)
     os.remove(temp_audio_output)
+    
+    # Clean up downloaded YouTube video if not keeping it
+    if downloaded_video and not args.keep_original:
+        os.remove(downloaded_video)
+        print(f"🗑️  Cleaned up downloaded video: {downloaded_video}")
 
     script_end_time = time.time()
     print(f"\n🎉 All done! Final video saved to {final_output_video}")

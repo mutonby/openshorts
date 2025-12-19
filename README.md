@@ -45,6 +45,8 @@ This script is built on a pipeline that uses specialized libraries for each step
 
 ### Usage
 
+#### Option A: Local Installation
+
 1.  **Clone the repository:**
     ```bash
     git clone https://github.com/kamilstanuch/AutoCrop-Vertical.git
@@ -61,15 +63,45 @@ This script is built on a pipeline that uses specialized libraries for each step
     The `yolov8n.pt` model weights will be downloaded automatically on the first run.
 
 3.  **Run the script:**
-    Use the `--input` and `--output` arguments to specify the source and destination files.
+    You can provide a local file or a YouTube URL.
 
+    **Local file:**
     ```bash
-    python main.py --input path/to/horizontal_video.mp4 --output path/to/vertical_video.mp4
+    python main.py --input path/to/video.mp4 --output path/to/output.mp4
+    ```
+
+    **YouTube URL:**
+    ```bash
+    # Auto-generates output name
+    python main.py --url "https://www.youtube.com/watch?v=VIDEO_ID"
+    
+    # Specific output name
+    python main.py --url "https://www.youtube.com/watch?v=VIDEO_ID" --output vertical_video.mp4
+    ```
+
+#### Option B: Running with Docker (Recommended)
+
+Docker is the easiest way to run the project as it includes all dependencies (FFmpeg, OpenCV, etc.) pre-configured.
+
+1.  **Build the image:**
+    ```bash
+    docker compose build
+    ```
+
+2.  **Process a local video:**
+    Place your video in a `videos/` folder (it will be mounted inside the container).
+    ```bash
+    docker compose run --rm autocrop -i /videos/input/video.mp4 -o /videos/output/video_vertical.mp4
+    ```
+
+3.  **Process a YouTube video:**
+    ```bash
+    docker compose run --rm autocrop -u "https://www.youtube.com/watch?v=VIDEO_ID" -o /videos/output/vertical.mp4
     ```
 
 ---
 
-### Prerequisites
+### Prerequisites (for Local Installation)
 
 *   Python 3.8+
 *   **FFmpeg:** This script requires `ffmpeg` to be installed and available in your system's PATH. It can be installed via a package manager (e.g., `brew install ffmpeg` on macOS, `sudo apt install ffmpeg` on Debian/Ubuntu).

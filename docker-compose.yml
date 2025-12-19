@@ -1,0 +1,19 @@
+services:
+  autocrop:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: autocrop-vertical:latest
+    container_name: autocrop-vertical
+    volumes:
+      # Mount local videos directory for input/output
+      - ./videos:/videos
+    # Examples:
+    # From local file:
+    #   docker compose run --rm autocrop -i /videos/input/video.mp4 -o /videos/output/video_vertical.mp4
+    # From YouTube URL:
+    #   docker compose run --rm autocrop -u "https://youtube.com/watch?v=VIDEO_ID" -o /videos/output/video_vertical.mp4
+    # From YouTube (auto-named output):
+    #   docker compose run --rm autocrop -u "https://youtube.com/watch?v=VIDEO_ID"
+    command: ["--help"]
+

@@ -4,3 +4,4 @@ ultralytics
 torch
 torchvision
 tqdm
+yt-dlp
