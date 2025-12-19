@@ -205,31 +205,46 @@ def download_youtube_video(url, output_dir="."):
 
     step_start_time = time.time()
     
-    # 2. Common Options (Try Android client to bypass bot check)
-    common_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'cookiefile': cookies_path if os.path.exists(cookies_path) else None,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'web']
-            }
-        }
-    }
+    # 2. Try multiple clients to bypass bot check
+    clients_to_try = ['ios', 'android', 'web', 'tv']
+    info = None
     
-    # Extract Info
-    try:
-        with yt_dlp.YoutubeDL(common_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-    except Exception as e:
-        print(f"⚠️ Extraction with Android client failed: {e}")
-        print("🔄 Retrying with default client...")
-        # Fallback to default client
-        fallback_opts = common_opts.copy()
-        fallback_opts.pop('extractor_args', None)
-        with yt_dlp.YoutubeDL(fallback_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-
+    # Check if cookies are available
+    has_cookies = cookies_path and os.path.exists(cookies_path)
+    if not has_cookies:
+        print("⚠️ No cookies found. This increases the risk of bot detection.")
+        
+    for client in clients_to_try:
+        print(f"🔄 Attempting extraction with client: {client}...")
+        current_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'cookiefile': cookies_path if has_cookies else None,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': [client, 'web'],
+                    'player_skip': ['webpage', 'configs'] if client in ['android', 'ios'] else []
+                }
+            },
+            # Force IPv4 as IPv6 datacenter ranges are often blocked
+            'source_address': '0.0.0.0', 
+            # Add sleep interval to avoid rate limiting
+            'sleep_interval': 2,
+            'max_sleep_interval': 5,
+        }
+        
+        try:
+            with yt_dlp.YoutubeDL(current_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            print(f"✅ Success with client: {client}")
+            break
+        except Exception as e:
+            print(f"⚠️ Failed with {client}: {e}")
+            
+    if not info:
+        print("❌ All clients failed. You MUST provide cookies via YOUTUBE_COOKIES env var.")
+        raise Exception("YouTube blocked all access attempts. Cookies required.")
+        
     video_title = info.get('title', 'youtube_video')
     sanitized_title = sanitize_filename(video_title)
     
@@ -239,15 +254,22 @@ def download_youtube_video(url, output_dir="."):
         os.remove(expected_file)
         print(f"🗑️  Removed existing file to re-download with H.264 codec")
     
-    # Download
-    ydl_opts = common_opts.copy()
-    ydl_opts.update({
+    # Download with the successful client configuration
+    ydl_opts = {
         'format': 'bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/bestvideo[vcodec^=avc1]+bestaudio/best[ext=mp4]/best',
         'outtmpl': output_template,
         'merge_output_format': 'mp4',
         'quiet': False,
         'overwrites': True,
-    })
+        'cookiefile': cookies_path if has_cookies else None,
+        'extractor_args': {
+            'youtube': {
+                'player_client': [client, 'web'],
+                'player_skip': ['webpage', 'configs'] if client in ['android', 'ios'] else []
+            }
+        },
+        'source_address': '0.0.0.0',
+    }
     
     # We use the same opts logic (try Android first, fallback implies logic complexity so for download we stick to opts)
     # If extraction worked with common_opts, download should too.
