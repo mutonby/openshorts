@@ -6,6 +6,25 @@ import ResultCard from './components/ResultCard';
 import ProcessingAnimation from './components/ProcessingAnimation';
 import { getApiUrl } from './config';
 
+// Simple helper for basic obfuscation (not secure encryption)
+const encrypt = (text) => {
+  if (!text) return '';
+  try {
+    return btoa(text);
+  } catch (e) {
+    return text;
+  }
+};
+
+const decrypt = (text) => {
+  if (!text) return '';
+  try {
+    return atob(text);
+  } catch (e) {
+    return text;
+  }
+};
+
 // Simple TikTok icon sine Lucide might not have it or it varies
 const TikTokIcon = ({ size = 16, className = "" }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className}>
@@ -88,8 +107,14 @@ const pollJob = async (jobId) => {
 
 function App() {
   const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_key') || '');
-  // Social API State
-  const [uploadPostKey, setUploadPostKey] = useState(() => localStorage.getItem('uploadPostKey') || '');
+  // Social API State - Load encrypted or plain
+  const [uploadPostKey, setUploadPostKey] = useState(() => {
+     const stored = localStorage.getItem('uploadPostKey_enc');
+     if (stored) return decrypt(stored);
+     // Fallback to plain text for transition
+     return localStorage.getItem('uploadPostKey') || '';
+  });
+  
   const [uploadUserId, setUploadUserId] = useState(() => localStorage.getItem('uploadUserId') || '');
   const [userProfiles, setUserProfiles] = useState([]); // List of {username, connected: []}
   const [jobId, setJobId] = useState(null);
@@ -105,8 +130,14 @@ function App() {
   }, [apiKey]);
 
   useEffect(() => {
-    localStorage.setItem('uploadPostKey', uploadPostKey);
-    localStorage.setItem('uploadUserId', uploadUserId);
+    if (uploadPostKey) {
+        localStorage.setItem('uploadPostKey_enc', encrypt(uploadPostKey));
+        // Remove old plain text key if exists
+        localStorage.removeItem('uploadPostKey');
+    }
+    if (uploadUserId) {
+        localStorage.setItem('uploadUserId', uploadUserId);
+    }
   }, [uploadPostKey, uploadUserId]);
 
   useEffect(() => {
