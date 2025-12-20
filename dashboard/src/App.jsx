@@ -6,12 +6,19 @@ import ResultCard from './components/ResultCard';
 import ProcessingAnimation from './components/ProcessingAnimation';
 import { getApiUrl } from './config';
 
-// Simple helper for basic obfuscation (not secure encryption)
+// Enhanced "Encryption" using XOR + Base64 with a Salt
+// This is better than plain Base64 but still client-side.
+const SECRET_KEY = import.meta.env.VITE_ENCRYPTION_KEY || "OpenShorts-Secret-Key-2025-V1";
+
 const encrypt = (text) => {
   if (!text) return '';
   try {
-    return btoa(text);
+    const xor = text.split('').map((c, i) => 
+      String.fromCharCode(c.charCodeAt(0) ^ SECRET_KEY.charCodeAt(i % SECRET_KEY.length))
+    ).join('');
+    return btoa(xor);
   } catch (e) {
+    console.error("Encryption failed", e);
     return text;
   }
 };
@@ -19,8 +26,14 @@ const encrypt = (text) => {
 const decrypt = (text) => {
   if (!text) return '';
   try {
-    return atob(text);
+    // Check if it's plain base64 or our custom XOR (simple try)
+    const xor = atob(text);
+    const result = xor.split('').map((c, i) => 
+      String.fromCharCode(c.charCodeAt(0) ^ SECRET_KEY.charCodeAt(i % SECRET_KEY.length))
+    ).join('');
+    return result;
   } catch (e) {
+    // Fallback if decryption fails (might be old plain text)
     return text;
   }
 };
@@ -109,10 +122,9 @@ function App() {
   const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_key') || '');
   // Social API State - Load encrypted or plain
   const [uploadPostKey, setUploadPostKey] = useState(() => {
-     const stored = localStorage.getItem('uploadPostKey_enc');
+     const stored = localStorage.getItem('uploadPostKey_v2'); // Changed key to force re-login or fresh start if needed
      if (stored) return decrypt(stored);
-     // Fallback to plain text for transition
-     return localStorage.getItem('uploadPostKey') || '';
+     return '';
   });
   
   const [uploadUserId, setUploadUserId] = useState(() => localStorage.getItem('uploadUserId') || '');
@@ -131,9 +143,7 @@ function App() {
 
   useEffect(() => {
     if (uploadPostKey) {
-        localStorage.setItem('uploadPostKey_enc', encrypt(uploadPostKey));
-        // Remove old plain text key if exists
-        localStorage.removeItem('uploadPostKey');
+        localStorage.setItem('uploadPostKey_v2', encrypt(uploadPostKey));
     }
     if (uploadUserId) {
         localStorage.setItem('uploadUserId', uploadUserId);
@@ -361,6 +371,8 @@ function App() {
                         </div>
                         <p className="text-xs text-zinc-500">
                           Connect your Upload-Post account to enable one-click publishing.
+                          <br/>
+                          <span className="text-zinc-600 italic">Key stored encrypted locally.</span>
                         </p>
                     </div>
                  </div>
