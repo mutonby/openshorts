@@ -1,5 +1,4 @@
-opencv-python-headless
-scenedetect[opencv]
+scenedetect
 ultralytics
 torch
 torchvision
@@ -9,7 +8,7 @@ faster-whisper
 google-genai
 python-dotenv
 mediapipe==0.10.14
-protobuf==4.25.8
+protobuf<4.24.0
 
 fastapi
 uvicorn
