@@ -20,9 +20,11 @@ OpenShorts leverages state-of-the-art AI to handle the entire content lifecycle:
     *   **Google Gemini 2.0 Flash**: Advanced AI analysis to identify the 3-15 most viral moments based on hooks and engagement potential.
     *   **Automatic Copywriting**: Generates SEO-optimized titles and descriptions for all platforms.
 
-2.  **✂️ Smart AI Cropping:**
-    *   **YOLOv8 + OpenCV**: intelligent subject tracking that keeps people/faces centered in the 9:16 frame.
-    *   **Dynamic Letterboxing**: Automatically handles multiple subjects to preserve context when they are far apart.
+2.  **✂️ Smart AI Cropping & Tracking (New V2 Engine):**
+    *   **Dual-Mode Strategy**: Automatically detects scene composition to apply the best framing strategy.
+        *   **TRACK Mode (Single Subject)**: Uses **MediaPipe Face Detection** + **YOLOv8** fallback for ultra-fast, robust subject tracking. Features a **"Heavy Tripod" stabilization engine** that eliminates jitter and unnatural movements, providing smooth, cinematic reframing. Includes **Speaker Identification** to stick to the active speaker and avoid erratic switching.
+        *   **GENERAL Mode (Groups/Landscapes)**: For scenes with multiple people or no clear subject, it automatically switches to a professional **blurred-background layout**, preserving the full width of the original shot while filling the 9:16 vertical space.
+    *   **Intelligent Scene Analysis**: Pre-scans every scene to determine the optimal strategy before processing.
 
 3.  **📲 Direct Social posting:**
     *   **Upload-Post Integration**: Share your generated clips directly to TikTok, Instagram, and YouTube with a single click.

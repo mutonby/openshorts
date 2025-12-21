@@ -4,6 +4,7 @@ import scenedetect
 import subprocess
 import argparse
 import re
+import sys
 from scenedetect import VideoManager, SceneManager
 from scenedetect.detectors import ContentDetector
 from ultralytics import YOLO
@@ -69,55 +70,45 @@ OUTPUT — RETURN ONLY VALID JSON (no markdown, no comments). Order clips by pre
 model = YOLO('yolov8n.pt')
 
 # --- MediaPipe Setup ---
-# Use Face Mesh for more accurate detection and mouth movement tracking
-mp_face_mesh = mp.solutions.face_mesh
-face_mesh = mp_face_mesh.FaceMesh(
-    max_num_faces=5,
-    refine_landmarks=True,
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
-)
+# Use standard Face Detection (BlazeFace) for speed
+mp_face_detection = mp.solutions.face_detection
+face_detection = mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
 
 class SmoothedCameraman:
     """
-    Handles smooth camera movement to track a subject without jitter.
-    Includes deadzone and dynamic smoothing.
+    Handles smooth camera movement.
+    Simplified Logic: "Heavy Tripod"
+    Only moves if the subject leaves the center safe zone.
+    Moves slowly and linearly.
     """
-    def __init__(self, output_width, output_height, video_width, video_height, smoothing_factor=0.1):
+    def __init__(self, output_width, output_height, video_width, video_height):
         self.output_width = output_width
         self.output_height = output_height
         self.video_width = video_width
         self.video_height = video_height
-        self.smoothing_factor = smoothing_factor
         
+        # Initial State
         self.current_center_x = video_width / 2
         self.target_center_x = video_width / 2
-        
-        # Deadzone: Ignore movements smaller than this (relative to video width)
-        self.deadzone = video_width * 0.03
         
         # Calculate crop dimensions once
         self.crop_height = video_height
         self.crop_width = int(self.crop_height * ASPECT_RATIO)
-        
         if self.crop_width > video_width:
-             # Handle case where original video is already narrow/vertical
              self.crop_width = video_width
              self.crop_height = int(self.crop_width / ASPECT_RATIO)
+             
+        # Safe Zone: 20% of the video width
+        # As long as the target is within this zone relative to current center, DO NOT MOVE.
+        self.safe_zone_radius = self.crop_width * 0.25
 
     def update_target(self, face_box):
         """
         Updates the target center based on detected face/person.
-        face_box: [x, y, w, h]
         """
         if face_box:
             x, y, w, h = face_box
-            new_target = x + w / 2
-            
-            # Deadzone logic: Only update if the target has moved significantly
-            # This prevents jitter when the person is stationary but detection wobbles
-            if abs(new_target - self.target_center_x) > self.deadzone:
-                self.target_center_x = new_target
+            self.target_center_x = x + w / 2
     
     def get_crop_box(self, force_snap=False):
         """
@@ -126,26 +117,34 @@ class SmoothedCameraman:
         if force_snap:
             self.current_center_x = self.target_center_x
         else:
-            # Dynamic Smoothing
             diff = self.target_center_x - self.current_center_x
-            distance = abs(diff)
             
-            # Adaptive speed:
-            # - If very far (scene change or fast move), move FAST.
-            # - If close (minor adjustment), move SLOW to be smooth.
-            if distance > self.video_width * 0.15: 
-                speed = 0.15  # Catch up moderately fast, but not instant (reduced from 0.3)
-            elif distance < self.video_width * 0.05:
-                speed = 0.05 # Very smooth for small adjustments
-            else:
-                speed = self.smoothing_factor
+            # SIMPLIFIED LOGIC:
+            # 1. Is the target outside the safe zone?
+            if abs(diff) > self.safe_zone_radius:
+                # 2. If yes, move towards it slowly (Linear Speed)
+                # Determine direction
+                direction = 1 if diff > 0 else -1
                 
-            self.current_center_x += diff * speed
+                # Speed: 2 pixels per frame (Slow pan)
+                # If the distance is HUGE (scene change or fast movement), speed up slightly
+                if abs(diff) > self.crop_width * 0.5:
+                    speed = 15.0 # Fast re-frame
+                else:
+                    speed = 3.0  # Slow, steady pan
+                
+                self.current_center_x += direction * speed
+                
+                # Check if we overshot (prevent oscillation)
+                new_diff = self.target_center_x - self.current_center_x
+                if (direction == 1 and new_diff < 0) or (direction == -1 and new_diff > 0):
+                    self.current_center_x = self.target_center_x
             
-        # Clamp center to keep crop within bounds
+            # If inside safe zone, DO NOTHING (Stationary Camera)
+                
+        # Clamp center
         half_crop = self.crop_width / 2
         
-        # Ensure we don't go out of left/right bounds
         if self.current_center_x - half_crop < 0:
             self.current_center_x = half_crop
         if self.current_center_x + half_crop > self.video_width:
@@ -154,12 +153,9 @@ class SmoothedCameraman:
         x1 = int(self.current_center_x - half_crop)
         x2 = int(self.current_center_x + half_crop)
         
-        # Final safety check
         x1 = max(0, x1)
         x2 = min(self.video_width, x2)
         
-        # For height, we usually take the full height unless we want to zoom
-        # Current logic: full height
         y1 = 0
         y2 = self.video_height
         
@@ -187,7 +183,7 @@ class SpeakerTracker:
     def get_target(self, face_candidates, frame_number, width):
         """
         Decides which face to focus on.
-        face_candidates: list of {'box': [x,y,w,h], 'score': float, 'is_speaking': bool}
+        face_candidates: list of {'box': [x,y,w,h], 'score': float}
         """
         current_candidates = []
         
@@ -197,11 +193,11 @@ class SpeakerTracker:
             center_x = x + w / 2
             
             best_match_id = -1
-            min_dist = width * 0.2 # Max movement distance
+            min_dist = width * 0.15 # Reduced matching radius to avoid jumping in groups
             
             # Try to match with known faces seen recently
             for kf in self.known_faces:
-                if frame_number - kf['last_frame'] > 60: # Forgot faces older than 2s
+                if frame_number - kf['last_frame'] > 30: # Forgot faces older than 1s (was 2s)
                     continue
                     
                 dist = abs(center_x - kf['center'])
@@ -215,41 +211,34 @@ class SpeakerTracker:
                 self.next_id += 1
             
             # Update known face
-            # Remove old entry for this ID if exists
             self.known_faces = [kf for kf in self.known_faces if kf['id'] != best_match_id]
             self.known_faces.append({'id': best_match_id, 'center': center_x, 'last_frame': frame_number})
             
             current_candidates.append({
                 'id': best_match_id,
                 'box': face['box'],
-                'score': face['score'],
-                'is_speaking': face['is_speaking']
+                'score': face['score']
             })
 
         # 2. Update Scores with decay
-        # Decay old scores
         for pid in list(self.speaker_scores.keys()):
-             self.speaker_scores[pid] *= 0.9 # Fast decay
+             self.speaker_scores[pid] *= 0.85 # Faster decay (was 0.9)
              if self.speaker_scores[pid] < 0.1:
                  del self.speaker_scores[pid]
 
         # Add new scores
         for cand in current_candidates:
             pid = cand['id']
-            # Boost score if speaking
-            score_boost = 20.0 if cand['is_speaking'] else 1.0
-            # Boost score if large (main subject)
-            # Normalize area (assuming 720p or 1080p, say max area ~ 1M pixels)
-            # Actually score is already area-based in previous function, so just use it
-            raw_score = cand['score'] / (width * width * 0.1) # Normalize roughly
-            
-            self.speaker_scores[pid] = self.speaker_scores.get(pid, 0) + (raw_score * score_boost)
+            # Score is purely based on size (proximity) now that we don't have mouth
+            raw_score = cand['score'] / (width * width * 0.05)
+            self.speaker_scores[pid] = self.speaker_scores.get(pid, 0) + raw_score
 
         # 3. Determine Best Speaker
         if not current_candidates:
-            return None # No one found
+            # If no one found, maintain last active speaker if cooldown allows
+            # to avoid black screen or jump to 0,0
+            return None 
             
-        # Sort candidates by accumulated score
         best_candidate = None
         max_score = -1
         
@@ -257,9 +246,9 @@ class SpeakerTracker:
             pid = cand['id']
             total_score = self.speaker_scores.get(pid, 0)
             
-            # Hysteresis: Bonus for current active speaker
+            # Hysteresis: HUGE Bonus for current active speaker
             if pid == self.active_speaker_id:
-                total_score *= 2.0 # Hard stickiness
+                total_score *= 3.0 # Sticky factor
                 
             if total_score > max_score:
                 max_score = total_score
@@ -269,24 +258,15 @@ class SpeakerTracker:
         if best_candidate:
             target_id = best_candidate['id']
             
-            # If it's the same person, just update
             if target_id == self.active_speaker_id:
                 self.locked_counter += 1
                 return best_candidate['box']
             
-            # If it's a NEW person
-            # Check cooldown
+            # New person
             if frame_number - self.last_switch_frame < self.switch_cooldown:
-                # Too soon to switch, stay with old one if possible
-                # Find old one in current candidates
                 old_cand = next((c for c in current_candidates if c['id'] == self.active_speaker_id), None)
                 if old_cand:
                     return old_cand['box']
-            
-            # Check stabilization (do we really want to switch?)
-            # If the new score is overwhelmingly high (someone started shouting/talking clearly), switch faster
-            # But normally wait a bit? 
-            # For now, let's just trust the accumulated score buffer + hysteresis
             
             self.active_speaker_id = target_id
             self.last_switch_frame = frame_number
@@ -297,48 +277,27 @@ class SpeakerTracker:
 
 def detect_face_candidates(frame):
     """
-    Returns list of all detected faces with their raw scores and speaking status.
+    Returns list of all detected faces using lightweight FaceDetection.
     """
     height, width, _ = frame.shape
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = face_mesh.process(rgb_frame)
+    results = face_detection.process(rgb_frame)
     
     candidates = []
     
-    if not results.multi_face_landmarks:
+    if not results.detections:
         return []
         
-    for face_landmarks in results.multi_face_landmarks:
-        # Bounding Box
-        x_min, y_min = width, height
-        x_max, y_max = 0, 0
-        
-        # Optimization: Use only silhouette landmarks (every 10th or specific indices)
-        # Full mesh is 468 points.
-        for i in range(0, 468, 10): 
-            lm = face_landmarks.landmark[i]
-            x, y = int(lm.x * width), int(lm.y * height)
-            if x < x_min: x_min = x
-            if x > x_max: x_max = x
-            if y < y_min: y_min = y
-            if y > y_max: y_max = y
-            
-        w = x_max - x_min
-        h = y_max - y_min
-        
-        # Mouth Openness
-        upper_lip = face_landmarks.landmark[13]
-        lower_lip = face_landmarks.landmark[14]
-        mouth_dist = abs(upper_lip.y - lower_lip.y) * height
-        mouth_ratio = mouth_dist / h if h > 0 else 0
-        
-        # Heuristic: Threshold for speaking
-        is_speaking = mouth_ratio > 0.05 # Increased threshold to reduce false positives
+    for detection in results.detections:
+        bboxC = detection.location_data.relative_bounding_box
+        x = int(bboxC.xmin * width)
+        y = int(bboxC.ymin * height)
+        w = int(bboxC.width * width)
+        h = int(bboxC.height * height)
         
         candidates.append({
-            'box': [x_min, y_min, w, h],
-            'score': w * h, # Area as base score
-            'is_speaking': is_speaking
+            'box': [x, y, w, h],
+            'score': w * h # Area as score
         })
             
     return candidates
@@ -373,6 +332,92 @@ def detect_person_yolo(frame):
                 best_box = [x1, y1, w, face_h]
                 
     return best_box
+
+def create_general_frame(frame, output_width, output_height):
+    """
+    Creates a 'General Shot' frame: 
+    - Background: Blurred zoom of original
+    - Foreground: Original video scaled to fit width, centered vertically.
+    """
+    orig_h, orig_w = frame.shape[:2]
+    
+    # 1. Background (Fill Height)
+    # Crop center to aspect ratio
+    bg_scale = output_height / orig_h
+    bg_w = int(orig_w * bg_scale)
+    bg_resized = cv2.resize(frame, (bg_w, output_height))
+    
+    # Crop center of background
+    start_x = (bg_w - output_width) // 2
+    if start_x < 0: start_x = 0
+    background = bg_resized[:, start_x:start_x+output_width]
+    if background.shape[1] != output_width:
+        background = cv2.resize(background, (output_width, output_height))
+        
+    # Blur background
+    background = cv2.GaussianBlur(background, (51, 51), 0)
+    
+    # 2. Foreground (Fit Width)
+    scale = output_width / orig_w
+    fg_h = int(orig_h * scale)
+    foreground = cv2.resize(frame, (output_width, fg_h))
+    
+    # 3. Overlay
+    y_offset = (output_height - fg_h) // 2
+    
+    # Clone background to avoid modifying it
+    final_frame = background.copy()
+    final_frame[y_offset:y_offset+fg_h, :] = foreground
+    
+    return final_frame
+
+def analyze_scenes_strategy(video_path, scenes):
+    """
+    Analyzes each scene to determine if it should be TRACK (Single person) or GENERAL (Group/Wide).
+    Returns list of strategies corresponding to scenes.
+    """
+    cap = cv2.VideoCapture(video_path)
+    strategies = []
+    
+    if not cap.isOpened():
+        return ['TRACK'] * len(scenes)
+        
+    for start, end in tqdm(scenes, desc="   Analyzing Scenes"):
+        # Sample 3 frames (start, middle, end)
+        frames_to_check = [
+            start.get_frames() + 5,
+            int((start.get_frames() + end.get_frames()) / 2),
+            end.get_frames() - 5
+        ]
+        
+        face_counts = []
+        for f_idx in frames_to_check:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
+            ret, frame = cap.read()
+            if not ret: continue
+            
+            # Detect faces
+            candidates = detect_face_candidates(frame)
+            face_counts.append(len(candidates))
+            
+        # Decision Logic
+        if not face_counts:
+            avg_faces = 0
+        else:
+            avg_faces = sum(face_counts) / len(face_counts)
+            
+        # Strategy:
+        # 0 faces -> GENERAL (Landscape/B-roll)
+        # 1 face -> TRACK
+        # > 1.2 faces -> GENERAL (Group)
+        
+        if avg_faces > 1.2 or avg_faces < 0.5:
+            strategies.append('GENERAL')
+        else:
+            strategies.append('TRACK')
+            
+    cap.release()
+    return strategies
 
 def detect_scenes(video_path):
     video_manager = VideoManager([video_path])
@@ -509,12 +554,14 @@ def process_video_to_vertical(input_video, final_output_video):
         OUTPUT_WIDTH += 1
 
     # Initialize Cameraman
-    cameraman = SmoothedCameraman(OUTPUT_WIDTH, OUTPUT_HEIGHT, original_width, original_height, smoothing_factor=0.08) # Slower smoothing
+    cameraman = SmoothedCameraman(OUTPUT_WIDTH, OUTPUT_HEIGHT, original_width, original_height)
     
-    # Initialize Speaker Tracker
-    speaker_tracker = SpeakerTracker(cooldown_frames=45) # 1.5s cooldown before switching again
-
-    print("\n   ✂️ Step 4: Processing video frames (Tracking & Cropping)...")
+    # --- New Strategy: Per-Scene Analysis ---
+    print("\n   🤖 Step 3: Analyzing Scenes for Strategy (Single vs Group)...")
+    scene_strategies = analyze_scenes_strategy(input_video, scenes)
+    # scene_strategies is a list of 'TRACK' or 'General' corresponding to scenes
+    
+    print("\n   ✂️ Step 4: Processing video frames...")
     
     command = [
         'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
@@ -531,58 +578,63 @@ def process_video_to_vertical(input_video, final_output_video):
     frame_number = 0
     current_scene_index = 0
     
-    # Pre-calculate scene boundaries for fast lookup
+    # Pre-calculate scene boundaries
     scene_boundaries = []
     for s_start, s_end in scenes:
         scene_boundaries.append((s_start.get_frames(), s_end.get_frames()))
 
-    with tqdm(total=total_frames, desc="   Tracking & Cropping") as pbar:
+    # Global tracker for single-person shots
+    speaker_tracker = SpeakerTracker(cooldown_frames=30)
+
+    with tqdm(total=total_frames, desc="   Processing", file=sys.stdout) as pbar:
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
                 break
 
-            # 1. Check for Scene Change to Snap Camera
-            is_new_scene = False
-            # Check if current frame is a start frame of any scene
-            for s_start, _ in scene_boundaries:
-                if frame_number == s_start:
-                    is_new_scene = True
-                    break
+            # Update Scene Index
+            if current_scene_index < len(scene_boundaries):
+                start_f, end_f = scene_boundaries[current_scene_index]
+                if frame_number >= end_f and current_scene_index < len(scene_boundaries) - 1:
+                    current_scene_index += 1
             
-            # Reset tracker on new scene
-            if is_new_scene:
-                speaker_tracker = SpeakerTracker(cooldown_frames=45)
+            # Determine Strategy for current frame based on scene
+            current_strategy = scene_strategies[current_scene_index] if current_scene_index < len(scene_strategies) else 'TRACK'
             
-            # 2. Detect Candidates
-            candidates = detect_face_candidates(frame)
-            
-            # 3. Get Target from Tracker
-            # Tracker handles ID persistence, hysteresis, and cooldown
-            target_box = speaker_tracker.get_target(candidates, frame_number, original_width)
-            
-            if target_box:
-                cameraman.update_target(target_box)
+            # Apply Strategy
+            if current_strategy == 'GENERAL':
+                # "Plano General" -> Blur Background + Fit Width
+                output_frame = create_general_frame(frame, OUTPUT_WIDTH, OUTPUT_HEIGHT)
+                
+                # Reset cameraman/tracker so they don't drift while inactive
+                cameraman.current_center_x = original_width / 2
+                cameraman.target_center_x = original_width / 2
+                
             else:
-                # Fallback: Use YOLO to find the person if face detection fails
-                person_box = detect_person_yolo(frame)
-                if person_box:
-                    cameraman.update_target(person_box)
+                # "Single Speaker" -> Track & Crop
+                
+                # Detect every 2nd frame for performance
+                if frame_number % 2 == 0:
+                    candidates = detect_face_candidates(frame)
+                    target_box = speaker_tracker.get_target(candidates, frame_number, original_width)
+                    if target_box:
+                        cameraman.update_target(target_box)
+                    else:
+                        person_box = detect_person_yolo(frame)
+                        if person_box:
+                            cameraman.update_target(person_box)
 
-            # 4. Get Crop Box (with smoothing, unless new scene)
-            x1, y1, x2, y2 = cameraman.get_crop_box(force_snap=is_new_scene)
-            
-            # 4. Crop & Resize
-            # Ensure coordinates are valid
-            crop_h = y2 - y1
-            crop_w = x2 - x1
-            
-            if crop_h > 0 and crop_w > 0:
-                cropped_frame = frame[y1:y2, x1:x2]
-                output_frame = cv2.resize(cropped_frame, (OUTPUT_WIDTH, OUTPUT_HEIGHT))
-            else:
-                # Fallback if crop is invalid (shouldn't happen)
-                output_frame = cv2.resize(frame, (OUTPUT_WIDTH, OUTPUT_HEIGHT))
+                # Snap camera on scene change to avoid panning from previous scene position
+                is_scene_start = (frame_number == scene_boundaries[current_scene_index][0])
+                
+                x1, y1, x2, y2 = cameraman.get_crop_box(force_snap=is_scene_start)
+                
+                # Crop
+                if y2 > y1 and x2 > x1:
+                    cropped = frame[y1:y2, x1:x2]
+                    output_frame = cv2.resize(cropped, (OUTPUT_WIDTH, OUTPUT_HEIGHT))
+                else:
+                    output_frame = cv2.resize(frame, (OUTPUT_WIDTH, OUTPUT_HEIGHT))
 
             ffmpeg_process.stdin.write(output_frame.tobytes())
             frame_number += 1
