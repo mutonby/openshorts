@@ -8,6 +8,7 @@ yt-dlp
 faster-whisper
 google-genai
 python-dotenv
+mediapipe
 
 fastapi
 uvicorn

@@ -143,6 +143,21 @@ function App() {
   const [logsVisible, setLogsVisible] = useState(true);
   const [processingMedia, setProcessingMedia] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, settings
+  
+  // Sync state for original video playback
+  const [syncedTime, setSyncedTime] = useState(0);
+  const [isSyncedPlaying, setIsSyncedPlaying] = useState(false);
+  const [syncTrigger, setSyncTrigger] = useState(0);
+
+  const handleClipPlay = (startTime) => {
+    setSyncedTime(startTime);
+    setIsSyncedPlaying(true);
+    setSyncTrigger(prev => prev + 1);
+  };
+
+  const handleClipPause = () => {
+    setIsSyncedPlaying(false);
+  };
 
   useEffect(() => {
     // Encrypt Gemini Key too for consistency if desired, but user asked specifically about Social integration not saving well.
@@ -461,7 +476,15 @@ function App() {
                 </div>
 
                 {/* Video Preview */}
-                {processingMedia && <ProcessingAnimation media={processingMedia} isComplete={status === 'complete'} />}
+                {processingMedia && (
+                  <ProcessingAnimation 
+                    media={processingMedia} 
+                    isComplete={status === 'complete'} 
+                    syncedTime={syncedTime}
+                    isSyncedPlaying={isSyncedPlaying}
+                    syncTrigger={syncTrigger}
+                  />
+                )}
 
                 {/* Logs Terminal */}
                 <div className={`bg-[#0c0c0e] rounded-xl border border-white/10 overflow-hidden flex flex-col transition-all duration-500 ${status === 'complete' ? 'h-32 min-h-0 opacity-50 hover:opacity-100' : 'flex-1 min-h-[200px]'}`}>
@@ -517,6 +540,8 @@ function App() {
                                 jobId={jobId}
                                 uploadPostKey={uploadPostKey}
                                 uploadUserId={uploadUserId}
+                                onPlay={(time) => handleClipPlay(time)}
+                                onPause={handleClipPause}
                               />
                            ))}
                        </div>

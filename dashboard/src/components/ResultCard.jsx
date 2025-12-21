@@ -2,8 +2,10 @@ import React, { useState } from 'react';
 import { Download, Share2, Instagram, Youtube, Video, CheckCircle, AlertCircle, X, Loader2, Copy } from 'lucide-react';
 import { getApiUrl } from '../config';
 
-export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId }) {
+export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, onPlay, onPause }) {
     const [showModal, setShowModal] = useState(false);
+    const videoRef = React.useRef(null);
+
     const [platforms, setPlatforms] = useState({
         tiktok: true,
         instagram: true,
@@ -70,11 +72,22 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
             {/* Left: Video Preview (Responsive Width) */}
             <div className="w-full md:w-[180px] lg:w-[200px] bg-black relative shrink-0 aspect-[9/16] md:aspect-auto">
                 <video
+                    ref={videoRef}
                     src={videoUrl}
                     controls
                     className="w-full h-full object-cover"
-                    loop
                     playsInline
+                    onPlay={() => {
+                        const currentTime = videoRef.current ? videoRef.current.currentTime : 0;
+                        onPlay && onPlay(clip.start + currentTime);
+                    }}
+                    onPause={() => onPause && onPause()}
+                    onEnded={() => {
+                        if (videoRef.current) {
+                            videoRef.current.currentTime = 0;
+                            videoRef.current.play();
+                        }
+                    }}
                 />
                 <div className="absolute top-3 left-3 flex gap-2">
                     <span className="bg-black/60 backdrop-blur-md text-white text-[10px] font-bold px-2 py-1 rounded-md border border-white/10 uppercase tracking-wide">
