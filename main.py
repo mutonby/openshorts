@@ -487,8 +487,10 @@ def download_youtube_video(url, output_dir="."):
         'socket_timeout': 30,
         'retries': 10,
         'nocheckcertificate': True,
-        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
-        'user_agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
+        'force_ipv4': True,
+        'cachedir': False,
+        'extractor_args': {'youtube': {'player_client': ['web']}},
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
     
     with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
@@ -498,6 +500,11 @@ def download_youtube_video(url, output_dir="."):
             sanitized_title = sanitize_filename(video_title)
         except Exception as e:
             print(f"❌ Error extracting info: {e}")
+            print("\n🚨 POSSIBLE USER SOLUTION:")
+            print("   YouTube has blocked downloads from this server (Error 429/Unavailable).")
+            print("   This is usually a temporary IP ban by YouTube.")
+            print("   👉 Please download the video manually on your PC and upload it directly using the 'Upload Video' option.")
+            print("   Alternative: Wait a few hours before trying again.")
             raise e
     
     output_template = os.path.join(output_dir, f'{sanitized_title}.%(ext)s')
