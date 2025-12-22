@@ -20,3 +20,5 @@ temp_*.mp4
 .cache
 
 .config
+
+output/
