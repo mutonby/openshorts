@@ -527,9 +527,9 @@ class SocialPostRequest(BaseModel):
     platforms: List[str] # ["tiktok", "instagram", "youtube"]
     # Optional overrides if frontend wants to edit them
     title: Optional[str] = None
-    tiktok_description: Optional[str] = None
-    instagram_description: Optional[str] = None
-    youtube_description: Optional[str] = None
+    description: Optional[str] = None
+    scheduled_date: Optional[str] = None # ISO-8601 string
+    timezone: Optional[str] = "UTC"
 
 import httpx
 
@@ -558,6 +558,7 @@ async def post_to_socials(req: SocialPostRequest):
         # Construct parameters for Upload-Post API
         # Fallbacks
         final_title = req.title or clip.get('title', 'Viral Short')
+        final_description = req.description or clip.get('video_description_for_instagram') or clip.get('video_description_for_tiktok') or "Check this out!"
         
         # Prepare form data
         url = "https://api.upload-post.com/api/upload"
@@ -571,22 +572,25 @@ async def post_to_socials(req: SocialPostRequest):
             "title": final_title,
             "platform[]": req.platforms # Pass list directly
         }
+
+        # Add scheduling if present
+        if req.scheduled_date:
+            data_payload["scheduled_date"] = req.scheduled_date
+            if req.timezone:
+                data_payload["timezone"] = req.timezone
         
         # Add Platform specifics
         if "tiktok" in req.platforms:
-             desc = req.tiktok_description or clip.get('video_description_for_tiktok', final_title)
-             data_payload["tiktok_title"] = desc
+             data_payload["tiktok_title"] = final_description
              
         if "instagram" in req.platforms:
-             desc = req.instagram_description or clip.get('video_description_for_instagram', final_title)
-             data_payload["instagram_title"] = desc
+             data_payload["instagram_title"] = final_description
              data_payload["media_type"] = "REELS"
 
         if "youtube" in req.platforms:
              yt_title = req.title or clip.get('video_title_for_youtube_short', final_title)
-             desc = req.youtube_description or clip.get('video_description_for_instagram', final_title) # Fallback
              data_payload["youtube_title"] = yt_title
-             data_payload["youtube_description"] = desc
+             data_payload["youtube_description"] = final_description
              data_payload["privacyStatus"] = "public"
 
         # Send File

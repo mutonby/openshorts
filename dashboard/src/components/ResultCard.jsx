@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, CheckCircle, AlertCircle, X, Loader2, Copy, Wand2, Type } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Download, Share2, Instagram, Youtube, Video, CheckCircle, AlertCircle, X, Loader2, Copy, Wand2, Type, Calendar, Clock } from 'lucide-react';
 import { getApiUrl } from '../config';
 import SubtitleModal from './SubtitleModal';
 
@@ -14,12 +14,28 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
         instagram: true,
         youtube: true
     });
+    const [postTitle, setPostTitle] = useState("");
+    const [postDescription, setPostDescription] = useState("");
+    const [isScheduling, setIsScheduling] = useState(false);
+    const [scheduleDate, setScheduleDate] = useState("");
+
     const [posting, setPosting] = useState(false);
     const [postResult, setPostResult] = useState(null);
 
     const [isEditing, setIsEditing] = useState(false);
     const [isSubtitling, setIsSubtitling] = useState(false);
     const [editError, setEditError] = useState(null);
+
+    // Initialize/Reset form when modal opens
+    useEffect(() => {
+        if (showModal) {
+            setPostTitle(clip.video_title_for_youtube_short || "Viral Short");
+            setPostDescription(clip.video_description_for_instagram || clip.video_description_for_tiktok || "");
+            setIsScheduling(false);
+            setScheduleDate("");
+            setPostResult(null);
+        }
+    }, [showModal, clip]);
 
     const handleAutoEdit = async () => {
         setIsEditing(true);
@@ -122,20 +138,36 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
             return;
         }
 
+        if (isScheduling && !scheduleDate) {
+            setPostResult({ success: false, msg: "Please select a date and time." });
+            return;
+        }
+
         setPosting(true);
         setPostResult(null);
 
         try {
+            const payload = {
+                job_id: jobId,
+                clip_index: index,
+                api_key: uploadPostKey,
+                user_id: uploadUserId,
+                platforms: selectedPlatforms,
+                title: postTitle,
+                description: postDescription
+            };
+
+            if (isScheduling && scheduleDate) {
+                // Convert to ISO-8601
+                payload.scheduled_date = new Date(scheduleDate).toISOString();
+                // Optional: pass timezone if needed, backend defaults to UTC or we can send user's timezone
+                payload.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            }
+
             const res = await fetch(getApiUrl('/api/social/post'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    job_id: jobId,
-                    clip_index: index,
-                    api_key: uploadPostKey,
-                    user_id: uploadUserId,
-                    platforms: selectedPlatforms
-                })
+                body: JSON.stringify(payload)
             });
 
             if (!res.ok) {
@@ -148,7 +180,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                 }
             }
 
-            setPostResult({ success: true, msg: "Posted successfully!" });
+            setPostResult({ success: true, msg: isScheduling ? "Scheduled successfully!" : "Posted successfully!" });
             setTimeout(() => {
                 setShowModal(false);
                 setPostResult(null);
@@ -303,7 +335,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
             {/* Post Modal */}
             {showModal && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-[fadeIn_0.2s_ease-out]">
-                    <div className="bg-[#121214] border border-white/10 p-6 rounded-2xl w-full max-w-sm shadow-2xl relative">
+                    <div className="bg-[#121214] border border-white/10 p-6 rounded-2xl w-full max-w-md shadow-2xl relative max-h-[90vh] overflow-y-auto custom-scrollbar">
                         <button
                             onClick={() => setShowModal(false)}
                             className="absolute top-4 right-4 text-zinc-500 hover:text-white"
@@ -311,7 +343,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                             <X size={20} />
                         </button>
 
-                        <h3 className="text-lg font-bold text-white mb-4">Post to Socials</h3>
+                        <h3 className="text-lg font-bold text-white mb-4">Post / Schedule</h3>
 
                         {!uploadPostKey && (
                             <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/20 text-yellow-200 text-xs rounded-lg flex items-start gap-2">
@@ -320,19 +352,76 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                             </div>
                         )}
 
-                        <div className="space-y-2 mb-6">
-                            <label className="flex items-center gap-3 p-3 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10 transition-colors border border-white/5">
-                                <input type="checkbox" checked={platforms.tiktok} onChange={e => setPlatforms({ ...platforms, tiktok: e.target.checked })} className="w-4 h-4 rounded border-zinc-600 bg-black/50 text-primary focus:ring-primary" />
-                                <div className="flex items-center gap-2 text-sm text-white"><Video size={16} className="text-cyan-400" /> TikTok</div>
-                            </label>
-                            <label className="flex items-center gap-3 p-3 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10 transition-colors border border-white/5">
-                                <input type="checkbox" checked={platforms.instagram} onChange={e => setPlatforms({ ...platforms, instagram: e.target.checked })} className="w-4 h-4 rounded border-zinc-600 bg-black/50 text-primary focus:ring-primary" />
-                                <div className="flex items-center gap-2 text-sm text-white"><Instagram size={16} className="text-pink-400" /> Instagram</div>
-                            </label>
-                            <label className="flex items-center gap-3 p-3 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10 transition-colors border border-white/5">
-                                <input type="checkbox" checked={platforms.youtube} onChange={e => setPlatforms({ ...platforms, youtube: e.target.checked })} className="w-4 h-4 rounded border-zinc-600 bg-black/50 text-primary focus:ring-primary" />
-                                <div className="flex items-center gap-2 text-sm text-white"><Youtube size={16} className="text-red-400" /> YouTube Shorts</div>
-                            </label>
+                        <div className="space-y-4 mb-6">
+                            {/* Title & Description */}
+                            <div>
+                                <label className="block text-xs font-bold text-zinc-400 mb-1">Video Title</label>
+                                <input 
+                                    type="text" 
+                                    value={postTitle}
+                                    onChange={(e) => setPostTitle(e.target.value)}
+                                    className="w-full bg-black/40 border border-white/10 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-primary/50 placeholder-zinc-600"
+                                    placeholder="Enter a catchy title..."
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-zinc-400 mb-1">Caption / Description</label>
+                                <textarea 
+                                    value={postDescription}
+                                    onChange={(e) => setPostDescription(e.target.value)}
+                                    rows={4}
+                                    className="w-full bg-black/40 border border-white/10 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-primary/50 placeholder-zinc-600 resize-none"
+                                    placeholder="Write a caption for your post..."
+                                />
+                            </div>
+
+                            {/* Scheduling */}
+                            <div className="p-3 bg-white/5 rounded-lg border border-white/5">
+                                <div className="flex items-center justify-between mb-2">
+                                    <div className="flex items-center gap-2 text-sm text-white font-medium">
+                                        <Calendar size={16} className="text-purple-400" /> Schedule Post
+                                    </div>
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" checked={isScheduling} onChange={(e) => setIsScheduling(e.target.checked)} className="sr-only peer" />
+                                        <div className="w-9 h-5 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-600"></div>
+                                    </label>
+                                </div>
+                                
+                                {isScheduling && (
+                                    <div className="mt-3 animate-[fadeIn_0.2s_ease-out]">
+                                        <label className="block text-xs text-zinc-400 mb-1">Select Date & Time</label>
+                                        <div className="relative">
+                                            <input 
+                                                type="datetime-local" 
+                                                value={scheduleDate}
+                                                onChange={(e) => setScheduleDate(e.target.value)}
+                                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2 pl-9 text-sm text-white focus:outline-none focus:border-purple-500/50 [color-scheme:dark]"
+                                            />
+                                            <Clock size={14} className="absolute left-3 top-2.5 text-zinc-500" />
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Platforms */}
+                            <div>
+                                <label className="block text-xs font-bold text-zinc-400 mb-2">Select Platforms</label>
+                                <div className="grid grid-cols-1 gap-2">
+                                    <label className="flex items-center gap-3 p-3 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10 transition-colors border border-white/5">
+                                        <input type="checkbox" checked={platforms.tiktok} onChange={e => setPlatforms({ ...platforms, tiktok: e.target.checked })} className="w-4 h-4 rounded border-zinc-600 bg-black/50 text-primary focus:ring-primary" />
+                                        <div className="flex items-center gap-2 text-sm text-white"><Video size={16} className="text-cyan-400" /> TikTok</div>
+                                    </label>
+                                    <label className="flex items-center gap-3 p-3 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10 transition-colors border border-white/5">
+                                        <input type="checkbox" checked={platforms.instagram} onChange={e => setPlatforms({ ...platforms, instagram: e.target.checked })} className="w-4 h-4 rounded border-zinc-600 bg-black/50 text-primary focus:ring-primary" />
+                                        <div className="flex items-center gap-2 text-sm text-white"><Instagram size={16} className="text-pink-400" /> Instagram</div>
+                                    </label>
+                                    <label className="flex items-center gap-3 p-3 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10 transition-colors border border-white/5">
+                                        <input type="checkbox" checked={platforms.youtube} onChange={e => setPlatforms({ ...platforms, youtube: e.target.checked })} className="w-4 h-4 rounded border-zinc-600 bg-black/50 text-primary focus:ring-primary" />
+                                        <div className="flex items-center gap-2 text-sm text-white"><Youtube size={16} className="text-red-400" /> YouTube Shorts</div>
+                                    </label>
+                                </div>
+                            </div>
                         </div>
 
                         {postResult && (
@@ -347,7 +436,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                             disabled={posting || !uploadPostKey}
                             className="w-full py-3 bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl text-white font-bold transition-all flex items-center justify-center gap-2"
                         >
-                            {posting ? <><Loader2 size={16} className="animate-spin" /> Publishing...</> : <><Share2 size={16} /> Publish Now</>}
+                            {posting ? <><Loader2 size={16} className="animate-spin" /> {isScheduling ? 'Scheduling...' : 'Publishing...'}</> : <><Share2 size={16} /> {isScheduling ? 'Schedule Post' : 'Publish Now'}</>}
                         </button>
                     </div>
                 </div>
