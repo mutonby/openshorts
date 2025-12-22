@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, CheckCircle, AlertCircle, X, Loader2, Copy } from 'lucide-react';
+import { Download, Share2, Instagram, Youtube, Video, CheckCircle, AlertCircle, X, Loader2, Copy, Wand2 } from 'lucide-react';
 import { getApiUrl } from '../config';
 
-export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, onPlay, onPause }) {
+export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, geminiApiKey, onPlay, onPause }) {
     const [showModal, setShowModal] = useState(false);
     const videoRef = React.useRef(null);
+    const [currentVideoUrl, setCurrentVideoUrl] = useState(getApiUrl(clip.video_url));
 
     const [platforms, setPlatforms] = useState({
         tiktok: true,
@@ -13,6 +14,61 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
     });
     const [posting, setPosting] = useState(false);
     const [postResult, setPostResult] = useState(null);
+
+    const [isEditing, setIsEditing] = useState(false);
+    const [editError, setEditError] = useState(null);
+
+    const handleAutoEdit = async () => {
+        setIsEditing(true);
+        setEditError(null);
+        try {
+             // Use passed prop or fallback
+             const apiKey = geminiApiKey || localStorage.getItem('gemini_key');
+             
+             if (!apiKey) {
+                 throw new Error("Gemini API Key is missing. Please set it in Settings.");
+             }
+
+             const res = await fetch(getApiUrl('/api/edit'), {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'X-Gemini-Key': apiKey 
+                },
+                body: JSON.stringify({
+                    job_id: jobId,
+                    clip_index: index,
+                    // We send it in header now, but backend might expect it in body too currently.
+                    // We will update backend to be flexible.
+                })
+             });
+
+             if (!res.ok) {
+                 const errText = await res.text();
+                 try {
+                     const jsonErr = JSON.parse(errText);
+                     throw new Error(jsonErr.detail || errText);
+                 } catch (e) {
+                     throw new Error(errText);
+                 }
+             }
+
+             const data = await res.json();
+             if (data.new_video_url) {
+                 setCurrentVideoUrl(getApiUrl(data.new_video_url));
+                 // Reload video
+                 if (videoRef.current) {
+                     videoRef.current.load();
+                 }
+             }
+
+        } catch (e) {
+            setEditError(e.message);
+            setTimeout(() => setEditError(null), 5000);
+        } finally {
+            setIsEditing(false);
+        }
+    };
 
     const handlePost = async () => {
         if (!uploadPostKey || !uploadUserId) {
@@ -65,15 +121,13 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
         }
     };
 
-    const videoUrl = getApiUrl(clip.video_url);
-
     return (
         <div className="bg-surface border border-white/5 rounded-2xl overflow-hidden flex flex-col md:flex-row group hover:border-white/10 transition-all animate-[fadeIn_0.5s_ease-out] min-h-[300px] h-auto" style={{ animationDelay: `${index * 0.1}s` }}>
             {/* Left: Video Preview (Responsive Width) */}
-            <div className="w-full md:w-[180px] lg:w-[200px] bg-black relative shrink-0 aspect-[9/16] md:aspect-auto">
+            <div className="w-full md:w-[180px] lg:w-[200px] bg-black relative shrink-0 aspect-[9/16] md:aspect-auto group/video">
                 <video
                     ref={videoRef}
-                    src={videoUrl}
+                    src={currentVideoUrl}
                     controls
                     className="w-full h-full object-cover"
                     playsInline
@@ -94,6 +148,15 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                         Clip {index + 1}
                     </span>
                 </div>
+                
+                {/* Auto Edit Overlay if Processing */}
+                {isEditing && (
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center z-10 p-4 text-center">
+                        <Loader2 size={32} className="text-primary animate-spin mb-3" />
+                        <span className="text-xs font-bold text-white uppercase tracking-wider">AI Magic in Progress...</span>
+                        <span className="text-[10px] text-zinc-400 mt-1">Applying viral edits & zooms</span>
+                    </div>
+                )}
             </div>
 
             {/* Right: Content & Details */}
@@ -135,8 +198,25 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                      </div>
                 </div>
 
+                {/* Error Message */}
+                {editError && (
+                    <div className="mb-3 p-2 bg-red-500/10 border border-red-500/20 text-red-400 text-[10px] rounded-lg flex items-center gap-2">
+                        <AlertCircle size={12} className="shrink-0" />
+                        {editError}
+                    </div>
+                )}
+
                 {/* Actions Footer */}
                 <div className="grid grid-cols-2 gap-3 mt-auto pt-4 border-t border-white/5">
+                    <button
+                        onClick={handleAutoEdit}
+                        disabled={isEditing}
+                        className="col-span-2 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-lg text-xs font-bold shadow-lg shadow-purple-500/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2 mb-1"
+                    >
+                        {isEditing ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />} 
+                        {isEditing ? 'Editing with AI...' : 'Auto Edit with AI'}
+                    </button>
+
                     <button
                         onClick={() => setShowModal(true)}
                         className="col-span-1 py-2 bg-primary hover:bg-blue-600 text-white rounded-lg text-xs font-bold shadow-lg shadow-primary/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2 truncate px-2"
@@ -147,7 +227,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                         onClick={async (e) => {
                             e.preventDefault();
                             try {
-                                const response = await fetch(videoUrl);
+                                const response = await fetch(currentVideoUrl);
                                 if (!response.ok) throw new Error('Download failed');
                                 const blob = await response.blob();
                                 const url = window.URL.createObjectURL(blob);
@@ -161,7 +241,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                                 document.body.removeChild(a);
                             } catch (err) {
                                 console.error('Download error:', err);
-                                window.open(videoUrl, '_blank');
+                                window.open(currentVideoUrl, '_blank');
                             }
                         }}
                         className="col-span-1 py-2 bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-2 border border-white/5 truncate px-2"

@@ -310,6 +310,118 @@ async def get_status(job_id: str):
         "result": job.get('result')
     }
 
+from editor import VideoEditor
+
+class EditRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    api_key: Optional[str] = None
+
+@app.post("/api/edit")
+async def edit_clip(
+    req: EditRequest,
+    x_gemini_key: Optional[str] = Header(None, alias="X-Gemini-Key")
+):
+    # Determine API Key
+    final_api_key = req.api_key or x_gemini_key or os.environ.get("GEMINI_API_KEY")
+    
+    if not final_api_key:
+        raise HTTPException(status_code=400, detail="Missing Gemini API Key (Header or Body)")
+
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job = jobs[req.job_id]
+    if 'result' not in job or 'clips' not in job['result']:
+        raise HTTPException(status_code=400, detail="Job result not available")
+        
+    try:
+        clip = job['result']['clips'][req.clip_index]
+        # Resolve file path
+        filename = clip['video_url'].split('/')[-1]
+        input_path = os.path.join(OUTPUT_DIR, req.job_id, filename)
+        
+        if not os.path.exists(input_path):
+             raise HTTPException(status_code=404, detail=f"Video file not found: {input_path}")
+
+        # Define output path for edited video
+        edited_filename = f"edited_{filename}"
+        output_path = os.path.join(OUTPUT_DIR, req.job_id, edited_filename)
+        
+        # Run editing in a thread to avoid blocking main loop
+        # Since VideoEditor uses blocking calls (subprocess, API wait)
+        def run_edit():
+            editor = VideoEditor(api_key=final_api_key)
+            
+            # SAFE FILE RENAMING STRATEGY (Avoid UnicodeEncodeError in Docker)
+            # Create a safe ASCII filename in the same directory
+            safe_filename = f"temp_input_{req.job_id}.mp4"
+            safe_input_path = os.path.join(OUTPUT_DIR, req.job_id, safe_filename)
+            
+            # Copy original file to safe path
+            # (Copy is safer than rename if something crashes, we keep original)
+            shutil.copy(input_path, safe_input_path)
+            
+            try:
+                # 1. Upload (using safe path)
+                vid_file = editor.upload_video(safe_input_path)
+                
+                # 2. Get duration
+                import cv2
+                cap = cv2.VideoCapture(safe_input_path)
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                duration = frame_count / fps if fps else 0
+                cap.release()
+                
+                # 3. Get Plan (Filter String)
+                filter_data = editor.get_ffmpeg_filter(vid_file, duration, fps=fps, width=width, height=height)
+                
+                # 4. Apply
+                # Use safe output name first
+                safe_output_path = os.path.join(OUTPUT_DIR, req.job_id, f"temp_output_{req.job_id}.mp4")
+                editor.apply_edits(safe_input_path, safe_output_path, filter_data)
+                
+                # Move result to final destination (rename works even if dest name has unicode if filesystem supports it, 
+                # but python might still struggle if locale is broken? No, os.rename usually handles it better than subprocess args)
+                # Actually, output_path is defined above: f"edited_{filename}"
+                # If filename has unicode, output_path has unicode.
+                # Let's hope shutil.move / os.rename works.
+                if os.path.exists(safe_output_path):
+                    shutil.move(safe_output_path, output_path)
+                
+                return filter_data
+            finally:
+                # Cleanup temp safe input
+                if os.path.exists(safe_input_path):
+                    os.remove(safe_input_path)
+
+        # Run in thread pool
+        loop = asyncio.get_event_loop()
+        plan = await loop.run_in_executor(None, run_edit)
+        
+        # Update clip URL in the job result? 
+        # Or return new URL and let frontend handle it?
+        # Updating job result allows persistence if page refreshes.
+        
+        new_video_url = f"/videos/{req.job_id}/{edited_filename}"
+        
+        # Start a new "edited" clip entry or just update the current one?
+        # Let's update the current one's video_url but keep backup?
+        # Or return the new URL to the frontend to display.
+        
+        return {
+            "success": True, 
+            "new_video_url": new_video_url,
+            "edit_plan": plan
+        }
+
+    except Exception as e:
+        print(f"❌ Edit Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 class SocialPostRequest(BaseModel):
     job_id: str
     clip_index: int

@@ -533,16 +533,17 @@ function App() {
                     {results && results.clips && results.clips.length > 0 ? (
                        <div className={`grid gap-4 pb-10 ${status === 'complete' ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'}`}>
                            {results.clips.map((clip, i) => (
-                              <ResultCard
-                                key={i}
-                                clip={clip}
-                                index={i}
-                                jobId={jobId}
-                                uploadPostKey={uploadPostKey}
-                                uploadUserId={uploadUserId}
-                                onPlay={(time) => handleClipPlay(time)}
-                                onPause={handleClipPause}
-                              />
+                          <ResultCard
+                               key={i}
+                               clip={clip}
+                               index={i}
+                               jobId={jobId}
+                               uploadPostKey={uploadPostKey}
+                               uploadUserId={uploadUserId}
+                               geminiApiKey={apiKey}
+                               onPlay={(time) => handleClipPlay(time)}
+                               onPause={handleClipPause}
+                             />
                            ))}
                        </div>
                     ) : (
