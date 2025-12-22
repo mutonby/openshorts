@@ -453,6 +453,7 @@ def download_youtube_video(url, output_dir="."):
     Downloads a YouTube video using yt-dlp.
     Returns the path to the downloaded video and the video title.
     """
+    print(f"🔍 Debug: yt-dlp version: {yt_dlp.version.__version__}")
     print("📥 Downloading video from YouTube...")
     step_start_time = time.time()
 
@@ -463,6 +464,11 @@ def download_youtube_video(url, output_dir="."):
         try:
             with open(cookies_path, 'w') as f:
                 f.write(cookies_env)
+            if os.path.exists(cookies_path):
+                 print(f"   Debug: Cookies file created. Size: {os.path.getsize(cookies_path)} bytes")
+                 with open(cookies_path, 'r') as f:
+                     content = f.read(100)
+                     print(f"   Debug: First 100 chars of cookie file: {content}")
         except Exception as e:
             print(f"⚠️ Failed to write cookies file: {e}")
             cookies_path = None
@@ -471,15 +477,20 @@ def download_youtube_video(url, output_dir="."):
         print("⚠️ YOUTUBE_COOKIES env var not found.")
     
     ydl_opts_info = {
-        'quiet': True,
-        'no_warnings': True,
+        'quiet': False,
+        'verbose': True,
+        'no_warnings': False,
         'cookiefile': cookies_path if cookies_path else None
     }
     
     with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
-        info = ydl.extract_info(url, download=False)
-        video_title = info.get('title', 'youtube_video')
-        sanitized_title = sanitize_filename(video_title)
+        try:
+            info = ydl.extract_info(url, download=False)
+            video_title = info.get('title', 'youtube_video')
+            sanitized_title = sanitize_filename(video_title)
+        except Exception as e:
+            print(f"❌ Error extracting info: {e}")
+            raise e
     
     output_template = os.path.join(output_dir, f'{sanitized_title}.%(ext)s')
     expected_file = os.path.join(output_dir, f'{sanitized_title}.mp4')
@@ -492,7 +503,8 @@ def download_youtube_video(url, output_dir="."):
         'outtmpl': output_template,
         'merge_output_format': 'mp4',
         'quiet': False,
-        'no_warnings': True,
+        'verbose': True,
+        'no_warnings': False,
         'overwrites': True,
         'cookiefile': cookies_path if cookies_path else None
     }
