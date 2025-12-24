@@ -26,7 +26,11 @@ OpenShorts leverages state-of-the-art AI to handle the entire content lifecycle:
         *   **GENERAL Mode (Groups/Landscapes)**: For scenes with multiple people or no clear subject, it automatically switches to a professional **blurred-background layout**, preserving the full width of the original shot while filling the 9:16 vertical space.
     *   **Intelligent Scene Analysis**: Pre-scans every scene to determine the optimal strategy before processing.
 
-3.  **📲 Direct Social posting:**
+3.  **☁️ Automated S3 Backup:**
+    *   **Silent Background Upload**: Once clips are generated, they are automatically uploaded to an AWS S3 bucket.
+    *   **Seamless Integration**: Operates in the background without affecting processing logs or UI performance.
+
+4.  **📲 Direct Social posting:**
     *   **Upload-Post Integration**: Share your generated clips directly to TikTok, Instagram, and YouTube with a single click.
     *   **Profile Selector**: Manage multiple social accounts easily through the dashboard.
 
@@ -50,6 +54,16 @@ To enable direct posting, follow these steps:
 3.  **Connect Accounts**: In the same section, connect your TikTok, Instagram, or YouTube accounts to that profile.
 4.  **Get API Key**: Navigate to [API Keys](https://app.upload-post.com/api-keys) and generate your key.
 5.  **Use in OpenShorts**: Paste the API Key and select your Profile in the dashboard.
+    
+
+### ☁️ AWS S3 Setup (Optional)
+To enable automatic backup of your clips to S3:
+1. **Environment Variables**: Set the following in your `.env` file or system environment:
+    * `AWS_ACCESS_KEY_ID`: Your AWS access key.
+    * `AWS_SECRET_ACCESS_KEY`: Your AWS secret key.
+    * `AWS_REGION`: (Optional) Defaults to `us-east-1`.
+    * `AWS_S3_BUCKET`: (Optional) Defaults to `openshorts.app-clips`.
+2. **Bucket**: Clips are uploaded to the specified bucket automatically after generation.
 
 
 ---
@@ -87,7 +101,8 @@ Open your browser and navigate to:
 3.  **AI Intelligence**: Gemini reads the transcript and selects periods of high interest.
 4.  **Extraction**: FFmpeg precisely cuts the selected segments.
 5.  **Reframing**: AI-powered visual tracking crops clips to vertical format.
-6.  **Distribution**: One-click posting via Upload-Post API.
+6.  **Backup**: Automated silent upload of clips and metadata to AWS S3.
+7.  **Distribution**: One-click posting via Upload-Post API.
 
 ---
 

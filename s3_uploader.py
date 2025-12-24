@@ -42,7 +42,7 @@ def upload_job_artifacts(directory, job_id):
     """
     Upload all generated clips and metadata for a job to S3.
     """
-    bucket_name = "openshorts.app-clips"
+    bucket_name = os.environ.get('AWS_S3_BUCKET', 'openshorts.app-clips')
     
     if not os.path.exists(directory):
         return
