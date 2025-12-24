@@ -437,8 +437,19 @@ async def edit_clip(
                 duration = frame_count / fps if fps else 0
                 cap.release()
                 
+                # Load transcript from metadata
+                transcript = None
+                try:
+                    meta_files = glob.glob(os.path.join(OUTPUT_DIR, req.job_id, "*_metadata.json"))
+                    if meta_files:
+                        with open(meta_files[0], 'r') as f:
+                            data = json.load(f)
+                            transcript = data.get('transcript')
+                except Exception as e:
+                    print(f"⚠️ Could not load transcript for editing context: {e}")
+
                 # 3. Get Plan (Filter String)
-                filter_data = editor.get_ffmpeg_filter(vid_file, duration, fps=fps, width=width, height=height)
+                filter_data = editor.get_ffmpeg_filter(vid_file, duration, fps=fps, width=width, height=height, transcript=transcript)
                 
                 # 4. Apply
                 # Use safe output name first

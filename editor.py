@@ -37,27 +37,38 @@ class VideoEditor:
                 raise Exception("Video processing failed by Gemini.")
             time.sleep(2)
 
-    def get_ffmpeg_filter(self, video_file_obj, duration, fps=30, width=None, height=None):
+    def get_ffmpeg_filter(self, video_file_obj, duration, fps=30, width=None, height=None, transcript=None):
         """Asks Gemini for a raw FFmpeg filter string."""
         if width is None or height is None:
             # Keep prompt usable even if caller didn't pass dimensions.
             width, height = 1080, 1920
         
+        transcript_text = json.dumps(transcript) if transcript else "Not available."
+
         prompt = f"""
-        You are an expert FFmpeg video editor. Your task is to generate a complex video filter string to make a short video viral.
-        
+        You are an expert FFmpeg video editor. Your task is to generate a complex video filter string to make a short video viral, BUT ONLY apply effects where they make sense contextually.
+
         Video Duration: {duration} seconds.
         Video FPS: {fps}
         Video Resolution (MUST KEEP EXACT): {width}x{height}
         
-        Goal: Apply dynamic zooms, cuts (simulated with punch-ins), and visual effects to increase retention.
-        
+        TRANSCRIPT (Context of what is being said):
+        {transcript_text}
+
+        Goal: Enhance the video with dynamic zooms, cuts (simulated with punch-ins), and visual effects to increase retention, but DO NOT overdo it. Random effects are bad. Contextual effects are good.
+
         Instructions:
-        1. Analyze the video content (if possible) or apply a generic high-retention pacing.
-        2. Create a single valid FFmpeg filter complex string (for the -vf flag).
-        3. Use filters like `zoompan`, `eq` (contrast), `hue` (saturation/bw), `unsharp`.
-        4. Pacing: Something interesting should happen every 3-5 seconds.
-        5. CRITICAL SYNTAX RULES:
+        1. ANALYZE THE VIDEO AND TRANSCRIPT: Understand the mood, the pacing, and the key moments.
+        2. APPLY EFFECTS ONLY WHEN RELEVANT:
+           - Use "punch-in" zooms (zoompan) to emphasize key points, jokes, or dramatic moments in the speech.
+           - slow zooms to face when the speaker is speaking
+           - Use visual effects (contrast, saturation, sharpness) to highlight mood changes or specific segments.
+           - If nothing significant is happening, keep it simple. It is BETTER to have no effect than a random/distracting one.
+           - Avoid constant motion if the speaker is delivering a serious or steady message.
+        3. Create a single valid FFmpeg filter complex string (for the -vf flag).
+        4. Use filters like `zoompan`, `eq` (contrast), `hue` (saturation/bw), `unsharp`.
+        5. Pacing: Align effects with the rhythm of the speech (from transcript) or visual action.
+        6. CRITICAL SYNTAX RULES:
            - DO NOT use comparison operators like `<`, `>`, `<=`, `>=` anywhere. They frequently break FFmpeg expression parsing.
            - USE FFmpeg expression FUNCTIONS instead:
              - `between(x,a,b)`
