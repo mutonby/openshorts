@@ -1,6 +1,64 @@
 import os
 import subprocess
 
+
+def transcribe_audio(video_path):
+    """
+    Transcribe audio from a video file using faster-whisper.
+    Returns transcript in the same format as main.py for compatibility.
+    """
+    from faster_whisper import WhisperModel
+
+    print(f"🎙️  Transcribing audio from: {video_path}")
+
+    # Run on CPU with INT8 quantization for speed
+    model = WhisperModel("base", device="cpu", compute_type="int8")
+
+    segments, info = model.transcribe(video_path, word_timestamps=True)
+
+    transcript = {
+        "segments": [],
+        "language": info.language
+    }
+
+    for segment in segments:
+        seg_data = {
+            "start": segment.start,
+            "end": segment.end,
+            "text": segment.text,
+            "words": []
+        }
+        if segment.words:
+            for word in segment.words:
+                seg_data["words"].append({
+                    "word": word.word.strip(),
+                    "start": word.start,
+                    "end": word.end
+                })
+        transcript["segments"].append(seg_data)
+
+    print(f"✅ Transcription complete. Language: {info.language}")
+    return transcript
+
+
+def generate_srt_from_video(video_path, output_path, max_chars=20, max_duration=2.0):
+    """
+    Transcribe a video and generate SRT directly.
+    Used for dubbed videos that don't have a pre-existing transcript.
+    """
+    transcript = transcribe_audio(video_path)
+
+    # Get video duration to use as clip_end
+    import cv2
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = frame_count / fps if fps else 0
+    cap.release()
+
+    return generate_srt(transcript, 0, duration, output_path, max_chars, max_duration)
+
+
 def generate_srt(transcript, clip_start, clip_end, output_path, max_chars=20, max_duration=2.0):
     """
     Generates an SRT file from the transcript for a specific time range.

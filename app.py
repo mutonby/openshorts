@@ -363,8 +363,9 @@ async def get_status(job_id: str):
     }
 
 from editor import VideoEditor
-from subtitles import generate_srt, burn_subtitles
+from subtitles import generate_srt, burn_subtitles, generate_srt_from_video
 from hooks import add_hook_to_video
+from translate import translate_video, get_supported_languages
 
 class EditRequest(BaseModel):
     job_id: str
@@ -558,10 +559,22 @@ async def add_subtitles(req: SubtitleRequest):
     
     try:
         # 1. Generate SRT
-        success = generate_srt(transcript, clip_data['start'], clip_data['end'], srt_path)
+        # Check if this is a dubbed video - if so, transcribe it fresh
+        is_dubbed = filename.startswith("translated_")
+
+        if is_dubbed:
+            print(f"🎙️ Dubbed video detected, transcribing audio for subtitles...")
+            def run_transcribe_srt():
+                return generate_srt_from_video(input_path, srt_path)
+
+            loop = asyncio.get_event_loop()
+            success = await loop.run_in_executor(None, run_transcribe_srt)
+        else:
+            success = generate_srt(transcript, clip_data['start'], clip_data['end'], srt_path)
+
         if not success:
              raise HTTPException(status_code=400, detail="No words found for this clip range.")
-             
+
         # 2. Burn Subtitles
         # Run in thread pool
         def run_burn():
@@ -682,6 +695,102 @@ async def add_hook(req: HookRequest):
         "new_video_url": f"/videos/{req.job_id}/{output_filename}"
     }
 
+class TranslateRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    target_language: str
+    source_language: Optional[str] = None
+    input_filename: Optional[str] = None
+
+@app.get("/api/translate/languages")
+async def get_languages():
+    """Return supported languages for translation."""
+    return {"languages": get_supported_languages()}
+
+@app.post("/api/translate")
+async def translate_clip(
+    req: TranslateRequest,
+    x_elevenlabs_key: Optional[str] = Header(None, alias="X-ElevenLabs-Key")
+):
+    """Translate a video clip to a different language using ElevenLabs dubbing."""
+    if not x_elevenlabs_key:
+        raise HTTPException(status_code=400, detail="Missing X-ElevenLabs-Key header")
+
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs[req.job_id]
+    output_dir = os.path.join(OUTPUT_DIR, req.job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+
+    with open(json_files[0], 'r') as f:
+        data = json.load(f)
+
+    clips = data.get('shorts', [])
+    if req.clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    clip_data = clips[req.clip_index]
+
+    # Video Path
+    if req.input_filename:
+        filename = os.path.basename(req.input_filename)
+    else:
+        filename = clip_data.get('video_url', '').split('/')[-1]
+        if not filename:
+             base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+             filename = f"{base_name}_clip_{req.clip_index+1}.mp4"
+
+    input_path = os.path.join(output_dir, filename)
+    if not os.path.exists(input_path):
+        raise HTTPException(status_code=404, detail=f"Video file not found: {input_path}")
+
+    # Output video with language suffix
+    base, ext = os.path.splitext(filename)
+    output_filename = f"translated_{req.target_language}_{base}{ext}"
+    output_path = os.path.join(output_dir, output_filename)
+
+    try:
+        # Run translation in thread pool (blocking API calls)
+        def run_translate():
+            return translate_video(
+                video_path=input_path,
+                output_path=output_path,
+                target_language=req.target_language,
+                api_key=x_elevenlabs_key,
+                source_language=req.source_language,
+            )
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, run_translate)
+
+    except Exception as e:
+        print(f"❌ Translation Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Update InMemory Jobs
+    if req.clip_index < len(job['result']['clips']):
+         job['result']['clips'][req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
+
+    # Update Metadata on Disk
+    try:
+        if req.clip_index < len(clips):
+            clips[req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
+            data['shorts'] = clips
+            with open(json_files[0], 'w') as f:
+                json.dump(data, f, indent=4)
+                print(f"✅ Metadata updated with translated video for clip {req.clip_index}")
+    except Exception as e:
+        print(f"⚠️ Failed to update metadata.json: {e}")
+
+    return {
+        "success": True,
+        "new_video_url": f"/videos/{req.job_id}/{output_filename}"
+    }
+
 class SocialPostRequest(BaseModel):
     job_id: str
     clip_index: int
@@ -733,7 +842,8 @@ async def post_to_socials(req: SocialPostRequest):
         data_payload = {
             "user": req.user_id,
             "title": final_title,
-            "platform[]": req.platforms # Pass list directly
+            "platform[]": req.platforms, # Pass list directly
+            "async_upload": "true"  # Enable async upload
         }
 
         # Add scheduling if present

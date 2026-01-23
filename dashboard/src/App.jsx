@@ -134,6 +134,12 @@ function App() {
     if (stored) return decrypt(stored);
     return '';
   });
+  // ElevenLabs API State - Load encrypted
+  const [elevenLabsKey, setElevenLabsKey] = useState(() => {
+    const stored = localStorage.getItem('elevenLabsKey_v1');
+    if (stored) return decrypt(stored);
+    return '';
+  });
 
   const [uploadUserId, setUploadUserId] = useState(() => localStorage.getItem('uploadUserId') || '');
   const [userProfiles, setUserProfiles] = useState([]); // List of {username, connected: []}
@@ -174,6 +180,12 @@ function App() {
       localStorage.setItem('uploadUserId', uploadUserId);
     }
   }, [uploadPostKey, uploadUserId]);
+
+  useEffect(() => {
+    if (elevenLabsKey) {
+      localStorage.setItem('elevenLabsKey_v1', encrypt(elevenLabsKey));
+    }
+  }, [elevenLabsKey]);
 
   useEffect(() => {
     if (uploadPostKey && userProfiles.length === 0) {
@@ -439,6 +451,57 @@ function App() {
                   </p>
                 </div>
               </div>
+
+              <div className="glass-panel p-6 mt-8">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-semibold">Video Translation</h2>
+                  <span className="text-[10px] bg-white/5 border border-white/5 px-2 py-0.5 rounded text-zinc-500 uppercase tracking-wider">Optional</span>
+                </div>
+                <p className="text-xs text-zinc-500 mb-6 leading-relaxed">
+                  Translate your clips to different languages using <strong>ElevenLabs</strong> AI dubbing.
+                  Automatically translates speech while preserving the original voice characteristics.
+                </p>
+                <div className="space-y-4">
+                  <label className="block text-sm text-zinc-400">ElevenLabs API Key</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      value={elevenLabsKey}
+                      onChange={(e) => setElevenLabsKey(e.target.value)}
+                      className="input-field"
+                      placeholder="sk_..."
+                    />
+                    <button
+                      onClick={() => {
+                        if (elevenLabsKey) {
+                          localStorage.setItem('elevenLabsKey_v1', encrypt(elevenLabsKey));
+                          alert('ElevenLabs API Key saved!');
+                        }
+                      }}
+                      className="btn-primary py-2 px-4 text-sm"
+                    >
+                      Save
+                    </button>
+                  </div>
+                  <p className="text-xs text-zinc-500 leading-relaxed">
+                    Get your API key from ElevenLabs to enable video translation.
+                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <a href="https://elevenlabs.io/sign-up" target="_blank" rel="noopener noreferrer" className="p-2 border border-white/5 rounded-lg hover:bg-white/5 transition-colors flex flex-col gap-1">
+                        <span className="text-zinc-400 font-medium">1. Sign Up</span>
+                        <span className="text-[10px] text-zinc-600">Create account</span>
+                      </a>
+                      <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener noreferrer" className="p-2 border border-white/5 rounded-lg hover:bg-white/5 transition-colors flex flex-col gap-1">
+                        <span className="text-zinc-400 font-medium">2. API Key</span>
+                        <span className="text-[10px] text-zinc-600">Generate key</span>
+                      </a>
+                    </div>
+                    <br />
+                    <span className="text-zinc-600 italic">
+                      Keys are only stored in your browser. They are sent to the backend only to process your request, never stored server-side.
+                    </span>
+                  </p>
+                </div>
+              </div>
             </div>
           )}
 
@@ -556,6 +619,7 @@ function App() {
                           uploadPostKey={uploadPostKey}
                           uploadUserId={uploadUserId}
                           geminiApiKey={apiKey}
+                          elevenLabsKey={elevenLabsKey}
                           onPlay={(time) => handleClipPlay(time)}
                           onPause={handleClipPause}
                         />

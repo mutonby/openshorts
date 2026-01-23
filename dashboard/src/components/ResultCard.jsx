@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, CheckCircle, AlertCircle, X, Loader2, Copy, Wand2, Type, Calendar, Clock } from 'lucide-react';
+import { Download, Share2, Instagram, Youtube, Video, CheckCircle, AlertCircle, X, Loader2, Copy, Wand2, Type, Calendar, Clock, Languages } from 'lucide-react';
 import { getApiUrl } from '../config';
 import SubtitleModal from './SubtitleModal';
 import HookModal from './HookModal';
+import TranslateModal from './TranslateModal';
 
-export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, geminiApiKey, onPlay, onPause }) {
+export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, onPlay, onPause }) {
     const [showModal, setShowModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
     const videoRef = React.useRef(null);
@@ -26,7 +27,9 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
     const [isEditing, setIsEditing] = useState(false);
     const [isSubtitling, setIsSubtitling] = useState(false);
     const [isHooking, setIsHooking] = useState(false);
+    const [isTranslating, setIsTranslating] = useState(false);
     const [showHookModal, setShowHookModal] = useState(false);
+    const [showTranslateModal, setShowTranslateModal] = useState(false);
     const [editError, setEditError] = useState(null);
 
     // Initialize/Reset form when modal opens
@@ -170,6 +173,69 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
             setTimeout(() => setEditError(null), 5000);
         } finally {
             setIsHooking(false);
+        }
+    };
+
+    const handleTranslate = async (options) => {
+        console.log('[Translate] Starting translation with options:', options);
+        setIsTranslating(true);
+        setEditError(null);
+        try {
+            const apiKey = elevenLabsKey;
+            console.log('[Translate] API Key available:', !!apiKey);
+
+            if (!apiKey) {
+                throw new Error("ElevenLabs API Key is missing. Please set it in Settings.");
+            }
+
+            const requestBody = {
+                job_id: jobId,
+                clip_index: index,
+                target_language: options.targetLanguage,
+                input_filename: currentVideoUrl.split('/').pop()
+            };
+            console.log('[Translate] Request body:', requestBody);
+            console.log('[Translate] Sending request to /api/translate');
+
+            const res = await fetch(getApiUrl('/api/translate'), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-ElevenLabs-Key': apiKey
+                },
+                body: JSON.stringify(requestBody)
+            });
+
+            console.log('[Translate] Response status:', res.status);
+
+            if (!res.ok) {
+                const errText = await res.text();
+                console.error('[Translate] Error response:', errText);
+                try {
+                    const jsonErr = JSON.parse(errText);
+                    throw new Error(jsonErr.detail || errText);
+                } catch (e) {
+                    if (e.message !== errText) throw e;
+                    throw new Error(errText);
+                }
+            }
+
+            const data = await res.json();
+            console.log('[Translate] Success response:', data);
+            if (data.new_video_url) {
+                setCurrentVideoUrl(getApiUrl(data.new_video_url));
+                if (videoRef.current) {
+                    videoRef.current.load();
+                }
+                setShowTranslateModal(false);
+            }
+
+        } catch (e) {
+            console.error('[Translate] Exception:', e);
+            setEditError(e.message);
+            setTimeout(() => setEditError(null), 5000);
+        } finally {
+            setIsTranslating(false);
         }
     };
 
@@ -355,6 +421,15 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                     </button>
 
                     <button
+                        onClick={() => setShowTranslateModal(true)}
+                        disabled={isTranslating}
+                        className="col-span-1 py-2 bg-gradient-to-r from-green-500 to-teal-600 hover:from-green-400 hover:to-teal-500 text-white rounded-lg text-xs font-bold shadow-lg shadow-green-500/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2 mb-1 truncate px-1"
+                    >
+                        {isTranslating ? <Loader2 size={14} className="animate-spin" /> : <Languages size={14} />}
+                        {isTranslating ? 'Translating...' : 'Dub Voice'}
+                    </button>
+
+                    <button
                         onClick={() => setShowModal(true)}
                         className="col-span-1 py-2 bg-primary hover:bg-blue-600 text-white rounded-lg text-xs font-bold shadow-lg shadow-primary/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2 truncate px-2"
                     >
@@ -513,6 +588,15 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                 isProcessing={isHooking}
                 videoUrl={currentVideoUrl}
                 initialText={clip.viral_hook_text}
+            />
+
+            <TranslateModal
+                isOpen={showTranslateModal}
+                onClose={() => setShowTranslateModal(false)}
+                onTranslate={handleTranslate}
+                isProcessing={isTranslating}
+                videoUrl={currentVideoUrl}
+                hasApiKey={!!elevenLabsKey}
             />
         </div>
     );

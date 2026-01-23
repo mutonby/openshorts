@@ -1,5 +1,9 @@
 # OpenShorts.app 🚀🎬
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Open Source](https://badges.frapsoft.com/os/v1/open-source.svg?v=103)](https://opensource.org/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
+
 OpenShorts is an all-in-one open-source solution to automate the creation and distribution of viral vertical content. It transforms long YouTube videos or local files into high-potential short clips optimized for **TikTok**, **Instagram Reels**, and **YouTube Shorts**.
 
 ![OpenShorts Demo](https://github.com/kamilstanuch/Autocrop-vertical/blob/main/churchil_queen_vertical_short.gif?raw=true)
@@ -30,11 +34,16 @@ OpenShorts leverages state-of-the-art AI to handle the entire content lifecycle:
     *   **Silent Background Upload**: Once clips are generated, they are automatically uploaded to an AWS S3 bucket.
     *   **Seamless Integration**: Operates in the background without affecting processing logs or UI performance.
 
-4.  **📲 Direct Social posting:**
+4.  **📲 Direct Social Posting:**
     *   **Upload-Post Integration**: Share your generated clips directly to TikTok, Instagram, and YouTube with a single click.
     *   **Profile Selector**: Manage multiple social accounts easily through the dashboard.
 
-4.  **🎨 Modern Web Dashboard:**
+5.  **🎙️ AI Voice Dubbing:**
+    *   **ElevenLabs Integration**: Translate your clips to 30+ languages with AI-powered voice dubbing.
+    *   **Voice Cloning**: Preserves the original speaker's voice characteristics in the new language.
+    *   **Auto-Subtitles**: Automatically generates subtitles in the dubbed language.
+
+6.  **🎨 Modern Web Dashboard:**
     *   **Real-time Progress**: Watch clips appear as they are generated with a live results feed.
     *   **Log Streaming**: Follow the technical process with real-time log updates.
     *   **Responsive Design**: A premium, dark-mode glassmorphism interface.
@@ -46,6 +55,7 @@ OpenShorts leverages state-of-the-art AI to handle the entire content lifecycle:
 *   **Docker & Docker Compose**.
 *   **Google Gemini API Key** ([Get it for free here](https://aistudio.google.com/app/apikey)).
 *   **Upload-Post API Key** (Optional, for direct social posting. **Free tier available, no credit card required**).
+*   **ElevenLabs API Key** (Optional, for AI voice dubbing. [Get it here](https://elevenlabs.io)).
 
 ### 📲 Social Media Setup (Upload-Post)
 To enable direct posting, follow these steps:
