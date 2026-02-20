@@ -171,7 +171,7 @@ OUTPUT JSON:
         return {"titles": ["Could not refine titles - please try again"]}
 
 
-def generate_thumbnail(api_key, title, session_id, face_image_path=None, bg_image_path=None, extra_prompt="", count=3):
+def generate_thumbnail(api_key, title, session_id, face_image_path=None, bg_image_path=None, extra_prompt="", count=3, video_context=""):
     """
     Generates YouTube thumbnails using Gemini image generation.
     Returns list of saved image paths (relative URLs).
@@ -193,34 +193,45 @@ def generate_thumbnail(api_key, title, session_id, face_image_path=None, bg_imag
         bg_img = Image.open(bg_image_path)
         prompt_parts.append(bg_img)
 
+    # Build video context block
+    context_block = ""
+    if video_context:
+        context_block = f"""
+VIDEO CONTEXT (use this to understand the video and design a relevant thumbnail):
+{video_context}
+"""
+
+    # Build extra instructions block (high priority)
+    extra_block = ""
+    if extra_prompt:
+        extra_block = f"""
+⚠️ MANDATORY USER INSTRUCTIONS (MUST follow these exactly — they override any default behavior):
+{extra_prompt}
+"""
+
     text_prompt = f"""Generate a professional, eye-catching YouTube thumbnail image.
 
-VIDEO TITLE (for context only — DO NOT copy it verbatim onto the thumbnail): "{title}"
-
-TEXT TO SHOW ON THE THUMBNAIL:
-- Derive a SHORT, punchy visual hook from the title: 1 to 5 words maximum
-- Pick the most emotionally powerful or curiosity-triggering fragment of the title
-  (a key number, a strong emotion word, a shocking claim, a question word, etc.)
-- Example: if the title is "I Made $10,000 in 30 Days With This Strategy", the thumbnail text might be "$10K IN 30 DAYS" or "THIS ACTUALLY WORKS"
-- The thumbnail text and the YouTube title should COMPLEMENT each other, not duplicate
-- Use ALL CAPS or mixed-case for visual impact depending on what looks better
-- Split across 2-3 lines if needed for readability
-
+VIDEO TITLE (for reference — do NOT put the full title on the thumbnail): "{title}"
+{context_block}
+TEXT ON THE THUMBNAIL:
+- Based on the title AND the video context, create a SHORT visual hook: 1 to 5 words maximum
+- It should capture the core emotion, surprise, or promise of the video
+- The thumbnail text should COMPLEMENT the YouTube title (which appears below), not repeat it
+- Examples: "$10K EN 30 DÍAS", "ESTO FUNCIONA", "NO LO SABÍAS", "GRATIS 🔥"
+- Use ALL CAPS for maximum impact, split into 2-3 lines
+{extra_block}
 DESIGN REQUIREMENTS:
-- The derived text MUST appear prominently — large, bold, high-contrast typography
-- Professional YouTube thumbnail style with vibrant, eye-catching colors
-- High contrast and visual impact for small screen sizes
-- Clean composition that immediately draws attention
-- The text and any face/subject should be the clear focal points"""
+- The text MUST be large, bold, and high-contrast (readable at small sizes)
+- Use vibrant, eye-catching colors that match the video's mood
+- Professional YouTube thumbnail aesthetic
+- Clean composition — text and face/subject as clear focal points
+- NO clutter, NO small text, NO watermarks"""
 
     if face_image_path and os.path.exists(face_image_path):
-        text_prompt += "\n- Include the provided face/person image prominently in the thumbnail, showing strong emotion or reaction"
+        text_prompt += "\n- Include the provided face/person prominently with an exaggerated expression (surprise, excitement, shock)"
 
     if bg_image_path and os.path.exists(bg_image_path):
-        text_prompt += "\n- Use the provided background image as the base/backdrop for the thumbnail"
-
-    if extra_prompt:
-        text_prompt += f"\n- Additional instructions: {extra_prompt}"
+        text_prompt += "\n- Use the provided background image as the base/backdrop"
 
     prompt_parts.append(text_prompt)
 

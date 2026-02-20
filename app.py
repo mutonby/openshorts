@@ -1204,6 +1204,11 @@ async def thumbnail_generate(
             with open(bg_path, "wb") as f:
                 f.write(await background.read())
 
+        # Get video context from session (transcript summary from analysis step)
+        video_context = ""
+        if session_id in thumbnail_sessions:
+            video_context = thumbnail_sessions[session_id].get("context", "")
+
         # Run generation in thread pool
         loop = asyncio.get_event_loop()
         thumbnails = await loop.run_in_executor(
@@ -1215,7 +1220,8 @@ async def thumbnail_generate(
             face_path,
             bg_path,
             extra_prompt,
-            count
+            count,
+            video_context
         )
 
         return {"thumbnails": thumbnails}
