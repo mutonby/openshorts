@@ -17,6 +17,10 @@ export default defineConfig({
       '/videos': {
         target: 'http://backend:8000',
         changeOrigin: true,
+      },
+      '/thumbnails': {
+        target: 'http://backend:8000',
+        changeOrigin: true,
       }
     }
   }

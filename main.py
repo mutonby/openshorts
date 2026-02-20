@@ -477,24 +477,35 @@ def download_youtube_video(url, output_dir="."):
         cookies_path = None
         print("⚠️ YOUTUBE_COOKIES env var not found.")
     
-    ydl_opts_info = {
+    # Common yt-dlp options to work around YouTube bot detection.
+    # extractor_args tries multiple player clients in order; tv_embed / android
+    # avoid the OAuth/PO-token checks that block server IPs.
+    _COMMON_YDL_OPTS = {
         'quiet': False,
         'verbose': True,
         'no_warnings': False,
         'cookiefile': cookies_path if cookies_path else None,
-        'sleep_interval_requests': 5,
-        'sleep_interval': 10,
-        'max_sleep_interval': 30,
         'socket_timeout': 30,
         'retries': 10,
+        'fragment_retries': 10,
         'nocheckcertificate': True,
-        'force_ipv4': True,
         'cachedir': False,
-        'extractor_args': {'youtube': {'player_client': ['web']}},
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['tv_embed', 'android', 'mweb', 'web'],
+                'player_skip': ['webpage', 'configs'],
+            }
+        },
+        'http_headers': {
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/120.0.0.0 Safari/537.36'
+            ),
+        },
     }
-    
-    with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
+
+    with yt_dlp.YoutubeDL(_COMMON_YDL_OPTS) as ydl:
         try:
             info = ydl.extract_info(url, download=False)
             video_title = info.get('title', 'youtube_video')
@@ -544,14 +555,11 @@ Technical Details: {str(e)}
         print(f"🗑️  Removed existing file to re-download with H.264 codec")
     
     ydl_opts = {
+        **_COMMON_YDL_OPTS,
         'format': 'bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/bestvideo[vcodec^=avc1]+bestaudio/best[ext=mp4]/best',
         'outtmpl': output_template,
         'merge_output_format': 'mp4',
-        'quiet': False,
-        'verbose': True,
-        'no_warnings': False,
         'overwrites': True,
-        'cookiefile': cookies_path if cookies_path else None
     }
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:

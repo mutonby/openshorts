@@ -12,17 +12,24 @@
 __pycache__/
 *.pyc
 
-# Temporary files
+# Temporary files / runtime dirs
 temp_*
 uploads/
+downloads/
+videos/
+output/
 
+# OS / IDE
 .DS_Store
+.idea/
+.vscode/
 
+# Secrets
 .env
+
+# Generated metadata
 *_metadata.json
 
-.cache
-
-.config
-
-output/
+# Cache dirs
+.cache/
+.config/
