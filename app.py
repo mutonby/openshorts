@@ -99,6 +99,20 @@ async def cleanup_jobs():
                         if job_id in jobs:
                             del jobs[job_id]
 
+            # Cleanup SaaSShorts jobs from memory
+            try:
+                saas_expired = [
+                    jid for jid, jdata in list(saas_jobs.items())
+                    if jdata.get("status") in ("completed", "failed")
+                    and jdata.get("output_dir")
+                    and os.path.isdir(jdata["output_dir"])
+                    and now - os.path.getmtime(jdata["output_dir"]) > JOB_RETENTION_SECONDS
+                ]
+                for jid in saas_expired:
+                    del saas_jobs[jid]
+            except NameError:
+                pass
+
             # Cleanup Uploads
             for filename in os.listdir(UPLOAD_DIR):
                 file_path = os.path.join(UPLOAD_DIR, filename)
@@ -1379,7 +1393,7 @@ async def thumbnail_publish_status(publish_id: str):
 # async def get_gallery_clips(limit: int = 20, offset: int = 0, refresh: bool = False):
 #     """
 #     Fetch clips from S3 for the gallery with pagination.
-#     
+#
 #     Args:
 #         limit: Number of clips to return (default 20, max 100)
 #         offset: Starting position for pagination
@@ -1388,13 +1402,13 @@ async def thumbnail_publish_status(publish_id: str):
 #     try:
 #         # Clamp limit to reasonable values
 #         limit = min(max(1, limit), 100)
-#         
+#
 #         # Get clips (uses cache internally)
 #         all_clips = list_all_clips(limit=limit + offset, force_refresh=refresh)
-#         
+#
 #         # Apply offset for pagination
 #         clips = all_clips[offset:offset + limit]
-#         
+#
 #         return {
 #             "clips": clips,
 #             "total": len(all_clips),
@@ -1405,3 +1419,252 @@ async def thumbnail_publish_status(publish_id: str):
 #     except Exception as e:
 #         print(f"❌ Gallery Error: {e}")
 #         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SaaSShorts: AI UGC Video Generator for SaaS Products
+# ═══════════════════════════════════════════════════════════════════════
+
+from saasshorts import (
+    scrape_website,
+    research_saas_online,
+    analyze_saas,
+    generate_scripts,
+    generate_full_video,
+    generate_actor_images,
+    get_elevenlabs_voices,
+    DEFAULT_VOICES,
+)
+
+# State for SaaSShorts jobs (separate from video processing jobs)
+saas_jobs: Dict[str, Dict] = {}
+
+
+class SaaSAnalyzeRequest(BaseModel):
+    url: str
+    num_scripts: int = 3
+    style: str = "ugc"
+    language: str = "en"
+    actor_gender: str = "female"
+
+
+@app.post("/api/saasshorts/analyze")
+async def saasshorts_analyze(
+    req: SaaSAnalyzeRequest,
+    x_gemini_key: Optional[str] = Header(None, alias="X-Gemini-Key"),
+):
+    """Scrape a SaaS URL, analyze it, and generate video scripts."""
+    gemini_key = x_gemini_key or os.environ.get("GEMINI_API_KEY")
+    if not gemini_key:
+        raise HTTPException(status_code=400, detail="Missing Gemini API Key")
+
+    try:
+        loop = asyncio.get_event_loop()
+
+        def run_analysis():
+            # Phase 1a: Scrape the website directly
+            scraped = scrape_website(req.url)
+            # Phase 1b: Research across the web with Google Search grounding
+            web_research = research_saas_online(req.url, gemini_key)
+            # Phase 1c: Combine both sources into deep analysis
+            analysis = analyze_saas(scraped, gemini_key, web_research=web_research)
+            # Phase 1d: Generate scripts based on analysis
+            scripts = generate_scripts(analysis, gemini_key, req.num_scripts, req.style, req.language, req.actor_gender)
+            return {
+                "analysis": analysis,
+                "scripts": scripts,
+                "web_research": web_research,
+            }
+
+        result = await loop.run_in_executor(None, run_analysis)
+        return result
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class SaaSActorRequest(BaseModel):
+    actor_description: str
+    num_options: int = 3
+
+
+@app.post("/api/saasshorts/actor-options")
+async def saasshorts_actor_options(
+    req: SaaSActorRequest,
+    x_fal_key: Optional[str] = Header(None, alias="X-Fal-Key"),
+):
+    """Generate multiple actor image options for the user to choose from."""
+    fal_key = x_fal_key
+    if not fal_key:
+        raise HTTPException(status_code=400, detail="Missing fal.ai API Key")
+
+    try:
+        job_id = str(uuid.uuid4())
+        out_dir = os.path.join(OUTPUT_DIR, f"saas_actors_{job_id}")
+        os.makedirs(out_dir, exist_ok=True)
+
+        loop = asyncio.get_running_loop()
+        paths = await loop.run_in_executor(
+            None,
+            generate_actor_images,
+            req.actor_description, fal_key, out_dir, "actor", req.num_options,
+        )
+
+        urls = [f"/videos/saas_actors_{job_id}/{os.path.basename(p)}" for p in paths]
+        return {"images": urls}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class SaaSGenerateRequest(BaseModel):
+    script: dict
+    voice_id: Optional[str] = None
+    actor_description: Optional[str] = None
+    selected_actor_url: Optional[str] = None  # Pre-selected actor image URL
+    retry_job_id: Optional[str] = None
+
+
+@app.post("/api/saasshorts/generate")
+async def saasshorts_generate(
+    req: SaaSGenerateRequest,
+    x_fal_key: Optional[str] = Header(None, alias="X-Fal-Key"),
+    x_elevenlabs_key: Optional[str] = Header(None, alias="X-ElevenLabs-Key"),
+):
+    """Generate a SaaS UGC video from a script. Returns a job_id for polling."""
+    fal_key = x_fal_key
+    elevenlabs_key = x_elevenlabs_key
+
+    if not fal_key:
+        raise HTTPException(status_code=400, detail="Missing fal.ai API Key (X-Fal-Key header)")
+    if not elevenlabs_key:
+        raise HTTPException(status_code=400, detail="Missing ElevenLabs API Key (X-ElevenLabs-Key header)")
+
+    # Support retry: reuse output_dir so cached assets (image, voice, head, broll) are kept
+    reused = False
+    if req.retry_job_id:
+        # Check memory first, then disk
+        old_dir = os.path.join(OUTPUT_DIR, f"saas_{req.retry_job_id}")
+        if req.retry_job_id in saas_jobs:
+            old_dir = saas_jobs[req.retry_job_id]["output_dir"]
+
+        if os.path.isdir(old_dir):
+            job_id = req.retry_job_id
+            job_output_dir = old_dir
+            reused = True
+            # Clear the 0-byte final video so pipeline re-generates it
+            for f in os.listdir(old_dir):
+                fp = os.path.join(old_dir, f)
+                if f.endswith("_final.mp4") and os.path.getsize(fp) == 0:
+                    os.remove(fp)
+            saas_jobs[job_id] = {
+                "status": "processing",
+                "logs": [f"Retrying job {job_id[:8]}... reusing cached assets from disk."],
+                "result": None,
+                "output_dir": job_output_dir,
+            }
+
+    if not reused:
+        job_id = str(uuid.uuid4())
+        job_output_dir = os.path.join(OUTPUT_DIR, f"saas_{job_id}")
+        os.makedirs(job_output_dir, exist_ok=True)
+        saas_jobs[job_id] = {
+            "status": "processing",
+            "logs": ["SaaSShorts job started."],
+            "result": None,
+            "output_dir": job_output_dir,
+        }
+
+    # If user selected a pre-generated actor, copy it into the job output dir
+    selected_actor_path = None
+    if req.selected_actor_url:
+        src = os.path.join(OUTPUT_DIR, req.selected_actor_url.replace("/videos/", ""))
+        if os.path.exists(src):
+            selected_actor_path = src
+
+    config = {
+        "fal_key": fal_key,
+        "elevenlabs_key": elevenlabs_key,
+        "voice_id": req.voice_id or "21m00Tcm4TlvDq8ikWAM",
+        "actor_description": req.actor_description,
+        "selected_actor_path": selected_actor_path,
+    }
+
+    async def run_generation():
+        await concurrency_semaphore.acquire()
+        try:
+            loop = asyncio.get_running_loop()
+
+            def log_msg(msg):
+                print(f"[SaaSShorts Job {job_id[:8]}] {msg}")
+                if job_id in saas_jobs:
+                    saas_jobs[job_id]["logs"].append(msg)
+
+            def run():
+                return generate_full_video(req.script, config, job_output_dir, log_msg)
+
+            result = await loop.run_in_executor(None, run)
+
+            if job_id in saas_jobs:
+                video_filename = result["video_filename"]
+                saas_jobs[job_id]["status"] = "completed"
+                saas_jobs[job_id]["result"] = {
+                    "video_url": f"/videos/saas_{job_id}/{video_filename}",
+                    "video_filename": video_filename,
+                    "duration": result.get("duration", 0),
+                    "cost_estimate": result.get("cost_estimate", {}),
+                    "script": req.script,
+                }
+                saas_jobs[job_id]["logs"].append("Video generation completed!")
+
+        except Exception as e:
+            print(f"[SaaSShorts] ❌ Job {job_id} failed: {e}")
+            if job_id in saas_jobs:
+                saas_jobs[job_id]["status"] = "failed"
+                saas_jobs[job_id]["logs"].append(f"Error: {str(e)}")
+        finally:
+            concurrency_semaphore.release()
+
+    asyncio.create_task(run_generation())
+
+    return {"job_id": job_id, "status": "processing"}
+
+
+@app.get("/api/saasshorts/status/{job_id}")
+async def saasshorts_status(job_id: str):
+    """Poll SaaSShorts job status."""
+    if job_id not in saas_jobs:
+        raise HTTPException(status_code=404, detail="SaaSShorts job not found")
+
+    job = saas_jobs[job_id]
+    return {
+        "status": job["status"],
+        "logs": job["logs"],
+        "result": job.get("result"),
+    }
+
+
+@app.get("/api/saasshorts/voices")
+async def saasshorts_voices(
+    x_elevenlabs_key: Optional[str] = Header(None, alias="X-ElevenLabs-Key"),
+):
+    """List available ElevenLabs voices."""
+    if x_elevenlabs_key:
+        try:
+            loop = asyncio.get_event_loop()
+            voices = await loop.run_in_executor(
+                None, get_elevenlabs_voices, x_elevenlabs_key
+            )
+            if voices:
+                return {"voices": voices, "source": "elevenlabs"}
+        except Exception:
+            pass
+
+    # Fallback to default voices
+    return {
+        "voices": [
+            {"voice_id": vid, "name": name, "category": "default"}
+            for name, vid in DEFAULT_VOICES.items()
+        ],
+        "source": "defaults",
+    }
