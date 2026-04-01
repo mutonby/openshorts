@@ -180,7 +180,7 @@ OpenShorts is free. You only pay for the AI APIs you use — and most have gener
 
 ### 1. Clone
 ```bash
-git clone https://github.com/your-username/OpenShorts.git
+git clone https://github.com/mutonby/openshorts.git
 cd OpenShorts
 ```
 
