@@ -97,7 +97,7 @@ def create_dubbing_project(
         try:
             error_data = response.json()
             error_msg = error_data.get("detail", {}).get("message", response.text)
-        except:
+        except Exception:
             pass
         raise Exception(f"ElevenLabs API error: {error_msg}")
 
