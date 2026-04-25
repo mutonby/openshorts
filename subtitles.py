@@ -124,7 +124,7 @@ def generate_srt(transcript, clip_start, clip_end, output_path, max_chars=20, ma
     cta_start = max(0, clip_duration - 2.0)
     cta_end = clip_duration
     if cta_end > cta_start:
-        srt_content += format_srt_block(index, cta_start, cta_end, "follow for more such content")
+        srt_content += format_srt_block(index, cta_start, cta_end, "follow for more such content 🔥")
 
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(srt_content)
