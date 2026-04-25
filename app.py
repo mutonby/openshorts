@@ -160,11 +160,23 @@ async def run_job_wrapper(job_id):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _worker_task, _cleanup_task
     # Start worker and cleanup
-    worker_task = asyncio.create_task(process_queue())
-    cleanup_task = asyncio.create_task(cleanup_jobs())
+    _worker_task = asyncio.create_task(process_queue())
+    _cleanup_task = asyncio.create_task(cleanup_jobs())
     yield
-    # Cleanup (optional: cancel worker)
+    # Graceful shutdown: cancel workers and wait for running jobs to drain
+    _worker_task.cancel()
+    _cleanup_task.cancel()
+    try:
+        await asyncio.gather(_worker_task, _cleanup_task, return_exceptions=True)
+    except Exception:
+        pass
+    # Wait for in-flight jobs to complete (up to 60s)
+    for _ in range(MAX_CONCURRENT_JOBS):
+        await concurrency_semaphore.acquire()
+        concurrency_semaphore.release()
+    print("\n🛑 Shutdown complete.")
 
 app = FastAPI(lifespan=lifespan)
 
