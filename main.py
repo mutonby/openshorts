@@ -444,7 +444,7 @@ def get_video_resolution(video_path):
 
 def sanitize_filename(filename):
     """Remove invalid characters from filename."""
-    filename = re.sub(r'[<>:"/\\|?*]', '', filename)
+    filename = re.sub(r'[<>:"/\\|?*#]', '', filename)
     filename = filename.replace(' ', '_')
     return filename[:100]
 
