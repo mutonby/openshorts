@@ -88,8 +88,17 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
             if (effectsRes.ok) {
                 const data = await effectsRes.json();
                 if (data.effects && data.effects.segments) {
-                    setCompositionParams(prev => ({ ...prev, effects: data.effects }));
-                    setShowPreviewModal(true);
+                    const newLayers = { ...activeLayers, effects: data.effects };
+                    setActiveLayers(newLayers);
+                    const blobUrl = await renderInBrowser({
+                        videoUrl: originalVideoUrl,
+                        durationInSeconds: clipDuration,
+                        subtitles: newLayers.subtitles,
+                        hook: newLayers.hook,
+                        effects: newLayers.effects,
+                    });
+                    setCurrentVideoUrl(blobUrl);
+                    if (videoRef.current) videoRef.current.load();
                     return;
                 }
             }
