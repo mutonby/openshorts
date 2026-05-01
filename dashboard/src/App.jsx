@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, FileVideo, Sparkles, Youtube, Instagram, Share2, LogOut, ChevronDown, Check, Activity, LayoutDashboard, Settings, PlusCircle, History, Menu, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound } from 'lucide-react';
+import { Upload, FileVideo, Sparkles, Youtube, Instagram, Share2, LogOut, ChevronDown, Check, Activity, LayoutDashboard, Settings, PlusCircle, History, Menu, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2 } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import ResultCard from './components/ResultCard';
@@ -397,6 +397,14 @@ function App() {
         </button>
 
         <button
+          onClick={() => setActiveTab('ai-agent')}
+          className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'ai-agent' ? 'bg-emerald-500/10 text-emerald-400' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
+        >
+          <Bot size={20} />
+          <span className="font-medium hidden lg:block">AI Agent</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('ugc-gallery')}
           className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'ugc-gallery' ? 'bg-violet-500/10 text-violet-400' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
         >
@@ -718,6 +726,122 @@ function App() {
           {/* View: SaaS Shorts */}
           {activeTab === 'saasshorts' && (
             <SaaShortsTab geminiApiKey={apiKey} elevenLabsKey={elevenLabsKey} falKey={falKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} />
+          )}
+
+          {/* View: AI Agent */}
+          {activeTab === 'ai-agent' && (
+            <div className="h-full overflow-y-auto custom-scrollbar p-6 md:p-10 animate-[fadeIn_0.3s_ease-out]">
+              <div className="max-w-4xl mx-auto space-y-8">
+
+                {/* Header */}
+                <div className="space-y-3">
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-[11px] uppercase tracking-wider text-emerald-400 font-semibold">
+                    <Bot size={12} /> Autonomous Skill
+                  </div>
+                  <h1 className="text-3xl md:text-4xl font-black bg-gradient-to-b from-white to-white/60 bg-clip-text text-transparent">
+                    Your Personal Clipping Team
+                  </h1>
+                  <p className="text-zinc-400 text-base md:text-lg leading-relaxed max-w-2xl">
+                    Drop your videos in a folder and a team of AI clippers picks the viral moments, edits them, and queues them for your approval — like having a 24/7 short-form editing crew on autopilot.
+                  </p>
+                </div>
+
+                {/* Mobile-format warning */}
+                <div className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 flex items-start gap-3">
+                  <Smartphone size={20} className="text-amber-400 shrink-0 mt-0.5" />
+                  <div className="text-sm text-amber-100">
+                    <p className="font-semibold text-amber-300 mb-1">Upload videos already in vertical (9:16) mobile format.</p>
+                    <p className="text-amber-100/80 leading-relaxed">
+                      The agent does not reframe horizontal footage. Make sure every source video is shot or pre-cropped to mobile/portrait format before dropping it into the input folder.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Workflow */}
+                <div className="grid md:grid-cols-3 gap-4">
+                  <div className="glass-panel p-5 space-y-2">
+                    <div className="w-10 h-10 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
+                      <Upload size={18} />
+                    </div>
+                    <h3 className="font-semibold text-white">1. Drop your videos</h3>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      Put your long-form vertical footage in the watched folder. The skill picks one video per run.
+                    </p>
+                  </div>
+
+                  <div className="glass-panel p-5 space-y-2">
+                    <div className="w-10 h-10 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
+                      <Users size={18} />
+                    </div>
+                    <h3 className="font-semibold text-white">2. AI clippers work</h3>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      Whisper transcribes, Gemini 3 Flash spots viral beats, FFmpeg cuts each clip and adds a hook overlay.
+                    </p>
+                  </div>
+
+                  <div className="glass-panel p-5 space-y-2">
+                    <div className="w-10 h-10 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
+                      <CheckCircle2 size={18} />
+                    </div>
+                    <h3 className="font-semibold text-white">3. You validate, it ships</h3>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      Approve the candidates you like and the skill auto-publishes them to TikTok, Reels and YouTube Shorts via Upload-Post.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Repo CTA */}
+                <div className="glass-panel p-6 md:p-8 space-y-5">
+                  <div className="flex items-start justify-between gap-4 flex-wrap">
+                    <div>
+                      <h2 className="text-xl font-bold text-white mb-1">skill-autoshorts</h2>
+                      <p className="text-sm text-zinc-400">
+                        The Claude Code skill that powers this workflow. Install it once and trigger it whenever you want a fresh batch of clips.
+                      </p>
+                    </div>
+                    <a
+                      href="https://github.com/mutonby/skill-autoshorts"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-primary py-2 px-4 text-sm flex items-center gap-2 shrink-0"
+                    >
+                      View on GitHub <ExternalLink size={14} />
+                    </a>
+                  </div>
+
+                  <div className="bg-[#0c0c0e] border border-white/10 rounded-lg p-4 font-mono text-xs text-zinc-300 flex items-center justify-between gap-3">
+                    <span className="truncate">git clone https://github.com/mutonby/skill-autoshorts</span>
+                    <button
+                      onClick={() => navigator.clipboard.writeText('git clone https://github.com/mutonby/skill-autoshorts')}
+                      className="text-zinc-500 hover:text-white transition-colors shrink-0"
+                      title="Copy"
+                    >
+                      <Copy size={14} />
+                    </button>
+                  </div>
+
+                  <div className="grid sm:grid-cols-2 gap-3 text-sm">
+                    <div className="flex items-start gap-2 text-zinc-300">
+                      <Check size={16} className="text-emerald-400 shrink-0 mt-0.5" />
+                      <span>Daily batch — picks one long video per run</span>
+                    </div>
+                    <div className="flex items-start gap-2 text-zinc-300">
+                      <Check size={16} className="text-emerald-400 shrink-0 mt-0.5" />
+                      <span>Whisper transcription with word-level timing</span>
+                    </div>
+                    <div className="flex items-start gap-2 text-zinc-300">
+                      <Check size={16} className="text-emerald-400 shrink-0 mt-0.5" />
+                      <span>Gemini 3 Flash multimodal moment detection</span>
+                    </div>
+                    <div className="flex items-start gap-2 text-zinc-300">
+                      <Check size={16} className="text-emerald-400 shrink-0 mt-0.5" />
+                      <span>Auto-publish to TikTok, Reels & YouTube Shorts</span>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
           )}
 
           {/* View: UGC Gallery */}
