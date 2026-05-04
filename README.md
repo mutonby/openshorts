@@ -172,7 +172,7 @@ OpenShorts is free. You only pay for the AI APIs you use — and most have gener
 - **Google Gemini API Key** ([Free — get it here](https://aistudio.google.com/app/apikey)) — required for all AI features
 - **fal.ai API Key** ([Pay-per-use](https://fal.ai)) — required for AI Shorts (actor generation, video, lip-sync)
 - **ElevenLabs API Key** ([Free tier](https://elevenlabs.io)) — required for voiceover/dubbing
-- **Upload-Post API Key** (Optional, [free tier](https://upload-post.com)) — for direct social posting
+- **Upload-Post API Key** ([free tier](https://upload-post.com)) — required for direct social posting
 
 ---
 
@@ -261,7 +261,7 @@ Navigate to **`http://localhost:5175`**
 | `GEMINI_API_KEY` | Google Gemini — required |
 | `FAL_KEY` | fal.ai — required for AI Shorts |
 | `ELEVENLABS_API_KEY` | ElevenLabs — required for voiceover/dubbing |
-| `UPLOAD_POST_API_KEY` | Upload-Post — optional, for social posting |
+| `UPLOAD_POST_API_KEY` | Upload-Post — required, for social posting |
 
 ---
 
