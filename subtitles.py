@@ -117,7 +117,15 @@ def generate_srt(transcript, clip_start, clip_end, output_path, max_chars=20, ma
         block_end = current_block[-1]['end'] - clip_start
         text = " ".join([w['word'] for w in current_block]).strip()
         srt_content += format_srt_block(index, block_start, block_end, text)
-        
+        index += 1
+
+    # CTA block: "follow for more" in the last 2 seconds of the clip
+    clip_duration = clip_end - clip_start
+    cta_start = max(0, clip_duration - 2.0)
+    cta_end = clip_duration
+    if cta_end > cta_start:
+        srt_content += format_srt_block(index, cta_start, cta_end, "follow for more such content 🔥")
+
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(srt_content)
         
@@ -209,7 +217,7 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
         '-i', video_path,
         '-vf', f"subtitles='{safe_srt_path}':force_style='{style_string}'",
         '-c:a', 'copy',
-        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+        '-c:v', 'libx264', '-preset', 'medium', '-crf', '18',
         output_path
     ]
 

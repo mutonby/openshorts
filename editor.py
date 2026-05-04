@@ -340,7 +340,7 @@ class VideoEditor:
             'ffmpeg', '-y',
             '-i', input_path,
             '-vf', filter_string,
-            '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+            '-c:v', 'libx264', '-preset', 'medium', '-crf', '18',
             '-c:a', 'copy',
             output_path
         ]
