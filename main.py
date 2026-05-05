@@ -5,7 +5,7 @@ import subprocess
 import argparse
 import re
 import sys
-from scenedetect import VideoManager, SceneManager
+from scenedetect import SceneManager, open_video, ContentDetector, FrameTimecode
 from scenedetect.detectors import ContentDetector
 from ultralytics import YOLO
 import torch
@@ -421,15 +421,13 @@ def analyze_scenes_strategy(video_path, scenes):
     return strategies
 
 def detect_scenes(video_path):
-    video_manager = VideoManager([video_path])
+    video = open_video(video_path)
     scene_manager = SceneManager()
     scene_manager.add_detector(ContentDetector())
-    video_manager.set_downscale_factor()
-    video_manager.start()
-    scene_manager.detect_scenes(frame_source=video_manager)
+    scene_manager.detect_scenes(video)
     scene_list = scene_manager.get_scene_list()
-    fps = video_manager.get_framerate()
-    video_manager.release()
+    # scene_list is a list of tuples (start_time, end_time)
+    fps = video.frame_rate
     return scene_list, fps
 
 def get_video_resolution(video_path):
