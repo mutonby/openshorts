@@ -7,6 +7,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [mode, setMode] = useState('url'); // 'url' | 'file'
     const [url, setUrl] = useState('');
     const [file, setFile] = useState(null);
+    const [acknowledged, setAcknowledged] = useState(false);
 
     useEffect(() => {
         fetch(getApiUrl('/api/config'))
@@ -22,10 +23,11 @@ export default function MediaInput({ onProcess, isProcessing }) {
 
     const handleSubmit = (e) => {
         e.preventDefault();
+        if (!acknowledged) return;
         if (mode === 'url' && url) {
-            onProcess({ type: 'url', payload: url });
+            onProcess({ type: 'url', payload: url, acknowledged: true });
         } else if (mode === 'file' && file) {
-            onProcess({ type: 'file', payload: file });
+            onProcess({ type: 'file', payload: file, acknowledged: true });
         }
     };
 
@@ -111,10 +113,22 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     </div>
                 )}
 
+                <label className="flex items-start gap-2 mt-5 text-xs text-zinc-400 cursor-pointer select-none">
+                    <input
+                        type="checkbox"
+                        checked={acknowledged}
+                        onChange={(e) => setAcknowledged(e.target.checked)}
+                        className="mt-0.5 accent-primary cursor-pointer"
+                    />
+                    <span>
+                        I confirm I own this content or have the rights to process it. I am responsible for any content I submit.
+                    </span>
+                </label>
+
                 <button
                     type="submit"
-                    disabled={isProcessing || (mode === 'url' && !url) || (mode === 'file' && !file)}
-                    className="w-full btn-primary mt-6 flex items-center justify-center gap-2"
+                    disabled={isProcessing || !acknowledged || (mode === 'url' && !url) || (mode === 'file' && !file)}
+                    className="w-full btn-primary mt-4 flex items-center justify-center gap-2"
                 >
                     {isProcessing ? (
                         <>

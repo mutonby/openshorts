@@ -336,10 +336,11 @@ function App() {
 
       if (data.type === 'url') {
         headers['Content-Type'] = 'application/json';
-        body = JSON.stringify({ url: data.payload });
+        body = JSON.stringify({ url: data.payload, acknowledged: !!data.acknowledged });
       } else {
         const formData = new FormData();
         formData.append('file', data.payload);
+        formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
         body = formData;
       }
 
