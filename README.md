@@ -23,7 +23,7 @@ https://github.com/user-attachments/assets/b45fa983-16b4-48b5-ac5b-a267836b9ad9
 ## 3 Tools in 1 Platform
 
 ### 1. Clip Generator
-Turn long YouTube videos or local uploads into viral-ready 9:16 shorts for TikTok, Instagram Reels, and YouTube Shorts.
+Turn your long-form videos — podcasts, webinars, livestreams, vlogs, interviews — into viral-ready 9:16 shorts for TikTok, Instagram Reels, and YouTube Shorts.
 
 ![Clip Generator](screenshots/clip-generator.png)
 
@@ -199,7 +199,7 @@ docker compose up --build
 Navigate to **`http://localhost:5175`**
 
 1. Go to **Settings** and enter your API keys (Gemini, fal.ai, ElevenLabs, Upload-Post)
-2. **Clip Generator**: Paste a YouTube URL or upload a video to generate viral shorts
+2. **Clip Generator**: Upload a long-form video to generate viral shorts
 3. **AI Shorts**: Describe your product or paste a URL to generate UGC marketing videos
 4. **YouTube Studio**: Generate thumbnails, titles, and descriptions for YouTube
 5. **UGC Gallery**: Browse all generated videos and avatars
@@ -209,7 +209,7 @@ Navigate to **`http://localhost:5175`**
 ## Technical Pipeline
 
 ### Clip Generator
-1. **Ingest** — YouTube download (yt-dlp) or local upload
+1. **Ingest** — Local video upload (or self-hosted URL ingest via yt-dlp)
 2. **Transcribe** — faster-whisper with word-level timestamps
 3. **Detect** — PySceneDetect for scene boundaries
 4. **Analyze** — Gemini identifies 3-15 viral moments (15-60s each)
