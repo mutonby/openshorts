@@ -1004,10 +1004,6 @@ function App() {
 
         </div>
 
-        {/* Footer */}
-        <div className="h-8 border-t border-white/5 flex items-center justify-center shrink-0">
-          <span className="text-[10px] text-zinc-600">Made with ❤️ by <a href="https://www.upload-post.com" target="_blank" rel="noopener noreferrer" className="text-zinc-500 hover:text-white transition-colors">Upload-Post</a></span>
-        </div>
       </main>
 
       {/* Missing API Key Modal */}
