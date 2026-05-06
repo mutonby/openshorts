@@ -869,7 +869,7 @@ function App() {
                     Create Viral Shorts
                   </h1>
                   <p className="text-zinc-400 text-lg">
-                    Drop your long-form video URL or file below to instantly generate viral clips with AI.
+                    Drop your long-form video below to instantly generate viral clips with AI.
                   </p>
                 </div>
 
