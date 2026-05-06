@@ -121,7 +121,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                         className="mt-0.5 accent-primary cursor-pointer"
                     />
                     <span>
-                        I confirm I own this content or have the rights to process it. I am responsible for any content I submit.
+                        I confirm I own this content or have the rights to process it. I am responsible for any content I submit. See our <a href="/#legal" target="_blank" rel="noopener noreferrer" className="text-primary underline" onClick={(e) => e.stopPropagation()}>Terms & Privacy</a>.
                     </span>
                 </label>
 

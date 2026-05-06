@@ -603,10 +603,8 @@ export default function Landing({ onLaunchApp }) {
             <a href="https://github.com/mutonby/openshorts" target="_blank" rel="noopener noreferrer" className="hover:text-white transition-colors">GitHub</a>
             <a href="#features" className="hover:text-white transition-colors">Features</a>
             <a href="#faq" className="hover:text-white transition-colors">FAQ</a>
+            <a href="#legal" className="hover:text-white transition-colors">Terms & Privacy</a>
           </div>
-        </div>
-        <div className="max-w-5xl mx-auto mt-6 pt-4 border-t border-white/5 text-center">
-          <span className="text-xs text-zinc-600">Made with ❤️ by <a href="https://www.upload-post.com" target="_blank" rel="noopener noreferrer" className="text-zinc-500 hover:text-white transition-colors">Upload-Post</a></span>
         </div>
       </footer>
     </div>
