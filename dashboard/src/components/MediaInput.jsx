@@ -1,10 +1,24 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Youtube, Upload, FileVideo, X } from 'lucide-react';
+import { getApiUrl } from '../config';
 
 export default function MediaInput({ onProcess, isProcessing }) {
+    const [youtubeUrlEnabled, setYoutubeUrlEnabled] = useState(true);
     const [mode, setMode] = useState('url'); // 'url' | 'file'
     const [url, setUrl] = useState('');
     const [file, setFile] = useState(null);
+
+    useEffect(() => {
+        fetch(getApiUrl('/api/config'))
+            .then((r) => r.ok ? r.json() : null)
+            .then((cfg) => {
+                if (cfg && cfg.youtubeUrlEnabled === false) {
+                    setYoutubeUrlEnabled(false);
+                    setMode('file');
+                }
+            })
+            .catch(() => {});
+    }, []);
 
     const handleSubmit = (e) => {
         e.preventDefault();
@@ -26,16 +40,18 @@ export default function MediaInput({ onProcess, isProcessing }) {
     return (
         <div className="bg-surface border border-white/5 rounded-2xl p-6 animate-[fadeIn_0.6s_ease-out]">
             <div className="flex gap-4 mb-6 border-b border-white/5 pb-4">
-                <button
-                    onClick={() => setMode('url')}
-                    className={`flex items-center gap-2 pb-2 px-2 transition-all ${mode === 'url'
-                        ? 'text-primary border-b-2 border-primary -mb-[17px]'
-                        : 'text-zinc-400 hover:text-white'
-                        }`}
-                >
-                    <Youtube size={18} />
-                    YouTube URL
-                </button>
+                {youtubeUrlEnabled && (
+                    <button
+                        onClick={() => setMode('url')}
+                        className={`flex items-center gap-2 pb-2 px-2 transition-all ${mode === 'url'
+                            ? 'text-primary border-b-2 border-primary -mb-[17px]'
+                            : 'text-zinc-400 hover:text-white'
+                            }`}
+                    >
+                        <Youtube size={18} />
+                        YouTube URL
+                    </button>
+                )}
                 <button
                     onClick={() => setMode('file')}
                     className={`flex items-center gap-2 pb-2 px-2 transition-all ${mode === 'file'
