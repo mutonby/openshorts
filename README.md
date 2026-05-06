@@ -25,8 +25,6 @@ https://github.com/user-attachments/assets/b45fa983-16b4-48b5-ac5b-a267836b9ad9
 ### 1. Clip Generator
 Turn your long-form videos — podcasts, webinars, livestreams, vlogs, interviews — into viral-ready 9:16 shorts for TikTok, Instagram Reels, and YouTube Shorts.
 
-![Clip Generator](screenshots/clip-generator.png)
-
 ![Clip Results](screenshots/clip-results.png)
 
 ### 2. AI Shorts (UGC Video Creator)
