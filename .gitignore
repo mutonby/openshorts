@@ -12,6 +12,11 @@
 __pycache__/
 *.pyc
 
+# Editable-install / build artifacts
+*.egg-info/
+build/
+dist/
+
 # Temporary files / runtime dirs
 temp_*
 uploads/
