@@ -61,4 +61,6 @@ RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 EXPOSE 8000
 
 # Run FastAPI app
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+# openshorts.app re-exports the FastAPI instance from the root-level app.py
+# (it inserts the repo root onto sys.path itself, no pip install -e needed).
+CMD ["uvicorn", "openshorts.app:app", "--host", "0.0.0.0", "--port", "8000"]
