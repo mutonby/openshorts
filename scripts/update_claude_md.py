@@ -15,7 +15,7 @@ script on every commit (via the pre-commit hook in .pre-commit-config.yaml):
 
 The script:
 1. Walks the repo and lists top-level folders (REPO-MAP).
-2. Parses every openshorts/*.py module via ast, extracting the one-line
+2. Parses every backend/app/*.py module via ast, extracting the one-line
    docstring + the names of public functions/classes (MODULE-MAP).
 3. Reads .env.example and renders the env-vars table (ENV).
 4. Locates the markers in CLAUDE.md and rewrites only the content between them.
@@ -26,7 +26,7 @@ Convention enforcement
 ======================
 
 This script exits non-zero (with a list of offenders) if any module under
-openshorts/ is missing a module docstring. The pre-commit hook will fail the
+backend/app/ is missing a module docstring. The pre-commit hook will fail the
 commit until the developer adds one. This is how the "every module has a
 one-liner" convention from CLAUDE.md becomes mechanically enforced — without
 this, CLAUDE.md is just an advisory and drifts.
@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import List, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PACKAGE_ROOT = REPO_ROOT / "openshorts"
+PACKAGE_ROOT = REPO_ROOT / "backend" / "app"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
 
@@ -83,16 +83,13 @@ def replace_between(text: str, start: str, end: str, body: str) -> str:
 # ---------------------------------------------------------------------------
 
 TOP_LEVEL_DESCRIPTIONS = {
-    "openshorts": "Python package — all backend code lives here.",
-    "dashboard": "React + Vite frontend (out of scope for the current restructure).",
-    "remotion": "Remotion compositions (TypeScript) consumed by the render-service.",
-    "render-service": "Standalone TypeScript microservice that bundles + renders Remotion compositions.",
-    "fonts": "Committed TTFs (Noto Serif Bold) used by hook overlays.",
+    "backend": "Python FastAPI service — the API, video pipeline, and tests.",
+    "frontend": "React + Vite dashboard — the UI users interact with.",
+    "renderer": "Remotion render microservice (TypeScript) + compositions.",
+    "assets": "Committed static assets (fonts, screenshots).",
     "scripts": "Developer tooling (update_claude_md.py, install_hooks.sh).",
-    "tests": "Pytest suite — unit, API contract, and e2e smoke.",
     "uploads": "Runtime: incoming video uploads (gitignored).",
     "output": "Runtime: generated clips and thumbnails (gitignored).",
-    "screenshots": "Repo screenshots used in README.md.",
 }
 
 
@@ -225,7 +222,7 @@ def main() -> int:
     env_table = build_env_table()
 
     if errors:
-        print("❌ Module docstrings missing — every .py file under openshorts/ "
+        print("❌ Module docstrings missing — every .py file under backend/app/ "
               "must start with a one-line module docstring:", file=sys.stderr)
         for err in errors:
             print(f"   - {err}", file=sys.stderr)

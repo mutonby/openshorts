@@ -41,8 +41,8 @@ output/
 .pytest_cache/
 
 # Test ephemera (baseline.openapi.json IS committed; current is not)
-tests/snapshots/current.openapi.json
-tests/fixtures/smoke.mp4
+backend/tests/snapshots/current.openapi.json
+backend/tests/fixtures/smoke.mp4
 # Multi-agent Skills
 .agents/
 .agent/
