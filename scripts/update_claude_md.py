@@ -106,6 +106,8 @@ def build_repo_map() -> str:
             continue
         if entry in {"__pycache__", ".venv", ".git", "node_modules"}:
             continue
+        if entry.endswith(".egg-info") or entry.endswith(".dist-info"):
+            continue
         desc = TOP_LEVEL_DESCRIPTIONS.get(entry, "_(undocumented — add to TOP_LEVEL_DESCRIPTIONS in scripts/update_claude_md.py)_")
         lines.append(f"| `{entry}/` | {desc} |")
     return "\n".join(lines)
