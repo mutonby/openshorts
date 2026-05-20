@@ -8,14 +8,15 @@ import shutil
 import glob
 import time
 import asyncio
+from functools import partial
 from dotenv import load_dotenv
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from app.integrations.s3 import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 
 load_dotenv()
@@ -187,6 +188,97 @@ THUMBNAILS_DIR = os.path.join(OUTPUT_DIR, "thumbnails")
 os.makedirs(THUMBNAILS_DIR, exist_ok=True)
 app.mount("/thumbnails", StaticFiles(directory=THUMBNAILS_DIR), name="thumbnails")
 
+# ---------------------------------------------------------------------------
+# Short-form auto-pipeline config (Phase 1 — see ~/.claude/plans/...-cray.md)
+#
+# When POST /api/process arrives with auto_subtitles / auto_edit / color_grade
+# / silence_removal toggles, run_job dispatches the post-processing chain
+# AFTER the CLI subprocess produces the raw reframed clips. Each enabled step
+# writes a sibling file (originals are preserved) and the polished URL is
+# what the wizard surfaces in Review. The full chain (Phase 2 wires the last
+# two) is: AI edit → color grade → silence removal → subtitles.
+# ---------------------------------------------------------------------------
+
+_AUTO_ALLOWED_CATEGORIES = {"educational", "yap", "live", "viral"}
+_AUTO_ALLOWED_POSITIONS = {"top", "middle", "bottom"}
+_AUTO_ALLOWED_TEXT_CASES = {"original", "upper", "lower"}
+# Brand-kit positions use a 3x3 grid (bottom-center, top-left, ...). The
+# subtitle burner only knows top/middle/bottom — alias the grid down to that.
+_POSITION_ALIASES = {
+    "top-left": "top", "top-center": "top", "top-right": "top",
+    "middle-left": "middle", "middle-center": "middle", "middle-right": "middle",
+    "bottom-left": "bottom", "bottom-center": "bottom", "bottom-right": "bottom",
+}
+
+
+class SubtitleStyle(BaseModel):
+    """Bounds-checked subtitle styling. Built from useBrandKit() JSON on the wire."""
+
+    position: str = "bottom"
+    font_size: int = Field(default=16, ge=8, le=120)
+    font_name: str = "Verdana"
+    font_color: str = "#FFFFFF"
+    border_color: str = "#000000"
+    border_width: int = Field(default=2, ge=0, le=20)
+    bg_color: str = "#000000"
+    bg_opacity: float = Field(default=0.0, ge=0.0, le=1.0)
+    words_per_line: Optional[int] = Field(default=None, ge=0, le=20)
+    text_case: Optional[str] = None
+
+    @field_validator("position", mode="before")
+    @classmethod
+    def _normalize_position(cls, v: Any) -> str:
+        s = str(v or "bottom").strip().lower()
+        s = _POSITION_ALIASES.get(s, s)
+        if s not in _AUTO_ALLOWED_POSITIONS:
+            raise ValueError(f"position must be one of {sorted(_AUTO_ALLOWED_POSITIONS)} or a 3x3 grid alias")
+        return s
+
+    @field_validator("text_case", mode="before")
+    @classmethod
+    def _normalize_text_case(cls, v: Any) -> Optional[str]:
+        if v is None or v == "":
+            return None
+        s = str(v).strip().lower()
+        if s not in _AUTO_ALLOWED_TEXT_CASES:
+            raise ValueError(f"text_case must be one of {sorted(_AUTO_ALLOWED_TEXT_CASES)}")
+        return s
+
+    @field_validator("font_color", "border_color", "bg_color", mode="before")
+    @classmethod
+    def _validate_hex_color(cls, v: Any) -> str:
+        if not isinstance(v, str) or len(v) != 7 or not v.startswith("#"):
+            raise ValueError("color must be #RRGGBB hex string")
+        try:
+            int(v[1:], 16)
+        except ValueError as exc:
+            raise ValueError("color must be #RRGGBB hex string") from exc
+        return v.upper()
+
+
+def _normalize_bool_form(value: Optional[str]) -> bool:
+    """Coerce a multipart-form string to bool. ``None`` / unset reads as False."""
+    if value is None:
+        return False
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _parse_subtitle_style(raw: Optional[str]) -> Dict[str, Any]:
+    """Validate the brand-kit subtitle JSON. Returns ``{}`` when unset."""
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=f"subtitle_style must be valid JSON: {exc}")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="subtitle_style must be a JSON object")
+    try:
+        return SubtitleStyle.model_validate(data).model_dump()
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"subtitle_style validation failed: {exc.errors()}")
+
+
 class ProcessRequest(BaseModel):
     url: str
 
@@ -271,13 +363,12 @@ async def run_job(job_id, job_data):
         returncode = process.returncode
         
         if returncode == 0:
-            jobs[job_id]['status'] = 'completed'
             jobs[job_id]['logs'].append("Process finished successfully.")
-            
+
             # Start S3 upload in background (silent, non-blocking)
             loop = asyncio.get_event_loop()
             loop.run_in_executor(None, upload_job_artifacts, output_dir, job_id)
-            
+
             # Find result JSON
             json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
             if not json_files:
@@ -285,10 +376,10 @@ async def run_job(job_id, job_data):
                 if _relocate_root_job_artifacts(job_id, output_dir):
                     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
             if json_files:
-                target_json = json_files[0] 
+                target_json = json_files[0]
                 with open(target_json, 'r') as f:
                     data = json.load(f)
-                
+
                 # Enhance result with video URLs
                 base_name = os.path.basename(target_json).replace('_metadata.json', '')
                 clips = data.get('shorts', [])
@@ -297,8 +388,19 @@ async def run_job(job_id, job_data):
                 for i, clip in enumerate(clips):
                      clip_filename = f"{base_name}_clip_{i+1}.mp4"
                      clip['video_url'] = f"/videos/{job_id}/{clip_filename}"
-                
+
                 jobs[job_id]['result'] = {'clips': clips, 'cost_analysis': cost_analysis}
+
+                # Post-processing chain (subtitles, AI effects, ...). Failures
+                # here log but do NOT fail the whole job — a raw clip is better
+                # than no clip. Status stays 'processing' until this returns so
+                # the wizard doesn't navigate to Review with raw URLs.
+                try:
+                    await _run_auto_pipeline(job_id, target_json, job_data.get('env', {}), jobs[job_id].get('auto', {}))
+                except Exception as exc:
+                    jobs[job_id]['logs'].append(f"⚠️ auto-pipeline error: {exc}")
+
+                jobs[job_id]['status'] = 'completed'
             else:
                  jobs[job_id]['status'] = 'failed'
                  jobs[job_id]['logs'].append("No metadata file generated.")
@@ -309,6 +411,110 @@ async def run_job(job_id, job_data):
     except Exception as e:
         jobs[job_id]['status'] = 'failed'
         jobs[job_id]['logs'].append(f"Execution error: {str(e)}")
+
+
+async def _run_auto_pipeline(
+    job_id: str,
+    metadata_path: str,
+    env: Dict[str, str],
+    auto_config: Dict[str, Any],
+) -> None:
+    """Apply the per-clip post-processing chain configured in /api/process.
+
+    Order: AI edit → color grade (Phase 2) → silence removal (Phase 2) → subtitles.
+    Each step writes a sibling file; the original ``_clip_N.mp4`` is preserved
+    so Review's per-clip toggles (Phase 3) can swap URLs without re-rendering.
+
+    Per-clip failures append to ``jobs[job_id]['logs']`` and do NOT mark the
+    job as failed — a polished clip missing one effect is better than nothing.
+    """
+    if not auto_config:
+        return
+    if not any(auto_config.get(k) for k in ("auto_edit", "auto_subtitles", "color_grade", "silence_removal")):
+        return
+
+    # Lazy import keeps cold-start cheap when no auto-pipeline is requested.
+    from app.editing.auto_pipeline import apply_ai_edit, apply_subtitles
+
+    try:
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+    except Exception as exc:
+        jobs[job_id]['logs'].append(f"⚠️ auto-pipeline: cannot read metadata: {exc}")
+        return
+
+    transcript = metadata.get('transcript')
+    api_key = env.get('GEMINI_API_KEY') or os.environ.get('GEMINI_API_KEY')
+    style = auto_config.get('subtitle_style') or {}
+
+    loop = asyncio.get_event_loop()
+    clips = jobs[job_id]['result']['clips']
+
+    for i, clip in enumerate(clips):
+        original_filename = clip['video_url'].split('/')[-1]
+        current_filename = original_filename
+        variants: Dict[str, Optional[str]] = {
+            'original':   original_filename,
+            'edited':     None,
+            'graded':     None,   # Phase 2
+            'silencecut': None,   # Phase 2
+            'subtitled':  None,
+        }
+
+        if auto_config.get('auto_edit') and api_key:
+            try:
+                edited = await loop.run_in_executor(
+                    None,
+                    partial(
+                        apply_ai_edit,
+                        api_key=api_key,
+                        job_id=job_id,
+                        input_filename=current_filename,
+                        transcript=transcript,
+                    ),
+                )
+                variants['edited'] = edited
+                current_filename = edited
+                jobs[job_id]['logs'].append(f"🎬 auto AI-edit applied to clip {i + 1}")
+            except Exception as exc:
+                jobs[job_id]['logs'].append(f"⚠️ auto AI-edit failed for clip {i + 1}: {exc}")
+
+        # color_grade — Phase 2
+        # silence_removal — Phase 2
+
+        if auto_config.get('auto_subtitles') and transcript:
+            try:
+                subtitled = await loop.run_in_executor(
+                    None,
+                    partial(
+                        apply_subtitles,
+                        job_id=job_id,
+                        clip_index=i,
+                        input_filename=current_filename,
+                        transcript=transcript,
+                        clip_start=clip.get('start', 0),
+                        clip_end=clip.get('end', 0),
+                        style=style,
+                    ),
+                )
+                variants['subtitled'] = subtitled
+                current_filename = subtitled
+                jobs[job_id]['logs'].append(f"✍️  auto subtitles burned on clip {i + 1}")
+            except Exception as exc:
+                jobs[job_id]['logs'].append(f"⚠️ auto subtitles failed for clip {i + 1}: {exc}")
+
+        variants['polished'] = current_filename
+        clip['variants'] = variants
+        clip['video_url'] = f"/videos/{job_id}/{current_filename}"
+
+    # Persist variants to disk so Review (Phase 3) can read them after a reload.
+    metadata['shorts'] = clips
+    try:
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=4)
+    except Exception as exc:
+        jobs[job_id]['logs'].append(f"⚠️ auto-pipeline: failed to persist variants: {exc}")
+
 
 _ALLOWED_VIDEO_EXTS = {".mp4", ".mov"}
 # MP4 / MOV files start with a 'ftyp' box at byte offset 4.
@@ -345,7 +551,14 @@ async def process_endpoint(
     request: Request,
     file: Optional[UploadFile] = File(None),
     url: Optional[str] = Form(None),
-    acknowledged: Optional[str] = Form(None)
+    acknowledged: Optional[str] = Form(None),
+    # Phase 1 auto-pipeline fields — see _run_auto_pipeline below.
+    category: Optional[str] = Form(None),
+    auto_subtitles: Optional[str] = Form(None),
+    auto_edit: Optional[str] = Form(None),
+    color_grade: Optional[str] = Form(None),         # honored in Phase 2
+    silence_removal: Optional[str] = Form(None),     # honored in Phase 2
+    subtitle_style: Optional[str] = Form(None),      # JSON string from useBrandKit()
 ):
     api_key = request.headers.get("X-Gemini-Key")
     if not api_key:
@@ -381,6 +594,23 @@ async def process_endpoint(
         "user_agent": user_agent,
         "timestamp": time.time(),
         "source": "url" if url else "file",
+    }
+
+    # Validate + freeze the auto-pipeline config used by run_job after the
+    # CLI subprocess completes. Raises 400 on out-of-bounds input.
+    cat_raw = (category or "").strip().lower() or None
+    if cat_raw is not None and cat_raw not in _AUTO_ALLOWED_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid category {cat_raw!r}. Allowed: {sorted(_AUTO_ALLOWED_CATEGORIES)}",
+        )
+    auto_config = {
+        "category": cat_raw,
+        "auto_edit": _normalize_bool_form(auto_edit),
+        "auto_subtitles": _normalize_bool_form(auto_subtitles),
+        "color_grade": _normalize_bool_form(color_grade),
+        "silence_removal": _normalize_bool_form(silence_removal),
+        "subtitle_style": _parse_subtitle_style(subtitle_style),
     }
 
     job_id = str(uuid.uuid4())
@@ -436,7 +666,8 @@ async def process_endpoint(
         'cmd': cmd,
         'env': env,
         'output_dir': job_output_dir,
-        'attestation': attestation
+        'attestation': attestation,
+        'auto': auto_config,
     }
 
     await job_queue.put(job_id)

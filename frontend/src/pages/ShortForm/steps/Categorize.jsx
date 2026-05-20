@@ -5,7 +5,9 @@
 // for new clips and let the user override per clip.
 
 import { useEffect } from 'react';
-import { GraduationCap, Mic, Sparkles, Tv } from 'lucide-react';
+import { GraduationCap, Mic, Sparkles, Tv, KeyRound } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { useKeys } from '../../../state/keysStore.js';
 
 const CATEGORIES = [
   {
@@ -34,16 +36,19 @@ const CATEGORIES = [
   },
 ];
 
+// Order matches the run_job auto-pipeline chain: AI edit → grade → silence → subtitles.
 const TOGGLES = [
-  { id: 'colorGrade',     label: 'Color grade',       hint: 'Apply a cinematic LUT (backend TODO #5).' },
-  { id: 'autoSubtitles',  label: 'Auto subtitles',    hint: 'Transcribe + burn captions with brand-kit style.' },
-  { id: 'silenceRemoval', label: 'Silence removal',   hint: 'Auto-cut dead air (backend TODO #4).' },
-  { id: 'faceLayout',     label: 'Face-focus layout', hint: 'Lock crop to detected speakers.' },
+  { id: 'autoEdit',       label: 'AI edits (zoom / pan / cuts)', hint: 'Gemini picks zoompan + cut points per clip.' },
+  { id: 'colorGrade',     label: 'Color grade',                   hint: 'Apply a cinematic LUT (lands with /api/colorgrade in Phase 2).' },
+  { id: 'silenceRemoval', label: 'Silence removal',               hint: 'Auto-cut dead air (lands with /api/silencecut in Phase 2).' },
+  { id: 'autoSubtitles',  label: 'Auto subtitles',                hint: 'Transcribe + burn captions with brand-kit style.' },
 ];
 
 export default function Categorize({ wizard }) {
   const files = wizard.data.files || [];
   const settings = wizard.data.settings || {};
+  const keys = useKeys();
+  const hasGeminiKey = !!keys.gemini;
 
   // TODO(backend): plan TODO #2 — replace this pre-fill with POST /api/categorize
   // on the file's transcript or thumbnail.
@@ -126,11 +131,34 @@ export default function Categorize({ wizard }) {
           </div>
         </section>
 
+        {!hasGeminiKey && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 flex items-start gap-3">
+            <KeyRound size={16} className="text-amber-400 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <div className="text-[13px] text-amber-200 font-medium">Gemini API key required</div>
+              <div className="text-[12px] text-amber-200/80 mt-0.5">
+                Processing needs a Gemini key to identify viral moments. Add one before continuing.
+              </div>
+            </div>
+            <Link
+              to="/settings/system/api-keys"
+              className="text-[12px] text-amber-200 hover:text-white underline shrink-0"
+            >
+              Open Settings →
+            </Link>
+          </div>
+        )}
+
         <div className="flex items-center justify-between pt-4 border-t border-border">
           <button onClick={wizard.back} className="text-[13px] text-zinc-400 hover:text-white transition-colors">
             ← Back
           </button>
-          <button onClick={wizard.next} className="btn-primary px-5 py-2 text-[13px]">
+          <button
+            onClick={wizard.next}
+            disabled={!hasGeminiKey}
+            title={!hasGeminiKey ? 'Set your Gemini API key in Settings first.' : ''}
+            className="btn-primary px-5 py-2 text-[13px] disabled:opacity-40 disabled:cursor-not-allowed"
+          >
             Start processing →
           </button>
         </div>

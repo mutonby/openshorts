@@ -14,6 +14,50 @@
             ],
             "title": "Acknowledged"
           },
+          "auto_edit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Edit"
+          },
+          "auto_subtitles": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Subtitles"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "color_grade": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Grade"
+          },
           "file": {
             "anyOf": [
               {
@@ -25,6 +69,28 @@
               }
             ],
             "title": "File"
+          },
+          "silence_removal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Silence Removal"
+          },
+          "subtitle_style": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtitle Style"
           },
           "url": {
             "anyOf": [
