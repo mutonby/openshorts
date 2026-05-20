@@ -759,11 +759,13 @@ async def edit_clip(
 
     if req.job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     job = jobs[req.job_id]
     if 'result' not in job or 'clips' not in job['result']:
         raise HTTPException(status_code=400, detail="Job result not available")
-        
+    if req.clip_index < 0 or req.clip_index >= len(job['result']['clips']):
+        raise HTTPException(status_code=404, detail="Clip not found")
+
     try:
         # Resolve Input Path: Prefer explict input_filename from frontend (chaining edits)
         if req.input_filename:
@@ -907,7 +909,7 @@ async def get_clip_transcript(job_id: str, clip_index: int):
         raise HTTPException(status_code=400, detail="Transcript not found in metadata")
 
     clips = data.get('shorts', [])
-    if clip_index >= len(clips):
+    if clip_index < 0 or clip_index >= len(clips):
         raise HTTPException(status_code=404, detail="Clip not found")
 
     clip_data = clips[clip_index]
@@ -983,6 +985,8 @@ async def generate_effects_config(
     job = jobs[req.job_id]
     if 'result' not in job or 'clips' not in job['result']:
         raise HTTPException(status_code=400, detail="Job result not available")
+    if req.clip_index < 0 or req.clip_index >= len(job['result']['clips']):
+        raise HTTPException(status_code=404, detail="Clip not found")
 
     try:
         # Resolve input path
@@ -1094,11 +1098,11 @@ async def add_subtitles(req: SubtitleRequest):
         raise HTTPException(status_code=400, detail="Transcript not found in metadata. Please process a new video.")
         
     clips = data.get('shorts', [])
-    if req.clip_index >= len(clips):
+    if req.clip_index < 0 or req.clip_index >= len(clips):
         raise HTTPException(status_code=404, detail="Clip not found")
-        
+
     clip_data = clips[req.clip_index]
-    
+
     # Video Path
     if req.input_filename:
         # Use chained file
@@ -1168,12 +1172,12 @@ async def add_subtitles(req: SubtitleRequest):
         
     # 3. Update Result and Metadata
     # Update InMemory Jobs
-    if req.clip_index < len(job['result']['clips']):
+    if 0 <= req.clip_index < len(job['result']['clips']):
          job['result']['clips'][req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
-    
+
     # Update Metadata on Disk (Persistence)
     try:
-        if req.clip_index < len(clips):
+        if 0 <= req.clip_index < len(clips):
             clips[req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
             # Update the main data structure
             data['shorts'] = clips
@@ -1254,7 +1258,7 @@ def _persist_clip_url(job_id: str, clip_index: int, new_filename: str) -> None:
     """Write the new clip URL back to in-memory jobs[] and to metadata.json."""
     new_url = f"/videos/{job_id}/{new_filename}"
     job = jobs.get(job_id)
-    if job and clip_index < len(job['result']['clips']):
+    if job and 0 <= clip_index < len(job['result']['clips']):
         job['result']['clips'][clip_index]['video_url'] = new_url
 
     try:
@@ -1263,7 +1267,7 @@ def _persist_clip_url(job_id: str, clip_index: int, new_filename: str) -> None:
             with open(json_files[0], 'r') as f:
                 data = json.load(f)
             clips = data.get('shorts', [])
-            if clip_index < len(clips):
+            if 0 <= clip_index < len(clips):
                 clips[clip_index]['video_url'] = new_url
                 data['shorts'] = clips
                 with open(json_files[0], 'w') as f:
@@ -1450,11 +1454,11 @@ async def add_hook(req: HookRequest):
         data = json.load(f)
         
     clips = data.get('shorts', [])
-    if req.clip_index >= len(clips):
+    if req.clip_index < 0 or req.clip_index >= len(clips):
         raise HTTPException(status_code=404, detail="Clip not found")
-        
+
     clip_data = clips[req.clip_index]
-    
+
     # Video Path
     if req.input_filename:
         filename = os.path.basename(req.input_filename)
