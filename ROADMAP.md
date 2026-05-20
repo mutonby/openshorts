@@ -15,6 +15,33 @@ Tiering:
 - **Stubbed in v1** — UI is in place; the backend feature is a no-op, placeholder, or partial loop. Each item lists the backend TODO that unblocks it.
 - **Later** — not started.
 
+### AI Restyle (planned — new sidebar product)
+
+A new sibling to Short-form / Long-form. Upload a video you've already produced; AI Restyle relights the first frame via Nano Banana (Gemini 2.5 Flash image preview) and uses that frame as the style reference for a video-to-video model — preserving the original motion, content, and audio while restyling lighting + background.
+
+**Spec:** [`docs/superpowers/specs/2026-05-20-ai-restyle-design.md`](docs/superpowers/specs/2026-05-20-ai-restyle-design.md)
+**Plan:** [`docs/superpowers/plans/2026-05-20-ai-restyle.md`](docs/superpowers/plans/2026-05-20-ai-restyle.md)
+
+**Planned (v1 scope, ~6-7 days):**
+- Sidebar entry between Long-form and Short-form (icon: `Wand2`)
+- 3-step wizard (Upload → Configure → Review)
+- Two preset dimensions (Background + Lighting) with 5 hand-tuned seed presets each
+- Per-job prompt override via editable textarea
+- Settings tab "AI Restyle" with full preset CRUD (star/edit/delete)
+- 30s duration cap (single video-to-video call; predictable ~$1-2 cost per clip)
+- Original audio preserved bit-for-bit
+- "Send to Short-form" CTA closes the loop with the editing pipeline
+
+**Out of scope for v1 (Later):**
+- >30s clips via chunked v2v (3-minute "AI ads" use case)
+- Bridge from Short-form Review's stage selector ("+ AI Restyle" stage)
+- Auto-suggest preset based on the source frame
+- Backend-stored preset sharing / team marketplace
+
+**Risks:** Video-to-video model choice deferred to Phase 0 spike (Wan v2.5 / Luma Ray2 / Runway Gen-3 Alpha candidates). If no fal.ai model meets the acceptance bar, fallback is direct Runway API integration (~1 extra day).
+
+---
+
 ### Short-form wizard
 
 **Shipped**
