@@ -13,6 +13,8 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.main import (
+    ColorGradeRequest,
+    SilenceCutRequest,
     SubtitleStyle,
     _AUTO_ALLOWED_CATEGORIES,
     _normalize_bool_form,
@@ -181,3 +183,50 @@ def test_parse_subtitle_style_rejects_out_of_bounds():
 def test_categories_allowlist_matches_frontend_contract():
     # Matches the four cards in frontend/src/pages/ShortForm/steps/Categorize.jsx.
     assert _AUTO_ALLOWED_CATEGORIES == {"educational", "yap", "live", "viral"}
+
+
+# --- Phase 2: ColorGradeRequest --------------------------------------------
+
+def test_color_grade_request_normalizes_lut_case():
+    r = ColorGradeRequest(job_id="j", clip_index=0, lut_name=" Teal_Orange ")
+    assert r.lut_name == "teal_orange"
+
+
+@pytest.mark.parametrize("name", ["cool", "noir", "teal_orange", "vivid", "warm"])
+def test_color_grade_request_accepts_every_preset(name):
+    r = ColorGradeRequest(job_id="j", clip_index=0, lut_name=name)
+    assert r.lut_name == name
+
+
+def test_color_grade_request_rejects_unknown_lut():
+    with pytest.raises(ValidationError):
+        ColorGradeRequest(job_id="j", clip_index=0, lut_name="neon_dreams")
+
+
+def test_color_grade_request_rejects_empty_lut():
+    with pytest.raises(ValidationError):
+        ColorGradeRequest(job_id="j", clip_index=0, lut_name="")
+
+
+# --- Phase 2: SilenceCutRequest --------------------------------------------
+
+def test_silence_cut_request_defaults():
+    r = SilenceCutRequest(job_id="j", clip_index=0)
+    assert r.noise_db == -30.0
+    assert r.min_silence_sec == 0.5
+    assert r.input_filename is None
+
+
+def test_silence_cut_request_rejects_positive_noise_db():
+    with pytest.raises(ValidationError):
+        SilenceCutRequest(job_id="j", clip_index=0, noise_db=5.0)
+
+
+def test_silence_cut_request_rejects_overlong_silence_threshold():
+    with pytest.raises(ValidationError):
+        SilenceCutRequest(job_id="j", clip_index=0, min_silence_sec=999.0)
+
+
+def test_silence_cut_request_rejects_too_short_silence_threshold():
+    with pytest.raises(ValidationError):
+        SilenceCutRequest(job_id="j", clip_index=0, min_silence_sec=0.001)

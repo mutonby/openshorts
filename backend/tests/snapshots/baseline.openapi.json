@@ -70,6 +70,17 @@
             ],
             "title": "File"
           },
+          "lut_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lut Name"
+          },
           "silence_removal": {
             "anyOf": [
               {
@@ -292,6 +303,40 @@
           "file"
         ],
         "title": "Body_upload_font_api_fonts_upload_post",
+        "type": "object"
+      },
+      "ColorGradeRequest": {
+        "properties": {
+          "clip_index": {
+            "title": "Clip Index",
+            "type": "integer"
+          },
+          "input_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Filename"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "lut_name": {
+            "title": "Lut Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "clip_index",
+          "lut_name"
+        ],
+        "title": "ColorGradeRequest",
         "type": "object"
       },
       "EditRequest": {
@@ -648,6 +693,49 @@
           "platforms"
         ],
         "title": "SaaSPostRequest",
+        "type": "object"
+      },
+      "SilenceCutRequest": {
+        "properties": {
+          "clip_index": {
+            "title": "Clip Index",
+            "type": "integer"
+          },
+          "input_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Filename"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "min_silence_sec": {
+            "default": 0.5,
+            "maximum": 10.0,
+            "minimum": 0.05,
+            "title": "Min Silence Sec",
+            "type": "number"
+          },
+          "noise_db": {
+            "default": -30.0,
+            "maximum": 0.0,
+            "minimum": -80.0,
+            "title": "Noise Db",
+            "type": "number"
+          }
+        },
+        "required": [
+          "job_id",
+          "clip_index"
+        ],
+        "title": "SilenceCutRequest",
         "type": "object"
       },
       "SocialPostRequest": {
@@ -1017,6 +1105,43 @@
           }
         },
         "summary": "Get Clip Transcript"
+      }
+    },
+    "/api/colorgrade": {
+      "post": {
+        "description": "Apply a named LUT preset to a clip. Writes ``graded_{input}.mp4``.",
+        "operationId": "color_grade_clip_api_colorgrade_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ColorGradeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Color Grade Clip"
       }
     },
     "/api/config": {
@@ -1792,6 +1917,43 @@
           }
         },
         "summary": "Saasshorts Voices"
+      }
+    },
+    "/api/silencecut": {
+      "post": {
+        "description": "Cut silent segments out of a clip. Writes ``silencecut_{input}.mp4``.",
+        "operationId": "silence_cut_clip_api_silencecut_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SilenceCutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Silence Cut Clip"
       }
     },
     "/api/social/post": {

@@ -434,7 +434,12 @@ async def _run_auto_pipeline(
         return
 
     # Lazy import keeps cold-start cheap when no auto-pipeline is requested.
-    from app.editing.auto_pipeline import apply_ai_edit, apply_subtitles
+    from app.editing.auto_pipeline import (
+        apply_ai_edit,
+        apply_color_grade,
+        apply_silence_cut,
+        apply_subtitles,
+    )
 
     try:
         with open(metadata_path, 'r') as f:
@@ -479,8 +484,38 @@ async def _run_auto_pipeline(
             except Exception as exc:
                 jobs[job_id]['logs'].append(f"⚠️ auto AI-edit failed for clip {i + 1}: {exc}")
 
-        # color_grade — Phase 2
-        # silence_removal — Phase 2
+        if auto_config.get('color_grade'):
+            try:
+                graded = await loop.run_in_executor(
+                    None,
+                    partial(
+                        apply_color_grade,
+                        job_id=job_id,
+                        input_filename=current_filename,
+                        lut_name=auto_config.get('lut_name'),
+                    ),
+                )
+                variants['graded'] = graded
+                current_filename = graded
+                jobs[job_id]['logs'].append(f"🎨 auto color-grade applied to clip {i + 1}")
+            except Exception as exc:
+                jobs[job_id]['logs'].append(f"⚠️ auto color-grade failed for clip {i + 1}: {exc}")
+
+        if auto_config.get('silence_removal'):
+            try:
+                silenced = await loop.run_in_executor(
+                    None,
+                    partial(
+                        apply_silence_cut,
+                        job_id=job_id,
+                        input_filename=current_filename,
+                    ),
+                )
+                variants['silencecut'] = silenced
+                current_filename = silenced
+                jobs[job_id]['logs'].append(f"🔇 auto silence-cut applied to clip {i + 1}")
+            except Exception as exc:
+                jobs[job_id]['logs'].append(f"⚠️ auto silence-cut failed for clip {i + 1}: {exc}")
 
         if auto_config.get('auto_subtitles') and transcript:
             try:
@@ -556,8 +591,9 @@ async def process_endpoint(
     category: Optional[str] = Form(None),
     auto_subtitles: Optional[str] = Form(None),
     auto_edit: Optional[str] = Form(None),
-    color_grade: Optional[str] = Form(None),         # honored in Phase 2
-    silence_removal: Optional[str] = Form(None),     # honored in Phase 2
+    color_grade: Optional[str] = Form(None),
+    lut_name: Optional[str] = Form(None),            # Phase 2: which LUT preset; defaults to teal_orange
+    silence_removal: Optional[str] = Form(None),
     subtitle_style: Optional[str] = Form(None),      # JSON string from useBrandKit()
 ):
     api_key = request.headers.get("X-Gemini-Key")
@@ -604,11 +640,20 @@ async def process_endpoint(
             status_code=400,
             detail=f"Invalid category {cat_raw!r}. Allowed: {sorted(_AUTO_ALLOWED_CATEGORIES)}",
         )
+    lut_raw = (lut_name or "").strip().lower() or None
+    if lut_raw is not None:
+        from app.editing.color_grade import allowed_luts as _luts
+        if lut_raw not in _luts():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid lut_name {lut_raw!r}. Allowed: {sorted(_luts())}",
+            )
     auto_config = {
         "category": cat_raw,
         "auto_edit": _normalize_bool_form(auto_edit),
         "auto_subtitles": _normalize_bool_form(auto_subtitles),
         "color_grade": _normalize_bool_form(color_grade),
+        "lut_name": lut_raw,
         "silence_removal": _normalize_bool_form(silence_removal),
         "subtitle_style": _parse_subtitle_style(subtitle_style),
     }
@@ -1143,6 +1188,151 @@ async def add_subtitles(req: SubtitleRequest):
         "success": True,
         "new_video_url": f"/videos/{req.job_id}/{output_filename}"
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: per-clip color grade + silence cut. State-mutating per-clip ops
+# that mirror /api/edit and /api/subtitle. Auth/rate-limit/audit/abuse-cap are
+# deferred to /gsd-secure-phase along with the rest of the existing routes
+# (see HANDOFF.md §5 + Decision D3 in the plan handover).
+# ---------------------------------------------------------------------------
+
+
+class ColorGradeRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    lut_name: str
+    input_filename: Optional[str] = None
+
+    @field_validator("lut_name", mode="before")
+    @classmethod
+    def _normalize_lut(cls, v: Any) -> str:
+        from app.editing.color_grade import allowed_luts as _luts
+        s = str(v or "").strip().lower()
+        if s not in _luts():
+            raise ValueError(f"lut_name must be one of {sorted(_luts())}")
+        return s
+
+
+class SilenceCutRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    input_filename: Optional[str] = None
+    noise_db: float = Field(default=-30.0, ge=-80.0, le=0.0)
+    min_silence_sec: float = Field(default=0.5, ge=0.05, le=10.0)
+
+
+def _resolve_clip_input(job_id: str, clip_index: int, input_filename: Optional[str]) -> tuple:
+    """Shared input-path resolver for per-clip route handlers.
+
+    Returns ``(job, output_dir, input_path, filename)``. Raises ``HTTPException``
+    with the same codes the other per-clip routes use, so frontend handling
+    stays uniform.
+    """
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs[job_id]
+    if 'result' not in job or 'clips' not in job['result']:
+        raise HTTPException(status_code=400, detail="Job result not available")
+    if clip_index < 0 or clip_index >= len(job['result']['clips']):
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    output_dir = os.path.join(OUTPUT_DIR, job_id)
+    if input_filename:
+        filename = os.path.basename(input_filename)
+    else:
+        filename = job['result']['clips'][clip_index]['video_url'].split('/')[-1]
+    input_path = os.path.join(output_dir, filename)
+    if not os.path.exists(input_path):
+        raise HTTPException(status_code=404, detail=f"Video file not found: {input_path}")
+    return job, output_dir, input_path, filename
+
+
+def _persist_clip_url(job_id: str, clip_index: int, new_filename: str) -> None:
+    """Write the new clip URL back to in-memory jobs[] and to metadata.json."""
+    new_url = f"/videos/{job_id}/{new_filename}"
+    job = jobs.get(job_id)
+    if job and clip_index < len(job['result']['clips']):
+        job['result']['clips'][clip_index]['video_url'] = new_url
+
+    try:
+        json_files = glob.glob(os.path.join(OUTPUT_DIR, job_id, "*_metadata.json"))
+        if json_files:
+            with open(json_files[0], 'r') as f:
+                data = json.load(f)
+            clips = data.get('shorts', [])
+            if clip_index < len(clips):
+                clips[clip_index]['video_url'] = new_url
+                data['shorts'] = clips
+                with open(json_files[0], 'w') as f:
+                    json.dump(data, f, indent=4)
+    except Exception as exc:
+        print(f"⚠️ Failed to update metadata.json for clip url: {exc}")
+
+
+@app.post("/api/colorgrade")
+async def color_grade_clip(req: ColorGradeRequest):
+    """Apply a named LUT preset to a clip. Writes ``graded_{input}.mp4``."""
+    from app.editing.auto_pipeline import apply_color_grade
+
+    _job, _output_dir, _input_path, filename = _resolve_clip_input(
+        req.job_id, req.clip_index, req.input_filename
+    )
+
+    loop = asyncio.get_event_loop()
+    try:
+        out_filename = await loop.run_in_executor(
+            None,
+            partial(
+                apply_color_grade,
+                job_id=req.job_id,
+                input_filename=filename,
+                lut_name=req.lut_name,
+            ),
+        )
+    except Exception as exc:
+        print(f"❌ ColorGrade Error: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    _persist_clip_url(req.job_id, req.clip_index, out_filename)
+    return {
+        "success": True,
+        "lut_name": req.lut_name,
+        "new_video_url": f"/videos/{req.job_id}/{out_filename}",
+    }
+
+
+@app.post("/api/silencecut")
+async def silence_cut_clip(req: SilenceCutRequest):
+    """Cut silent segments out of a clip. Writes ``silencecut_{input}.mp4``."""
+    from app.editing.auto_pipeline import apply_silence_cut
+
+    _job, _output_dir, _input_path, filename = _resolve_clip_input(
+        req.job_id, req.clip_index, req.input_filename
+    )
+
+    loop = asyncio.get_event_loop()
+    try:
+        out_filename = await loop.run_in_executor(
+            None,
+            partial(
+                apply_silence_cut,
+                job_id=req.job_id,
+                input_filename=filename,
+                noise_db=req.noise_db,
+                min_silence_sec=req.min_silence_sec,
+            ),
+        )
+    except Exception as exc:
+        print(f"❌ SilenceCut Error: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    _persist_clip_url(req.job_id, req.clip_index, out_filename)
+    return {
+        "success": True,
+        "new_video_url": f"/videos/{req.job_id}/{out_filename}",
+    }
+
 
 class HookRequest(BaseModel):
     job_id: str

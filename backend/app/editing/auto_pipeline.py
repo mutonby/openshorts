@@ -8,6 +8,8 @@ import time
 from typing import Any, Dict, Optional
 
 from app.editing.ai_filters import VideoEditor
+from app.editing.color_grade import DEFAULT_LUT, apply_lut, allowed_luts
+from app.editing.silence import cut_silence
 from app.overlays.subtitles_generate import generate_srt, generate_srt_from_video
 from app.overlays.subtitles_render import burn_subtitles
 
@@ -77,6 +79,63 @@ def apply_ai_edit(
             os.remove(safe_input_path)
 
     return edited_filename
+
+
+def apply_color_grade(
+    *,
+    job_id: str,
+    input_filename: str,
+    lut_name: Optional[str] = None,
+) -> str:
+    """Apply a named LUT preset to a clip. Writes ``graded_{input_filename}``.
+
+    Idempotent: returns the existing output when present and non-empty.
+    Raises ``ValueError`` for unknown LUTs (caller should log and skip).
+    """
+    job_dir = _job_dir(job_id)
+    input_path = os.path.join(job_dir, input_filename)
+    output_filename = f"graded_{input_filename}"
+    output_path = os.path.join(job_dir, output_filename)
+
+    if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+        return output_filename
+
+    name = (lut_name or DEFAULT_LUT).strip().lower()
+    if name not in allowed_luts():
+        raise ValueError(f"lut_name must be one of {sorted(allowed_luts())}, got {name!r}")
+
+    apply_lut(input_path, output_path, name)
+    return output_filename
+
+
+def apply_silence_cut(
+    *,
+    job_id: str,
+    input_filename: str,
+    noise_db: float = -30.0,
+    min_silence_sec: float = 0.5,
+) -> str:
+    """Cut silent segments from a clip. Writes ``silencecut_{input_filename}``.
+
+    Idempotent: returns the existing output when present and non-empty.
+    A clip with no detectable silence is stream-copied so the output still
+    exists (matches the legacy per-clip flow's expectations).
+    """
+    job_dir = _job_dir(job_id)
+    input_path = os.path.join(job_dir, input_filename)
+    output_filename = f"silencecut_{input_filename}"
+    output_path = os.path.join(job_dir, output_filename)
+
+    if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+        return output_filename
+
+    cut_silence(
+        input_path,
+        output_path,
+        noise_db=noise_db,
+        min_silence_sec=min_silence_sec,
+    )
+    return output_filename
 
 
 def apply_subtitles(
