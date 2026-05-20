@@ -2,7 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import AppShell from './layouts/AppShell.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import ShortForm from './pages/ShortForm/index.jsx';
-import LongForm from './pages/LongForm.jsx';
+import LongForm from './pages/LongForm/index.jsx';
 import ClipGenerator from './pages/ClipGenerator.jsx';
 import SettingsLayout from './pages/Settings/index.jsx';
 import BrandKitSection from './pages/Settings/sections/BrandKitSection.jsx';
