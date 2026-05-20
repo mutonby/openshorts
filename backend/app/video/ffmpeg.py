@@ -20,6 +20,15 @@ import subprocess
 from typing import Iterable, List, Optional, Sequence
 
 
+# Default subprocess timeouts. Codex flagged unbounded ffmpeg as a DoS
+# vector (deferred-C4 exploitable today): any state-mutating route that
+# accepts user-supplied media can keep ffmpeg busy forever. Override via
+# FFMPEG_TIMEOUT_SECONDS / FFPROBE_TIMEOUT_SECONDS for unusual workloads
+# (e.g. a 50-clip merge of 60s sources).
+DEFAULT_TIMEOUT: float = float(os.environ.get("FFMPEG_TIMEOUT_SECONDS", "1800"))
+DEFAULT_PROBE_TIMEOUT: float = float(os.environ.get("FFPROBE_TIMEOUT_SECONDS", "30"))
+
+
 class FFmpegError(RuntimeError):
     """Raised when an ffmpeg/ffprobe invocation exits non-zero."""
 
@@ -46,6 +55,10 @@ def run(
     Use this for one-shot ffmpeg invocations (encode, mux, probe). For
     multi-input filter graphs, build the args with ``build_filter_complex``
     and pass them through here.
+
+    Applies ``DEFAULT_TIMEOUT`` when caller passes ``timeout=None``.
+    Timeouts surface as ``FFmpegError(returncode=-1)`` so callers see a
+    single exception type.
     """
     cmd = ["ffmpeg", *args] if not (args and args[0].endswith("ffprobe")) else list(args)
     if cmd[0] != "ffmpeg" and not cmd[0].endswith("ffprobe"):
@@ -59,14 +72,26 @@ def run(
     full_env.setdefault("LANG", "C.UTF-8")
     full_env.setdefault("LC_ALL", "C.UTF-8")
 
-    result = subprocess.run(
-        cmd,
-        check=False,
-        stdout=subprocess.PIPE if capture_output else None,
-        stderr=subprocess.PIPE if capture_output else None,
-        env=full_env,
-        timeout=timeout,
-    )
+    effective_timeout = DEFAULT_TIMEOUT if timeout is None else timeout
+
+    try:
+        result = subprocess.run(
+            cmd,
+            check=False,
+            stdout=subprocess.PIPE if capture_output else None,
+            stderr=subprocess.PIPE if capture_output else None,
+            env=full_env,
+            timeout=effective_timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # Bubble timeouts as FFmpegError so callers do not need to catch
+        # both exception types. -1 returncode signals the timeout.
+        stderr_bytes = exc.stderr if isinstance(exc.stderr, bytes) else b""
+        raise FFmpegError(
+            -1,
+            stderr_bytes + f"\n[timeout after {effective_timeout}s]".encode(),
+            cmd,
+        ) from exc
 
     if check and result.returncode != 0:
         raise FFmpegError(result.returncode, result.stderr or b"", cmd)
@@ -89,6 +114,7 @@ def probe_resolution(video_path: str) -> tuple:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env={**os.environ, "LANG": "C.UTF-8"},
+        timeout=DEFAULT_PROBE_TIMEOUT,
     )
     width, height = result.stdout.decode().strip().split("x")
     return int(width), int(height)
@@ -107,6 +133,7 @@ def probe_duration(video_path: str) -> float:
         check=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        timeout=DEFAULT_PROBE_TIMEOUT,
     )
     return float(result.stdout.decode().strip())
 
