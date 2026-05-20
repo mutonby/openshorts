@@ -5,6 +5,7 @@ import SubtitleModal from './SubtitleModal';
 import HookModal from './HookModal';
 import TranslateModal from './TranslateModal';
 import { renderInBrowser } from '../lib/renderInBrowser';
+import { pushNotification } from '../state/notificationsStore';
 
 export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, onPlay, onPause }) {
     const [showModal, setShowModal] = useState(false);
@@ -372,6 +373,20 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
             }
 
             setPostResult({ success: true, msg: isScheduling ? "Scheduled successfully!" : "Posted successfully!" });
+            // Push one notification per selected platform so the bell groups by
+            // platform. Status remains 'submitted' / 'scheduled' until a future
+            // backend push channel can confirm actual delivery (plan TODO #9).
+            selectedPlatforms.forEach((platform) => {
+                pushNotification({
+                    type: 'publish',
+                    platform,
+                    status: isScheduling ? 'scheduled' : 'submitted',
+                    jobId,
+                    message: isScheduling
+                        ? `Clip ${index + 1} scheduled on ${platform}`
+                        : `Clip ${index + 1} sent to ${platform}`,
+                });
+            });
             setTimeout(() => {
                 setShowModal(false);
                 setPostResult(null);
@@ -379,6 +394,17 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
 
         } catch (e) {
             setPostResult({ success: false, msg: `Failed: ${e.message}` });
+            // Surface the failure in the bell so users notice even if the modal
+            // has been dismissed.
+            selectedPlatforms.forEach((platform) => {
+                pushNotification({
+                    type: 'publish',
+                    platform,
+                    status: 'failed',
+                    jobId,
+                    message: `Clip ${index + 1} failed on ${platform}: ${e.message}`,
+                });
+            });
         } finally {
             setPosting(false);
         }

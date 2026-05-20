@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { X, Loader2, Calendar, Clock, CheckCircle, AlertCircle, Video, Instagram, Youtube, ChevronLeft, ChevronRight, Globe, ExternalLink } from 'lucide-react';
 import { getApiUrl } from '../config';
+import { pushNotification } from '../state/notificationsStore';
 
 const DAYS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 const MONTHS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
@@ -146,8 +147,26 @@ export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploa
                 }
 
                 results.push({ index: i, success: true });
+                selectedPlatforms.forEach((platform) => {
+                    pushNotification({
+                        type: 'publish',
+                        platform,
+                        status: 'scheduled',
+                        jobId,
+                        message: `Clip ${index + 1} scheduled on ${platform}`,
+                    });
+                });
             } catch (e) {
                 results.push({ index: i, success: false, error: e.message });
+                selectedPlatforms.forEach((platform) => {
+                    pushNotification({
+                        type: 'publish',
+                        platform,
+                        status: 'failed',
+                        jobId,
+                        message: `Clip ${index + 1} failed on ${platform}: ${e.message}`,
+                    });
+                });
             }
 
             setProgress({ current: i + 1, total, results: [...results] });
