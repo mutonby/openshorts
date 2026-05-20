@@ -5,9 +5,11 @@ Regenerate the auto-managed sections of CLAUDE.md.
 What this does
 ==============
 
-CLAUDE.md is split into hand-written prose and three auto-managed tables. The
-auto-managed sections live between marker comments and get rewritten by this
-script on every commit (via the pre-commit hook in .pre-commit-config.yaml):
+The OpenShorts project content lives inside the user's global Claude config at
+``~/.claude/CLAUDE.md`` under the ``## OpenShorts (project-specific)`` H2
+section. That section contains three auto-managed tables flanked by marker
+comments; this script rewrites the body between those markers on every commit
+(via the pre-commit hook in .pre-commit-config.yaml):
 
     <!-- AUTO:REPO-MAP:START --> ... <!-- AUTO:REPO-MAP:END -->
     <!-- AUTO:MODULE-MAP:START --> ... <!-- AUTO:MODULE-MAP:END -->
@@ -18,7 +20,8 @@ The script:
 2. Parses every backend/app/*.py module via ast, extracting the one-line
    docstring + the names of public functions/classes (MODULE-MAP).
 3. Reads .env.example and renders the env-vars table (ENV).
-4. Locates the markers in CLAUDE.md and rewrites only the content between them.
+4. Locates the markers in ~/.claude/CLAUDE.md and rewrites only the content
+   between them.
 
 It is idempotent: running it twice with no source changes is a no-op.
 
@@ -50,7 +53,10 @@ from typing import List, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_ROOT = REPO_ROOT / "backend" / "app"
-CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
+# Project content lives in the user's global CLAUDE.md under the
+# "## OpenShorts (project-specific)" H2 section. CLAUDE_OVERRIDE lets users
+# (e.g. CI in a different env) point the writer somewhere else.
+CLAUDE_MD = Path(os.environ.get("OPENSHORTS_CLAUDE_MD", str(Path.home() / ".claude" / "CLAUDE.md")))
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
 
 
@@ -244,8 +250,11 @@ def main() -> int:
         return 1
 
     CLAUDE_MD.write_text(updated, encoding="utf-8")
-    print(f"✓ Rewrote {CLAUDE_MD.relative_to(REPO_ROOT)} "
-          f"(REPO-MAP, MODULE-MAP, ENV sections).")
+    try:
+        display_path = CLAUDE_MD.relative_to(REPO_ROOT)
+    except ValueError:
+        display_path = CLAUDE_MD
+    print(f"✓ Rewrote {display_path} (REPO-MAP, MODULE-MAP, ENV sections).")
     return 0
 
 
