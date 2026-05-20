@@ -37,6 +37,18 @@ async function fetchStatus(jobId, signal) {
   return res.json();
 }
 
+// Backend vocab is `queued | processing | completed | failed` and the
+// payload uses `result` (singular). The wizard's done check + StatusIcon
+// expect `complete | error` and a `result` key. Normalize once at the
+// boundary so the rest of the component speaks the wizard's vocab.
+function normalizeJobPayload(data) {
+  const status =
+    data.status === 'completed' ? 'complete' :
+    data.status === 'failed'    ? 'error'    :
+    data.status;
+  return { status, logs: data.logs, result: data.result };
+}
+
 function saveHistory(entry) {
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
@@ -105,6 +117,7 @@ export default function Processing({ wizard }) {
         try {
           const data = await fetchStatus(j.jobId, controller.signal);
           if (cancelled) return;
+          const norm = normalizeJobPayload(data);
           wizard.setData((prev) => {
             const cur = prev.jobs[fileId];
             if (cur?.status === 'complete' || cur?.status === 'error') return prev;
@@ -114,9 +127,9 @@ export default function Processing({ wizard }) {
                 ...prev.jobs,
                 [fileId]: {
                   ...cur,
-                  status: data.status || cur.status,
-                  logs:   data.logs   || cur.logs,
-                  result: data.results || cur.result,
+                  status: norm.status || cur.status,
+                  logs:   norm.logs   || cur.logs,
+                  result: norm.result || cur.result,
                 },
               },
             };
