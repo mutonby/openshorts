@@ -1,7 +1,13 @@
 // Step 4: Review. Split view — clip list (left) + phone preview + export bar.
 //
+// Phase 3: per-clip stage selector. The auto-pipeline emits a chain of variants
+// (original → edited → graded → silencecut → subtitled) per clip; here we let
+// the user step through them. Missing variants can be generated inline via the
+// existing /api/edit, /api/colorgrade, /api/silencecut, /api/subtitle endpoints.
+// Selection + LUT choice persist in wizard.data so reloads keep them.
+//
 // Export wiring:
-//   - Download: opens the generated clip URL (existing /api/status results).
+//   - Download: opens the currently-displayed variant URL.
 //   - Publish:  pushes a notification + would call POST /api/social/post.
 //               Backend doesn't queue these yet (plan TODO #9), so we
 //               surface the intent locally via the bell.
@@ -9,13 +15,33 @@
 //   - Send to CapCut: placeholder — backend integration TODO.
 
 import { useEffect, useMemo, useState } from 'react';
-import { Download, Eye, Scissors } from 'lucide-react';
+import { Download, Eye, Loader2, Plus, Scissors } from 'lucide-react';
 import PhoneFrame from '../../../components/ui/PhoneFrame.jsx';
 import PlatformBadge from '../../../components/ui/PlatformBadge.jsx';
 import { getApiUrl } from '../../../config';
 import { pushNotification } from '../../../state/notificationsStore.js';
+import { useKeys } from '../../../state/keysStore.js';
+import { useBrandKit } from '../../../lib/brandKit.js';
 
 const PLATFORMS = ['youtube', 'tiktok', 'instagram', 'snapchat', 'facebook'];
+
+// Chain order must match backend/app/main.py:_run_auto_pipeline.
+const STAGES = [
+  { key: 'original',   label: 'Original',     short: 'Original'    },
+  { key: 'edited',     label: '+ AI Edit',    short: '+ Edit'      },
+  { key: 'graded',     label: '+ Color Grade', short: '+ Grade'    },
+  { key: 'silencecut', label: '+ Silence Cut', short: '+ Cut'      },
+  { key: 'subtitled',  label: '+ Subtitles',  short: '+ Subs'      },
+];
+
+// Must match backend/app/editing/color_grade.py:LUT_PRESETS (allowlist enforced
+// server-side via the ColorGradeRequest validator).
+const LUTS = ['teal_orange', 'warm', 'cool', 'vivid', 'noir'];
+const DEFAULT_LUT = 'teal_orange';
+
+function clipKey(c) {
+  return `${c.jobId}-${c.clipIndex}`;
+}
 
 function flattenClips(jobs, files) {
   const out = [];
@@ -36,6 +62,27 @@ function flattenClips(jobs, files) {
   return out;
 }
 
+// Pick the deepest stage whose variant exists, walking the chain backwards.
+// Used as the initial display when the wizard first lands on Review.
+function pickInitialStage(variants) {
+  if (!variants) return 'original';
+  for (let i = STAGES.length - 1; i >= 0; i--) {
+    if (variants[STAGES[i].key]) return STAGES[i].key;
+  }
+  return 'original';
+}
+
+// Walk backwards from `targetStage` to find the most recent existing variant —
+// that's the input to feed when generating the missing one. Falls back to original.
+function priorVariantFilename(variants, targetStage) {
+  const idx = STAGES.findIndex((s) => s.key === targetStage);
+  for (let i = idx - 1; i >= 0; i--) {
+    const f = variants?.[STAGES[i].key];
+    if (f) return f;
+  }
+  return variants?.original || null;
+}
+
 export default function Review({ wizard }) {
   const files = wizard.data.files || [];
   const jobs = wizard.data.jobs || {};
@@ -44,8 +91,33 @@ export default function Review({ wizard }) {
   const [showOriginal, setShowOriginal] = useState(false);
   const [sourceUrl, setSourceUrl] = useState(null);
 
+  // Per-clip transient state — loading flag + last error. Lost on reload (OK).
+  const [pendingStage, setPendingStage] = useState(null); // { clipKey, stageKey }
+  const [stageError, setStageError] = useState(null);     // { clipKey, message }
+
+  const keys = useKeys();
+  const brand = useBrandKit();
+
   const current = clips[Math.min(selected, clips.length - 1)] || null;
-  const clipUrl = current?.clip?.video_url ? getApiUrl(current.clip.video_url) : null;
+
+  // Persisted per-clip state (auto-saves through wizard.data).
+  const clipStages = wizard.data.clipStages || {};
+  const clipLuts = wizard.data.clipLuts || {};
+
+  const variants = current?.clip?.variants || null;
+  const currentClipKey = current ? clipKey(current) : null;
+  const selectedStage = currentClipKey
+    ? (clipStages[currentClipKey] || pickInitialStage(variants))
+    : 'original';
+  const lutName = currentClipKey ? (clipLuts[currentClipKey] || DEFAULT_LUT) : DEFAULT_LUT;
+
+  // Resolve the URL for the currently-selected stage, falling back to the
+  // deepest existing variant, then to the polished URL the backend set, then
+  // to the raw clip URL (covers legacy clips without a variants dict).
+  const stageFilename = variants?.[selectedStage] || variants?.polished || null;
+  const clipUrl = stageFilename
+    ? getApiUrl(`/videos/${current.jobId}/${stageFilename}`)
+    : (current?.clip?.video_url ? getApiUrl(current.clip.video_url) : null);
 
   // Build a blob URL for the original source file — only available when
   // the wizard has the in-memory File (lost after reload).
@@ -66,6 +138,166 @@ export default function Review({ wizard }) {
         </button>
       </div>
     );
+  }
+
+  function setClipStage(stageKey) {
+    if (!currentClipKey) return;
+    wizard.setData({ clipStages: { ...clipStages, [currentClipKey]: stageKey } });
+  }
+
+  function setClipLut(lut) {
+    if (!currentClipKey) return;
+    wizard.setData({ clipLuts: { ...clipLuts, [currentClipKey]: lut } });
+  }
+
+  // Merge a new variant into wizard.data.jobs[fileId].result.clips[i].variants.
+  // This is the central state update — every successful generation flows through here.
+  function mergeVariant(stageKey, newFilename) {
+    if (!current) return;
+    wizard.setData((prev) => {
+      const job = prev.jobs?.[current.fileId];
+      if (!job?.result?.clips) return prev;
+      const newClips = job.result.clips.map((c, i) => {
+        if (i !== current.clipIndex) return c;
+        const newVariants = { ...(c.variants || { original: c.video_url?.split('/').pop() }) };
+        newVariants[stageKey] = newFilename;
+        return { ...c, variants: newVariants };
+      });
+      return {
+        ...prev,
+        jobs: {
+          ...prev.jobs,
+          [current.fileId]: {
+            ...job,
+            result: { ...job.result, clips: newClips },
+          },
+        },
+      };
+    });
+  }
+
+  async function generateStage(stageKey) {
+    if (!current) return;
+    const cKey = clipKey(current);
+    setPendingStage({ clipKey: cKey, stageKey });
+    setStageError(null);
+
+    try {
+      const inputFilename = priorVariantFilename(variants, stageKey);
+      if (!inputFilename) throw new Error('No source variant available');
+
+      let newFilename = null;
+
+      if (stageKey === 'edited') {
+        if (!keys.gemini) throw new Error('Set your Gemini key in Settings first');
+        const res = await fetch(getApiUrl('/api/edit'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Gemini-Key': keys.gemini },
+          body: JSON.stringify({
+            job_id: current.jobId,
+            clip_index: current.clipIndex,
+            input_filename: inputFilename,
+          }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        newFilename = data.new_video_url?.split('/').pop();
+      } else if (stageKey === 'graded') {
+        const res = await fetch(getApiUrl('/api/colorgrade'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            job_id: current.jobId,
+            clip_index: current.clipIndex,
+            input_filename: inputFilename,
+            lut_name: lutName,
+          }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        newFilename = data.new_video_url?.split('/').pop();
+      } else if (stageKey === 'silencecut') {
+        const res = await fetch(getApiUrl('/api/silencecut'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            job_id: current.jobId,
+            clip_index: current.clipIndex,
+            input_filename: inputFilename,
+          }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        newFilename = data.new_video_url?.split('/').pop();
+      } else if (stageKey === 'subtitled') {
+        const res = await fetch(getApiUrl('/api/subtitle'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            job_id: current.jobId,
+            clip_index: current.clipIndex,
+            input_filename: inputFilename,
+            position: brand?.position || 'bottom',
+            font_size: brand?.font_size || 50,
+            font_name: brand?.font_name || 'Anton',
+            font_color: brand?.font_color || '#FFFF00',
+            border_color: brand?.border_color || '#000000',
+            border_width: brand?.border_width || 4,
+            bg_opacity: brand?.bg_opacity ?? 0,
+            words_per_line: brand?.words_per_line || 3,
+            text_case: brand?.text_case || 'upper',
+          }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        newFilename = data.new_video_url?.split('/').pop();
+      }
+
+      if (!newFilename) throw new Error('Empty response from backend');
+      mergeVariant(stageKey, newFilename);
+      // Switch to the freshly-generated stage so the preview swaps immediately.
+      wizard.setData((prev) => ({
+        ...prev,
+        clipStages: { ...(prev.clipStages || {}), [cKey]: stageKey },
+      }));
+    } catch (e) {
+      setStageError({ clipKey: cKey, message: String(e.message || e) });
+      setTimeout(() => setStageError(null), 6000);
+    } finally {
+      setPendingStage(null);
+    }
+  }
+
+  async function regenerateGrade(newLut) {
+    if (!current) return;
+    setClipLut(newLut);
+    // If we already have a graded variant, regenerate with the new LUT.
+    if (variants?.graded) {
+      setPendingStage({ clipKey: clipKey(current), stageKey: 'graded' });
+      setStageError(null);
+      try {
+        const inputFilename = priorVariantFilename(variants, 'graded');
+        const res = await fetch(getApiUrl('/api/colorgrade'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            job_id: current.jobId,
+            clip_index: current.clipIndex,
+            input_filename: inputFilename,
+            lut_name: newLut,
+          }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        const newFilename = data.new_video_url?.split('/').pop();
+        if (newFilename) mergeVariant('graded', newFilename);
+      } catch (e) {
+        setStageError({ clipKey: clipKey(current), message: String(e.message || e) });
+        setTimeout(() => setStageError(null), 6000);
+      } finally {
+        setPendingStage(null);
+      }
+    }
   }
 
   function publish(platform, scheduled) {
@@ -89,6 +321,9 @@ export default function Review({ wizard }) {
     current?.clip?.video_description_for_tiktok ||
     current?.clip?.description ||
     '';
+
+  const isPending = pendingStage?.clipKey === currentClipKey;
+  const isErr = stageError?.clipKey === currentClipKey;
 
   return (
     <div className="h-full flex">
@@ -141,11 +376,77 @@ export default function Review({ wizard }) {
             {showOriginal && sourceUrl ? (
               <video key={`src-${selected}`} src={sourceUrl} controls className="w-full h-full object-contain" />
             ) : clipUrl ? (
-              <video key={`clip-${selected}`} src={clipUrl} controls className="w-full h-full object-cover" />
+              <video key={`clip-${selected}-${selectedStage}`} src={clipUrl} controls className="w-full h-full object-cover" />
             ) : (
               <div className="text-zinc-600 text-[12px] p-4 text-center">No preview available.</div>
             )}
           </PhoneFrame>
+
+          {/* Stage selector — segmented row. Lights up the currently-displayed
+              variant and exposes a [+] on each missing stage so the user can
+              fill it in without leaving Review. */}
+          {!showOriginal && current && (
+            <div className="flex flex-col items-center gap-2">
+              <div className="inline-flex rounded-lg border border-border bg-surface p-0.5 text-[12px]">
+                {STAGES.map((stage) => {
+                  const has = !!variants?.[stage.key];
+                  const isActive = stage.key === selectedStage;
+                  const isThisPending = isPending && pendingStage.stageKey === stage.key;
+                  const clickable = has || !isThisPending;
+                  return (
+                    <button
+                      key={stage.key}
+                      disabled={!clickable}
+                      onClick={() => has ? setClipStage(stage.key) : generateStage(stage.key)}
+                      title={has
+                        ? `Show ${stage.label.replace(/^\+ /, '').toLowerCase()} variant`
+                        : `Generate ${stage.label.replace(/^\+ /, '').toLowerCase()}`}
+                      className={`px-3 py-1.5 rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed ${
+                        isActive
+                          ? 'bg-primary/20 text-white border border-primary/40'
+                          : has
+                            ? 'text-zinc-300 hover:bg-white/5'
+                            : 'text-zinc-500 hover:text-zinc-300 hover:bg-white/5'
+                      }`}
+                    >
+                      {isThisPending ? (
+                        <Loader2 size={12} className="animate-spin" />
+                      ) : !has ? (
+                        <Plus size={11} />
+                      ) : null}
+                      <span>{stage.short}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* LUT picker — only relevant when the user is viewing or about
+                  to generate the graded stage. Sliding the dropdown re-grades
+                  in place if a graded variant already exists. */}
+              {(selectedStage === 'graded' || (!variants?.graded && pendingStage?.stageKey === 'graded')) && (
+                <div className="flex items-center gap-2 text-[11px] text-zinc-400">
+                  <label htmlFor="lut-picker">LUT:</label>
+                  <select
+                    id="lut-picker"
+                    value={lutName}
+                    onChange={(e) => regenerateGrade(e.target.value)}
+                    disabled={isPending}
+                    className="bg-surface border border-border rounded-md px-2 py-1 text-zinc-200 text-[11px] disabled:opacity-50"
+                  >
+                    {LUTS.map((l) => (
+                      <option key={l} value={l}>{l.replace('_', ' ')}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {isErr && (
+                <div className="text-[11px] text-red-400 max-w-md text-center" role="alert">
+                  {stageError.message}
+                </div>
+              )}
+            </div>
+          )}
 
           {title && (
             <div className="text-center max-w-md">
