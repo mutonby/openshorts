@@ -17,7 +17,7 @@ import SnakeGame from '../../../components/ui/SnakeGame.jsx';
 const POLL_MS = 2000;
 const HISTORY_KEY = 'openshorts.shortForm.history';
 
-async function startJob({ file, geminiKey }) {
+async function startJob({ file, geminiKey, signal }) {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('acknowledged', 'true');
@@ -25,13 +25,14 @@ async function startJob({ file, geminiKey }) {
     method: 'POST',
     headers: { 'X-Gemini-Key': geminiKey },
     body: formData,
+    signal,
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
-async function fetchStatus(jobId) {
-  const res = await fetch(getApiUrl(`/api/status/${jobId}`));
+async function fetchStatus(jobId, signal) {
+  const res = await fetch(getApiUrl(`/api/status/${jobId}`), { signal });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -88,38 +89,59 @@ export default function Processing({ wizard }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Poll status for every still-running job.
+  // Poll status for every still-running job. Cleanup aborts in-flight
+  // fetches and a `cancelled` flag stops late responses from committing
+  // after unmount or after the effect re-runs. The terminal-status guard
+  // in the setData updater drops stale 'processing' responses that race
+  // past a newer 'complete'/'error' response.
   useEffect(() => {
     const active = Object.entries(jobs).filter(([, j]) => j.jobId && j.status === 'processing');
     if (active.length === 0) return;
+    let cancelled = false;
+    const controller = new AbortController();
     const id = setInterval(async () => {
+      if (cancelled) return;
       for (const [fileId, j] of active) {
         try {
-          const data = await fetchStatus(j.jobId);
-          wizard.setData((prev) => ({
-            ...prev,
-            jobs: {
-              ...prev.jobs,
-              [fileId]: {
-                ...prev.jobs[fileId],
-                status: data.status || prev.jobs[fileId].status,
-                logs:   data.logs   || prev.jobs[fileId].logs,
-                result: data.results || prev.jobs[fileId].result,
+          const data = await fetchStatus(j.jobId, controller.signal);
+          if (cancelled) return;
+          wizard.setData((prev) => {
+            const cur = prev.jobs[fileId];
+            if (cur?.status === 'complete' || cur?.status === 'error') return prev;
+            return {
+              ...prev,
+              jobs: {
+                ...prev.jobs,
+                [fileId]: {
+                  ...cur,
+                  status: data.status || cur.status,
+                  logs:   data.logs   || cur.logs,
+                  result: data.results || cur.result,
+                },
               },
-            },
-          }));
+            };
+          });
         } catch (e) {
-          wizard.setData((prev) => ({
-            ...prev,
-            jobs: {
-              ...prev.jobs,
-              [fileId]: { ...prev.jobs[fileId], status: 'error', logs: [...(prev.jobs[fileId].logs || []), String(e.message || e)] },
-            },
-          }));
+          if (e?.name === 'AbortError' || cancelled) return;
+          wizard.setData((prev) => {
+            const cur = prev.jobs[fileId];
+            if (cur?.status === 'complete' || cur?.status === 'error') return prev;
+            return {
+              ...prev,
+              jobs: {
+                ...prev.jobs,
+                [fileId]: { ...cur, status: 'error', logs: [...(cur?.logs || []), String(e.message || e)] },
+              },
+            };
+          });
         }
       }
     }, POLL_MS);
-    return () => clearInterval(id);
+    return () => {
+      cancelled = true;
+      controller.abort();
+      clearInterval(id);
+    };
   // Re-subscribe whenever the set of active job statuses changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [Object.values(jobs).map((j) => j.status).join(',')]);

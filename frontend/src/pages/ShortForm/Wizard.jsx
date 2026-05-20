@@ -29,8 +29,23 @@ const INITIAL = {
 
 const STORAGE_KEY = 'openshorts.shortForm.wizard';
 
+// File objects can't be JSON-serialized; after a reload the `files`
+// array would carry plain {name,size,...} stubs instead of real Files
+// and any forward step would fail. Detect that and force the wizard
+// back to Upload before the user sees stale state.
+function shortFormNeedsFreshUpload(data) {
+  return Array.isArray(data?.files)
+    && data.files.length > 0
+    && data.files.some((f) => !(f?.file instanceof File));
+}
+
 export default function Wizard() {
-  const w = useWizard({ steps: STEPS, initialData: INITIAL, storageKey: STORAGE_KEY });
+  const w = useWizard({
+    steps: STEPS,
+    initialData: INITIAL,
+    storageKey: STORAGE_KEY,
+    resetOnRehydrate: shortFormNeedsFreshUpload,
+  });
 
   return (
     <div className="h-full flex flex-col">

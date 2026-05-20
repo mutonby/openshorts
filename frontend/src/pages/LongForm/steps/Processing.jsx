@@ -32,15 +32,19 @@ function saveHistory(entry) {
 export default function Processing({ wizard }) {
   const proc = wizard.data.processing || { progress: 0, status: 'idle' };
   const file = wizard.data.file;
-  const startedRef = useRef(false);
   const savedRef = useRef(false);
 
-  // Drive the fake progress timer once.
+  // Drive the fake progress timer. The cleanup intentionally clears its own
+  // interval — under React 18 StrictMode dev the effect runs twice, but each
+  // run owns its own timer and the setData updater reads the latest progress
+  // so the visible counter never flickers backward.
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
     if (proc.status === 'complete') return;
-    wizard.setData((prev) => ({ ...prev, processing: { progress: 0, status: 'running' } }));
+    wizard.setData((prev) => {
+      const existing = prev.processing;
+      if (existing?.status === 'running' || existing?.status === 'complete') return prev;
+      return { ...prev, processing: { progress: 0, status: 'running' } };
+    });
 
     const id = setInterval(() => {
       wizard.setData((prev) => {

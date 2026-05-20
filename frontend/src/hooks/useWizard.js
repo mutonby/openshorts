@@ -39,7 +39,7 @@ function reducer(state, action) {
   }
 }
 
-export function useWizard({ steps, initialData = {}, storageKey = null }) {
+export function useWizard({ steps, initialData = {}, storageKey = null, resetOnRehydrate = null }) {
   const maxStep = steps.length - 1;
 
   const initial = useRef({
@@ -51,8 +51,9 @@ export function useWizard({ steps, initialData = {}, storageKey = null }) {
   const [state, dispatch] = useReducer(reducer, initial.current);
 
   // Rehydrate once from localStorage. File objects don't survive JSON
-  // round-trips, so callers should treat persisted File fields as "may be
-  // missing on reload" and recover gracefully.
+  // round-trips. If `resetOnRehydrate(mergedData)` returns true, force
+  // step=0 + initialData and clear persistence — keeps users from
+  // marching past lost state into a step that will fail.
   useEffect(() => {
     if (!storageKey) return;
     try {
@@ -60,14 +61,20 @@ export function useWizard({ steps, initialData = {}, storageKey = null }) {
       if (!raw) return;
       const saved = JSON.parse(raw);
       if (saved && typeof saved.step === 'number') {
+        const merged = { ...initialData, ...(saved.data || {}) };
+        const corrupt =
+          saved.step > 0
+          && typeof resetOnRehydrate === 'function'
+          && resetOnRehydrate(merged);
         dispatch({
           type: 'REHYDRATE',
           state: {
-            step: Math.min(saved.step, maxStep),
-            data: { ...initialData, ...(saved.data || {}) },
+            step: corrupt ? 0 : Math.min(saved.step, maxStep),
+            data: corrupt ? initialData : merged,
             maxStep,
           },
         });
+        if (corrupt) localStorage.removeItem(storageKey);
       }
     } catch {/* ignore */}
   // eslint-disable-next-line react-hooks/exhaustive-deps

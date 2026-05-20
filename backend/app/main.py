@@ -310,6 +310,32 @@ async def run_job(job_id, job_data):
         jobs[job_id]['status'] = 'failed'
         jobs[job_id]['logs'].append(f"Execution error: {str(e)}")
 
+_ALLOWED_VIDEO_EXTS = {".mp4", ".mov"}
+# MP4 / MOV files start with a 'ftyp' box at byte offset 4.
+# Reference: ISO/IEC 14496-12 (MP4 container spec).
+_MP4_FTYP_MAGIC = b"ftyp"
+
+
+def _ensure_video_upload(filename: str, first_chunk: bytes) -> None:
+    """Reject uploads that aren't MP4/MOV by extension AND magic-byte check.
+
+    Browsers send inconsistent Content-Type for video files (often
+    application/octet-stream), so MIME is intentionally not checked —
+    the extension + ftyp signature pair is the authoritative test.
+    """
+    ext = os.path.splitext((filename or "").lower())[1]
+    if ext not in _ALLOWED_VIDEO_EXTS:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported file type {ext!r}. Allowed: {sorted(_ALLOWED_VIDEO_EXTS)}",
+        )
+    if len(first_chunk) < 12 or first_chunk[4:8] != _MP4_FTYP_MAGIC:
+        raise HTTPException(
+            status_code=415,
+            detail="File contents do not match MP4/MOV format (ftyp signature missing).",
+        )
+
+
 @app.get("/api/config")
 async def get_config():
     return {"youtubeUrlEnabled": not DISABLE_YOUTUBE_URL}
@@ -362,24 +388,36 @@ async def process_endpoint(
     os.makedirs(job_output_dir, exist_ok=True)
 
     # Prepare Command
-    cmd = ["python", "-u", "main.py"] # -u for unbuffered
+    cmd = ["python", "-u", "-m", "app.cli"] # -u for unbuffered; CLI lives at backend/app/cli.py post-restructure
     env = os.environ.copy()
     env["GEMINI_API_KEY"] = api_key # Override with key from request
 
     if url:
         cmd.extend(["-u", url])
     else:
-        # Save uploaded file with size limit check
+        # Save uploaded file with size + signature checks.
         input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{file.filename}")
-
-        # Read file in chunks to check size
-        size = 0
         limit_bytes = MAX_FILE_SIZE_MB * 1024 * 1024
 
+        # Read the first chunk and validate the signature before persisting
+        # anything to disk. Empty / wrong-type uploads are rejected early.
+        first_chunk = await file.read(1024 * 1024)
+        if not first_chunk:
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+        try:
+            _ensure_video_upload(file.filename or "", first_chunk)
+        except HTTPException:
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            raise
+
+        size = len(first_chunk)
         with open(input_path, "wb") as buffer:
+            buffer.write(first_chunk)
             while content := await file.read(1024 * 1024): # Read 1MB chunks
                 size += len(content)
                 if size > limit_bytes:
+                    buffer.close()
                     os.remove(input_path)
                     shutil.rmtree(job_output_dir)
                     raise HTTPException(status_code=413, detail=f"File too large. Max size {MAX_FILE_SIZE_MB}MB")

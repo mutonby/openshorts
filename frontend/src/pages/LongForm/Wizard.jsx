@@ -34,8 +34,20 @@ const INITIAL = {
 
 const STORAGE_KEY = 'openshorts.longForm.wizard';
 
+// File objects can't be JSON-serialized; after a reload `data.file.file`
+// is a plain object instead of a real File and Settings/Processing/Editor
+// would all fail. Force the wizard back to Upload in that case.
+function longFormNeedsFreshUpload(data) {
+  return !!data?.file && !(data.file.file instanceof File);
+}
+
 export default function Wizard() {
-  const w = useWizard({ steps: STEPS, initialData: INITIAL, storageKey: STORAGE_KEY });
+  const w = useWizard({
+    steps: STEPS,
+    initialData: INITIAL,
+    storageKey: STORAGE_KEY,
+    resetOnRehydrate: longFormNeedsFreshUpload,
+  });
 
   return (
     <div className="h-full flex flex-col">
