@@ -12,6 +12,7 @@ const SECTIONS = [
       { to: 'general/brand-kit',       label: 'Brand Kit' },
       { to: 'general/subtitle-style',  label: 'Subtitle style' },
       { to: 'general/color-presets',   label: 'Color presets' },
+      { to: 'general/ai-restyle',      label: 'AI Restyle' },
       { to: 'general/export-defaults', label: 'Export defaults' },
     ],
   },

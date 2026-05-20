@@ -8,6 +8,7 @@ import SettingsLayout from './pages/Settings/index.jsx';
 import BrandKitSection from './pages/Settings/sections/BrandKitSection.jsx';
 import SubtitleStyleSection from './pages/Settings/sections/SubtitleStyleSection.jsx';
 import ColorPresetsSection from './pages/Settings/sections/ColorPresetsSection.jsx';
+import AIRestylePresetsSection from './pages/Settings/sections/AIRestylePresetsSection.jsx';
 import ExportDefaultsSection from './pages/Settings/sections/ExportDefaultsSection.jsx';
 import PlatformSection from './pages/Settings/sections/PlatformSection.jsx';
 import ApiKeysSection from './pages/Settings/sections/ApiKeysSection.jsx';
@@ -32,6 +33,7 @@ export default function App() {
           <Route path="general/brand-kit"        element={<BrandKitSection />} />
           <Route path="general/subtitle-style"   element={<SubtitleStyleSection />} />
           <Route path="general/color-presets"    element={<ColorPresetsSection />} />
+          <Route path="general/ai-restyle"       element={<AIRestylePresetsSection />} />
           <Route path="general/export-defaults"  element={<ExportDefaultsSection />} />
           <Route path="platforms/:platform"      element={<PlatformSection />} />
           <Route path="system/api-keys"          element={<ApiKeysSection />} />
