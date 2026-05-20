@@ -132,6 +132,30 @@
         "title": "Body_saasshorts_actor_upload_api_saasshorts_actor_upload_post",
         "type": "object"
       },
+      "Body_start_restyle_api_restyle_post": {
+        "properties": {
+          "background_prompt": {
+            "title": "Background Prompt",
+            "type": "string"
+          },
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "lighting_prompt": {
+            "title": "Lighting Prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "background_prompt",
+          "lighting_prompt"
+        ],
+        "title": "Body_start_restyle_api_restyle_post",
+        "type": "object"
+      },
       "Body_thumbnail_analyze_api_thumbnail_analyze_post": {
         "properties": {
           "file": {
@@ -510,6 +534,46 @@
           "clip_indices"
         ],
         "title": "MergeRequest",
+        "type": "object"
+      },
+      "RestyleStatus": {
+        "properties": {
+          "logs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Logs",
+            "type": "array"
+          },
+          "progress_pct": {
+            "default": 0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Progress Pct",
+            "type": "integer"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "logs"
+        ],
+        "title": "RestyleStatus",
         "type": "object"
       },
       "SaaSActorRequest": {
@@ -1593,6 +1657,83 @@
           }
         },
         "summary": "Proxy Render Status"
+      }
+    },
+    "/api/restyle": {
+      "post": {
+        "description": "Start a restyle job. Returns ``{job_id}`` immediately; poll\n``GET /api/restyle/{job_id}`` for status.",
+        "operationId": "start_restyle_api_restyle_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_start_restyle_api_restyle_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Restyle"
+      }
+    },
+    "/api/restyle/{job_id}": {
+      "get": {
+        "description": "Poll the status of a restyle job.",
+        "operationId": "restyle_status_api_restyle__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestyleStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restyle Status"
       }
     },
     "/api/saasshorts/actor-gallery": {

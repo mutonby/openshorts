@@ -188,6 +188,11 @@ THUMBNAILS_DIR = os.path.join(OUTPUT_DIR, "thumbnails")
 os.makedirs(THUMBNAILS_DIR, exist_ok=True)
 app.mount("/thumbnails", StaticFiles(directory=THUMBNAILS_DIR), name="thumbnails")
 
+# AI Restyle product routes (first populated module under app/routes/).
+# Defers its own app.main imports to dodge the circular at load time.
+from app.routes.ai_restyle import router as ai_restyle_router  # noqa: E402
+app.include_router(ai_restyle_router)
+
 # ---------------------------------------------------------------------------
 # Short-form auto-pipeline config (Phase 1+2 — see ~/.claude/plans/...-cray.md)
 #
