@@ -12,6 +12,11 @@
 __pycache__/
 *.pyc
 
+# Editable-install / build artifacts
+*.egg-info/
+build/
+dist/
+
 # Temporary files / runtime dirs
 temp_*
 uploads/
@@ -33,10 +38,19 @@ output/
 # Cache dirs
 .cache/
 .config/
+.pytest_cache/
+
+# Test ephemera (baseline.openapi.json IS committed; current is not)
+backend/tests/snapshots/current.openapi.json
+backend/tests/fixtures/smoke.mp4
 # Multi-agent Skills
 .agents/
 .agent/
 .claude/
 skills/
 skills-lock.json
+
+# Session-local artifacts (handovers, test screenshots) — not for git
+.session/
+.compact-ultra
 

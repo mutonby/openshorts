@@ -194,7 +194,7 @@ docker compose up --build
 ```
 
 ### 4. Open Dashboard
-Navigate to **`http://localhost:5175`**
+Navigate to **`http://localhost:3001`**
 
 1. Go to **Settings** and enter your API keys (Gemini, fal.ai, ElevenLabs, Upload-Post)
 2. **Clip Generator**: Upload a long-form video to generate viral shorts

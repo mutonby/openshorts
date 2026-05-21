@@ -1,0 +1,10 @@
+repos:
+  - repo: local
+    hooks:
+      - id: update-claude-md
+        name: Regenerate CLAUDE.md auto-managed sections
+        entry: python scripts/update_claude_md.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]

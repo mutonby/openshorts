@@ -1,0 +1,2779 @@
+{
+  "components": {
+    "schemas": {
+      "Body_process_endpoint_api_process_post": {
+        "properties": {
+          "acknowledged": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acknowledged"
+          },
+          "auto_edit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Edit"
+          },
+          "auto_subtitles": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Subtitles"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "color_grade": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color Grade"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "contentMediaType": "application/octet-stream",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          },
+          "lut_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lut Name"
+          },
+          "silence_removal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Silence Removal"
+          },
+          "subtitle_style": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtitle Style"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "title": "Body_process_endpoint_api_process_post",
+        "type": "object"
+      },
+      "Body_saasshorts_actor_upload_api_saasshorts_actor_upload_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_saasshorts_actor_upload_api_saasshorts_actor_upload_post",
+        "type": "object"
+      },
+      "Body_start_restyle_api_restyle_post": {
+        "properties": {
+          "background_prompt": {
+            "title": "Background Prompt",
+            "type": "string"
+          },
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "lighting_prompt": {
+            "title": "Lighting Prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "background_prompt",
+          "lighting_prompt"
+        ],
+        "title": "Body_start_restyle_api_restyle_post",
+        "type": "object"
+      },
+      "Body_thumbnail_analyze_api_thumbnail_analyze_post": {
+        "properties": {
+          "file": {
+            "anyOf": [
+              {
+                "contentMediaType": "application/octet-stream",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "title": "Body_thumbnail_analyze_api_thumbnail_analyze_post",
+        "type": "object"
+      },
+      "Body_thumbnail_generate_api_thumbnail_generate_post": {
+        "properties": {
+          "background": {
+            "anyOf": [
+              {
+                "contentMediaType": "application/octet-stream",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background"
+          },
+          "count": {
+            "default": 3,
+            "title": "Count",
+            "type": "integer"
+          },
+          "extra_prompt": {
+            "default": "",
+            "title": "Extra Prompt",
+            "type": "string"
+          },
+          "face": {
+            "anyOf": [
+              {
+                "contentMediaType": "application/octet-stream",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "title"
+        ],
+        "title": "Body_thumbnail_generate_api_thumbnail_generate_post",
+        "type": "object"
+      },
+      "Body_thumbnail_publish_api_thumbnail_publish_post": {
+        "properties": {
+          "api_key": {
+            "title": "Api Key",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "thumbnail_url": {
+            "title": "Thumbnail Url",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "title",
+          "description",
+          "thumbnail_url",
+          "api_key",
+          "user_id"
+        ],
+        "title": "Body_thumbnail_publish_api_thumbnail_publish_post",
+        "type": "object"
+      },
+      "Body_thumbnail_upload_api_thumbnail_upload_post": {
+        "properties": {
+          "file": {
+            "anyOf": [
+              {
+                "contentMediaType": "application/octet-stream",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "title": "Body_thumbnail_upload_api_thumbnail_upload_post",
+        "type": "object"
+      },
+      "Body_upload_font_api_fonts_upload_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_font_api_fonts_upload_post",
+        "type": "object"
+      },
+      "ColorGradeRequest": {
+        "properties": {
+          "clip_index": {
+            "title": "Clip Index",
+            "type": "integer"
+          },
+          "input_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Filename"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "lut_name": {
+            "title": "Lut Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "clip_index",
+          "lut_name"
+        ],
+        "title": "ColorGradeRequest",
+        "type": "object"
+      },
+      "EditRequest": {
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "clip_index": {
+            "title": "Clip Index",
+            "type": "integer"
+          },
+          "input_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Filename"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "clip_index"
+        ],
+        "title": "EditRequest",
+        "type": "object"
+      },
+      "EffectsGenerateRequest": {
+        "properties": {
+          "clip_index": {
+            "title": "Clip Index",
+            "type": "integer"
+          },
+          "input_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Filename"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "clip_index"
+        ],
+        "title": "EffectsGenerateRequest",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HookRequest": {
+        "properties": {
+          "clip_index": {
+            "title": "Clip Index",
+            "type": "integer"
+          },
+          "input_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Filename"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "top",
+            "title": "Position"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "M",
+            "title": "Size"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "clip_index",
+          "text"
+        ],
+        "title": "HookRequest",
+        "type": "object"
+      },
+      "MergeRequest": {
+        "properties": {
+          "clip_indices": {
+            "items": {
+              "type": "integer"
+            },
+            "maxItems": 50,
+            "minItems": 2,
+            "title": "Clip Indices",
+            "type": "array"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "transition": {
+            "default": "cut",
+            "title": "Transition",
+            "type": "string"
+          },
+          "use_processed": {
+            "default": true,
+            "title": "Use Processed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "job_id",
+          "clip_indices"
+        ],
+        "title": "MergeRequest",
+        "type": "object"
+      },
+      "RestyleStatus": {
+        "properties": {
+          "logs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Logs",
+            "type": "array"
+          },
+          "progress_pct": {
+            "default": 0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Progress Pct",
+            "type": "integer"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "logs"
+        ],
+        "title": "RestyleStatus",
+        "type": "object"
+      },
+      "SaaSActorRequest": {
+        "properties": {
+          "actor_description": {
+            "title": "Actor Description",
+            "type": "string"
+          },
+          "num_options": {
+            "default": 3,
+            "title": "Num Options",
+            "type": "integer"
+          },
+          "product_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Description"
+          }
+        },
+        "required": [
+          "actor_description"
+        ],
+        "title": "SaaSActorRequest",
+        "type": "object"
+      },
+      "SaaSAnalyzeRequest": {
+        "properties": {
+          "actor_gender": {
+            "default": "female",
+            "title": "Actor Gender",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "language": {
+            "default": "en",
+            "title": "Language",
+            "type": "string"
+          },
+          "num_scripts": {
+            "default": 3,
+            "title": "Num Scripts",
+            "type": "integer"
+          },
+          "style": {
+            "default": "ugc",
+            "title": "Style",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "title": "SaaSAnalyzeRequest",
+        "type": "object"
+      },
+      "SaaSGenerateRequest": {
+        "properties": {
+          "actor_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Description"
+          },
+          "retry_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Job Id"
+          },
+          "script": {
+            "additionalProperties": true,
+            "title": "Script",
+            "type": "object"
+          },
+          "selected_actor_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Actor Url"
+          },
+          "video_mode": {
+            "default": "lowcost",
+            "title": "Video Mode",
+            "type": "string"
+          },
+          "voice_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voice Id"
+          }
+        },
+        "required": [
+          "script"
+        ],
+        "title": "SaaSGenerateRequest",
+        "type": "object"
+      },
+      "SaaSPostRequest": {
+        "properties": {
+          "api_key": {
+            "title": "Api Key",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "platforms": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Platforms",
+            "type": "array"
+          },
+          "scheduled_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled Date"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "UTC",
+            "title": "Timezone"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "api_key",
+          "user_id",
+          "platforms"
+        ],
+        "title": "SaaSPostRequest",
+        "type": "object"
+      },
+      "SilenceCutRequest": {
+        "properties": {
+          "clip_index": {
+            "title": "Clip Index",
+            "type": "integer"
+          },
+          "input_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Filename"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "min_silence_sec": {
+            "default": 0.5,
+            "maximum": 10.0,
+            "minimum": 0.05,
+            "title": "Min Silence Sec",
+            "type": "number"
+          },
+          "noise_db": {
+            "default": -30.0,
+            "maximum": 0.0,
+            "minimum": -80.0,
+            "title": "Noise Db",
+            "type": "number"
+          }
+        },
+        "required": [
+          "job_id",
+          "clip_index"
+        ],
+        "title": "SilenceCutRequest",
+        "type": "object"
+      },
+      "SocialPostRequest": {
+        "properties": {
+          "api_key": {
+            "title": "Api Key",
+            "type": "string"
+          },
+          "clip_index": {
+            "title": "Clip Index",
+            "type": "integer"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "platforms": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Platforms",
+            "type": "array"
+          },
+          "scheduled_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled Date"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "UTC",
+            "title": "Timezone"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "clip_index",
+          "api_key",
+          "user_id",
+          "platforms"
+        ],
+        "title": "SocialPostRequest",
+        "type": "object"
+      },
+      "SubtitleRequest": {
+        "properties": {
+          "bg_color": {
+            "default": "#000000",
+            "title": "Bg Color",
+            "type": "string"
+          },
+          "bg_opacity": {
+            "default": 0.0,
+            "title": "Bg Opacity",
+            "type": "number"
+          },
+          "border_color": {
+            "default": "#000000",
+            "title": "Border Color",
+            "type": "string"
+          },
+          "border_width": {
+            "default": 2,
+            "title": "Border Width",
+            "type": "integer"
+          },
+          "clip_index": {
+            "title": "Clip Index",
+            "type": "integer"
+          },
+          "font_color": {
+            "default": "#FFFFFF",
+            "title": "Font Color",
+            "type": "string"
+          },
+          "font_name": {
+            "default": "Verdana",
+            "title": "Font Name",
+            "type": "string"
+          },
+          "font_size": {
+            "default": 16,
+            "title": "Font Size",
+            "type": "integer"
+          },
+          "input_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Filename"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "position": {
+            "default": "bottom",
+            "title": "Position",
+            "type": "string"
+          },
+          "text_case": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Case"
+          },
+          "words_per_line": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Words Per Line"
+          }
+        },
+        "required": [
+          "job_id",
+          "clip_index"
+        ],
+        "title": "SubtitleRequest",
+        "type": "object"
+      },
+      "ThumbnailDescribeRequest": {
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "title"
+        ],
+        "title": "ThumbnailDescribeRequest",
+        "type": "object"
+      },
+      "ThumbnailTitlesRequest": {
+        "properties": {
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "title": "ThumbnailTitlesRequest",
+        "type": "object"
+      },
+      "TranslateRequest": {
+        "properties": {
+          "clip_index": {
+            "title": "Clip Index",
+            "type": "integer"
+          },
+          "input_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Filename"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "source_language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Language"
+          },
+          "target_language": {
+            "title": "Target Language",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "clip_index",
+          "target_language"
+        ],
+        "title": "TranslateRequest",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "FastAPI",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/clip/{job_id}/{clip_index}/transcript": {
+      "get": {
+        "description": "Return word-level captions for a specific clip, formatted for Remotion.",
+        "operationId": "get_clip_transcript_api_clip__job_id___clip_index__transcript_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clip_index",
+            "required": true,
+            "schema": {
+              "title": "Clip Index",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Clip Transcript"
+      }
+    },
+    "/api/colorgrade": {
+      "post": {
+        "description": "Apply a named LUT preset to a clip. Writes ``graded_{input}.mp4``.",
+        "operationId": "color_grade_clip_api_colorgrade_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ColorGradeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Color Grade Clip"
+      }
+    },
+    "/api/config": {
+      "get": {
+        "operationId": "get_config_api_config_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Config"
+      }
+    },
+    "/api/edit": {
+      "post": {
+        "operationId": "edit_clip_api_edit_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Gemini-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gemini-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Edit Clip"
+      }
+    },
+    "/api/effects/generate": {
+      "post": {
+        "description": "Generate structured EffectsConfig JSON for Remotion rendering via Gemini AI.",
+        "operationId": "generate_effects_config_api_effects_generate_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Gemini-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gemini-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EffectsGenerateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Generate Effects Config"
+      }
+    },
+    "/api/fonts": {
+      "get": {
+        "description": "Return the catalog of available fonts (system + user-uploaded).",
+        "operationId": "list_fonts_api_fonts_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Fonts"
+      }
+    },
+    "/api/fonts/file/user/{name}": {
+      "get": {
+        "description": "Serve a user-uploaded font from assets/fonts/user/.",
+        "operationId": "serve_user_font_api_fonts_file_user__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Serve User Font"
+      }
+    },
+    "/api/fonts/file/{name}": {
+      "get": {
+        "description": "Serve a bundled font (in assets/fonts/, not under user/).",
+        "operationId": "serve_bundled_font_api_fonts_file__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Serve Bundled Font"
+      }
+    },
+    "/api/fonts/upload": {
+      "post": {
+        "description": "Save a user-uploaded font under assets/fonts/user/.",
+        "operationId": "upload_font_api_fonts_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_font_api_fonts_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload Font"
+      }
+    },
+    "/api/hook": {
+      "post": {
+        "operationId": "add_hook_api_hook_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HookRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Hook"
+      }
+    },
+    "/api/merge": {
+      "post": {
+        "description": "Concat the selected clips of a job into a single ``merged_*.mp4``.",
+        "operationId": "merge_clips_api_merge_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Merge Clips"
+      }
+    },
+    "/api/process": {
+      "post": {
+        "operationId": "process_endpoint_api_process_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_process_endpoint_api_process_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Process Endpoint"
+      }
+    },
+    "/api/render": {
+      "post": {
+        "description": "Proxy render requests to the Node.js Remotion render service.",
+        "operationId": "proxy_render_api_render_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Proxy Render"
+      }
+    },
+    "/api/render/{render_id}": {
+      "get": {
+        "description": "Proxy render status polling to the Node.js Remotion render service.",
+        "operationId": "proxy_render_status_api_render__render_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "render_id",
+            "required": true,
+            "schema": {
+              "title": "Render Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Proxy Render Status"
+      }
+    },
+    "/api/restyle": {
+      "post": {
+        "description": "Start a restyle job. Returns ``{job_id}`` immediately; poll\n``GET /api/restyle/{job_id}`` for status.",
+        "operationId": "start_restyle_api_restyle_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_start_restyle_api_restyle_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Restyle"
+      }
+    },
+    "/api/restyle/{job_id}": {
+      "get": {
+        "description": "Poll the status of a restyle job.",
+        "operationId": "restyle_status_api_restyle__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestyleStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restyle Status"
+      }
+    },
+    "/api/saasshorts/actor-gallery": {
+      "get": {
+        "description": "List all previously generated actor images from public S3.",
+        "operationId": "saasshorts_actor_gallery_api_saasshorts_actor_gallery_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Saasshorts Actor Gallery"
+      }
+    },
+    "/api/saasshorts/actor-options": {
+      "post": {
+        "description": "Generate multiple actor image options for the user to choose from.",
+        "operationId": "saasshorts_actor_options_api_saasshorts_actor_options_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Fal-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fal-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaaSActorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Saasshorts Actor Options"
+      }
+    },
+    "/api/saasshorts/actor-upload": {
+      "post": {
+        "description": "Upload a custom actor image (stored locally only, not S3).",
+        "operationId": "saasshorts_actor_upload_api_saasshorts_actor_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_saasshorts_actor_upload_api_saasshorts_actor_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Saasshorts Actor Upload"
+      }
+    },
+    "/api/saasshorts/analyze": {
+      "post": {
+        "description": "Analyze a URL or manual description and generate video scripts.",
+        "operationId": "saasshorts_analyze_api_saasshorts_analyze_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Gemini-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gemini-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaaSAnalyzeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Saasshorts Analyze"
+      }
+    },
+    "/api/saasshorts/gallery": {
+      "get": {
+        "description": "List all UGC videos from the public gallery.",
+        "operationId": "saasshorts_video_gallery_api_saasshorts_gallery_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Saasshorts Video Gallery"
+      }
+    },
+    "/api/saasshorts/generate": {
+      "post": {
+        "description": "Generate a SaaS UGC video from a script. Returns a job_id for polling.",
+        "operationId": "saasshorts_generate_api_saasshorts_generate_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Fal-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fal-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-ElevenLabs-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Elevenlabs-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaaSGenerateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Saasshorts Generate"
+      }
+    },
+    "/api/saasshorts/post": {
+      "post": {
+        "description": "Post an AI Shorts video to social media via Upload-Post.",
+        "operationId": "saasshorts_post_to_socials_api_saasshorts_post_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaaSPostRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Saasshorts Post To Socials"
+      }
+    },
+    "/api/saasshorts/status/{job_id}": {
+      "get": {
+        "description": "Poll SaaSShorts job status.",
+        "operationId": "saasshorts_status_api_saasshorts_status__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Saasshorts Status"
+      }
+    },
+    "/api/saasshorts/voices": {
+      "get": {
+        "description": "List available ElevenLabs voices.",
+        "operationId": "saasshorts_voices_api_saasshorts_voices_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-ElevenLabs-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Elevenlabs-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Saasshorts Voices"
+      }
+    },
+    "/api/silencecut": {
+      "post": {
+        "description": "Cut silent segments out of a clip. Writes ``silencecut_{input}.mp4``.",
+        "operationId": "silence_cut_clip_api_silencecut_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SilenceCutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Silence Cut Clip"
+      }
+    },
+    "/api/social/post": {
+      "post": {
+        "operationId": "post_to_socials_api_social_post_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SocialPostRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post To Socials"
+      }
+    },
+    "/api/social/user": {
+      "get": {
+        "description": "Proxy to fetch user ID from Upload-Post",
+        "operationId": "get_social_user_api_social_user_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Upload-Post-Key",
+            "required": true,
+            "schema": {
+              "title": "X-Upload-Post-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Social User"
+      }
+    },
+    "/api/status/{job_id}": {
+      "get": {
+        "operationId": "get_status_api_status__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Status"
+      }
+    },
+    "/api/subtitle": {
+      "post": {
+        "operationId": "add_subtitles_api_subtitle_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubtitleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Subtitles"
+      }
+    },
+    "/api/thumbnail/analyze": {
+      "post": {
+        "description": "Analyze a video and suggest viral YouTube titles.",
+        "operationId": "thumbnail_analyze_api_thumbnail_analyze_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Gemini-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gemini-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_thumbnail_analyze_api_thumbnail_analyze_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Thumbnail Analyze"
+      }
+    },
+    "/api/thumbnail/describe": {
+      "post": {
+        "description": "Generate a YouTube description with chapters from the transcript.",
+        "operationId": "thumbnail_describe_api_thumbnail_describe_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Gemini-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gemini-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThumbnailDescribeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Thumbnail Describe"
+      }
+    },
+    "/api/thumbnail/generate": {
+      "post": {
+        "description": "Generate YouTube thumbnails with Gemini image generation.",
+        "operationId": "thumbnail_generate_api_thumbnail_generate_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Gemini-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gemini-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_thumbnail_generate_api_thumbnail_generate_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Thumbnail Generate"
+      }
+    },
+    "/api/thumbnail/publish": {
+      "post": {
+        "description": "Kick off a background upload to YouTube via Upload-Post and return immediately.",
+        "operationId": "thumbnail_publish_api_thumbnail_publish_post",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_thumbnail_publish_api_thumbnail_publish_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Thumbnail Publish"
+      }
+    },
+    "/api/thumbnail/publish/status/{publish_id}": {
+      "get": {
+        "description": "Poll the status of a background publish job.",
+        "operationId": "thumbnail_publish_status_api_thumbnail_publish_status__publish_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "publish_id",
+            "required": true,
+            "schema": {
+              "title": "Publish Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Thumbnail Publish Status"
+      }
+    },
+    "/api/thumbnail/titles": {
+      "post": {
+        "description": "Refine title suggestions or accept a manual title.",
+        "operationId": "thumbnail_titles_api_thumbnail_titles_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Gemini-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Gemini-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThumbnailTitlesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Thumbnail Titles"
+      }
+    },
+    "/api/thumbnail/upload": {
+      "post": {
+        "description": "Upload video and start background Whisper transcription immediately.",
+        "operationId": "thumbnail_upload_api_thumbnail_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_thumbnail_upload_api_thumbnail_upload_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Thumbnail Upload"
+      }
+    },
+    "/api/translate": {
+      "post": {
+        "description": "Translate a video clip to a different language using ElevenLabs dubbing.",
+        "operationId": "translate_clip_api_translate_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-ElevenLabs-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Elevenlabs-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TranslateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Translate Clip"
+      }
+    },
+    "/api/translate/languages": {
+      "get": {
+        "description": "Return supported languages for translation.",
+        "operationId": "get_languages_api_translate_languages_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Languages"
+      }
+    },
+    "/gallery": {
+      "get": {
+        "description": "SEO gallery page with all generated UGC videos.",
+        "operationId": "gallery_html_page_gallery_get",
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Gallery Html Page"
+      }
+    },
+    "/video/{video_id}": {
+      "get": {
+        "description": "SEO individual video page with og:video meta tags.",
+        "operationId": "video_html_page_video__video_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "video_id",
+            "required": true,
+            "schema": {
+              "title": "Video Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Video Html Page"
+      }
+    }
+  }
+}
