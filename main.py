@@ -746,7 +746,132 @@ def process_video_to_vertical(input_video, final_output_video):
     
     return True
 
-def transcribe_video(video_path):
+def transcribe_video(video_path, method="faster-whisper"):
+    """
+    Transcribe video audio to text.
+    
+    Args:
+        video_path: Path to the video file
+        method: Transcription method - "faster-whisper" or "groq"
+    """
+    if method == "groq":
+        return transcribe_with_groq(video_path)
+    else:
+        return transcribe_with_faster_whisper(video_path)
+
+def transcribe_with_groq(video_path):
+    """Transcribe video using Groq API (faster, cloud-based)."""
+    print("🎙️  Transcribing with Groq Whisper...")
+    from groq import Groq
+    
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        print("❌ Error: GROQ_API_KEY not found in environment variables.")
+        return None
+    
+    client = Groq(api_key=api_key)
+    
+    # Extract audio from video first
+    temp_audio = "/tmp/temp_audio.wav"
+    extract_audio_cmd = [
+        'ffmpeg', '-y', '-i', video_path, '-vn', '-acodec', 'pcm_s16le',
+        '-ar', '16000', '-ac', '1', temp_audio
+    ]
+    subprocess.run(extract_audio_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    
+    try:
+        with open(temp_audio, "rb") as file:
+            transcription = client.audio.transcriptions.create(
+                file=(os.path.basename(temp_audio), file.read()),
+                model="whisper-large-v3-turbo",
+                response_format="verbose_json",
+                timestamp_granularities=["segment", "word"]
+            )
+        
+        # Debug: print transcription type and keys
+        print(f"   Transcription type: {type(transcription)}")
+        if isinstance(transcription, dict):
+            print(f"   Transcription keys: {transcription.keys()}")
+        
+        # Groq SDK returns a Transcription object, but response_format="verbose_json"
+        # can return dicts for nested fields. Handle both object and dict access.
+        if isinstance(transcription, dict):
+            text = transcription.get("text", "")
+            language = transcription.get("language", "unknown")
+            segments_data = transcription.get("segments", [])
+            words_data = transcription.get("words", [])
+        else:
+            text = transcription.text
+            language = transcription.language
+            segments_data = transcription.segments or []
+            words_data = getattr(transcription, "words", []) or []
+        
+        print(f"   Detected language: {language}")
+        
+        # Convert to standard format
+        transcript_segments = []
+        full_text = text or ""
+        
+        for segment in segments_data:
+            if isinstance(segment, dict):
+                seg_text = segment.get("text", "")
+                seg_start = segment.get("start", 0)
+                seg_end = segment.get("end", 0)
+            else:
+                seg_text = segment.text
+                seg_start = segment.start
+                seg_end = segment.end
+            
+            seg_dict = {
+                'text': seg_text,
+                'start': seg_start,
+                'end': seg_end,
+                'words': []
+            }
+            
+            # Groq returns words in a separate attribute
+            if words_data:
+                for word in words_data:
+                    if isinstance(word, dict):
+                        word_text = word.get("word", "")
+                        word_start = word.get("start", 0)
+                        word_end = word.get("end", 0)
+                        word_prob = word.get("probability", 1.0)
+                    else:
+                        word_text = word.word
+                        word_start = word.start
+                        word_end = word.end
+                        word_prob = getattr(word, "probability", 1.0)
+                    
+                    if seg_start <= word_start < seg_end:
+                        seg_dict['words'].append({
+                            'word': word_text,
+                            'start': word_start,
+                            'end': word_end,
+                            'probability': word_prob
+                        })
+            
+            transcript_segments.append(seg_dict)
+            print(f"   [{seg_start:.2f}s -> {seg_end:.2f}s] {seg_text}")
+        
+        # Clean up temp audio
+        if os.path.exists(temp_audio):
+            os.remove(temp_audio)
+        
+        return {
+            'text': full_text.strip(),
+            'segments': transcript_segments,
+            'language': language
+        }
+    
+    except Exception as e:
+        print(f"   ❌ Groq transcription failed: {e}")
+        if os.path.exists(temp_audio):
+            os.remove(temp_audio)
+        return None
+
+def transcribe_with_faster_whisper(video_path):
+    """Transcribe video using Faster-Whisper (local, CPU-optimized)."""
     print("🎙️  Transcribing video with Faster-Whisper (CPU Optimized)...")
     from faster_whisper import WhisperModel
     
@@ -793,6 +918,10 @@ def transcribe_video(video_path):
 def get_viral_clips(transcript_result, video_duration):
     print("🤖  Analyzing with Gemini...")
     
+    if not transcript_result:
+        print("❌ Error: No transcript available. Skipping viral clip analysis.")
+        return None
+    
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         print("❌ Error: GEMINI_API_KEY not found in environment variables.")
@@ -801,8 +930,8 @@ def get_viral_clips(transcript_result, video_duration):
 
     client = OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"))
     
-    # We use gemini-2.5-flash as requested.
-    model_name = 'gemini-2.5-flash' 
+    # We use gemma-4-31b-it as requested.
+    model_name = 'gemma-4-31b-it' 
     
     print(f"🤖  Initializing Gemini with model: {model_name}")
 
@@ -825,7 +954,8 @@ def get_viral_clips(transcript_result, video_duration):
     try:
         response = client.chat.completions.create(
             model=model_name,
-            messages=[{"role": "user", "content": prompt}]
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"}
         )
         
         # --- Cost Calculation ---
@@ -864,14 +994,21 @@ def get_viral_clips(transcript_result, video_duration):
             print(f"⚠️ Could not calculate cost: {e}")
             cost_analysis = None
         # ------------------------
-
+        
         # Clean response if it contains markdown code blocks
-        text = response.choices[0].message.content
+        text = response.choices[0].message.content.strip()
         if text.startswith("```json"):
             text = text[7:]
+        if text.startswith("```"):
+            text = text[3:]
         if text.endswith("```"):
             text = text[:-3]
         text = text.strip()
+        
+        start_idx = text.find('{')
+        end_idx = text.rfind('}')
+        if start_idx != -1 and end_idx != -1:
+            text = text[start_idx:end_idx + 1]
         
         result_json = json.loads(text)
         if cost_analysis:
@@ -892,8 +1029,24 @@ if __name__ == '__main__':
     parser.add_argument('-o', '--output', type=str, help="Output directory or file (if processing whole video).")
     parser.add_argument('--keep-original', action='store_true', help="Keep the downloaded YouTube video.")
     parser.add_argument('--skip-analysis', action='store_true', help="Skip AI analysis and convert the whole video.")
+    parser.add_argument('--transcription-method', type=str, choices=['faster-whisper', 'groq'], default=None, help="Transcription method: faster-whisper (local CPU) or groq (cloud API). Defaults to GROQ if GROQ_API_KEY env var is set, otherwise faster-whisper")
     
     args = parser.parse_args()
+
+    # Auto-detect transcription method if not specified
+    transcription_method = args.transcription_method
+    if not transcription_method:
+        if os.getenv("GROQ_API_KEY"):
+            transcription_method = "groq"
+            print("🚀 GROQ_API_KEY detected - using Groq for transcription")
+        else:
+            transcription_method = "faster-whisper"
+            print("💻 No GROQ_API_KEY - using Faster-Whisper (local CPU)")
+    else:
+        print(f"📌 Transcription method specified via CLI: {transcription_method}")
+
+    print(f"🔍 GROQ_API_KEY in env: {'Yes' if os.getenv('GROQ_API_KEY') else 'No'}")
+    print(f"🎯 Selected transcription method: {transcription_method}")
 
     script_start_time = time.time()
     
@@ -946,7 +1099,7 @@ if __name__ == '__main__':
         process_video_to_vertical(input_video, output_file)
     else:
         # 3. Transcribe
-        transcript = transcribe_video(input_video)
+        transcript = transcribe_video(input_video, method=transcription_method)
         
         # Get duration
         cap = cv2.VideoCapture(input_video)
