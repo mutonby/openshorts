@@ -2,8 +2,7 @@ import os
 import uuid
 import time
 import json
-from google import genai
-from google.genai import types
+from openai import OpenAI
 from PIL import Image
 
 
@@ -20,25 +19,14 @@ def analyze_video_for_titles(api_key, video_path, transcript=None):
     else:
         print("🎬 [Thumbnail] Using pre-computed transcript (Whisper already done)...")
 
-    print("📤 [Thumbnail] Uploading video to Gemini...")
-    client = genai.Client(api_key=api_key)
-
-    file_upload = client.files.upload(file=video_path)
-    while True:
-        file_info = client.files.get(name=file_upload.name)
-        if file_info.state == "ACTIVE":
-            break
-        elif file_info.state == "FAILED":
-            raise Exception("Video processing failed by Gemini.")
-        time.sleep(2)
-
+    # Use transcript only for OpenAI compatible clients
     prompt = f"""You are a YouTube title expert who creates viral, click-worthy titles.
-
+ 
 Analyze this video and its transcript, then suggest 10 YouTube titles that would maximize CTR (click-through rate).
-
+ 
 TRANSCRIPT:
 {transcript['text']}
-
+ 
 RULES:
 - Titles must be under 70 characters
 - Use power words, curiosity gaps, and emotional triggers
@@ -47,11 +35,11 @@ RULES:
 - Include numbers where appropriate
 - Consider the language of the video (detected: {transcript['language']})
 - Titles should be in the SAME LANGUAGE as the video transcript
-
+ 
 Also provide a brief summary of the video content (2-3 sentences).
-
+ 
 After generating all 10 titles, pick the TOP 2 you most recommend and explain concisely WHY (CTR potential, emotional hook, uniqueness, etc.). Reference them by their 0-based index in the titles array.
-
+ 
 OUTPUT JSON:
 {{
     "titles": ["title1", "title2", ...],
@@ -62,14 +50,12 @@ OUTPUT JSON:
         {{"index": 3, "reason": "Why this title is second best..."}}
     ]
 }}"""
-
-    print("🤖 [Thumbnail] Asking Gemini for title suggestions...")
-    response = client.models.generate_content(
+ 
+    print("🤖 [Thumbnail] Asking OpenAI for title suggestions...")
+    response = client.chat.completions.create(
         model="gemini-2.5-flash",
-        contents=[file_upload, prompt],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json"
-        )
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"}
     )
 
     # Extract segments and duration from transcript for later use
@@ -77,7 +63,7 @@ OUTPUT JSON:
     video_duration = segments[-1]["end"] if segments else 0
 
     try:
-        text = response.text.strip()
+        text = response.choices[0].message.content.strip()
         if text.startswith("```json"):
             text = text[7:]
         if text.startswith("```"):
@@ -98,7 +84,7 @@ OUTPUT JSON:
         result["video_duration"] = video_duration
         return result
     except json.JSONDecodeError:
-        print(f"❌ [Thumbnail] Failed to parse titles JSON: {response.text}")
+        print(f"❌ [Thumbnail] Failed to parse titles JSON: {response.choices[0].message.content}")
         return {
             "titles": ["Could not generate titles - please try again"],
             "transcript_summary": transcript["text"][:500],
@@ -112,7 +98,7 @@ def refine_titles(api_key, context, user_message, conversation_history=None):
     """
     Takes video context + user feedback and returns refined title suggestions.
     """
-    client = genai.Client(api_key=api_key)
+    client = OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"))
 
     history_text = ""
     if conversation_history:
@@ -142,16 +128,14 @@ OUTPUT JSON:
     "titles": ["title1", "title2", ...]
 }}"""
 
-    response = client.models.generate_content(
+    response = client.chat.completions.create(
         model="gemini-2.5-flash",
-        contents=[prompt],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json"
-        )
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"}
     )
 
     try:
-        text = response.text.strip()
+        text = response.choices[0].message.content.strip()
         if text.startswith("```json"):
             text = text[7:]
         if text.startswith("```"):
@@ -167,7 +151,7 @@ OUTPUT JSON:
 
         return json.loads(text)
     except json.JSONDecodeError:
-        print(f"❌ [Thumbnail] Failed to parse refined titles: {response.text}")
+        print(f"❌ [Thumbnail] Failed to parse refined titles: {response.choices[0].message.content}")
         return {"titles": ["Could not refine titles - please try again"]}
 
 
@@ -176,7 +160,7 @@ def generate_thumbnail(api_key, title, session_id, face_image_path=None, bg_imag
     Generates YouTube thumbnails using Gemini image generation.
     Returns list of saved image paths (relative URLs).
     """
-    client = genai.Client(api_key=api_key)
+    client = OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"))
 
     output_dir = os.path.join("output", "thumbnails", session_id)
     os.makedirs(output_dir, exist_ok=True)
@@ -240,28 +224,24 @@ DESIGN REQUIREMENTS:
     for i in range(count):
         print(f"🎨 [Thumbnail] Generating thumbnail {i + 1}/{count}...")
         try:
-            response = client.models.generate_content(
-                model="gemini-3.1-flash-image-preview",
-                contents=prompt_parts,
-                config=types.GenerateContentConfig(
-                    response_modalities=["TEXT", "IMAGE"],
-                    image_config=types.ImageConfig(
-                        aspect_ratio="16:9",
-                        image_size="2K"
-                    )
-                )
+            response = client.images.generate(
+                model="dall-e-3",
+                prompt=text_prompt,
+                n=1,
+                size="1024x1024",
             )
+ 
+            img_url = response.data[0].url
+            filename = f"thumb_{i + 1}.jpg"
+            filepath = os.path.join(output_dir, filename)
+            with httpx.Client(timeout=60.0) as client_http:
+                img_resp = client_http.get(img_url)
+                with open(filepath, "wb") as f:
+                    f.write(img_resp.content)
+            thumbnails.append(f"/thumbnails/{session_id}/{filename}")
+            print(f"✅ [Thumbnail] Saved: {filepath}")
+            break
 
-            for part in response.parts:
-                if part.text is not None:
-                    print(f"📝 [Thumbnail] Gemini text: {part.text}")
-                elif image := part.as_image():
-                    filename = f"thumb_{i + 1}.jpg"
-                    filepath = os.path.join(output_dir, filename)
-                    image.save(filepath)
-                    thumbnails.append(f"/thumbnails/{session_id}/{filename}")
-                    print(f"✅ [Thumbnail] Saved: {filepath}")
-                    break
 
         except Exception as e:
             last_error = str(e)
@@ -278,7 +258,7 @@ def generate_youtube_description(api_key, title, transcript_segments, language, 
     Uses Gemini to generate a YouTube description with chapter markers from transcript segments.
     Returns: { "description": "full description text with chapters" }
     """
-    client = genai.Client(api_key=api_key)
+    client = OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"))
 
     # Format segments for the prompt
     formatted_segments = []
@@ -321,12 +301,12 @@ REQUIREMENTS:
 OUTPUT: Return ONLY the description text (no JSON wrapper, no markdown code blocks). The description should be ready to paste directly into YouTube."""
 
     print("🤖 [Thumbnail] Generating YouTube description with chapters...")
-    response = client.models.generate_content(
+    response = client.chat.completions.create(
         model="gemini-2.5-flash",
-        contents=[prompt],
+        messages=[{"role": "user", "content": prompt}],
     )
-
-    description = response.text.strip()
+ 
+    description = response.choices[0].message.content.strip()
     # Clean up any accidental markdown wrappers
     if description.startswith("```"):
         lines = description.split("\n")

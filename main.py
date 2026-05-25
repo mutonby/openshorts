@@ -15,7 +15,7 @@ from tqdm import tqdm
 import yt_dlp
 import mediapipe as mp
 # import whisper (replaced by faster_whisper inside function)
-from google import genai
+from openai import OpenAI
 from dotenv import load_dotenv
 import json
 
@@ -628,7 +628,7 @@ def process_video_to_vertical(input_video, final_output_video):
         'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
         '-s', f'{OUTPUT_WIDTH}x{OUTPUT_HEIGHT}', '-pix_fmt', 'bgr24',
         '-r', str(fps), '-i', '-', '-c:v', 'libx264',
-        '-preset', 'fast', '-crf', '23', '-an', temp_video_output
+        '-preset', 'fast', '-crf', '23', '-pix_fmt', 'yuv420p', '-an', temp_video_output
     ]
 
     ffmpeg_process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -752,7 +752,7 @@ def transcribe_video(video_path):
     from faster_whisper import WhisperModel
     
     # Run on CPU with INT8 quantization for speed
-    model = WhisperModel("base", device="cpu", compute_type="int8")
+    model = WhisperModel("large-v3-turbo", device="cpu", compute_type="int8")
     
     segments, info = model.transcribe(video_path, word_timestamps=True)
     
@@ -800,7 +800,7 @@ def get_viral_clips(transcript_result, video_duration):
         return None
 
 
-    client = genai.Client(api_key=api_key)
+    client = OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"))
     
     # We use gemini-2.5-flash as requested.
     model_name = 'gemini-2.5-flash' 
@@ -824,14 +824,14 @@ def get_viral_clips(transcript_result, video_duration):
     )
 
     try:
-        response = client.models.generate_content(
+        response = client.chat.completions.create(
             model=model_name,
-            contents=prompt
+            messages=[{"role": "user", "content": prompt}]
         )
         
         # --- Cost Calculation ---
         try:
-            usage = response.usage_metadata
+            usage = response.usage
             if usage:
                 # Gemini 2.5 Flash Pricing (Dec 2025)
                 # Input: $0.10 per 1M tokens
@@ -840,8 +840,8 @@ def get_viral_clips(transcript_result, video_duration):
                 input_price_per_million = 0.10
                 output_price_per_million = 0.40
                 
-                prompt_tokens = usage.prompt_token_count
-                output_tokens = usage.candidates_token_count
+                prompt_tokens = usage.prompt_tokens
+                output_tokens = usage.completion_tokens
                 
                 input_cost = (prompt_tokens / 1_000_000) * input_price_per_million
                 output_cost = (output_tokens / 1_000_000) * output_price_per_million
@@ -867,7 +867,7 @@ def get_viral_clips(transcript_result, video_duration):
         # ------------------------
 
         # Clean response if it contains markdown code blocks
-        text = response.text
+        text = response.choices[0].message.content
         if text.startswith("```json"):
             text = text[7:]
         if text.endswith("```"):
@@ -992,7 +992,7 @@ if __name__ == '__main__':
                     '-ss', str(start), 
                     '-to', str(end), 
                     '-i', input_video,
-                    '-c:v', 'libx264', '-crf', '18', '-preset', 'fast',
+                    '-c:v', 'libx264', '-crf', '18', '-preset', 'fast', '-pix_fmt', 'yuv420p',
                     '-c:a', 'aac',
                     clip_temp_path
                 ]

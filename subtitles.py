@@ -12,7 +12,7 @@ def transcribe_audio(video_path):
     print(f"🎙️  Transcribing audio from: {video_path}")
 
     # Run on CPU with INT8 quantization for speed
-    model = WhisperModel("base", device="cpu", compute_type="int8")
+    model = WhisperModel("large-v3-turbo", device="cpu", compute_type="int8")
 
     segments, info = model.transcribe(video_path, word_timestamps=True)
 

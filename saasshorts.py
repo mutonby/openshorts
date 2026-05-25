@@ -50,12 +50,11 @@ def research_saas_online(url: str, gemini_key: str) -> dict:
     across the internet: reviews, Reddit threads, Twitter, competitor comparisons,
     pricing complaints, user testimonials, etc.
     """
-    from google import genai
-    from google.genai import types
+    from openai import OpenAI
 
     print(f"[SaaSShorts] 🔍 Researching {url} across the web (Google Search grounding)...")
 
-    client = genai.Client(api_key=gemini_key)
+    client = OpenAI(api_key=gemini_key, base_url=os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"))
 
     # Extract domain name for search queries
     domain = url.replace("https://", "").replace("http://", "").split("/")[0]
@@ -100,29 +99,17 @@ Return a comprehensive JSON research report:
 
 Be thorough. Use REAL data from your search results, not made-up information."""
 
-    response = client.models.generate_content(
+    response = client.chat.completions.create(
         model=GEMINI_MODEL,
-        contents=[prompt],
-        config=types.GenerateContentConfig(
-            tools=[types.Tool(google_search=types.GoogleSearch())],
-        ),
+        messages=[{"role": "user", "content": prompt}],
     )
 
     # Extract grounding sources
     sources = []
-    try:
-        metadata = response.candidates[0].grounding_metadata
-        if metadata and metadata.grounding_chunks:
-            for chunk in metadata.grounding_chunks:
-                if chunk.web:
-                    sources.append({"title": chunk.web.title, "url": chunk.web.uri})
-        if metadata and metadata.web_search_queries:
-            print(f"[SaaSShorts]   Searches performed: {metadata.web_search_queries}")
-    except Exception:
-        pass
+    # Grounding metadata is not available in standard OpenAI-compatible completions
 
     # Parse response text as JSON
-    raw = response.text
+    raw = response.choices[0].message.content
     if not raw:
         print("[SaaSShorts] ⚠️ Gemini returned empty response for web research")
         return {"raw_research": "", "product_name": domain, "grounding_sources": sources}
@@ -241,12 +228,11 @@ def analyze_saas(scraped_data: dict, gemini_key: str, web_research: dict = None)
     Deep analysis of a SaaS product combining website scraping + web research.
     Uses Gemini 3 Flash for synthesis.
     """
-    from google import genai
-    from google.genai import types
+    from openai import OpenAI
 
     print(f"[SaaSShorts] 🧠 Analyzing {scraped_data['url']} (with web research)...")
 
-    client = genai.Client(api_key=gemini_key)
+    client = OpenAI(api_key=gemini_key, base_url=os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"))
 
     # Build web research context
     research_context = ""
@@ -332,13 +318,13 @@ Return a JSON object:
 IMPORTANT: Use REAL pain points from user reviews when available. Real frustrations make the best UGC content.
 Include 5-8 pain points, 4-6 emotional hooks, and 4+ viral angles."""
 
-    response = client.models.generate_content(
+    response = client.chat.completions.create(
         model=GEMINI_MODEL,
-        contents=[prompt],
-        config=types.GenerateContentConfig(response_mime_type="application/json"),
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"}
     )
 
-    raw = response.text
+    raw = response.choices[0].message.content
     if not raw:
         raise Exception("Gemini returned empty response for SaaS analysis")
 
@@ -374,13 +360,12 @@ def generate_scripts(
     actor_gender: str = "female",
 ) -> list:
     """Generate video scripts based on SaaS analysis."""
-    from google import genai
-    from google.genai import types
+    from openai import OpenAI
 
     lang_name = "Spanish" if language == "es" else "English"
     print(f"[SaaSShorts] 📝 Generating {num_scripts} scripts ({style}, {lang_name})...")
 
-    client = genai.Client(api_key=gemini_key)
+    client = OpenAI(api_key=gemini_key, base_url=os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"))
 
     style_guide = {
         "ugc": "Natural, authentic UGC style. Person talking to camera like sharing a discovery with a friend. Casual, genuine.",
@@ -514,16 +499,13 @@ RULES:
 - Example female: "a 26 year old attractive european woman, light brown wavy hair, wearing a white tank top, natural minimal makeup, friendly face"
 - Example male: "a 29 year old european man, short dark hair, light stubble, wearing a navy t-shirt, smart casual look" """
 
-    response = client.models.generate_content(
+    response = client.chat.completions.create(
         model=GEMINI_MODEL,
-        contents=[prompt],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            max_output_tokens=8192,
-        ),
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"}
     )
 
-    raw = response.text
+    raw = response.choices[0].message.content
     if not raw:
         raise Exception("Gemini returned empty response for script generation")
 
@@ -1054,7 +1036,7 @@ def transcribe_audio_for_subs(audio_path: str) -> list:
     from faster_whisper import WhisperModel
 
     print(f"[SaaSShorts] 🎙️ Transcribing audio for subtitles...")
-    model = WhisperModel("base", device="cpu", compute_type="int8")
+    model = WhisperModel("large-v3-turbo", device="cpu", compute_type="int8")
     segments, info = model.transcribe(audio_path, word_timestamps=True)
 
     words = []

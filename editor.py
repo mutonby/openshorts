@@ -3,39 +3,18 @@ import json
 import re
 import subprocess
 import time
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 class VideoEditor:
     def __init__(self, api_key):
-        self.client = genai.Client(api_key=api_key)
+        self.client = OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"))
         self.model_name = "gemini-3-flash-preview" 
 
     def upload_video(self, video_path):
-        """Uploads video to Gemini File API."""
-        print(f"📤 Uploading {video_path} to Gemini...")
-        
-        # Ensure we are passing a path that exists
-        if not os.path.exists(video_path):
-            raise FileNotFoundError(f"Video file not found: {video_path}")
-            
-        # Using 'file' keyword instead of 'path'
-        try:
-            file_upload = self.client.files.upload(file=video_path)
-        except Exception as e:
-            print(f"❌ Gemini Upload Error: {e}")
-            raise e
-        
-        # Wait for processing
-        print("⏳ Waiting for video processing by Gemini...")
-        while True:
-            file_info = self.client.files.get(name=file_upload.name)
-            if file_info.state == "ACTIVE":
-                print("✅ Video processed and ready.")
-                return file_upload
-            elif file_info.state == "FAILED":
-                raise Exception("Video processing failed by Gemini.")
-            time.sleep(2)
+        """Deprecated: OpenAI compatible APIs generally don't support native video uploads.
+        Returning None as the model will now rely on the transcript."""
+        print(f"⚠️  Video upload is not supported in OpenAI compatible mode. Skipping upload of {video_path}.")
+        return None
 
     def get_ffmpeg_filter(self, video_file_obj, duration, fps=30, width=None, height=None, transcript=None):
         """Asks Gemini for a raw FFmpeg filter string."""
@@ -112,19 +91,17 @@ class VideoEditor:
         """
 
         print("🤖 Asking Gemini for FFmpeg filter...")
-        response = self.client.models.generate_content(
+        response = self.client.chat.completions.create(
             model=self.model_name,
-            contents=[video_file_obj, prompt],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json"
-            )
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"}
         )
         
-        print(f"🔍 DEBUG: Gemini Raw Response:\n{response.text}")
+        print(f"🔍 DEBUG: OpenAI Raw Response:\n{response.choices[0].message.content}")
 
         try:
             # Clean response text (remove potential markdown blocks)
-            text = response.text
+            text = response.choices[0].message.content
             if text.startswith("```json"):
                 text = text[7:]
             elif text.startswith("```"):
@@ -147,7 +124,7 @@ class VideoEditor:
                 
             return json.loads(text)
         except json.JSONDecodeError:
-            print(f"❌ Failed to parse JSON: {response.text}")
+            print(f"❌ Failed to parse JSON: {response.choices[0].message.content}")
             return None
 
     def get_effects_config(self, video_file_obj, duration, fps=30, width=None, height=None, transcript=None):
@@ -208,19 +185,17 @@ class VideoEditor:
         """
 
         print("🤖 Asking Gemini for Remotion effects config...")
-        response = self.client.models.generate_content(
+        response = self.client.chat.completions.create(
             model=self.model_name,
-            contents=[video_file_obj, prompt],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json"
-            )
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"}
         )
 
-        print(f"🔍 DEBUG: Gemini Raw Response:\n{response.text}")
+        print(f"🔍 DEBUG: OpenAI Raw Response:\n{response.choices[0].message.content}")
 
         try:
             # Clean response text (remove potential markdown blocks)
-            text = response.text
+            text = response.choices[0].message.content
             if text.startswith("```json"):
                 text = text[7:]
             elif text.startswith("```"):
@@ -242,7 +217,7 @@ class VideoEditor:
 
             return json.loads(text)
         except json.JSONDecodeError:
-            print(f"❌ Failed to parse effects config JSON: {response.text}")
+            print(f"❌ Failed to parse effects config JSON: {response.choices[0].message.content}")
             return None
 
     @staticmethod

@@ -96,7 +96,7 @@ Async job queue with semaphore-based concurrency control. Configure via `MAX_CON
 > API keys are stored encrypted in the browser and sent via headers only when needed. Never stored server-side.
 
 ## Tech Stack
-- **Backend:** Python 3.11, FastAPI, google-genai, faster-whisper, ultralytics (YOLOv8), mediapipe, opencv-python, yt-dlp, FFmpeg, httpx
+- **Backend:** Python 3.11, FastAPI, openai, faster-whisper, ultralytics (YOLOv8), mediapipe, opencv-python, yt-dlp, FFmpeg, httpx
 - **Frontend:** React 18, Vite 4, Tailwind CSS 3.4
 - **External APIs:** Google Gemini, ElevenLabs Dubbing, Upload-Post
 - **Infrastructure:** Docker + Docker Compose, AWS S3
