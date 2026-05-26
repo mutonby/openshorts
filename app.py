@@ -318,7 +318,9 @@ async def process_endpoint(
     request: Request,
     file: Optional[UploadFile] = File(None),
     url: Optional[str] = Form(None),
-    acknowledged: Optional[str] = Form(None)
+    acknowledged: Optional[str] = Form(None),
+    transcription_method: Optional[str] = Form("faster-whisper"),
+    groq_key: Optional[str] = Form(None)
 ):
     api_key = request.headers.get("X-Gemini-Key")
     if not api_key:
@@ -332,6 +334,8 @@ async def process_endpoint(
         body = await request.json()
         url = body.get("url")
         ack_flag = bool(body.get("acknowledged"))
+        transcription_method = body.get("transcription_method", "faster-whisper")
+        groq_key = body.get("groq_key")
 
     if not url and not file:
         raise HTTPException(status_code=400, detail="Must provide URL or File")
@@ -364,6 +368,8 @@ async def process_endpoint(
     cmd = ["python", "-u", "main.py"] # -u for unbuffered
     env = os.environ.copy()
     env["GEMINI_API_KEY"] = api_key # Override with key from request
+    if groq_key:
+        env["GROQ_API_KEY"] = groq_key
 
     if url:
         cmd.extend(["-u", url])
@@ -387,6 +393,7 @@ async def process_endpoint(
         cmd.extend(["-i", input_path])
 
     cmd.extend(["-o", job_output_dir])
+    cmd.extend(["--transcription-method", transcription_method])
 
     print(f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true")
 
@@ -1201,6 +1208,7 @@ async def get_social_user(api_key: str = Header(..., alias="X-Upload-Post-Key"))
 async def thumbnail_upload(
     file: Optional[UploadFile] = File(None),
     url: Optional[str] = Form(None),
+    transcription_method: Optional[str] = Form("faster-whisper"),
 ):
     """Upload video and start background Whisper transcription immediately."""
     if not url and not file:
@@ -1244,7 +1252,7 @@ async def thumbnail_upload(
 
             from main import transcribe_video
             loop = asyncio.get_event_loop()
-            transcript = await loop.run_in_executor(None, transcribe_video, vpath)
+            transcript = await loop.run_in_executor(None, transcribe_video, vpath, transcription_method)
             segments = transcript.get("segments", [])
             duration = segments[-1]["end"] if segments else 0
 

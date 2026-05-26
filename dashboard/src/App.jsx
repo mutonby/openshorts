@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, FileVideo, Sparkles, Youtube, Instagram, Share2, LogOut, ChevronDown, Check, Activity, LayoutDashboard, Settings, PlusCircle, History, Menu, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2 } from 'lucide-react';
+import { Upload, FileVideo, Sparkles, Youtube, Instagram, Share2, LogOut, ChevronDown, Check, Activity, LayoutDashboard, Settings, PlusCircle, History, Menu, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Cpu, Zap } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import ResultCard from './components/ResultCard';
@@ -155,6 +155,18 @@ function App() {
     return '';
   });
 
+  // Transcription method preference
+  const [transcriptionMethod, setTranscriptionMethod] = useState(() => 
+    localStorage.getItem('transcription_method') || 'faster-whisper'
+  );
+
+  // Groq API Key for transcription
+  const [groqKey, setGroqKey] = useState(() => {
+    const stored = localStorage.getItem('groqKey_v1');
+    if (stored) return decrypt(stored);
+    return '';
+  });
+
   const [uploadUserId, setUploadUserId] = useState(() => localStorage.getItem('uploadUserId') || '');
   const [userProfiles, setUserProfiles] = useState([]); // List of {username, connected: []}
   const [showKeyModal, setShowKeyModal] = useState(false);
@@ -258,6 +270,16 @@ function App() {
   }, [falKey]);
 
   useEffect(() => {
+    localStorage.setItem('transcription_method', transcriptionMethod);
+  }, [transcriptionMethod]);
+
+  useEffect(() => {
+    if (groqKey) {
+      localStorage.setItem('groqKey_v1', encrypt(groqKey));
+    }
+  }, [groqKey]);
+
+  useEffect(() => {
     if (uploadPostKey && userProfiles.length === 0) {
       fetchUserProfiles();
     }
@@ -336,11 +358,18 @@ function App() {
 
       if (data.type === 'url') {
         headers['Content-Type'] = 'application/json';
-        body = JSON.stringify({ url: data.payload, acknowledged: !!data.acknowledged });
+        body = JSON.stringify({ 
+          url: data.payload, 
+          acknowledged: !!data.acknowledged,
+          transcription_method: transcriptionMethod,
+          groq_key: groqKey
+        });
       } else {
         const formData = new FormData();
         formData.append('file', data.payload);
         formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
+        formData.append('transcription_method', transcriptionMethod);
+        if (groqKey) formData.append('groq_key', groqKey);
         body = formData;
       }
 
@@ -668,6 +697,65 @@ function App() {
                       Keys are only stored in your browser. They are sent to the backend only to process your request, never stored server-side.
                     </span>
                   </p>
+                </div>
+              </div>
+
+              <div className="glass-panel p-6 mt-8">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-semibold">Transcription Method</h2>
+                  <span className="text-[10px] bg-white/5 border border-white/5 px-2 py-0.5 rounded text-zinc-500 uppercase tracking-wider">Optional</span>
+                </div>
+                <p className="text-xs text-zinc-500 mb-6 leading-relaxed">
+                  Choose how to transcribe video audio to text. <strong>Faster-Whisper</strong> runs locally on CPU (free, slower). <strong>Groq</strong> uses cloud API (requires API key, much faster).
+                </p>
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => setTranscriptionMethod('faster-whisper')}
+                      className={`p-4 rounded-xl border transition-all ${transcriptionMethod === 'faster-whisper' ? 'bg-primary/20 border-primary text-white' : 'bg-white/5 border-white/10 text-zinc-400 hover:border-white/20'}`}
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <Cpu size={18} />
+                        <span className="font-semibold text-sm">Faster-Whisper</span>
+                      </div>
+                      <span className="text-[10px] text-zinc-500">Local CPU • Free • Slower</span>
+                    </button>
+                    <button
+                      onClick={() => setTranscriptionMethod('groq')}
+                      className={`p-4 rounded-xl border transition-all ${transcriptionMethod === 'groq' ? 'bg-primary/20 border-primary text-white' : 'bg-white/5 border-white/10 text-zinc-400 hover:border-white/20'}`}
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <Zap size={18} />
+                        <span className="font-semibold text-sm">Groq</span>
+                      </div>
+                      <span className="text-[10px] text-zinc-500">Cloud API • Fast • Requires GROQ_API_KEY</span>
+                    </button>
+                  </div>
+                  {transcriptionMethod === 'groq' && (
+                    <div className="space-y-2">
+                      <label className="block text-sm text-zinc-400">Groq API Key</label>
+                      <input
+                        type="password"
+                        value={groqKey}
+                        onChange={(e) => setGroqKey(e.target.value)}
+                        className="input-field"
+                        placeholder="gsk_..."
+                      />
+                      <p className="text-xs text-zinc-500 leading-relaxed">
+                        Get your free API key from Groq.
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          <a href="https://console.groq.com/signup" target="_blank" rel="noopener noreferrer" className="p-2 border border-white/5 rounded-lg hover:bg-white/5 transition-colors flex flex-col gap-1">
+                            <span className="text-zinc-400 font-medium">1. Sign Up</span>
+                            <span className="text-[10px] text-zinc-600">Create account</span>
+                          </a>
+                          <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer" className="p-2 border border-white/5 rounded-lg hover:bg-white/5 transition-colors flex flex-col gap-1">
+                            <span className="text-zinc-400 font-medium">2. API Keys</span>
+                            <span className="text-[10px] text-zinc-600">Generate key</span>
+                          </a>
+                        </div>
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
 

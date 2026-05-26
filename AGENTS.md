@@ -77,7 +77,20 @@ The video processing follows this sequence:
 
 ## MCP & Tooling Best Practices
 
-### Available Toolsets
+### ⚠️ MANDATORY WORKFLOW
+You MUST follow this exact workflow for EVERY coding task. Do not skip any step.
+
+- **Core File System**: `read`, `write`, `edit`, `glob`, `grep` (precise code manipulation).
+- **System Shell**: `bash` (commands, tests, environment checks).
+- **Agent Orchestration**: `task` (complex, autonomous sub-tasks to keep main context clean).
+- **Web Intelligence**: `webfetch` (external documentation and data).
+- **Codebase Analysis**: `semantic_search` (intent-based search), `kilo_local_recall` (past session context).
+- **Reasoning & Planning**: Sequential Thinking (complex problem solving), `todowrite` (task tracking).
+- **Browser Automation**: `playwright_browser_*` (testing and scraping).
+- **External Knowledge**: `context7_*` (up-to-date library documentation).
+- **Memory**: `agentmemory_*` (long-term persistence of decisions and patterns).
+
+### Development Guidelines
 - **Core File System**: `read`, `write`, `edit`, `glob`, `grep` (precise code manipulation).
 - **System Shell**: `bash` (commands, tests, environment checks).
 - **Agent Orchestration**: `task` (complex, autonomous sub-tasks to keep main context clean).
@@ -113,3 +126,19 @@ The video processing follows this sequence:
 - `FAL_KEY`: fal.ai API key (Required for AI Shorts).
 - `ELEVENLABS_API_KEY`: ElevenLabs API key (Optional).
 - `UPLOAD_POST_API_KEY`: Upload-Post API key (Optional).
+
+**⚠️ MANDATORY: ALWAYS follow this workflow for EVERY coding task:**
+
+1. **LOAD CONTEXT** → `agentmemory_memory_recall` or `agentmemory_memory_smart_search`
+2. **THINK** → Sequential Thinking for analysis
+3. **LOOKUP** → Context7 if external libraries involved
+4. **SEARCH** → `semantic_search` for code patterns and implementations
+5. **EXECUTE** → tools for code operations
+6. **VERIFY** → Check results
+7. **SAVE** → `agentmemory_memory_save` to Agent Memory after completing work
+
+**Memory Rules (MANDATORY):**
+
+- ALWAYS load memories BEFORE starting any task
+- ALWAYS save memories AFTER completing significant work
+- Use `semantic_search` to find code by intent and meaning before using grep/glob

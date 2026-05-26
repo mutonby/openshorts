@@ -8,6 +8,8 @@ services:
       - .:/app
       - /app/__pycache__
       - ./output:/app/output
+    env_file:
+      - .env
     restart: unless-stopped
 
   frontend:

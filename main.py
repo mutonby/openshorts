@@ -759,6 +759,35 @@ def transcribe_video(video_path, method="faster-whisper"):
     else:
         return transcribe_with_faster_whisper(video_path)
 
+def split_audio_into_chunks(audio_path, chunk_duration_sec=600):
+    """
+    Splits an audio file into smaller chunks using FFmpeg.
+    Returns a list of paths to the created chunks.
+    """
+    print(f"   ✂️  Splitting audio into {chunk_duration_sec}s chunks...")
+    chunks = []
+    base_dir = os.path.dirname(audio_path)
+    base_name = os.path.splitext(os.path.basename(audio_path))[0]
+    
+    # Use ffmpeg segment muxer for efficient splitting without re-encoding
+    # we use -f segment to split into equal durations
+    cmd = [
+        'ffmpeg', '-y', '-i', audio_path,
+        '-f', 'segment',
+        '-segment_time', str(chunk_duration_sec),
+        '-c', 'copy',
+        os.path.join(base_dir, f"{base_name}_chunk_%03d.wav")
+    ]
+    
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    
+    # Find all created chunks
+    for f in sorted(os.listdir(base_dir)):
+        if f.startswith(f"{base_name}_chunk_") and f.endswith(".wav"):
+            chunks.append(os.path.join(base_dir, f))
+            
+    return chunks
+
 def transcribe_with_groq(video_path):
     """Transcribe video using Groq API (faster, cloud-based)."""
     print("🎙️  Transcribing with Groq Whisper...")
@@ -780,81 +809,137 @@ def transcribe_with_groq(video_path):
     subprocess.run(extract_audio_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     
     try:
-        with open(temp_audio, "rb") as file:
-            transcription = client.audio.transcriptions.create(
-                file=(os.path.basename(temp_audio), file.read()),
-                model="whisper-large-v3-turbo",
-                response_format="verbose_json",
-                timestamp_granularities=["segment", "word"]
-            )
+        # Handle file size limit (25MB for free tier)
+        file_size_mb = os.path.getsize(temp_audio) / (1024 * 1024)
         
-        # Debug: print transcription type and keys
-        print(f"   Transcription type: {type(transcription)}")
-        if isinstance(transcription, dict):
-            print(f"   Transcription keys: {transcription.keys()}")
-        
-        # Groq SDK returns a Transcription object, but response_format="verbose_json"
-        # can return dicts for nested fields. Handle both object and dict access.
-        if isinstance(transcription, dict):
-            text = transcription.get("text", "")
-            language = transcription.get("language", "unknown")
-            segments_data = transcription.get("segments", [])
-            words_data = transcription.get("words", [])
-        else:
-            text = transcription.text
-            language = transcription.language
-            segments_data = transcription.segments or []
-            words_data = getattr(transcription, "words", []) or []
-        
-        print(f"   Detected language: {language}")
-        
-        # Convert to standard format
-        transcript_segments = []
-        full_text = text or ""
-        
-        for segment in segments_data:
-            if isinstance(segment, dict):
-                seg_text = segment.get("text", "")
-                seg_start = segment.get("start", 0)
-                seg_end = segment.get("end", 0)
-            else:
-                seg_text = segment.text
-                seg_start = segment.start
-                seg_end = segment.end
+        if file_size_mb > 20: # Use 20MB as a safe threshold
+            print(f"   ⚠️  Audio file size ({file_size_mb:.2f}MB) exceeds Groq free tier limit. Chunking...")
+            chunks = split_audio_into_chunks(temp_audio)
             
-            seg_dict = {
-                'text': seg_text,
-                'start': seg_start,
-                'end': seg_end,
-                'words': []
-            }
+            all_segments = []
+            all_words = []
+            full_text_parts = []
+            cumulative_offset = 0.0
+            detected_language = "unknown"
             
-            # Groq returns words in a separate attribute
-            if words_data:
+            for i, chunk_path in enumerate(chunks):
+                print(f"   Processing chunk {i+1}/{len(chunks)} ({os.path.basename(chunk_path)})...")
+                with open(chunk_path, "rb") as f:
+                    transcription = client.audio.transcriptions.create(
+                        file=(os.path.basename(chunk_path), f.read()),
+                        model="whisper-large-v3-turbo",
+                        response_format="verbose_json",
+                        timestamp_granularities=["segment", "word"]
+                    )
+                
+                if isinstance(transcription, dict):
+                    text = transcription.get("text", "")
+                    language = transcription.get("language", "unknown")
+                    segments_data = transcription.get("segments", [])
+                    words_data = transcription.get("words", [])
+                else:
+                    text = transcription.text
+                    language = transcription.language
+                    segments_data = transcription.segments or []
+                    words_data = getattr(transcription, "words", []) or []
+                
+                if i == 0:
+                    detected_language = language
+                
+                full_text_parts.append(text)
+                
+                # Offset timestamps for segments
+                for seg in segments_data:
+                    if isinstance(seg, dict):
+                        s_start, s_end, s_text = seg.get("start", 0), seg.get("end", 0), seg.get("text", "")
+                    else:
+                        s_start, s_end, s_text = seg.start, seg.end, seg.text
+                    
+                    all_segments.append({
+                        'text': s_text,
+                        'start': s_start + cumulative_offset,
+                        'end': s_end + cumulative_offset,
+                        'words': []
+                    })
+                
+                # Offset timestamps for words
                 for word in words_data:
                     if isinstance(word, dict):
-                        word_text = word.get("word", "")
-                        word_start = word.get("start", 0)
-                        word_end = word.get("end", 0)
-                        word_prob = word.get("probability", 1.0)
+                        w_text, w_start, w_end, w_prob = word.get("word", ""), word.get("start", 0), word.get("end", 0), word.get("probability", 1.0)
                     else:
-                        word_text = word.word
-                        word_start = word.start
-                        word_end = word.end
-                        word_prob = getattr(word, "probability", 1.0)
+                        w_text, w_start, w_end, w_prob = word.word, word.start, word.end, getattr(word, "probability", 1.0)
                     
-                    if seg_start <= word_start < seg_end:
-                        seg_dict['words'].append({
-                            'word': word_text,
-                            'start': word_start,
-                            'end': word_end,
-                            'probability': word_prob
-                        })
+                    all_words.append({
+                        'word': w_text,
+                        'start': w_start + cumulative_offset,
+                        'end': w_end + cumulative_offset,
+                        'probability': w_prob
+                    })
+                
+                # Accurate chunk duration for offset
+                if segments_data:
+                    last_seg = segments_data[-1]
+                    chunk_duration = last_seg.get("end", 600) if isinstance(last_seg, dict) else last_seg.end
+                else:
+                    chunk_duration = 600
+                
+                cumulative_offset += chunk_duration
+                os.remove(chunk_path)
             
-            transcript_segments.append(seg_dict)
-            print(f"   [{seg_start:.2f}s -> {seg_end:.2f}s] {seg_text}")
+            # Map offset words to offset segments
+            for seg in all_segments:
+                for word in all_words:
+                    if seg['start'] <= word['start'] < seg['end']:
+                        seg['words'].append(word)
+            
+            full_text = " ".join(full_text_parts)
+            transcript_segments = all_segments
+            language = detected_language
+            
+        else:
+            # Single-request logic
+            with open(temp_audio, "rb") as file:
+                transcription = client.audio.transcriptions.create(
+                    file=(os.path.basename(temp_audio), file.read()),
+                    model="whisper-large-v3-turbo",
+                    response_format="verbose_json",
+                    timestamp_granularities=["segment", "word"]
+                )
+            
+            if isinstance(transcription, dict):
+                text = transcription.get("text", "")
+                language = transcription.get("language", "unknown")
+                segments_data = transcription.get("segments", [])
+                words_data = transcription.get("words", [])
+            else:
+                text = transcription.text
+                language = transcription.language
+                segments_data = transcription.segments or []
+                words_data = getattr(transcription, "words", []) or []
+            
+            full_text = text
+            transcript_segments = []
+            for segment in segments_data:
+                if isinstance(segment, dict):
+                    s_text, s_start, s_end = segment.get("text", ""), segment.get("start", 0), segment.get("end", 0)
+                else:
+                    s_text, s_start, s_end = segment.text, segment.start, segment.end
+                
+                seg_dict = {'text': s_text, 'start': s_start, 'end': s_end, 'words': []}
+                if words_data:
+                    for word in words_data:
+                        if isinstance(word, dict):
+                            w_text, w_start, w_end, w_prob = word.get("word", ""), word.get("start", 0), word.get("end", 0), word.get("probability", 1.0)
+                        else:
+                            w_text, w_start, w_end, w_prob = word.word, word.start, word.end, getattr(word, "probability", 1.0)
+                        if s_start <= w_start < s_end:
+                            seg_dict['words'].append({'word': w_text, 'start': w_start, 'end': w_end, 'probability': w_prob})
+                transcript_segments.append(seg_dict)
+            
+        print(f"   Detected language: {language}")
+        for seg in transcript_segments:
+            print(f"   [{seg['start']:.2f}s -> {seg['end']:.2f}s] {seg['text']}")
         
-        # Clean up temp audio
         if os.path.exists(temp_audio):
             os.remove(temp_audio)
         
