@@ -1,12 +1,11 @@
 scenedetect==0.7
 ultralytics==8.4.46
-torch==2.11.0
-torchvision==0.26.0
 tqdm==4.67.3
 yt-dlp
 faster-whisper==1.2.1
 openai
 python-dotenv==1.2.2
+opencv-python
 mediapipe==0.10.14
 boto3==1.43.4
 
