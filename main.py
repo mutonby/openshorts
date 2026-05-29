@@ -957,11 +957,16 @@ def transcribe_with_groq(video_path):
 
 def transcribe_with_faster_whisper(video_path):
     """Transcribe video using Faster-Whisper (local, CPU-optimized)."""
-    print("🎙️  Transcribing video with Faster-Whisper (CPU Optimized)...")
+    print("🎙️  Transcribing video with Faster-Whisper...")
     from faster_whisper import WhisperModel
+    import torch
     
-    # Run on CPU with INT8 quantization for speed
-    model = WhisperModel("large-v3-turbo", device="cpu", compute_type="int8")
+    # Auto-detect CUDA for faster transcription
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    compute_type = "float16" if device == "cuda" else "int8"
+    print(f"   Using device: {device} ({compute_type})")
+    
+    model = WhisperModel("large-v3-turbo", device=device, compute_type=compute_type)
     
     segments, info = model.transcribe(video_path, word_timestamps=True)
     
@@ -1015,8 +1020,8 @@ def get_viral_clips(transcript_result, video_duration):
 
     client = OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"))
     
-    # We use gemma-4-31b-it as requested.
-    model_name = 'gemma-4-31b-it' 
+    # We use gemini-2.5-flash as requested.
+    model_name = 'gemini-2.5-flash' 
     
     print(f"🤖  Initializing Gemini with model: {model_name}")
 

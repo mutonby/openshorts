@@ -8,11 +8,16 @@ def transcribe_audio(video_path):
     Returns transcript in the same format as main.py for compatibility.
     """
     from faster_whisper import WhisperModel
+    import torch
 
     print(f"🎙️  Transcribing audio from: {video_path}")
 
-    # Run on CPU with INT8 quantization for speed
-    model = WhisperModel("large-v3-turbo", device="cpu", compute_type="int8")
+    # Auto-detect CUDA for faster transcription
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    compute_type = "float16" if device == "cuda" else "int8"
+    print(f"   Using device: {device} ({compute_type})")
+    
+    model = WhisperModel("large-v3-turbo", device=device, compute_type=compute_type)
 
     segments, info = model.transcribe(video_path, word_timestamps=True)
 

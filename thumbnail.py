@@ -53,7 +53,7 @@ OUTPUT JSON:
  
     print("🤖 [Thumbnail] Asking OpenAI for title suggestions...")
     response = client.chat.completions.create(
-        model="gemma-4-31b-it",
+        model="gemini-2.5-flash",
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"}
     )
@@ -129,7 +129,7 @@ OUTPUT JSON:
 }}"""
 
     response = client.chat.completions.create(
-        model="gemma-4-31b-it",
+        model="gemini-2.5-flash",
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"}
     )
@@ -302,7 +302,7 @@ OUTPUT: Return ONLY the description text (no JSON wrapper, no markdown code bloc
 
     print("🤖 [Thumbnail] Generating YouTube description with chapters...")
     response = client.chat.completions.create(
-        model="gemma-4-31b-it",
+        model="gemini-2.5-flash",
         messages=[{"role": "user", "content": prompt}],
     )
  
