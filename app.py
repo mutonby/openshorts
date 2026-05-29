@@ -1476,7 +1476,7 @@ async def thumbnail_generate(
         )
 
         if not thumbnails:
-            raise HTTPException(status_code=500, detail="Thumbnail generation failed. Please check your Gemini API key has access to image generation (gemini-3.1-flash-image-preview model).")
+            raise HTTPException(status_code=500, detail=f"Thumbnail generation failed. Please check your Gemini API key has access to image generation ({os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')} model).")
 
         return {"thumbnails": thumbnails}
 

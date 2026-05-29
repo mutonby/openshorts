@@ -8,7 +8,7 @@ from openai import OpenAI
 class VideoEditor:
     def __init__(self, api_key):
         self.client = OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"))
-        self.model_name = "gemini-3-flash-preview" 
+        self.model_name = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
 
     def upload_video(self, video_path):
         """Deprecated: OpenAI compatible APIs generally don't support native video uploads.
@@ -100,29 +100,13 @@ class VideoEditor:
         print(f"🔍 DEBUG: OpenAI Raw Response:\n{response.choices[0].message.content}")
 
         try:
-            # Clean response text (remove potential markdown blocks)
+            from utils import extract_json
+
             text = response.choices[0].message.content
-            if text.startswith("```json"):
-                text = text[7:]
-            elif text.startswith("```"):
-                text = text[3:]
-            
-            if text.endswith("```"):
-                text = text[:-3]
-                
-            text = text.strip()
-            
-            # Additional cleanup for potential trailing characters outside JSON
-            # Find the first '{' and last '}'
-            start_idx = text.find('{')
-            end_idx = text.rfind('}')
-            
-            if start_idx != -1 and end_idx != -1:
-                text = text[start_idx:end_idx+1]
-            
-            print(f"🔍 DEBUG: Cleaned JSON Text:\n{text}")
-                
-            return json.loads(text)
+            result = extract_json(text)
+            if result is None:
+                raise json.JSONDecodeError("No valid JSON found", text, 0)
+            return result
         except json.JSONDecodeError:
             print(f"❌ Failed to parse JSON: {response.choices[0].message.content}")
             return None
@@ -195,27 +179,14 @@ class VideoEditor:
 
         try:
             # Clean response text (remove potential markdown blocks)
+            from utils import extract_json
+
             text = response.choices[0].message.content
-            if text.startswith("```json"):
-                text = text[7:]
-            elif text.startswith("```"):
-                text = text[3:]
-
-            if text.endswith("```"):
-                text = text[:-3]
-
-            text = text.strip()
-
-            # Find the first '{' and last '}'
-            start_idx = text.find('{')
-            end_idx = text.rfind('}')
-
-            if start_idx != -1 and end_idx != -1:
-                text = text[start_idx:end_idx+1]
-
-            print(f"🔍 DEBUG: Cleaned JSON Text:\n{text}")
-
-            return json.loads(text)
+            result = extract_json(text)
+            if result is None:
+                raise json.JSONDecodeError("No valid JSON found", text, 0)
+            print(f"🔍 DEBUG: Cleaned JSON Text:\n{json.dumps(result)}")
+            return result
         except json.JSONDecodeError:
             print(f"❌ Failed to parse effects config JSON: {response.choices[0].message.content}")
             return None

@@ -37,7 +37,7 @@ DEFAULT_VOICES = {
 }
 
 
-GEMINI_MODEL = "gemini-3-flash-preview"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -114,20 +114,11 @@ Be thorough. Use REAL data from your search results, not made-up information."""
         print("[SaaSShorts] ⚠️ Gemini returned empty response for web research")
         return {"raw_research": "", "product_name": domain, "grounding_sources": sources}
 
-    text = raw.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\n?", "", text)
-        text = re.sub(r"\n?```$", "", text)
+    from utils import extract_json
 
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1:
-        text = text[start : end + 1]
-
-    try:
-        research = json.loads(text)
-    except json.JSONDecodeError:
-        research = {"raw_research": text, "product_name": domain}
+    research = extract_json(raw)
+    if research is None:
+        research = {"raw_research": raw.strip(), "product_name": domain}
 
     research["grounding_sources"] = sources
     print(f"[SaaSShorts] ✅ Web research complete: {len(sources)} sources found")
@@ -328,20 +319,11 @@ Include 5-8 pain points, 4-6 emotional hooks, and 4+ viral angles."""
     if not raw:
         raise Exception("Gemini returned empty response for SaaS analysis")
 
-    text = raw.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\n?", "", text)
-        text = re.sub(r"\n?```$", "", text)
+    from utils import extract_json
 
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1:
-        text = text[start : end + 1]
-
-    try:
-        analysis = json.loads(text)
-    except json.JSONDecodeError as e:
-        raise Exception(f"Failed to parse analysis JSON: {e}\nRaw: {text[:500]}")
+    analysis = extract_json(raw)
+    if analysis is None:
+        raise Exception(f"Failed to parse analysis JSON\nRaw: {raw[:500]}")
 
     # Attach web research sources for reference
     if web_research and web_research.get("grounding_sources"):

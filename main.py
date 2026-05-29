@@ -1021,7 +1021,7 @@ def get_viral_clips(transcript_result, video_duration):
     client = OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"))
     
     # We use gemini-2.5-flash as requested.
-    model_name = 'gemini-2.5-flash' 
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     
     print(f"🤖  Initializing Gemini with model: {model_name}")
 
@@ -1085,25 +1085,15 @@ def get_viral_clips(transcript_result, video_duration):
             cost_analysis = None
         # ------------------------
         
-        # Clean response if it contains markdown code blocks
-        text = response.choices[0].message.content.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-        
-        start_idx = text.find('{')
-        end_idx = text.rfind('}')
-        if start_idx != -1 and end_idx != -1:
-            text = text[start_idx:end_idx + 1]
-        
-        result_json = json.loads(text)
+        from utils import extract_json
+
+        text = response.choices[0].message.content
+        result_json = extract_json(text)
+        if result_json is None:
+            raise ValueError(f"Failed to parse JSON from Gemini response")
         if cost_analysis:
             result_json['cost_analysis'] = cost_analysis
-            
+
         return result_json
     except Exception as e:
         print(f"❌ Gemini Error: {e}")

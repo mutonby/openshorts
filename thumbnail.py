@@ -53,7 +53,7 @@ OUTPUT JSON:
  
     print("🤖 [Thumbnail] Asking OpenAI for title suggestions...")
     response = client.chat.completions.create(
-        model="gemini-2.5-flash",
+        model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"}
     )
@@ -63,21 +63,11 @@ OUTPUT JSON:
     video_duration = segments[-1]["end"] if segments else 0
 
     try:
-        text = response.choices[0].message.content.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
+        from utils import extract_json
 
-        start_idx = text.find('{')
-        end_idx = text.rfind('}')
-        if start_idx != -1 and end_idx != -1:
-            text = text[start_idx:end_idx + 1]
-
-        result = json.loads(text)
+        result = extract_json(response.choices[0].message.content)
+        if result is None:
+            raise json.JSONDecodeError("No valid JSON found", response.choices[0].message.content, 0)
         result["transcript_summary"] = result.get("transcript_summary", "")
         result["language"] = result.get("language", transcript["language"])
         result["segments"] = segments
@@ -129,27 +119,18 @@ OUTPUT JSON:
 }}"""
 
     response = client.chat.completions.create(
-        model="gemini-2.5-flash",
+        model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"}
     )
 
     try:
-        text = response.choices[0].message.content.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
+        from utils import extract_json
 
-        start_idx = text.find('{')
-        end_idx = text.rfind('}')
-        if start_idx != -1 and end_idx != -1:
-            text = text[start_idx:end_idx + 1]
-
-        return json.loads(text)
+        result = extract_json(response.choices[0].message.content)
+        if result is None:
+            raise json.JSONDecodeError("No valid JSON found", response.choices[0].message.content, 0)
+        return result
     except json.JSONDecodeError:
         print(f"❌ [Thumbnail] Failed to parse refined titles: {response.choices[0].message.content}")
         return {"titles": ["Could not refine titles - please try again"]}
@@ -302,7 +283,7 @@ OUTPUT: Return ONLY the description text (no JSON wrapper, no markdown code bloc
 
     print("🤖 [Thumbnail] Generating YouTube description with chapters...")
     response = client.chat.completions.create(
-        model="gemini-2.5-flash",
+        model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
         messages=[{"role": "user", "content": prompt}],
     )
  

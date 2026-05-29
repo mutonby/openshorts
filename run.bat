@@ -33,6 +33,7 @@ echo [3/6] Installing/updating Python dependencies...
 pip install --upgrade pip --quiet
 pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu124 --no-cache-dir
 pip install -r requirements.txt
+pip install --upgrade --no-cache-dir yt-dlp
 if errorlevel 1 (
     echo ERROR: Failed to install Python dependencies.
     pause & exit /b 1
