@@ -8,7 +8,7 @@ from openai import OpenAI
 class VideoEditor:
     def __init__(self, api_key):
         self.client = OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"))
-        self.model_name = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
+        self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
     def upload_video(self, video_path):
         """Deprecated: OpenAI compatible APIs generally don't support native video uploads.

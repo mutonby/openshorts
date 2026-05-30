@@ -29,39 +29,67 @@ load_dotenv()
 ASPECT_RATIO = 9 / 16
 
 GEMINI_PROMPT_TEMPLATE = """
-You are a senior short-form video editor. Read the ENTIRE transcript and word-level timestamps to choose the 3–15 MOST VIRAL moments for TikTok/IG Reels/YouTube Shorts. Each clip must be between 15 and 60 seconds long.
-
-⚠️ FFMPEG TIME CONTRACT — STRICT REQUIREMENTS:
-- Return timestamps in ABSOLUTE SECONDS from the start of the video (usable in: ffmpeg -ss <start> -to <end> -i <input> ...).
-- Only NUMBERS with decimal point, up to 3 decimals (examples: 0, 1.250, 17.350).
-- Ensure 0 ≤ start < end ≤ VIDEO_DURATION_SECONDS.
-- Each clip between 15 and 60 s (inclusive).
-- Prefer starting 0.2–0.4 s BEFORE the hook and ending 0.2–0.4 s AFTER the payoff.
-- Use silence moments for natural cuts; never cut in the middle of a word or phrase.
-- STRICTLY FORBIDDEN to use time formats other than absolute seconds.
+You are a senior short-form video editor for TikTok/IG Reels/YouTube Shorts. Identify the 3-15 most viral-worthy moments from the transcript.
 
 VIDEO_DURATION_SECONDS: {video_duration}
+DETECTED_LANGUAGE: {language}
+
+SCENE_BOUNDARIES (natural visual cut points in seconds — prefer aligning clip edges here):
+{scene_boundaries}
+
+--- VIRAL CRITERIA ---
+Evaluate each candidate moment against these viral pattern types:
+1. PATTERN_INTERRUPT: Unexpected twist, surprise reveal, "wait what?!" moment
+2. EMOTIONAL_PEAK: High emotion — anger, excitement, laughter, tears, passion
+3. VALUE_DROP: Actionable tip, hack, insight, or framework the viewer can use immediately
+4. CONTROVERSY: Hot take, debate trigger, strong opinion that sparks comments
+5. CLIFFHANGER: Unfinished story, looming reveal, "you won't believe what happened next"
+6. CURIOSITY_GAP: Opens a question the viewer MUST know the answer to
+7. STORY_BEAT: Key narrative moment — setup, conflict, resolution
+8. RELATABLE_MOMENT: "That's so me" — universal experience, high shareability
+
+--- CONTENT TYPE ---
+First, classify the dominant content type: TUTORIAL / STORYTELLING / INTERVIEW / REACTION / VLOG / REVIEW / DEBATE / OTHER. This guides clip length and selection logic.
+
+--- CLIP DIVERSITY ---
+Select clips covering at least 3 DIFFERENT viral pattern types. Avoid homogeneous picks.
+
+--- DURATION GUIDANCE ---
+Fast-paced/reactions/quick tips: 8-25 s
+Storytelling/narrative: 40-90 s
+Tutorials/interviews: 20-60 s
+Default when uncertain: 15-60 s
+
+--- TIMING RULES ---
+- Return timestamps in ABSOLUTE SECONDS from video start (usable in: ffmpeg -ss <start> -to <end> -i <input> ...)
+- Only NUMBERS with decimal point, up to 3 decimals (e.g., 12.340)
+- Ensure 0 ≤ start < end ≤ VIDEO_DURATION_SECONDS
+- Prefer cutting 0.2-0.4 s BEFORE the hook and 0.2-0.4 s AFTER the payoff
+- Align cuts with scene boundaries when available
+- Never cut in the middle of a word or phrase
+- Avoid cutting near LOW-PROBABILITY words (p < 0.3 in WORDS_JSON) — they indicate transcription uncertainty
+- No generic intros/outros or purely sponsorship segments unless they contain a hook
 
 TRANSCRIPT_TEXT (raw):
 {transcript_text}
 
-WORDS_JSON (array of {{w, s, e}} where s/e are seconds):
+WORDS_JSON (array of {{w, s, e, p}} where s/e are seconds, p is 0-1 transcription confidence):
 {words_json}
 
-STRICT EXCLUSIONS:
-- No generic intros/outros or purely sponsorship segments unless they contain the hook.
-- No clips < 15 s or > 60 s.
-
-OUTPUT — RETURN ONLY VALID JSON (no markdown, no comments). Order clips by predicted performance (best to worst). In the descriptions, ALWAYS include a CTA like "Follow me and comment X and I'll send you the workflow" (especially if discussing an n8n workflow):
+OUTPUT — RETURN ONLY VALID JSON (no markdown fences, no extra text). Order clips by predicted performance (best first). Include a CTA in descriptions like "Follow me and comment X and I'll send you the workflow":
 {{
+  "content_type": "<TUTORIAL|STORYTELLING|INTERVIEW|REACTION|VLOG|REVIEW|DEBATE|OTHER>",
   "shorts": [
     {{
-      "start": <number in seconds, e.g., 12.340>,
-      "end": <number in seconds, e.g., 37.900>,
-      "video_description_for_tiktok": "<description for TikTok oriented to get views>",
-      "video_description_for_instagram": "<description for Instagram oriented to get views>",
-      "video_title_for_youtube_short": "<title for YouTube Short oriented to get views 100 chars max>",
-      "viral_hook_text": "<SHORT punchy text overlay (max 10 words). MUST BE IN THE SAME LANGUAGE AS THE VIDEO TRANSCRIPT. Examples: 'POV: You realized...', 'Did you know?', 'Stop doing this!'>"
+      "start": <number>,
+      "end": <number>,
+      "confidence": <0.0 to 1.0, your confidence this clip will perform well>,
+      "reasoning": "<2-3 sentences: which viral pattern this hits, why it works, why the timestamps are optimal>",
+      "viral_pattern_type": "<one of the 8 types above>",
+      "video_description_for_tiktok": "<description for TikTok>",
+      "video_description_for_instagram": "<description for Instagram>",
+      "video_title_for_youtube_short": "<title for YouTube Short, 100 chars max>",
+      "viral_hook_text": "<SHORT punchy overlay (max 10 words). MUST BE IN THE SAME LANGUAGE AS THE VIDEO>"
     }}
   ]
 }}
@@ -827,7 +855,7 @@ def transcribe_with_groq(video_path):
                 with open(chunk_path, "rb") as f:
                     transcription = client.audio.transcriptions.create(
                         file=(os.path.basename(chunk_path), f.read()),
-                        model="whisper-large-v3-turbo",
+                        model="whisper-large-v3",
                         response_format="verbose_json",
                         timestamp_granularities=["segment", "word"]
                     )
@@ -901,7 +929,7 @@ def transcribe_with_groq(video_path):
             with open(temp_audio, "rb") as file:
                 transcription = client.audio.transcriptions.create(
                     file=(os.path.basename(temp_audio), file.read()),
-                    model="whisper-large-v3-turbo",
+                    model="whisper-large-v3",
                     response_format="verbose_json",
                     timestamp_granularities=["segment", "word"]
                 )
@@ -966,7 +994,7 @@ def transcribe_with_faster_whisper(video_path):
     compute_type = "float16" if device == "cuda" else "int8"
     print(f"   Using device: {device} ({compute_type})")
     
-    model = WhisperModel("large-v3-turbo", device=device, compute_type=compute_type)
+    model = WhisperModel("large-v3", device=device, compute_type=compute_type)
     
     segments, info = model.transcribe(video_path, word_timestamps=True)
     
@@ -1005,8 +1033,124 @@ def transcribe_with_faster_whisper(video_path):
         'language': info.language
     }
 
-def get_viral_clips(transcript_result, video_duration):
-    print("🤖  Analyzing with Gemini...")
+def post_process_clips(result_json, min_confidence=0.6, max_overlap=0.7, max_clips=10):
+    """Filter, deduplicate, and rank clips by quality, duration, and diversity."""
+    shorts = result_json.get('shorts', [])
+    if not shorts:
+        return result_json
+
+    # 0. Filter by duration — enforce absolute floor and ceiling
+    MIN_DURATION = 8
+    MAX_DURATION = 90
+    duration_filtered = []
+    for s in shorts:
+        dur = s['end'] - s['start']
+        if dur < MIN_DURATION:
+            print(f"   ⚠️ Dropping clip at {s['start']:.1f}s: {dur:.1f}s too short (min {MIN_DURATION}s)")
+            continue
+        if dur > MAX_DURATION:
+            print(f"   ⚠️ Dropping clip at {s['start']:.1f}s: {dur:.1f}s too long (max {MAX_DURATION}s)")
+            continue
+        duration_filtered.append(s)
+    if not duration_filtered:
+        print(f"   ⚠️ All clips outside duration bounds, keeping originals")
+        duration_filtered = shorts
+
+    # 1. Filter by confidence (keep low-confidence as fallback)
+    has_confidence = any('confidence' in s for s in duration_filtered)
+    if has_confidence:
+        filtered = [s for s in duration_filtered if s.get('confidence', 0) >= min_confidence]
+        if not filtered:
+            print(f"   ⚠️ All clips below confidence {min_confidence}, keeping top 3")
+            filtered = sorted(duration_filtered, key=lambda s: s.get('confidence', 0), reverse=True)[:3]
+    else:
+        filtered = duration_filtered
+
+    # 2. Deduplicate overlapping clips (>max_overlap overlap)
+    deduped = []
+    filtered.sort(key=lambda s: s['start'])
+    for clip in filtered:
+        is_duplicate = False
+        for i, kept in enumerate(deduped):
+            overlap_start = max(clip['start'], kept['start'])
+            overlap_end = min(clip['end'], kept['end'])
+            overlap_dur = max(0, overlap_end - overlap_start)
+            clip_dur = clip['end'] - clip['start']
+            kept_dur = kept['end'] - kept['start']
+            min_dur = min(clip_dur, kept_dur)
+            if min_dur > 0 and overlap_dur / min_dur > max_overlap:
+                is_duplicate = True
+                if clip.get('confidence', 0) > kept.get('confidence', 0):
+                    deduped[i] = clip
+                break
+        if not is_duplicate:
+            deduped.append(clip)
+
+    # 3. Enforce diversity — keep first occurrence of each pattern type, then fill with high-confidence remainder
+    seen_types = set()
+    diversified = []
+    for clip in deduped:
+        ptype = clip.get('viral_pattern_type', '')
+        if ptype and ptype not in seen_types:
+            seen_types.add(ptype)
+            diversified.append(clip)
+    for clip in deduped:
+        if clip not in diversified:
+            diversified.append(clip)
+
+    # 4. Sort by confidence desc, limit to max_clips
+    diversified.sort(key=lambda s: s.get('confidence', 0), reverse=True)
+    result_json['shorts'] = diversified[:max_clips]
+
+    filtered_out = len(shorts) - len(result_json['shorts'])
+    if filtered_out > 0:
+        print(f"   🔎 Post-process filtered {filtered_out} clip(s) (duration/confidence/dedup/diversity)")
+
+    return result_json
+
+
+def _build_window_prompt(words, transcript_segments, video_duration, language, scene_boundaries, window_num, total_windows):
+    """Build a reduced prompt for a window of words."""
+    if not words:
+        return None, None
+
+    window_start = words[0]['s']
+    window_end = words[-1]['e']
+
+    # Filter segments that overlap this window
+    window_segments = [seg for seg in transcript_segments
+                       if seg['end'] >= window_start and seg['start'] <= window_end]
+    if window_segments:
+        window_text = " ".join(seg['text'] for seg in window_segments)
+    else:
+        window_text = "(no transcript in this window)"
+
+    # Filter scene boundaries in this window
+    if scene_boundaries:
+        window_scene_parts = []
+        for s_start, s_end in scene_boundaries:
+            if s_end >= window_start and s_start <= window_end:
+                window_scene_parts.append(f"[{s_start:.1f}s - {s_end:.1f}s]")
+        window_scene_text = ", ".join(window_scene_parts) if window_scene_parts else "No scene data in this window"
+    else:
+        window_scene_text = "No scene data available"
+
+    prompt = GEMINI_PROMPT_TEMPLATE.format(
+        video_duration=video_duration,
+        language=language,
+        scene_boundaries=f"WINDOW {window_num+1}/{total_windows} [{window_start:.1f}s - {window_end:.1f}s]: {window_scene_text}",
+        transcript_text=json.dumps(window_text),
+        words_json=json.dumps(words)
+    )
+
+    return prompt, window_text
+
+
+MAX_PROMPT_CHARS = 380_000  # ~100K tokens, safe budget per chunk
+
+
+def get_viral_clips(transcript_result, video_duration, scene_boundaries=None):
+    print("🤖  Analyzing with AI...")
     
     if not transcript_result:
         print("❌ Error: No transcript available. Skipping viral clip analysis.")
@@ -1017,86 +1161,180 @@ def get_viral_clips(transcript_result, video_duration):
         print("❌ Error: GEMINI_API_KEY not found in environment variables.")
         return None
 
-
     client = OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"))
-    
-    # We use gemini-2.5-flash as requested.
     model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     
-    print(f"🤖  Initializing Gemini with model: {model_name}")
+    print(f"🤖  Initializing model: {model_name}")
 
-    # Extract words
     words = []
     for segment in transcript_result['segments']:
         for word in segment.get('words', []):
             words.append({
                 'w': word['word'],
                 's': word['start'],
-                'e': word['end']
+                'e': word['end'],
+                'p': round(word.get('probability', 1.0), 3)
             })
 
-    prompt = GEMINI_PROMPT_TEMPLATE.format(
-        video_duration=video_duration,
-        transcript_text=json.dumps(transcript_result['text']),
-        words_json=json.dumps(words)
-    )
+    language = transcript_result.get('language', 'unknown')
 
-    try:
-        response = client.chat.completions.create(
+    # Format scene boundaries for full-video prompt
+    if scene_boundaries:
+        scene_parts = []
+        for s_start, s_end in scene_boundaries:
+            scene_parts.append(f"[{s_start:.1f}s - {s_end:.1f}s]")
+        scene_text = ", ".join(scene_parts)
+    else:
+        scene_text = "No scene data available — use transcript context to find natural cut points"
+
+    from utils import extract_json
+
+    def _call_llm(prompt_content, extra_system_prompt=None):
+        messages = []
+        if extra_system_prompt:
+            messages.append({"role": "system", "content": extra_system_prompt})
+        messages.append({"role": "user", "content": prompt_content})
+        return client.chat.completions.create(
             model=model_name,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             response_format={"type": "json_object"}
         )
-        
-        # --- Cost Calculation ---
-        try:
-            usage = response.usage
-            if usage:
-                # Gemini 2.5 Flash Pricing (Dec 2025)
-                # Input: $0.10 per 1M tokens
-                # Output: $0.40 per 1M tokens
-                
-                input_price_per_million = 0.10
-                output_price_per_million = 0.40
-                
-                prompt_tokens = usage.prompt_tokens
-                output_tokens = usage.completion_tokens
-                
-                input_cost = (prompt_tokens / 1_000_000) * input_price_per_million
-                output_cost = (output_tokens / 1_000_000) * output_price_per_million
-                total_cost = input_cost + output_cost
-                
-                cost_analysis = {
-                    "input_tokens": prompt_tokens,
-                    "output_tokens": output_tokens,
-                    "input_cost": input_cost,
-                    "output_cost": output_cost,
-                    "total_cost": total_cost,
-                    "model": model_name
-                }
 
-                print(f"💰 Token Usage ({model_name}):")
-                print(f"   - Input Tokens: {prompt_tokens} (${input_cost:.6f})")
-                print(f"   - Output Tokens: {output_tokens} (${output_cost:.6f})")
-                print(f"   - Total Estimated Cost: ${total_cost:.6f}")
-                
-        except Exception as e:
-            print(f"⚠️ Could not calculate cost: {e}")
-            cost_analysis = None
-        # ------------------------
-        
-        from utils import extract_json
-
+    def _analyze_single(prompt_content):
+        response = _call_llm(prompt_content)
         text = response.choices[0].message.content
-        result_json = extract_json(text)
-        if result_json is None:
-            raise ValueError(f"Failed to parse JSON from Gemini response")
-        if cost_analysis:
-            result_json['cost_analysis'] = cost_analysis
+        result = extract_json(text)
+        if result is None:
+            print("   ⚠️ First attempt returned non-JSON output, retrying...")
+            try:
+                response = _call_llm(prompt_content, "CRITICAL: Return ONLY a single valid JSON object. Start your response with '{' and end with '}'. No markdown, no code fences, no explanatory text.")
+                text = response.choices[0].message.content
+                result = extract_json(text)
+            except Exception as retry_err:
+                print(f"   ❌ Retry also failed: {retry_err}")
+        return result, response
 
+    try:
+        # --- Estimate prompt size and decide single-call vs chunked ---
+        transcript_json = json.dumps(transcript_result['text'])
+        words_json = json.dumps(words)
+        full_prompt = GEMINI_PROMPT_TEMPLATE.format(
+            video_duration=video_duration,
+            language=language,
+            scene_boundaries=scene_text,
+            transcript_text=transcript_json,
+            words_json=words_json
+        )
+
+        if len(full_prompt) <= MAX_PROMPT_CHARS:
+            # Single call
+            result_json, response = _analyze_single(full_prompt)
+
+            if result_json is None:
+                raise ValueError("Failed to parse JSON from model response after retry")
+
+            # Token usage
+            try:
+                usage = response.usage
+                if usage:
+                    print(f"💰 Token Usage ({model_name}):")
+                    print(f"   - Input Tokens: {usage.prompt_tokens}")
+                    print(f"   - Output Tokens: {usage.completion_tokens}")
+            except Exception:
+                pass
+
+            result_json = post_process_clips(result_json)
+            return result_json
+
+        # --- Chunked: sliding windows ---
+        print(f"   📦 Prompt too large ({len(full_prompt)} chars > {MAX_PROMPT_CHARS}), chunking video into windows...")
+
+        # Calculate window size: fit words + transcript within budget
+        template_overhead = GEMINI_PROMPT_TEMPLATE.format(
+            video_duration=video_duration, language=language,
+            scene_boundaries="", transcript_text="", words_json=""
+        )
+        # Account for both words_json AND transcript_json in per-word estimate
+        total_data_chars = len(transcript_json) + len(words_json)
+        chars_per_word = total_data_chars / max(len(words), 1)
+        available_per_window = MAX_PROMPT_CHARS - len(template_overhead) - 500  # window label
+        words_per_window = max(int(available_per_window / chars_per_word), 200)
+        overlap_words = words_per_window // 5  # 20% overlap
+
+        total_windows = max(1, (len(words) + words_per_window - overlap_words - 1) // (words_per_window - overlap_words))
+        print(f"   🪟 Splitting {len(words)} words into ~{total_windows} windows ({words_per_window} words each, {overlap_words} overlap)")
+
+        all_shorts = []
+        content_types = []
+
+        for win_idx in range(0, len(words), words_per_window - overlap_words):
+            window_words = words[win_idx:win_idx + words_per_window]
+            if len(window_words) < 200:
+                continue
+
+            window_prompt, _ = _build_window_prompt(
+                window_words, transcript_result['segments'],
+                video_duration, language, scene_boundaries,
+                win_idx // max(words_per_window - overlap_words, 1), total_windows
+            )
+            if window_prompt is None:
+                continue
+
+            # Safety: if window prompt still too large, trim words
+            while len(window_prompt) > MAX_PROMPT_CHARS and len(window_words) > 200:
+                trim_count = int(len(window_words) * 0.15)
+                window_words = window_words[:-trim_count]
+                window_prompt, _ = _build_window_prompt(
+                    window_words, transcript_result['segments'],
+                    video_duration, language, scene_boundaries,
+                    win_idx // max(words_per_window - overlap_words, 1), total_windows
+                )
+
+            if len(window_prompt) > MAX_PROMPT_CHARS:
+                print(f"   ⚠️ Window still too large ({len(window_prompt)} chars), skipping")
+                continue
+
+            print(f"   🔍 Analyzing window {win_idx // max(words_per_window - overlap_words, 1) + 1}/{total_windows} ({len(window_words)} words)...")
+            result_json, _ = _analyze_single(window_prompt)
+
+            if result_json:
+                if 'content_type' in result_json:
+                    content_types.append(result_json['content_type'])
+                all_shorts.extend(result_json.get('shorts', []))
+
+        if not all_shorts:
+            raise ValueError("No clips found in any window")
+
+        # Merge: dedup highly overlapping clips from adjacent windows, keep best
+        merged = []
+        all_shorts.sort(key=lambda s: s['start'])
+        for clip in all_shorts:
+            is_dup = False
+            for i, kept in enumerate(merged):
+                overlap_start = max(clip['start'], kept['start'])
+                overlap_end = min(clip['end'], kept['end'])
+                overlap_dur = max(0, overlap_end - overlap_start)
+                clip_dur = clip['end'] - clip['start']
+                kept_dur = kept['end'] - kept['start']
+                min_dur = min(clip_dur, kept_dur)
+                if min_dur > 0 and overlap_dur / min_dur > 0.9:  # 90% overlap = same clip
+                    is_dup = True
+                    if clip.get('confidence', 0) > kept.get('confidence', 0):
+                        merged[i] = clip
+                    break
+            if not is_dup:
+                merged.append(clip)
+
+        result_json = {"shorts": merged}
+        if content_types:
+            result_json['content_type'] = max(set(content_types), key=content_types.count)
+
+        result_json = post_process_clips(result_json)
+        print(f"   ✅ Chunked analysis complete: {len(all_shorts)} raw → {len(result_json['shorts'])} after merge+filter")
         return result_json
+
     except Exception as e:
-        print(f"❌ Gemini Error: {e}")
+        print(f"❌ AI Analysis Error: {e}")
         return None
 
 if __name__ == '__main__':
@@ -1188,8 +1426,19 @@ if __name__ == '__main__':
         duration = frame_count / fps
         cap.release()
 
-        # 4. Gemini Analysis
-        clips_data = get_viral_clips(transcript, duration)
+        # 3.5. Detect scenes for better boundary alignment
+        scene_boundaries = None
+        try:
+            scenes, scene_fps = detect_scenes(input_video)
+            scene_boundaries = []
+            for s_start, s_end in scenes:
+                scene_boundaries.append((s_start.get_seconds(), s_end.get_seconds()))
+            print(f"   🎞️  Detected {len(scene_boundaries)} scenes for boundary alignment")
+        except Exception as e:
+            print(f"   ⚠️ Scene detection skipped: {e}")
+
+        # 4. AI Analysis
+        clips_data = get_viral_clips(transcript, duration, scene_boundaries)
         
         if not clips_data or 'shorts' not in clips_data:
             print("❌ Failed to identify clips. Converting whole video as fallback.")

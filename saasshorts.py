@@ -37,7 +37,7 @@ DEFAULT_VOICES = {
 }
 
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1025,7 +1025,7 @@ def transcribe_audio_for_subs(audio_path: str) -> list:
     compute_type = "float16" if device == "cuda" else "int8"
     print(f"   Using device: {device} ({compute_type})")
     
-    model = WhisperModel("large-v3-turbo", device=device, compute_type=compute_type)
+    model = WhisperModel("large-v3", device=device, compute_type=compute_type)
     segments, info = model.transcribe(audio_path, word_timestamps=True)
 
     words = []

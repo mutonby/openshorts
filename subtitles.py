@@ -17,7 +17,7 @@ def transcribe_audio(video_path):
     compute_type = "float16" if device == "cuda" else "int8"
     print(f"   Using device: {device} ({compute_type})")
     
-    model = WhisperModel("large-v3-turbo", device=device, compute_type=compute_type)
+    model = WhisperModel("large-v3", device=device, compute_type=compute_type)
 
     segments, info = model.transcribe(video_path, word_timestamps=True)
 
