@@ -1060,8 +1060,42 @@ class SocialPostRequest(BaseModel):
     description: Optional[str] = None
     scheduled_date: Optional[str] = None # ISO-8601 string
     timezone: Optional[str] = "UTC"
+    # Optional edited video filename (if subtitles/hooks were applied client-side)
+    edited_video_filename: Optional[str] = None
 
 import httpx
+
+@app.post("/api/upload-edited-video")
+async def upload_edited_video(
+    file: UploadFile = File(...),
+    job_id: str = Form(...),
+    clip_index: int = Form(...)
+):
+    """
+    Receive a rendered video blob (with subtitles/hooks/effects applied client-side)
+    and save it to disk so the social post endpoint can use it.
+    Returns the saved filename for inclusion in the /api/social/post payload.
+    """
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Create edited_videos subdirectory
+    edited_dir = os.path.join(OUTPUT_DIR, job_id, "edited_videos")
+    os.makedirs(edited_dir, exist_ok=True)
+
+    # Generate unique filename
+    ext = os.path.splitext(file.filename)[1] or ".mp4"
+    saved_filename = f"edited_{clip_index}_{uuid.uuid4().hex}{ext}"
+    saved_path = os.path.join(edited_dir, saved_filename)
+
+    # Save file
+    with open(saved_path, "wb") as f:
+        content = await file.read()
+        f.write(content)
+
+    print(f"✅ Saved edited video: {saved_path} ({len(content)} bytes)")
+
+    return {"filename": saved_filename, "path": f"/videos/{job_id}/edited_videos/{saved_filename}"}
 
 @app.post("/api/social/post")
 async def post_to_socials(req: SocialPostRequest):
@@ -1074,13 +1108,19 @@ async def post_to_socials(req: SocialPostRequest):
         
     try:
         clip = job['result']['clips'][req.clip_index]
-        # Video URL is relative /videos/..., we need absolute file path
-        # clip['video_url'] is like "/videos/{job_id}/{filename}"
-        # We constructed it as: f"/videos/{job_id}/{clip_filename}"
-        # And file is at f"{OUTPUT_DIR}/{job_id}/{clip_filename}"
         
-        filename = clip['video_url'].split('/')[-1]
-        file_path = os.path.join(OUTPUT_DIR, req.job_id, filename)
+        # Use edited video if provided, otherwise fall back to original
+        if req.edited_video_filename:
+            # Edited video is stored in the job's edited_videos subdirectory
+            filename = req.edited_video_filename
+            file_path = os.path.join(OUTPUT_DIR, req.job_id, "edited_videos", filename)
+        else:
+            # Video URL is relative /videos/..., we need absolute file path
+            # clip['video_url'] is like "/videos/{job_id}/{filename}"
+            # We constructed it as: f"/videos/{job_id}/{clip_filename}"
+            # And file is at f"{OUTPUT_DIR}/{job_id}/{clip_filename}"
+            filename = clip['video_url'].split('/')[-1]
+            file_path = os.path.join(OUTPUT_DIR, req.job_id, filename)
         
         if not os.path.exists(file_path):
              raise HTTPException(status_code=404, detail=f"Video file not found: {file_path}")

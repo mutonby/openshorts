@@ -36,8 +36,46 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
 
     const [clipDuration, setClipDuration] = useState(clip.end && clip.start ? clip.end - clip.start : 30);
 
-    // Accumulate Remotion layers across operations
-    const [activeLayers, setActiveLayers] = useState({ subtitles: null, hook: null, effects: null });
+    // Accumulate Remotion layers across operations — restored from localStorage on mount
+    const [activeLayers, setActiveLayers] = useState(() => {
+        const storageKey = `layers-${jobId}-${index}`;
+        try {
+            const saved = localStorage.getItem(storageKey);
+            return saved ? JSON.parse(saved) : { subtitles: null, hook: null, effects: null };
+        } catch {
+            return { subtitles: null, hook: null, effects: null };
+        }
+    });
+
+    // Helper to persist layers to localStorage
+    const saveLayers = (newLayers) => {
+        setActiveLayers(newLayers);
+        const storageKey = `layers-${jobId}-${index}`;
+        try {
+            localStorage.setItem(storageKey, JSON.stringify(newLayers));
+        } catch {
+            // Storage full or unavailable — silently ignore
+        }
+    };
+
+    // Re-render blob URL on mount when saved layers exist
+    useEffect(() => {
+        const hasLayers = activeLayers.subtitles || activeLayers.hook || activeLayers.effects;
+        if (hasLayers && originalVideoUrl && clipDuration > 0) {
+            renderInBrowser({
+                videoUrl: originalVideoUrl,
+                durationInSeconds: clipDuration,
+                subtitles: activeLayers.subtitles,
+                hook: activeLayers.hook,
+                effects: activeLayers.effects,
+            }).then(blobUrl => {
+                setCurrentVideoUrl(blobUrl);
+                if (videoRef.current) videoRef.current.load();
+            }).catch(() => {
+                // Render failed — fall back to original URL
+            });
+        }
+    }, []);
 
     // Fetch clip duration from transcript endpoint
     useEffect(() => {
@@ -89,7 +127,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                 const data = await effectsRes.json();
                 if (data.effects && data.effects.segments) {
                     const newLayers = { ...activeLayers, effects: data.effects };
-                    setActiveLayers(newLayers);
+                    saveLayers(newLayers);
                     const blobUrl = await renderInBrowser({
                         videoUrl: originalVideoUrl,
                         durationInSeconds: clipDuration,
@@ -150,7 +188,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
             if (options.remotion) {
                 // Accumulate layer and render all layers together
                 const newLayers = { ...activeLayers, subtitles: options.remotion };
-                setActiveLayers(newLayers);
+                saveLayers(newLayers);
                 const blobUrl = await renderInBrowser({
                     videoUrl: originalVideoUrl,
                     durationInSeconds: clipDuration,
@@ -205,7 +243,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
             if (hookData.remotion) {
                 // Accumulate layer and render all layers together
                 const newLayers = { ...activeLayers, hook: hookData.remotion };
-                setActiveLayers(newLayers);
+                saveLayers(newLayers);
                 const blobUrl = await renderInBrowser({
                     videoUrl: originalVideoUrl,
                     durationInSeconds: clipDuration,
@@ -336,6 +374,31 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
         setPostResult(null);
 
         try {
+            // If we have active layers (subtitles/hooks/effects), upload the edited video first
+            let editedVideoFilename = null;
+            const hasLayers = activeLayers.subtitles || activeLayers.hook || activeLayers.effects;
+            if (hasLayers && currentVideoUrl !== originalVideoUrl) {
+                // Fetch the blob URL content and upload to server
+                const videoResponse = await fetch(currentVideoUrl);
+                const videoBlob = await videoResponse.blob();
+                const formData = new FormData();
+                formData.append('file', videoBlob, `edited_clip_${index}.mp4`);
+                formData.append('job_id', jobId);
+                formData.append('clip_index', index);
+
+                const uploadRes = await fetch(getApiUrl('/api/upload-edited-video'), {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!uploadRes.ok) {
+                    throw new Error('Failed to upload edited video');
+                }
+
+                const uploadData = await uploadRes.json();
+                editedVideoFilename = uploadData.filename;
+            }
+
             const payload = {
                 job_id: jobId,
                 clip_index: index,
@@ -345,6 +408,10 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                 title: postTitle,
                 description: postDescription
             };
+
+            if (editedVideoFilename) {
+                payload.edited_video_filename = editedVideoFilename;
+            }
 
             if (isScheduling && scheduleDate) {
                 // Convert to ISO-8601
