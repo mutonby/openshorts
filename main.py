@@ -1302,6 +1302,12 @@ def get_viral_clips(transcript_result, video_duration, scene_boundaries=None):
                     content_types.append(result_json['content_type'])
                 all_shorts.extend(result_json.get('shorts', []))
 
+            # Add 1-minute delay between chunk analyses to avoid API rate limiting
+            next_win_idx = win_idx + words_per_window - overlap_words
+            if next_win_idx < len(words):
+                print(f"   ⏳ Waiting 60 seconds before analyzing next window...")
+                time.sleep(60)
+
         if not all_shorts:
             raise ValueError("No clips found in any window")
 
