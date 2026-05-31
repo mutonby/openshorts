@@ -190,6 +190,56 @@ def list_all_clips(bucket_name=None, limit=50, force_refresh=False):
 
     return all_clips[:limit] if limit else all_clips
 
+def upload_video_to_s3_for_repliz(file_path):
+    """
+    Upload a video file to the public S3 bucket for use with Repliz API.
+    Returns the public URL or None on failure.
+    """
+    bucket_name = os.environ.get('AWS_S3_PUBLIC_BUCKET', 'my-public-bucket')
+    region = os.environ.get('AWS_REGION', 'eu-west-3')
+
+    s3_client = get_s3_client()
+    if not s3_client:
+        return None
+
+    import uuid
+    import datetime
+    unique_id = str(uuid.uuid4())[:8]
+    filename = os.path.basename(file_path)
+    name, ext = os.path.splitext(filename)
+    s3_key = f"repliz/{unique_id}/{filename}"
+
+    try:
+        if not os.path.exists(file_path):
+            logger.warning(f"File not found: {file_path}")
+            return None
+
+        s3_client.upload_file(
+            file_path, bucket_name, s3_key,
+            ExtraArgs={'ContentType': 'video/mp4'},
+        )
+        public_url = f"https://{bucket_name}.s3.{region}.amazonaws.com/{s3_key}"
+
+        # Save metadata JSON alongside the video
+        meta_key = s3_key.rsplit('.', 1)[0] + '_metadata.json'
+        meta = json.dumps({
+            "url": public_url,
+            "original_filename": filename,
+            "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+        }, ensure_ascii=False)
+        s3_client.put_object(
+            Bucket=bucket_name, Key=meta_key,
+            Body=meta.encode('utf-8'),
+            ContentType='application/json',
+        )
+
+        logger.info(f"Uploaded video to S3 for Repliz: {public_url}")
+        return public_url
+    except Exception as e:
+        logger.error(f"Failed to upload video to S3 for Repliz: {e}")
+        return None
+
+
 def upload_actor_to_s3(file_path, description=""):
     """
     Upload an actor image to the public S3 bucket.

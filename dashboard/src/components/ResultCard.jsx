@@ -6,12 +6,17 @@ import HookModal from './HookModal';
 import TranslateModal from './TranslateModal';
 import { renderInBrowser } from '../lib/renderInBrowser';
 
-export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, onPlay, onPause }) {
+export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, replizAccessKey, replizSecretKey, replizAccounts, geminiApiKey, elevenLabsKey, onPlay, onPause }) {
     const [showModal, setShowModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
     const videoRef = React.useRef(null);
     const originalVideoUrl = getApiUrl(clip.video_url); // Never changes — used for Remotion previews
     const [currentVideoUrl, setCurrentVideoUrl] = useState(originalVideoUrl);
+
+    // Upload provider selection
+    const [uploadProvider, setUploadProvider] = useState('upload-post'); // 'upload-post' or 'repliz'
+    const [selectedReplizAccount, setSelectedReplizAccount] = useState('');
+    const [selectedReplizPlatform, setSelectedReplizPlatform] = useState('youtube');
 
     const [platforms, setPlatforms] = useState({
         tiktok: true,
@@ -354,15 +359,21 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
     };
 
     const handlePost = async () => {
-        if (!uploadPostKey || !uploadUserId) {
-            setPostResult({ success: false, msg: "Missing API Key or User ID." });
-            return;
-        }
-
-        const selectedPlatforms = Object.keys(platforms).filter(k => platforms[k]);
-        if (selectedPlatforms.length === 0) {
-            setPostResult({ success: false, msg: "Select at least one platform." });
-            return;
+        // Validate based on selected provider
+        if (uploadProvider === 'upload-post') {
+            if (!uploadPostKey || !uploadUserId) {
+                setPostResult({ success: false, msg: "Missing Upload-Post API Key or User ID." });
+                return;
+            }
+        } else if (uploadProvider === 'repliz') {
+            if (!replizAccessKey || !replizSecretKey) {
+                setPostResult({ success: false, msg: "Missing Repliz API credentials." });
+                return;
+            }
+            if (!selectedReplizAccount) {
+                setPostResult({ success: false, msg: "Please select a Repliz account." });
+                return;
+            }
         }
 
         if (isScheduling && !scheduleDate) {
@@ -399,32 +410,68 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                 editedVideoFilename = uploadData.filename;
             }
 
-            const payload = {
-                job_id: jobId,
-                clip_index: index,
-                api_key: uploadPostKey,
-                user_id: uploadUserId,
-                platforms: selectedPlatforms,
-                title: postTitle,
-                description: postDescription
-            };
+            let res;
+            
+            if (uploadProvider === 'repliz') {
+                // Repliz: single platform per post
+                const payload = {
+                    job_id: jobId,
+                    clip_index: index,
+                    access_key: replizAccessKey,
+                    secret_key: replizSecretKey,
+                    account_id: selectedReplizAccount,
+                    platform: selectedReplizPlatform,
+                    title: postTitle,
+                    description: postDescription
+                };
 
-            if (editedVideoFilename) {
-                payload.edited_video_filename = editedVideoFilename;
+                if (editedVideoFilename) {
+                    payload.edited_video_filename = editedVideoFilename;
+                }
+
+                if (isScheduling && scheduleDate) {
+                    payload.scheduled_date = new Date(scheduleDate).toISOString();
+                }
+
+                res = await fetch(getApiUrl('/api/social/post-repliz'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+            } else {
+                // Upload-Post: multi-platform
+                const selectedPlatforms = Object.keys(platforms).filter(k => platforms[k]);
+                if (selectedPlatforms.length === 0) {
+                    setPostResult({ success: false, msg: "Select at least one platform." });
+                    setPosting(false);
+                    return;
+                }
+
+                const payload = {
+                    job_id: jobId,
+                    clip_index: index,
+                    api_key: uploadPostKey,
+                    user_id: uploadUserId,
+                    platforms: selectedPlatforms,
+                    title: postTitle,
+                    description: postDescription
+                };
+
+                if (editedVideoFilename) {
+                    payload.edited_video_filename = editedVideoFilename;
+                }
+
+                if (isScheduling && scheduleDate) {
+                    payload.scheduled_date = new Date(scheduleDate).toISOString();
+                    payload.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                }
+
+                res = await fetch(getApiUrl('/api/social/post'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
             }
-
-            if (isScheduling && scheduleDate) {
-                // Convert to ISO-8601
-                payload.scheduled_date = new Date(scheduleDate).toISOString();
-                // Optional: pass timezone if needed, backend defaults to UTC or we can send user's timezone
-                payload.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-            }
-
-            const res = await fetch(getApiUrl('/api/social/post'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
 
             if (!res.ok) {
                 const errText = await res.text();
@@ -619,11 +666,86 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
 
                         <h3 className="text-lg font-bold text-white mb-4">Post / Schedule</h3>
 
-                        {!uploadPostKey && (
+                        {/* Upload Provider Selector */}
+                        <div className="mb-4">
+                            <label className="block text-xs font-bold text-zinc-400 mb-2">Upload Provider</label>
+                            <div className="grid grid-cols-2 gap-2">
+                                <button
+                                    onClick={() => setUploadProvider('upload-post')}
+                                    className={`p-3 rounded-lg border text-xs font-medium transition-all ${uploadProvider === 'upload-post'
+                                        ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                                        : 'bg-white/5 border-white/10 text-zinc-400 hover:bg-white/10'}`}
+                                >
+                                    <div className="font-bold">Upload-Post</div>
+                                    <div className="text-[10px] mt-1 opacity-70">Multi-platform</div>
+                                </button>
+                                <button
+                                    onClick={() => setUploadProvider('repliz')}
+                                    className={`p-3 rounded-lg border text-xs font-medium transition-all ${uploadProvider === 'repliz'
+                                        ? 'bg-blue-500/10 border-blue-500/30 text-blue-400'
+                                        : 'bg-white/5 border-white/10 text-zinc-400 hover:bg-white/10'}`}
+                                >
+                                    <div className="font-bold">Repliz</div>
+                                    <div className="text-[10px] mt-1 opacity-70">Single platform</div>
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Provider-specific warnings */}
+                        {uploadProvider === 'upload-post' && !uploadPostKey && (
                             <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/20 text-yellow-200 text-xs rounded-lg flex items-start gap-2">
                                 <AlertCircle size={14} className="mt-0.5 shrink-0" />
-                                <div>Configure API Key in Settings first.</div>
+                                <div>Configure Upload-Post API Key in Settings first.</div>
                             </div>
+                        )}
+                        {uploadProvider === 'repliz' && (!replizAccessKey || !replizSecretKey) && (
+                            <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/20 text-blue-200 text-xs rounded-lg flex items-start gap-2">
+                                <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                                <div>Configure Repliz API credentials in Settings first.</div>
+                            </div>
+                        )}
+
+                        {/* Repliz-specific fields */}
+                        {uploadProvider === 'repliz' && (
+                            <>
+                                <div>
+                                    <label className="block text-xs font-bold text-zinc-400 mb-1">Repliz Account</label>
+                                    <select
+                                        value={selectedReplizAccount}
+                                        onChange={(e) => setSelectedReplizAccount(e.target.value)}
+                                        className="w-full bg-black/40 border border-white/10 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-blue-500/50"
+                                    >
+                                        <option value="">Select an account...</option>
+                                        {replizAccounts?.map(account => (
+                                            <option key={account.id} value={account.id}>
+                                                {account.name} ({account.platform})
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold text-zinc-400 mb-1">Platform</label>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {[
+                                            { id: 'youtube', label: 'YouTube', icon: <Youtube size={14} className="text-red-400" /> },
+                                            { id: 'tiktok', label: 'TikTok', icon: <Video size={14} className="text-cyan-400" /> },
+                                            { id: 'instagram', label: 'Instagram', icon: <Instagram size={14} className="text-pink-400" /> }
+                                        ].map(platform => (
+                                            <button
+                                                key={platform.id}
+                                                onClick={() => setSelectedReplizPlatform(platform.id)}
+                                                className={`p-2 rounded-lg border text-xs font-medium transition-all flex items-center justify-center gap-1 ${selectedReplizPlatform === platform.id
+                                                    ? 'bg-blue-500/10 border-blue-500/30 text-blue-400'
+                                                    : 'bg-white/5 border-white/10 text-zinc-400 hover:bg-white/10'}`}
+                                            >
+                                                {platform.icon}
+                                                {platform.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </>
                         )}
 
                         <div className="space-y-4 mb-6">
@@ -678,24 +800,26 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                                 )}
                             </div>
 
-                            {/* Platforms */}
-                            <div>
-                                <label className="block text-xs font-bold text-zinc-400 mb-2">Select Platforms</label>
-                                <div className="grid grid-cols-1 gap-2">
-                                    <label className="flex items-center gap-3 p-3 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10 transition-colors border border-white/5">
-                                        <input type="checkbox" checked={platforms.tiktok} onChange={e => setPlatforms({ ...platforms, tiktok: e.target.checked })} className="w-4 h-4 rounded border-zinc-600 bg-black/50 text-primary focus:ring-primary" />
-                                        <div className="flex items-center gap-2 text-sm text-white"><Video size={16} className="text-cyan-400" /> TikTok</div>
-                                    </label>
-                                    <label className="flex items-center gap-3 p-3 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10 transition-colors border border-white/5">
-                                        <input type="checkbox" checked={platforms.instagram} onChange={e => setPlatforms({ ...platforms, instagram: e.target.checked })} className="w-4 h-4 rounded border-zinc-600 bg-black/50 text-primary focus:ring-primary" />
-                                        <div className="flex items-center gap-2 text-sm text-white"><Instagram size={16} className="text-pink-400" /> Instagram</div>
-                                    </label>
-                                    <label className="flex items-center gap-3 p-3 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10 transition-colors border border-white/5">
-                                        <input type="checkbox" checked={platforms.youtube} onChange={e => setPlatforms({ ...platforms, youtube: e.target.checked })} className="w-4 h-4 rounded border-zinc-600 bg-black/50 text-primary focus:ring-primary" />
-                                        <div className="flex items-center gap-2 text-sm text-white"><Youtube size={16} className="text-red-400" /> YouTube Shorts</div>
-                                    </label>
+                            {/* Platforms (Upload-Post only - multi-platform) */}
+                            {uploadProvider === 'upload-post' && (
+                                <div>
+                                    <label className="block text-xs font-bold text-zinc-400 mb-2">Select Platforms</label>
+                                    <div className="grid grid-cols-1 gap-2">
+                                        <label className="flex items-center gap-3 p-3 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10 transition-colors border border-white/5">
+                                            <input type="checkbox" checked={platforms.tiktok} onChange={e => setPlatforms({ ...platforms, tiktok: e.target.checked })} className="w-4 h-4 rounded border-zinc-600 bg-black/50 text-primary focus:ring-primary" />
+                                            <div className="flex items-center gap-2 text-sm text-white"><Video size={16} className="text-cyan-400" /> TikTok</div>
+                                        </label>
+                                        <label className="flex items-center gap-3 p-3 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10 transition-colors border border-white/5">
+                                            <input type="checkbox" checked={platforms.instagram} onChange={e => setPlatforms({ ...platforms, instagram: e.target.checked })} className="w-4 h-4 rounded border-zinc-600 bg-black/50 text-primary focus:ring-primary" />
+                                            <div className="flex items-center gap-2 text-sm text-white"><Instagram size={16} className="text-pink-400" /> Instagram</div>
+                                        </label>
+                                        <label className="flex items-center gap-3 p-3 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10 transition-colors border border-white/5">
+                                            <input type="checkbox" checked={platforms.youtube} onChange={e => setPlatforms({ ...platforms, youtube: e.target.checked })} className="w-4 h-4 rounded border-zinc-600 bg-black/50 text-primary focus:ring-primary" />
+                                            <div className="flex items-center gap-2 text-sm text-white"><Youtube size={16} className="text-red-400" /> YouTube Shorts</div>
+                                        </label>
+                                    </div>
                                 </div>
-                            </div>
+                            )}
                         </div>
 
                         {postResult && (
@@ -707,7 +831,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
 
                         <button
                             onClick={handlePost}
-                            disabled={posting || !uploadPostKey}
+                            disabled={posting || (uploadProvider === 'upload-post' && !uploadPostKey) || (uploadProvider === 'repliz' && (!replizAccessKey || !replizSecretKey || !selectedReplizAccount))}
                             className="w-full py-3 bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl text-white font-bold transition-all flex items-center justify-center gap-2"
                         >
                             {posting ? <><Loader2 size={16} className="animate-spin" /> {isScheduling ? 'Scheduling...' : 'Publishing...'}</> : <><Share2 size={16} /> {isScheduling ? 'Schedule Post' : 'Publish Now'}</>}

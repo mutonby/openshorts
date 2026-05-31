@@ -92,7 +92,7 @@ function DragDropZone({ label, accept, onFile, file, onClear, icon: Icon }) {
   );
 }
 
-export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUserId }) {
+export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUserId, replizAccessKey, replizSecretKey, replizAccounts }) {
   // Step management
   const [step, setStep] = useState(0);
   const [mode, setMode] = useState(null); // 'video' or 'manual'
@@ -127,6 +127,10 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
   const [selectedThumbnail, setSelectedThumbnail] = useState(null);
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishResult, setPublishResult] = useState(null);
+  
+  // Upload provider selection
+  const [uploadProvider, setUploadProvider] = useState('upload-post');
+  const [selectedReplizAccount, setSelectedReplizAccount] = useState('');
 
   // Background preprocessing state
   const [preprocessSessionId, setPreprocessSessionId] = useState(null);
@@ -366,60 +370,117 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
 
   // --- Publish to YouTube ---
   const handlePublish = async () => {
-    if (!uploadPostKey || !uploadUserId) return alert('Please configure your Upload-Post API key and user in Settings first.');
     const finalTitle = selectedTitle || manualTitle;
     if (!finalTitle) return alert('No title selected.');
     if (!selectedThumbnail) return alert('Please select a thumbnail first.');
     if (!description) return alert('Please generate or write a description first.');
 
+    // Validate based on provider
+    if (uploadProvider === 'upload-post' && (!uploadPostKey || !uploadUserId)) {
+      return alert('Please configure your Upload-Post API key and user in Settings first.');
+    }
+    if (uploadProvider === 'repliz' && (!replizAccessKey || !replizSecretKey || !selectedReplizAccount)) {
+      return alert('Please configure your Repliz API credentials and select an account in Settings first.');
+    }
+
     setIsPublishing(true);
     setPublishResult(null);
     try {
-      const formData = new FormData();
-      formData.append('session_id', sessionId);
-      formData.append('title', finalTitle);
-      formData.append('description', description);
-      formData.append('thumbnail_url', selectedThumbnail);
-      formData.append('api_key', uploadPostKey);
-      formData.append('user_id', uploadUserId);
+      if (uploadProvider === 'repliz') {
+        // Repliz: upload thumbnail and video via Repliz API
+        const formData = new FormData();
+        formData.append('session_id', sessionId);
+        formData.append('title', finalTitle);
+        formData.append('description', description);
+        formData.append('thumbnail_url', selectedThumbnail);
+        formData.append('access_key', replizAccessKey);
+        formData.append('secret_key', replizSecretKey);
+        formData.append('account_id', selectedReplizAccount);
+        formData.append('platform', 'youtube');
 
-      // Submit the publish job — returns immediately with a publish_id
-      const res = await fetch(getApiUrl('/api/thumbnail/publish'), {
-        method: 'POST',
-        body: formData
-      });
+        const res = await fetch(getApiUrl('/api/thumbnail/publish-repliz'), {
+          method: 'POST',
+          body: formData
+        });
 
-      if (!res.ok) {
-        const err = await res.text();
-        throw new Error(err);
-      }
+        if (!res.ok) {
+          const err = await res.text();
+          throw new Error(err);
+        }
 
-      const { publish_id } = await res.json();
+        const { publish_id } = await res.json();
 
-      // Poll for status every 2 seconds (upload can take minutes for large videos)
-      await new Promise((resolve, reject) => {
-        const interval = setInterval(async () => {
-          try {
-            const statusRes = await fetch(getApiUrl(`/api/thumbnail/publish/status/${publish_id}`));
-            if (!statusRes.ok) { clearInterval(interval); reject(new Error('Status check failed')); return; }
-            const statusData = await statusRes.json();
+        // Poll for status
+        await new Promise((resolve, reject) => {
+          const interval = setInterval(async () => {
+            try {
+              const statusRes = await fetch(getApiUrl(`/api/thumbnail/publish-repliz/status/${publish_id}`));
+              if (!statusRes.ok) { clearInterval(interval); reject(new Error('Status check failed')); return; }
+              const statusData = await statusRes.json();
 
-            if (statusData.status === 'done') {
+              if (statusData.status === 'done') {
+                clearInterval(interval);
+                setPublishResult({ success: true, data: statusData.result });
+                resolve();
+              } else if (statusData.status === 'failed') {
+                clearInterval(interval);
+                reject(new Error(statusData.error || 'Upload failed'));
+              }
+            } catch (e) {
               clearInterval(interval);
-              setPublishResult({ success: true, data: statusData.result });
-              resolve();
-            } else if (statusData.status === 'failed') {
-              clearInterval(interval);
-              reject(new Error(statusData.error || 'Upload failed'));
+              reject(e);
             }
-            // 'uploading' → keep polling
-          } catch (e) {
-            clearInterval(interval);
-            reject(e);
-          }
-        }, 2000);
-      });
+          }, 2000);
+          setTimeout(() => { clearInterval(interval); reject(new Error('Timeout')); }, 300000);
+        });
+      } else {
+        // Upload-Post: existing flow
+        const formData = new FormData();
+        formData.append('session_id', sessionId);
+        formData.append('title', finalTitle);
+        formData.append('description', description);
+        formData.append('thumbnail_url', selectedThumbnail);
+        formData.append('api_key', uploadPostKey);
+        formData.append('user_id', uploadUserId);
 
+        // Submit the publish job — returns immediately with a publish_id
+        const res = await fetch(getApiUrl('/api/thumbnail/publish'), {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!res.ok) {
+          const err = await res.text();
+          throw new Error(err);
+        }
+
+        const { publish_id } = await res.json();
+
+        // Poll for status every 2 seconds (upload can take minutes for large videos)
+        await new Promise((resolve, reject) => {
+          const interval = setInterval(async () => {
+            try {
+              const statusRes = await fetch(getApiUrl(`/api/thumbnail/publish/status/${publish_id}`));
+              if (!statusRes.ok) { clearInterval(interval); reject(new Error('Status check failed')); return; }
+              const statusData = await statusRes.json();
+
+              if (statusData.status === 'done') {
+                clearInterval(interval);
+                setPublishResult({ success: true, data: statusData.result });
+                resolve();
+              } else if (statusData.status === 'failed') {
+                clearInterval(interval);
+                reject(new Error(statusData.error || 'Upload failed'));
+              }
+              // 'uploading' → keep polling
+            } catch (e) {
+              clearInterval(interval);
+              reject(e);
+            }
+          }, 2000);
+          setTimeout(() => { clearInterval(interval); reject(new Error('Timeout')); }, 300000);
+        });
+      }
     } catch (e) {
       setPublishResult({ success: false, error: e.message });
     } finally {
@@ -1057,8 +1118,54 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                 />
               </div>
 
-              {/* Publish Button */}
-              {(!uploadPostKey || !uploadUserId) ? (
+              {/* Upload Provider Selector */}
+              <div className="glass-panel p-4 space-y-3">
+                <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                  <Send size={14} /> Publish Provider
+                </h3>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setUploadProvider('upload-post')}
+                    className={`p-3 rounded-lg border text-xs font-medium transition-all ${uploadProvider === 'upload-post'
+                      ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                      : 'bg-white/5 border-white/10 text-zinc-400 hover:bg-white/10'}`}
+                  >
+                    <div className="font-bold">Upload-Post</div>
+                    <div className="text-[10px] mt-1 opacity-70">Multi-platform</div>
+                  </button>
+                  <button
+                    onClick={() => setUploadProvider('repliz')}
+                    className={`p-3 rounded-lg border text-xs font-medium transition-all ${uploadProvider === 'repliz'
+                      ? 'bg-blue-500/10 border-blue-500/30 text-blue-400'
+                      : 'bg-white/5 border-white/10 text-zinc-400 hover:bg-white/10'}`}
+                  >
+                    <div className="font-bold">Repliz</div>
+                    <div className="text-[10px] mt-1 opacity-70">Single platform</div>
+                  </button>
+                </div>
+
+                {/* Repliz account selector */}
+                {uploadProvider === 'repliz' && (
+                  <div className="mt-2">
+                    <label className="block text-xs font-bold text-zinc-400 mb-1">Repliz Account</label>
+                    <select
+                      value={selectedReplizAccount}
+                      onChange={(e) => setSelectedReplizAccount(e.target.value)}
+                      className="w-full bg-black/40 border border-white/10 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-blue-500/50"
+                    >
+                      <option value="">Select an account...</option>
+                      {replizAccounts?.map(account => (
+                        <option key={account.id} value={account.id}>
+                          {account.name} ({account.platform})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              {/* Provider-specific warnings */}
+              {uploadProvider === 'upload-post' && (!uploadPostKey || !uploadUserId) && (
                 <div className="glass-panel p-6 space-y-3">
                   <div className="flex items-center gap-2 text-amber-400">
                     <AlertCircle size={16} />
@@ -1074,7 +1181,27 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                     <Settings size={12} /> Go to Settings
                   </button>
                 </div>
-              ) : (
+              )}
+              {uploadProvider === 'repliz' && (!replizAccessKey || !replizSecretKey) && (
+                <div className="glass-panel p-6 space-y-3">
+                  <div className="flex items-center gap-2 text-blue-400">
+                    <AlertCircle size={16} />
+                    <span className="text-sm font-medium">Repliz Not Configured</span>
+                  </div>
+                  <p className="text-xs text-zinc-500">
+                    To publish via Repliz, configure your Repliz API credentials in Settings.
+                  </p>
+                  <button
+                    onClick={() => { }}
+                    className="text-xs text-primary hover:underline flex items-center gap-1"
+                  >
+                    <Settings size={12} /> Go to Settings
+                  </button>
+                </div>
+              )}
+
+              {/* Publish Button */}
+              {((uploadProvider === 'upload-post' && uploadPostKey && uploadUserId) || (uploadProvider === 'repliz' && replizAccessKey && replizSecretKey && selectedReplizAccount)) && (
                 <button
                   onClick={handlePublish}
                   disabled={isPublishing}

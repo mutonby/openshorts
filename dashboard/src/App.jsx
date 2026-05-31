@@ -169,6 +169,20 @@ function App() {
 
   const [uploadUserId, setUploadUserId] = useState(() => localStorage.getItem('uploadUserId') || '');
   const [userProfiles, setUserProfiles] = useState([]); // List of {username, connected: []}
+  
+  // Repliz API State - Load encrypted
+  const [replizAccessKey, setReplizAccessKey] = useState(() => {
+    const stored = localStorage.getItem('replizAccessKey_v1');
+    if (stored) return decrypt(stored);
+    return '';
+  });
+  const [replizSecretKey, setReplizSecretKey] = useState(() => {
+    const stored = localStorage.getItem('replizSecretKey_v1');
+    if (stored) return decrypt(stored);
+    return '';
+  });
+  const [replizAccounts, setReplizAccounts] = useState([]);
+  
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [jobId, setJobId] = useState(null);
   const [status, setStatus] = useState('idle'); // idle, processing, complete, error
@@ -258,6 +272,21 @@ function App() {
   }, [uploadPostKey, uploadUserId]);
 
   useEffect(() => {
+    if (replizAccessKey) {
+      localStorage.setItem('replizAccessKey_v1', encrypt(replizAccessKey));
+    }
+    if (replizSecretKey) {
+      localStorage.setItem('replizSecretKey_v1', encrypt(replizSecretKey));
+    }
+  }, [replizAccessKey, replizSecretKey]);
+
+  useEffect(() => {
+    if (replizAccessKey && replizSecretKey && replizAccounts.length === 0) {
+      fetchReplizAccounts();
+    }
+  }, [replizAccessKey, replizSecretKey]);
+
+  useEffect(() => {
     if (elevenLabsKey) {
       localStorage.setItem('elevenLabsKey_v1', encrypt(elevenLabsKey));
     }
@@ -339,6 +368,23 @@ function App() {
     } catch (e) {
       alert("Error fetching User Profiles. Please check key.");
       console.error(e);
+    }
+  };
+
+  const fetchReplizAccounts = async () => {
+    if (!replizAccessKey || !replizSecretKey) return;
+    try {
+      const res = await fetch(getApiUrl(`/api/repliz/accounts?access_key=${encodeURIComponent(replizAccessKey)}&secret_key=${encodeURIComponent(replizSecretKey)}`));
+      if (!res.ok) throw new Error("Failed to fetch");
+      const data = await res.json();
+      if (data.accounts && data.accounts.length > 0) {
+        setReplizAccounts(data.accounts);
+      } else {
+        setReplizAccounts([]);
+      }
+    } catch (e) {
+      console.error("Error fetching Repliz accounts:", e);
+      setReplizAccounts([]);
     }
   };
 
@@ -649,6 +695,80 @@ function App() {
                 </div>
               </div>
 
+              <div className={`glass-panel p-6 mt-8 ${!replizAccessKey || !replizSecretKey ? 'border-blue-500/30 ring-1 ring-blue-500/20' : ''}`}>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-semibold">Repliz API</h2>
+                  <span className="text-[10px] bg-blue-500/10 border border-blue-500/30 px-2 py-0.5 rounded text-blue-400 uppercase tracking-wider">Alternative</span>
+                </div>
+                <p className="text-xs text-zinc-500 mb-6 leading-relaxed">
+                  Alternative social media posting via <strong>Repliz</strong>. Supports YouTube, TikTok, Instagram, Facebook, LinkedIn, and Threads.
+                  Requires Gold+ tier for full functionality.
+                </p>
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm text-zinc-400 mb-2">Access Key</label>
+                      <input
+                        type="password"
+                        value={replizAccessKey}
+                        onChange={(e) => setReplizAccessKey(e.target.value)}
+                        className="input-field"
+                        placeholder="Your Access Key"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-zinc-400 mb-2">Secret Key</label>
+                      <input
+                        type="password"
+                        value={replizSecretKey}
+                        onChange={(e) => setReplizSecretKey(e.target.value)}
+                        className="input-field"
+                        placeholder="Your Secret Key"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    onClick={fetchReplizAccounts}
+                    className="btn-primary py-2 px-4 text-sm w-full"
+                    disabled={!replizAccessKey || !replizSecretKey}
+                  >
+                    Connect & Fetch Accounts
+                  </button>
+                  
+                  {replizAccounts.length > 0 && (
+                    <div className="mt-4 p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
+                      <p className="text-xs text-green-400 font-medium mb-2">Connected Accounts:</p>
+                      <div className="space-y-1">
+                        {replizAccounts.map((acc, i) => (
+                          <div key={i} className="flex items-center gap-2 text-xs text-zinc-300">
+                            <span className="w-2 h-2 rounded-full bg-green-400"></span>
+                            {acc.platform} - {acc.username}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  <p className="text-xs text-zinc-500 leading-relaxed">
+                    Get your API keys from Repliz dashboard.
+                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <a href="https://repliz.com" target="_blank" rel="noopener noreferrer" className="p-2 border border-white/5 rounded-lg hover:bg-white/5 transition-colors flex flex-col gap-1">
+                        <span className="text-zinc-400 font-medium">1. Repliz Website</span>
+                        <span className="text-[10px] text-zinc-600">Visit repliz.com</span>
+                      </a>
+                      <a href="https://api.repliz.com/public" target="_blank" rel="noopener noreferrer" className="p-2 border border-white/5 rounded-lg hover:bg-white/5 transition-colors flex flex-col gap-1">
+                        <span className="text-zinc-400 font-medium">2. API Docs</span>
+                        <span className="text-[10px] text-zinc-600">View documentation</span>
+                      </a>
+                    </div>
+                    <br />
+                    <span className="text-zinc-600 italic">
+                      Keys are only stored in your browser. They are sent to the backend only to process your request, never stored server-side.
+                    </span>
+                  </p>
+                </div>
+              </div>
+
               <div className="glass-panel p-6 mt-8">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-lg font-semibold">Video Translation</h2>
@@ -814,7 +934,7 @@ function App() {
 
           {/* View: SaaS Shorts */}
           {activeTab === 'saasshorts' && (
-            <SaaShortsTab geminiApiKey={apiKey} elevenLabsKey={elevenLabsKey} falKey={falKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} />
+            <SaaShortsTab geminiApiKey={apiKey} elevenLabsKey={elevenLabsKey} falKey={falKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} replizAccessKey={replizAccessKey} replizSecretKey={replizSecretKey} replizAccounts={replizAccounts} />
           )}
 
           {/* View: AI Agent */}
@@ -940,7 +1060,7 @@ function App() {
 
           {/* View: Thumbnails */}
           {activeTab === 'thumbnails' && (
-            <ThumbnailStudio geminiApiKey={apiKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} />
+            <ThumbnailStudio geminiApiKey={apiKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} replizAccessKey={replizAccessKey} replizSecretKey={replizSecretKey} replizAccounts={replizAccounts} />
           )}
 
           {/* View: Gallery */}
@@ -1065,6 +1185,9 @@ function App() {
                           jobId={jobId}
                           uploadPostKey={uploadPostKey}
                           uploadUserId={uploadUserId}
+                          replizAccessKey={replizAccessKey}
+                          replizSecretKey={replizSecretKey}
+                          replizAccounts={replizAccounts}
                           geminiApiKey={apiKey}
                           elevenLabsKey={elevenLabsKey}
                           onPlay={(time) => handleClipPlay(time)}

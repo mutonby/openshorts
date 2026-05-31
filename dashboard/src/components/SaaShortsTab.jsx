@@ -34,7 +34,7 @@ function saveCache(url, analysis, webResearch, scripts) {
   } catch { /* localStorage full */ }
 }
 
-export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uploadPostKey, uploadUserId }) {
+export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uploadPostKey, uploadUserId, replizAccessKey, replizSecretKey, replizAccounts }) {
   // Wizard state
   const [step, setStep] = useState(() => {
     const cache = loadCache();
@@ -86,6 +86,11 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   const [publishPlatforms, setPublishPlatforms] = useState({ tiktok: true, instagram: true, youtube: true });
   const [isScheduling, setIsScheduling] = useState(false);
   const [scheduleDate, setScheduleDate] = useState('');
+  
+  // Upload provider selection
+  const [uploadProvider, setUploadProvider] = useState('upload-post'); // 'upload-post' or 'repliz'
+  const [selectedReplizAccount, setSelectedReplizAccount] = useState('');
+  const [selectedReplizPlatform, setSelectedReplizPlatform] = useState('youtube');
 
   // UI
   const [copied, setCopied] = useState('');
@@ -1401,104 +1406,200 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                       <Share2 size={14} /> Publish to Social Media
                     </h3>
 
-                    {!uploadPostKey ? (
-                      <p className="text-xs text-zinc-500">Set your Upload-Post API key in Settings to enable publishing.</p>
-                    ) : (
+                    {/* Upload Provider Selector */}
+                    <div className="grid grid-cols-2 gap-2 mb-3">
+                      <button
+                        onClick={() => setUploadProvider('upload-post')}
+                        className={`p-2 rounded-lg border text-xs font-medium transition-all ${uploadProvider === 'upload-post'
+                          ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                          : 'bg-white/5 border-white/10 text-zinc-400 hover:bg-white/10'}`}
+                      >
+                        <div className="font-bold">Upload-Post</div>
+                        <div className="text-[10px] mt-0.5 opacity-70">Multi-platform</div>
+                      </button>
+                      <button
+                        onClick={() => setUploadProvider('repliz')}
+                        className={`p-2 rounded-lg border text-xs font-medium transition-all ${uploadProvider === 'repliz'
+                          ? 'bg-blue-500/10 border-blue-500/30 text-blue-400'
+                          : 'bg-white/5 border-white/10 text-zinc-400 hover:bg-white/10'}`}
+                      >
+                        <div className="font-bold">Repliz</div>
+                        <div className="text-[10px] mt-0.5 opacity-70">Single platform</div>
+                      </button>
+                    </div>
+
+                    {/* Provider-specific warnings */}
+                    {uploadProvider === 'upload-post' && !uploadPostKey && (
+                      <p className="text-xs text-yellow-400">Set your Upload-Post API key in Settings to enable publishing.</p>
+                    )}
+                    {uploadProvider === 'repliz' && (!replizAccessKey || !replizSecretKey) && (
+                      <p className="text-xs text-blue-400">Set your Repliz API credentials in Settings to enable publishing.</p>
+                    )}
+
+                    {/* Repliz-specific fields */}
+                    {uploadProvider === 'repliz' && (
                       <>
-                        {/* Platform checkboxes */}
-                        <div className="flex gap-4">
-                          {[
-                            { id: 'tiktok', label: 'TikTok', icon: '🎵' },
-                            { id: 'instagram', label: 'Instagram', icon: '📸' },
-                            { id: 'youtube', label: 'YouTube', icon: '▶️' },
-                          ].map((p) => (
-                            <label key={p.id} className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={publishPlatforms[p.id]}
-                                onChange={(e) => setPublishPlatforms({ ...publishPlatforms, [p.id]: e.target.checked })}
-                                className="w-3.5 h-3.5 rounded border-zinc-600 bg-black/50 text-violet-500 focus:ring-violet-500"
-                              />
-                              <span>{p.icon}</span> {p.label}
-                            </label>
-                          ))}
+                        <div>
+                          <label className="block text-xs font-bold text-zinc-400 mb-1">Repliz Account</label>
+                          <select
+                            value={selectedReplizAccount}
+                            onChange={(e) => setSelectedReplizAccount(e.target.value)}
+                            className="w-full bg-black/40 border border-white/10 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-blue-500/50"
+                          >
+                            <option value="">Select an account...</option>
+                            {replizAccounts?.map(account => (
+                              <option key={account.id} value={account.id}>
+                                {account.name} ({account.platform})
+                              </option>
+                            ))}
+                          </select>
                         </div>
 
-                        {/* Schedule toggle */}
-                        <div className="flex items-center gap-3">
-                          <label className="flex items-center gap-2 text-xs text-zinc-400 cursor-pointer">
+                        <div>
+                          <label className="block text-xs font-bold text-zinc-400 mb-1">Platform</label>
+                          <div className="grid grid-cols-3 gap-2">
+                            {[
+                              { id: 'youtube', label: 'YouTube', icon: '▶️' },
+                              { id: 'tiktok', label: 'TikTok', icon: '🎵' },
+                              { id: 'instagram', label: 'Instagram', icon: '📸' },
+                            ].map((p) => (
+                              <button
+                                key={p.id}
+                                onClick={() => setSelectedReplizPlatform(p.id)}
+                                className={`p-2 rounded-lg border text-xs font-medium transition-all flex items-center justify-center gap-1 ${selectedReplizPlatform === p.id
+                                  ? 'bg-blue-500/10 border-blue-500/30 text-blue-400'
+                                  : 'bg-white/5 border-white/10 text-zinc-400 hover:bg-white/10'}`}
+                              >
+                                <span>{p.icon}</span> {p.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    {/* Upload-Post: Platform checkboxes */}
+                    {uploadProvider === 'upload-post' && (
+                      <div className="flex gap-4">
+                        {[
+                          { id: 'tiktok', label: 'TikTok', icon: '🎵' },
+                          { id: 'instagram', label: 'Instagram', icon: '📸' },
+                          { id: 'youtube', label: 'YouTube', icon: '▶️' },
+                        ].map((p) => (
+                          <label key={p.id} className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
                             <input
                               type="checkbox"
-                              checked={isScheduling}
-                              onChange={(e) => setIsScheduling(e.target.checked)}
+                              checked={publishPlatforms[p.id]}
+                              onChange={(e) => setPublishPlatforms({ ...publishPlatforms, [p.id]: e.target.checked })}
                               className="w-3.5 h-3.5 rounded border-zinc-600 bg-black/50 text-violet-500 focus:ring-violet-500"
                             />
-                            <Calendar size={12} /> Schedule
+                            <span>{p.icon}</span> {p.label}
                           </label>
-                          {isScheduling && (
-                            <input
-                              type="datetime-local"
-                              value={scheduleDate}
-                              onChange={(e) => setScheduleDate(e.target.value)}
-                              className="input-field text-xs py-1 px-2 w-auto"
-                            />
-                          )}
-                        </div>
+                        ))}
+                      </div>
+                    )}
 
-                        {/* Publish button */}
-                        <button
-                          onClick={async () => {
-                            const selected = Object.keys(publishPlatforms).filter(k => publishPlatforms[k]);
-                            if (selected.length === 0) { setPublishResult({ ok: false, msg: 'Select at least one platform' }); return; }
-                            if (isScheduling && !scheduleDate) { setPublishResult({ ok: false, msg: 'Select a date' }); return; }
+                    {/* Schedule toggle */}
+                    <div className="flex items-center gap-3">
+                      <label className="flex items-center gap-2 text-xs text-zinc-400 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={isScheduling}
+                          onChange={(e) => setIsScheduling(e.target.checked)}
+                          className="w-3.5 h-3.5 rounded border-zinc-600 bg-black/50 text-violet-500 focus:ring-violet-500"
+                        />
+                        <Calendar size={12} /> Schedule
+                      </label>
+                      {isScheduling && (
+                        <input
+                          type="datetime-local"
+                          value={scheduleDate}
+                          onChange={(e) => setScheduleDate(e.target.value)}
+                          className="input-field text-xs py-1 px-2 w-auto"
+                        />
+                      )}
+                    </div>
 
-                            setPublishing(true);
-                            setPublishResult(null);
-                            try {
-                              const payload = {
-                                job_id: jobId,
-                                api_key: uploadPostKey,
-                                user_id: uploadUserId,
-                                platforms: selected,
-                                title: genResult.script?.title,
-                                description: genResult.script?.caption || genResult.script?.full_narration,
-                              };
-                              if (isScheduling && scheduleDate) {
-                                payload.scheduled_date = new Date(scheduleDate).toISOString();
-                                payload.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-                              }
-                              const res = await fetch(getApiUrl('/api/saasshorts/post'), {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify(payload),
-                              });
-                              if (!res.ok) {
-                                const err = await res.json().catch(() => ({ detail: 'Failed' }));
-                                throw new Error(err.detail || 'Failed');
-                              }
-                              setPublishResult({ ok: true, msg: isScheduling ? 'Scheduled!' : 'Published!' });
-                            } catch (e) {
-                              setPublishResult({ ok: false, msg: e.message });
-                            } finally {
-                              setPublishing(false);
+                    {/* Publish button */}
+                    <button
+                      onClick={async () => {
+                        // Validate based on provider
+                        if (uploadProvider === 'upload-post') {
+                          const selected = Object.keys(publishPlatforms).filter(k => publishPlatforms[k]);
+                          if (selected.length === 0) { setPublishResult({ ok: false, msg: 'Select at least one platform' }); return; }
+                        } else if (uploadProvider === 'repliz') {
+                          if (!selectedReplizAccount) { setPublishResult({ ok: false, msg: 'Select a Repliz account' }); return; }
+                        }
+                        if (isScheduling && !scheduleDate) { setPublishResult({ ok: false, msg: 'Select a date' }); return; }
+
+                        setPublishing(true);
+                        setPublishResult(null);
+                        try {
+                          if (uploadProvider === 'repliz') {
+                            // Repliz: single platform
+                            const payload = {
+                              job_id: jobId,
+                              access_key: replizAccessKey,
+                              secret_key: replizSecretKey,
+                              account_id: selectedReplizAccount,
+                              platform: selectedReplizPlatform,
+                              title: genResult.script?.title,
+                              description: genResult.script?.caption || genResult.script?.full_narration,
+                            };
+                            if (isScheduling && scheduleDate) {
+                              payload.scheduled_date = new Date(scheduleDate).toISOString();
                             }
-                          }}
-                          disabled={publishing}
-                          className="w-full btn-primary py-2 text-sm flex items-center justify-center gap-2 disabled:opacity-50"
-                        >
-                          {publishing ? (
-                            <><Loader2 size={14} className="animate-spin" /> {isScheduling ? 'Scheduling...' : 'Publishing...'}</>
-                          ) : (
-                            <><Share2 size={14} /> {isScheduling ? 'Schedule Post' : 'Publish Now'}</>
-                          )}
-                        </button>
+                            const res = await fetch(getApiUrl('/api/saasshorts/post-repliz'), {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify(payload),
+                            });
+                          } else {
+                            // Upload-Post: multi-platform
+                            const selected = Object.keys(publishPlatforms).filter(k => publishPlatforms[k]);
+                            const payload = {
+                              job_id: jobId,
+                              api_key: uploadPostKey,
+                              user_id: uploadUserId,
+                              platforms: selected,
+                              title: genResult.script?.title,
+                              description: genResult.script?.caption || genResult.script?.full_narration,
+                            };
+                            if (isScheduling && scheduleDate) {
+                              payload.scheduled_date = new Date(scheduleDate).toISOString();
+                              payload.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                            }
+                            const res = await fetch(getApiUrl('/api/saasshorts/post'), {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify(payload),
+                            });
+                          }
+                          if (!res.ok) {
+                            const err = await res.json().catch(() => ({ detail: 'Failed' }));
+                            throw new Error(err.detail || 'Failed');
+                          }
+                          setPublishResult({ ok: true, msg: isScheduling ? 'Scheduled!' : 'Published!' });
+                        } catch (e) {
+                          setPublishResult({ ok: false, msg: e.message });
+                        } finally {
+                          setPublishing(false);
+                        }
+                      }}
+                      disabled={publishing || (uploadProvider === 'upload-post' && !uploadPostKey) || (uploadProvider === 'repliz' && (!replizAccessKey || !replizSecretKey || !selectedReplizAccount))}
+                      className="w-full btn-primary py-2 text-sm flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {publishing ? (
+                        <><Loader2 size={14} className="animate-spin" /> {isScheduling ? 'Scheduling...' : 'Publishing...'}</>
+                      ) : (
+                        <><Share2 size={14} /> {isScheduling ? 'Schedule Post' : 'Publish Now'}</>
+                      )}
+                    </button>
 
-                        {publishResult && (
-                          <p className={`text-xs ${publishResult.ok ? 'text-green-400' : 'text-red-400'}`}>
-                            {publishResult.msg}
-                          </p>
-                        )}
-                      </>
+                    {publishResult && (
+                      <p className={`text-xs ${publishResult.ok ? 'text-green-400' : 'text-red-400'}`}>
+                        {publishResult.msg}
+                      </p>
                     )}
                   </div>
                 </div>

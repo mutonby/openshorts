@@ -1243,6 +1243,251 @@ async def get_social_user(api_key: str = Header(..., alias="X-Upload-Post-Key"))
         except Exception as e:
              raise HTTPException(status_code=500, detail=str(e))
 
+# --- Repliz API Endpoints ---
+
+class ReplizPostRequest(BaseModel):
+   job_id: str
+   clip_index: int
+   access_key: str       # Repliz Access Key
+   secret_key: str       # Repliz Secret Key
+   account_id: str       # Connected account ID on Repliz
+   platform: str         # youtube, tiktok, instagram, facebook, linkedin, threads
+   title: Optional[str] = None
+   description: Optional[str] = None
+   scheduled_date: Optional[str] = None
+   edited_video_filename: Optional[str] = None
+
+
+class SaaSReplizPostRequest(BaseModel):
+   job_id: str
+   access_key: str
+   secret_key: str
+   account_id: str
+   platform: str
+   title: Optional[str] = None
+   description: Optional[str] = None
+   scheduled_date: Optional[str] = None
+
+
+@app.get("/api/repliz/accounts")
+async def get_repliz_accounts(access_key: str, secret_key: str):
+   """Get connected accounts from Repliz API."""
+   if not access_key or not secret_key:
+       raise HTTPException(status_code=400, detail="Missing Repliz credentials")
+   
+   import base64
+   credentials = base64.b64encode(f"{access_key}:{secret_key}".encode()).decode()
+   headers = {"Authorization": f"Basic {credentials}"}
+   
+   async with httpx.AsyncClient(timeout=30.0) as client:
+       try:
+           # Fetch accounts from Repliz (requires page and limit params)
+           resp = await client.get("https://api.repliz.com/public/account", headers=headers, params={"page": 1, "limit": 100})
+           if resp.status_code != 200:
+               print(f"❌ Repliz Accounts Fetch Error: {resp.text}")
+               raise HTTPException(status_code=resp.status_code, detail=f"Failed to fetch accounts: {resp.text}")
+           
+           data = resp.json()
+           
+           # Parse and return account list
+           accounts = []
+           raw_accounts = []
+           
+           if isinstance(data, list):
+               raw_accounts = data
+           elif isinstance(data, dict):
+               # Repliz uses 'docs' for paginated responses
+               raw_accounts = data.get('docs', [])
+               # Fallback to other common keys
+               if not raw_accounts:
+                   raw_accounts = (
+                       data.get('data', []) or
+                       data.get('accounts', []) or
+                       data.get('result', []) or
+                       data.get('items', []) or
+                       []
+                   )
+           
+           if isinstance(raw_accounts, list):
+               for acc in raw_accounts:
+                   if isinstance(acc, dict):
+                       accounts.append({
+                           "id": acc.get("id", acc.get("_id", "")),
+                           "platform": acc.get("type", acc.get("platform", "")),
+                           "username": acc.get("username", acc.get("name", "")),
+                           "name": acc.get("name", ""),
+                           "picture": acc.get("picture", ""),
+                           "status": "connected" if acc.get("isConnected", True) else "disconnected"
+                       })
+           
+           return {"accounts": accounts}
+           
+       except HTTPException:
+           raise
+       except Exception as e:
+           raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/social/post-repliz")
+async def post_to_socials_repliz(req: ReplizPostRequest):
+    """Post a clip to social media via Repliz API."""
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs[req.job_id]
+    if 'result' not in job or 'clips' not in job['result']:
+        raise HTTPException(status_code=400, detail="Job result not available")
+
+    try:
+        clip = job['result']['clips'][req.clip_index]
+
+        # Use edited video if provided, otherwise fall back to original
+        if req.edited_video_filename:
+            filename = req.edited_video_filename
+            file_path = os.path.join(OUTPUT_DIR, req.job_id, "edited_videos", filename)
+        else:
+            filename = clip['video_url'].split('/')[-1]
+            file_path = os.path.join(OUTPUT_DIR, req.job_id, filename)
+
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail=f"Video file not found: {file_path}")
+
+        # Construct parameters for Repliz API
+        final_title = req.title or clip.get('title', 'Viral Short')
+        final_description = req.description or clip.get('video_description_for_instagram') or clip.get('video_description_for_tiktok') or "Check this out!"
+
+        # Repliz uses Basic Auth
+        import base64
+        credentials = base64.b64encode(f"{req.access_key}:{req.secret_key}".encode()).decode()
+        headers = {"Authorization": f"Basic {credentials}", "Content-Type": "application/json"}
+
+        # Upload video to S3 first, then send URL to Repliz
+        from s3_uploader import upload_video_to_s3_for_repliz
+        print(f"📤 [Repliz] Uploading video to S3...")
+        video_url = upload_video_to_s3_for_repliz(file_path)
+        if not video_url:
+            raise HTTPException(status_code=500, detail="Failed to upload video to S3. Please check your AWS configuration.")
+        print(f"✅ [Repliz] Video uploaded to S3: {video_url}")
+
+        # Prepare JSON payload for Repliz
+        url = "https://api.repliz.com/public/schedule"
+
+        data_payload = {
+            "title": final_title,
+            "description": final_description,
+            "type": "video",
+            "accountId": req.account_id,
+            "platform": req.platform,
+            "medias": [
+                {
+                    "alt": "",
+                    "customThumbnail": False,
+                    "type": "video",
+                    "url": video_url
+                }
+            ],
+        }
+
+        # Add scheduling if present
+        if req.scheduled_date:
+            data_payload["scheduleAt"] = req.scheduled_date
+
+        # Use synchronous client for JSON upload
+        with httpx.Client(timeout=300.0) as client:
+            print(f"📡 [Repliz] Sending to {req.platform} via Repliz API...")
+            response = client.post(url, headers=headers, json=data_payload)
+
+        if response.status_code not in [200, 201, 202]:
+            print(f"❌ Repliz Error: {response.text}")
+            raise HTTPException(status_code=response.status_code, detail=f"Repliz API Error: {response.text}")
+
+        print(f"✅ [Repliz] Posted successfully to {req.platform}")
+        return response.json()
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Repliz Post Exception: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/saasshorts/post-repliz")
+async def saasshorts_post_repliz(req: SaaSReplizPostRequest):
+    """Post an AI Shorts video to social media via Repliz API."""
+    if req.job_id not in saas_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = saas_jobs[req.job_id]
+    result = job.get("result")
+    if not result or not result.get("video_url"):
+        raise HTTPException(status_code=400, detail="No video available for this job")
+
+    try:
+        # Resolve video file path
+        video_url = result["video_url"]
+        rel_path = video_url.replace("/videos/", "")
+        file_path = os.path.join(OUTPUT_DIR, rel_path)
+
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail=f"Video file not found")
+
+        script = result.get("script", {})
+        final_title = req.title or script.get("title", "AI Short")
+        final_description = req.description or script.get("caption", "")
+        if not final_description:
+            final_description = script.get("full_narration", "Check this out!")
+
+        # Repliz uses Basic Auth
+        import base64
+        credentials = base64.b64encode(f"{req.access_key}:{req.secret_key}".encode()).decode()
+        headers = {"Authorization": f"Basic {credentials}", "Content-Type": "application/json"}
+
+        # Upload video to S3 first, then send URL to Repliz
+        from s3_uploader import upload_video_to_s3_for_repliz
+        print(f"📤 [AI Shorts/Repliz] Uploading video to S3...")
+        s3_video_url = upload_video_to_s3_for_repliz(file_path)
+        if not s3_video_url:
+            raise HTTPException(status_code=500, detail="Failed to upload video to S3. Please check your AWS configuration.")
+        print(f"✅ [AI Shorts/Repliz] Video uploaded to S3: {s3_video_url}")
+
+        # Prepare JSON payload for Repliz
+        url = "https://api.repliz.com/public/schedule"
+
+        data_payload = {
+            "title": final_title,
+            "description": final_description,
+            "type": "video",
+            "accountId": req.account_id,
+            "platform": req.platform,
+            "medias": [
+                {
+                    "alt": "",
+                    "customThumbnail": False,
+                    "type": "video",
+                    "url": s3_video_url
+                }
+            ],
+        }
+
+        if req.scheduled_date:
+            data_payload["scheduleAt"] = req.scheduled_date
+
+        with httpx.Client(timeout=300.0) as client:
+            print(f"📡 [AI Shorts/Repliz] Sending to {req.platform}...")
+            response = client.post(url, headers=headers, json=data_payload)
+
+        if response.status_code not in [200, 201, 202]:
+            raise HTTPException(status_code=response.status_code, detail=f"Repliz Error: {response.text}")
+
+        return response.json()
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [AI Shorts/Repliz] Post Exception: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # --- Thumbnail Studio Endpoints ---
 
 @app.post("/api/thumbnail/upload")
@@ -1651,6 +1896,132 @@ async def thumbnail_publish(
 @app.get("/api/thumbnail/publish/status/{publish_id}")
 async def thumbnail_publish_status(publish_id: str):
     """Poll the status of a background publish job."""
+    if publish_id not in publish_jobs:
+        raise HTTPException(status_code=404, detail="Publish job not found")
+    return publish_jobs[publish_id]
+
+
+@app.post("/api/thumbnail/publish-repliz")
+async def thumbnail_publish_repliz(
+    background_tasks: BackgroundTasks,
+    session_id: str = Form(...),
+    title: str = Form(...),
+    description: str = Form(...),
+    thumbnail_url: str = Form(...),
+    access_key: str = Form(...),
+    secret_key: str = Form(...),
+    account_id: str = Form(...),
+    platform: str = Form(...),
+):
+    """Kick off a background upload to YouTube via Repliz API and return immediately."""
+    if session_id not in thumbnail_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = thumbnail_sessions[session_id]
+    video_path = session.get("video_path")
+    if not video_path or not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail="Original video file not found")
+
+    # Resolve thumbnail path from URL
+    thumb_relative = thumbnail_url.lstrip("/")
+    if thumb_relative.startswith("thumbnails/"):
+        thumb_path = os.path.join(OUTPUT_DIR, thumb_relative)
+    else:
+        thumb_path = os.path.join(THUMBNAILS_DIR, thumb_relative)
+
+    if not os.path.exists(thumb_path):
+        raise HTTPException(status_code=404, detail=f"Thumbnail file not found: {thumb_path}")
+
+    # Generate a unique ID for this publish job
+    publish_id = str(uuid.uuid4())
+    publish_jobs[publish_id] = {"status": "uploading", "result": None, "error": None}
+
+    def do_upload():
+        """Runs in a thread via BackgroundTasks — uploads video to S3, then sends JSON to Repliz."""
+        try:
+            import base64
+            credentials = base64.b64encode(f"{access_key}:{secret_key}".encode()).decode()
+            headers = {"Authorization": f"Basic {credentials}", "Content-Type": "application/json"}
+
+            # Upload video to S3 first
+            from s3_uploader import upload_video_to_s3_for_repliz
+            print(f"📤 [Thumbnail/Repliz] Uploading video to S3... (publish_id={publish_id})")
+            s3_video_url = upload_video_to_s3_for_repliz(video_path)
+            if not s3_video_url:
+                err = "Failed to upload video to S3. Please check your AWS configuration."
+                print(f"❌ {err}")
+                publish_jobs[publish_id]["status"] = "failed"
+                publish_jobs[publish_id]["error"] = err
+                return
+            print(f"✅ [Thumbnail/Repliz] Video uploaded to S3: {s3_video_url}")
+
+            # Upload thumbnail to S3
+            from s3_uploader import get_s3_client
+            import uuid as _uuid
+            s3_client = get_s3_client()
+            s3_thumb_url = None
+            if s3_client:
+                bucket_name = os.environ.get('AWS_S3_PUBLIC_BUCKET', 'my-public-bucket')
+                region = os.environ.get('AWS_REGION', 'eu-west-3')
+                thumb_ext = os.path.splitext(thumb_path)[1] or '.jpg'
+                s3_thumb_key = f"repliz/{_uuid.uuid4()[:8]}/thumbnail{thumb_ext}"
+                try:
+                    s3_client.upload_file(
+                        thumb_path, bucket_name, s3_thumb_key,
+                        ExtraArgs={'ContentType': 'image/jpeg'}
+                    )
+                    s3_thumb_url = f"https://{bucket_name}.s3.{region}.amazonaws.com/{s3_thumb_key}"
+                    print(f"✅ [Thumbnail/Repliz] Thumbnail uploaded to S3: {s3_thumb_url}")
+                except Exception as e:
+                    print(f"⚠️ [Thumbnail/Repliz] Thumbnail upload failed, continuing without it: {e}")
+
+            url = "https://api.repliz.com/public/schedule"
+
+            media_item = {
+                "alt": "",
+                "customThumbnail": s3_thumb_url is not None,
+                "type": "video",
+                "url": s3_video_url,
+            }
+            if s3_thumb_url:
+                media_item["thumbnail"] = s3_thumb_url
+
+            data_payload = {
+                "title": title,
+                "description": description,
+                "type": "video",
+                "accountId": account_id,
+                "platform": platform,
+                "medias": [media_item],
+            }
+
+            print(f"📡 [Thumbnail/Repliz] Publishing to {platform}... (publish_id={publish_id})")
+            with httpx.Client(timeout=600.0) as client:
+                response = client.post(url, headers=headers, json=data_payload)
+
+            if response.status_code not in [200, 201, 202]:
+                err = f"Repliz API Error ({response.status_code}): {response.text}"
+                print(f"❌ {err}")
+                publish_jobs[publish_id]["status"] = "failed"
+                publish_jobs[publish_id]["error"] = err
+            else:
+                print(f"✅ [Thumbnail/Repliz] Published successfully (publish_id={publish_id})")
+                publish_jobs[publish_id]["status"] = "done"
+                publish_jobs[publish_id]["result"] = response.json()
+
+        except Exception as e:
+            err = str(e)
+            print(f"❌ Thumbnail Publish Repliz Background Error: {err}")
+            publish_jobs[publish_id]["status"] = "failed"
+            publish_jobs[publish_id]["error"] = err
+
+    background_tasks.add_task(do_upload)
+    return {"publish_id": publish_id, "status": "uploading"}
+
+
+@app.get("/api/thumbnail/publish-repliz/status/{publish_id}")
+async def thumbnail_publish_repliz_status(publish_id: str):
+    """Poll the status of a Repliz background publish job."""
     if publish_id not in publish_jobs:
         raise HTTPException(status_code=404, detail="Publish job not found")
     return publish_jobs[publish_id]
