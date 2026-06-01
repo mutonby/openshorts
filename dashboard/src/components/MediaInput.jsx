@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Youtube, Upload, FileVideo, X } from 'lucide-react';
+import { Youtube, Upload, FileVideo, X, Film, Crop } from 'lucide-react';
 import { getApiUrl } from '../config';
 
 export default function MediaInput({ onProcess, isProcessing }) {
@@ -8,6 +8,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [url, setUrl] = useState('');
     const [file, setFile] = useState(null);
     const [acknowledged, setAcknowledged] = useState(false);
+    const [cropStyle, setCropStyle] = useState('blur_bars'); // 'blur_bars' | 'auto'
 
     useEffect(() => {
         fetch(getApiUrl('/api/config'))
@@ -25,9 +26,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
         e.preventDefault();
         if (!acknowledged) return;
         if (mode === 'url' && url) {
-            onProcess({ type: 'url', payload: url, acknowledged: true });
+            onProcess({ type: 'url', payload: url, acknowledged: true, cropStyle });
         } else if (mode === 'file' && file) {
-            onProcess({ type: 'file', payload: file, acknowledged: true });
+            onProcess({ type: 'file', payload: file, acknowledged: true, cropStyle });
         }
     };
 
@@ -112,6 +113,40 @@ export default function MediaInput({ onProcess, isProcessing }) {
                         )}
                     </div>
                 )}
+
+                <div className="mt-5 p-4 bg-white/5 rounded-xl border border-white/5">
+                    <p className="text-xs text-zinc-500 mb-3 uppercase tracking-wider">Crop Style</p>
+                    <div className="flex gap-2">
+                        <button
+                            type="button"
+                            onClick={() => setCropStyle('blur_bars')}
+                            className={`flex-1 flex items-center gap-2 p-3 rounded-lg text-sm transition-all ${cropStyle === 'blur_bars'
+                                ? 'bg-primary/20 text-primary border border-primary/40'
+                                : 'bg-white/5 text-zinc-400 hover:text-white border border-transparent'
+                                }`}
+                        >
+                            <Film size={16} />
+                            <div className="text-left">
+                                <div className="font-medium">Blur Bars</div>
+                                <div className="text-[10px] opacity-60">Full content, sharp quality</div>
+                            </div>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setCropStyle('auto')}
+                            className={`flex-1 flex items-center gap-2 p-3 rounded-lg text-sm transition-all ${cropStyle === 'auto'
+                                ? 'bg-primary/20 text-primary border border-primary/40'
+                                : 'bg-white/5 text-zinc-400 hover:text-white border border-transparent'
+                                }`}
+                        >
+                            <Crop size={16} />
+                            <div className="text-left">
+                                <div className="font-medium">AI Crop &amp; Track</div>
+                                <div className="text-[10px] opacity-60">Smart cropping, follows speaker</div>
+                            </div>
+                        </button>
+                    </div>
+                </div>
 
                 <label className="flex items-start gap-2 mt-5 text-xs text-zinc-400 cursor-pointer select-none">
                     <input

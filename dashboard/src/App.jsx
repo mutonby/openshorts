@@ -408,7 +408,8 @@ function App() {
           url: data.payload, 
           acknowledged: !!data.acknowledged,
           transcription_method: transcriptionMethod,
-          groq_key: groqKey
+          groq_key: groqKey,
+          crop_style: data.cropStyle || 'blur_bars'
         });
       } else {
         const formData = new FormData();
@@ -416,6 +417,7 @@ function App() {
         formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
         formData.append('transcription_method', transcriptionMethod);
         if (groqKey) formData.append('groq_key', groqKey);
+        formData.append('crop_style', data.cropStyle || 'blur_bars');
         body = formData;
       }
 
