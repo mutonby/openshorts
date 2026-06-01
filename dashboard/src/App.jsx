@@ -1194,6 +1194,7 @@ function App() {
                           elevenLabsKey={elevenLabsKey}
                           onPlay={(time) => handleClipPlay(time)}
                           onPause={handleClipPause}
+                          cropStyle={processingMedia?.cropStyle}
                         />
                       ))}
                     </div>

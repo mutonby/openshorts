@@ -6,7 +6,7 @@ import HookModal from './HookModal';
 import TranslateModal from './TranslateModal';
 import { renderInBrowser } from '../lib/renderInBrowser';
 
-export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, replizAccessKey, replizSecretKey, replizAccounts, geminiApiKey, elevenLabsKey, onPlay, onPause }) {
+export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, replizAccessKey, replizSecretKey, replizAccounts, geminiApiKey, elevenLabsKey, onPlay, onPause, cropStyle }) {
     const [showModal, setShowModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
     const videoRef = React.useRef(null);
@@ -849,6 +849,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                 jobId={jobId}
                 clipIndex={index}
                 existingHook={activeLayers.hook}
+                cropStyle={cropStyle}
             />
 
             <HookModal
@@ -860,6 +861,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                 initialText={clip.viral_hook_text}
                 durationInSeconds={clip.end && clip.start ? clip.end - clip.start : 30}
                 existingSubtitles={activeLayers.subtitles}
+                cropStyle={cropStyle}
             />
 
             <TranslateModal

@@ -28,7 +28,7 @@ const ANIMATION_OPTIONS = [
     { value: 'none', label: 'None' },
 ];
 
-export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessing, videoUrl, jobId, clipIndex, existingHook }) {
+export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessing, videoUrl, jobId, clipIndex, existingHook, cropStyle }) {
     const [position, setPosition] = useState('bottom');
     const [fontSize, setFontSize] = useState(24);
     const [fontName, setFontName] = useState('Verdana');
@@ -172,6 +172,8 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
                                 ${position === 'top' ? 'top-20' : ''}
                                 ${position === 'middle' ? 'top-0 bottom-0' : ''}
                                 ${position === 'bottom' ? 'bottom-20' : ''}
+                                ${position === 'above_blur' ? 'top-[26%]' : ''}
+                                ${position === 'below_blur' ? 'bottom-[26%]' : ''}
                             `}>
                                 <span style={fallbackPreviewStyle}>
                                     This is how your subtitles<br/>will appear on the video
@@ -191,14 +193,17 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
                         {/* Position Selector */}
                         <div>
                             <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2 block">Position</label>
-                            <div className="grid grid-cols-3 gap-2">
-                                {['top', 'middle', 'bottom'].map((pos) => (
+                            <div className={`grid gap-2 ${cropStyle === 'blur_bars' ? 'grid-cols-5' : 'grid-cols-3'}`}>
+                                {(cropStyle === 'blur_bars'
+                                    ? ['above_blur', 'top', 'middle', 'bottom', 'below_blur']
+                                    : ['top', 'middle', 'bottom']
+                                ).map((pos) => (
                                     <button
                                         key={pos}
                                         onClick={() => setPosition(pos)}
                                         className={`p-2 rounded-lg border text-center text-xs font-medium transition-all ${position === pos ? 'bg-primary/20 border-primary text-white' : 'bg-white/5 border-white/5 text-zinc-400 hover:bg-white/10'}`}
                                     >
-                                        {pos.charAt(0).toUpperCase() + pos.slice(1)}
+                                        {pos.replace('_', ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
                                     </button>
                                 ))}
                             </div>

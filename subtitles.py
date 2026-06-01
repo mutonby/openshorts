@@ -16,30 +16,25 @@ def transcribe_audio(video_path):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     compute_type = "float16" if device == "cuda" else "int8"
     print(f"   Using device: {device} ({compute_type})")
-    
+
     model = WhisperModel("large-v3", device=device, compute_type=compute_type)
 
     segments, info = model.transcribe(video_path, word_timestamps=True)
 
-    transcript = {
-        "segments": [],
-        "language": info.language
-    }
+    transcript = {"segments": [], "language": info.language}
 
     for segment in segments:
         seg_data = {
             "start": segment.start,
             "end": segment.end,
             "text": segment.text,
-            "words": []
+            "words": [],
         }
         if segment.words:
             for word in segment.words:
-                seg_data["words"].append({
-                    "word": word.word.strip(),
-                    "start": word.start,
-                    "end": word.end
-                })
+                seg_data["words"].append(
+                    {"word": word.word.strip(), "start": word.start, "end": word.end}
+                )
         transcript["segments"].append(seg_data)
 
     print(f"✅ Transcription complete. Language: {info.language}")
@@ -55,6 +50,7 @@ def generate_srt_from_video(video_path, output_path, max_chars=20, max_duration=
 
     # Get video duration to use as clip_end
     import cv2
+
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -64,69 +60,75 @@ def generate_srt_from_video(video_path, output_path, max_chars=20, max_duration=
     return generate_srt(transcript, 0, duration, output_path, max_chars, max_duration)
 
 
-def generate_srt(transcript, clip_start, clip_end, output_path, max_chars=20, max_duration=2.0):
+def generate_srt(
+    transcript, clip_start, clip_end, output_path, max_chars=20, max_duration=2.0
+):
     """
     Generates an SRT file from the transcript for a specific time range.
     Groups words into short lines suitable for vertical video.
     """
-    
+
     words = []
     # 1. Extract and flatten words within range
-    for segment in transcript.get('segments', []):
-        for word_info in segment.get('words', []):
+    for segment in transcript.get("segments", []):
+        for word_info in segment.get("words", []):
             # Check overlap
-            if word_info['end'] > clip_start and word_info['start'] < clip_end:
+            if word_info["end"] > clip_start and word_info["start"] < clip_end:
                 words.append(word_info)
-    
+
     if not words:
         return False
 
     srt_content = ""
     index = 1
-    
+
     current_block = []
     block_start = None
-    
+
     for i, word in enumerate(words):
         # Adjust times relative to clip
-        start = max(0, word['start'] - clip_start)
-        end = max(0, word['end'] - clip_start)
-        
+        start = max(0, word["start"] - clip_start)
+        end = max(0, word["end"] - clip_start)
+
         # Clip to video duration logic handled by ffmpeg usually, but good to be safe
-        
+
         if not current_block:
             current_block.append(word)
             block_start = start
         else:
             # Decide whether to close block
-            current_text_len = sum(len(w['word']) + 1 for w in current_block)
+            current_text_len = sum(len(w["word"]) + 1 for w in current_block)
             duration = end - block_start
-            
-            if current_text_len + len(word['word']) > max_chars or duration > max_duration:
+
+            if (
+                current_text_len + len(word["word"]) > max_chars
+                or duration > max_duration
+            ):
                 # Finalize current block
                 # End time of block is start of this word (gap) or end of last word?
                 # Usually end of last word.
-                block_end = current_block[-1]['end'] - clip_start
-                
-                text = " ".join([w['word'] for w in current_block]).strip()
+                block_end = current_block[-1]["end"] - clip_start
+
+                text = " ".join([w["word"] for w in current_block]).strip()
                 srt_content += format_srt_block(index, block_start, block_end, text)
                 index += 1
-                
+
                 current_block = [word]
                 block_start = start
             else:
                 current_block.append(word)
-    
+
     # Final block
     if current_block:
-        block_end = current_block[-1]['end'] - clip_start
-        text = " ".join([w['word'] for w in current_block]).strip()
+        block_end = current_block[-1]["end"] - clip_start
+        text = " ".join([w["word"] for w in current_block]).strip()
         srt_content += format_srt_block(index, block_start, block_end, text)
-        
-    with open(output_path, 'w', encoding='utf-8') as f:
+
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write(srt_content)
-        
+
     return True
+
 
 def format_srt_block(index, start, end, text):
     def format_time(seconds):
@@ -135,12 +137,13 @@ def format_srt_block(index, start, end, text):
         secs = int(seconds % 60)
         millis = int((seconds - int(seconds)) * 1000)
         return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
-        
+
     return f"{index}\n{format_time(start)} --> {format_time(end)}\n{text}\n\n"
+
 
 def hex_to_ass_color(hex_color, opacity=1.0):
     """Convert #RRGGBB to ASS &HAABBGGRR format. opacity: 0.0=transparent, 1.0=opaque"""
-    hex_color = hex_color.lstrip('#')
+    hex_color = hex_color.lstrip("#")
     if len(hex_color) != 6:
         hex_color = "FFFFFF"
     r = int(hex_color[0:2], 16)
@@ -150,10 +153,19 @@ def hex_to_ass_color(hex_color, opacity=1.0):
     return f"&H{alpha:02X}{b:02X}{g:02X}{r:02X}"
 
 
-def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
-                   font_name="Verdana", font_color="#FFFFFF",
-                   border_color="#000000", border_width=2,
-                   bg_color="#000000", bg_opacity=0.0):
+def burn_subtitles(
+    video_path,
+    srt_path,
+    output_path,
+    alignment=2,
+    fontsize=16,
+    font_name="Verdana",
+    font_color="#FFFFFF",
+    border_color="#000000",
+    border_width=2,
+    bg_color="#000000",
+    bg_opacity=0.0,
+):
     """
     Burns subtitles into the video using FFmpeg.
     Supports two modes:
@@ -162,13 +174,20 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
     """
     # Position mapping
     ass_alignment = 2
+    margin_v = 25
     align_lower = str(alignment).lower()
-    if align_lower == 'top':
+    if align_lower == "top":
         ass_alignment = 6
-    elif align_lower == 'middle':
+    elif align_lower == "middle":
         ass_alignment = 10
-    elif align_lower == 'bottom':
+    elif align_lower == "bottom":
         ass_alignment = 2
+    elif align_lower == "above_blur":
+        ass_alignment = 6
+        margin_v = 50
+    elif align_lower == "below_blur":
+        ass_alignment = 2
+        margin_v = 50
 
     # Font size scaling for ASS virtual resolution (PlayResY=288 default)
     # For vertical 1080x1920 video, we need larger text for readability
@@ -177,7 +196,7 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
         final_fontsize = 10
 
     # Path handling for FFmpeg filter syntax
-    safe_srt_path = srt_path.replace('\\', '/').replace(':', '\\:')
+    safe_srt_path = srt_path.replace("\\", "/").replace(":", "\\:")
 
     # Convert colors to ASS format and build style
     primary_colour = hex_to_ass_color(font_color, 1.0)
@@ -205,17 +224,26 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
         f"BorderStyle={border_style},"
         f"Outline={outline_width},"
         f"Shadow=0,"
-        f"MarginV=25,"
+        f"MarginV={margin_v},"
         f"Bold=1"
     )
 
     cmd = [
-        'ffmpeg', '-y',
-        '-i', video_path,
-        '-vf', f"subtitles='{safe_srt_path}':force_style='{style_string}'",
-        '-c:a', 'copy',
-        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-        output_path
+        "ffmpeg",
+        "-y",
+        "-i",
+        video_path,
+        "-vf",
+        f"subtitles='{safe_srt_path}':force_style='{style_string}'",
+        "-c:a",
+        "copy",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "23",
+        output_path,
     ]
 
     print(f"🎬 Burning subtitles: {' '.join(cmd)}")
@@ -226,4 +254,3 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
         raise Exception(f"FFmpeg failed: {result.stderr.decode()}")
 
     return True
-

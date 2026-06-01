@@ -9,7 +9,7 @@ const ENTRANCE_OPTIONS = [
     { value: 'none', label: 'None' },
 ];
 
-export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, videoUrl, initialText, durationInSeconds, existingSubtitles }) {
+export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, videoUrl, initialText, durationInSeconds, existingSubtitles, cropStyle }) {
     const [text, setText] = useState(initialText || 'POV: You are using the viral hook feature');
     const [position, setPosition] = useState('top');
     const [size, setSize] = useState('M');
@@ -33,7 +33,9 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
     const getPositionClass = () => {
         switch (position) {
             case 'center': return 'items-center justify-center';
-            case 'bottom': return 'items-center justify-end pb-[20%]';
+            case 'bottom': return 'items-center justify-end pb-[30%]';
+            case 'above_blur': return 'items-center justify-start pt-[28%]';
+            case 'below_blur': return 'items-center justify-end pb-[28%]';
             case 'top': default: return 'items-center justify-start pt-[20%]';
         }
     };
@@ -113,17 +115,20 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
                             <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3 flex items-center gap-2">
                                 <MoveVertical size={12} /> Position
                             </label>
-                            <div className="grid grid-cols-3 gap-2">
-                                {['top', 'center', 'bottom'].map((pos) => (
+                            <div className={`grid gap-2 ${cropStyle === 'blur_bars' ? 'grid-cols-5' : 'grid-cols-3'}`}>
+                                {(cropStyle === 'blur_bars'
+                                    ? ['above_blur', 'top', 'center', 'bottom', 'below_blur']
+                                    : ['top', 'center', 'bottom']
+                                ).map((pos) => (
                                     <button
                                         key={pos}
                                         onClick={() => setPosition(pos)}
-                                        className={`py-2 px-1 rounded-lg text-xs font-bold capitalize transition-all border ${position === pos
+                                        className={`py-2 px-1 rounded-lg text-xs font-bold transition-all border ${position === pos
                                             ? 'bg-white text-black border-white'
                                             : 'bg-white/5 text-zinc-400 border-white/5 hover:bg-white/10'
                                             }`}
                                     >
-                                        {pos}
+                                        {pos.replace('_', ' ')}
                                     </button>
                                 ))}
                             </div>

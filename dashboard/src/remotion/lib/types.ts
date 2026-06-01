@@ -9,7 +9,7 @@ export interface CaptionWord {
 
 // --- Subtitle config ---
 export type SubtitleAnimation = "none" | "word-highlight" | "pop" | "karaoke";
-export type SubtitlePosition = "top" | "middle" | "bottom";
+export type SubtitlePosition = "top" | "middle" | "bottom" | "above_blur" | "below_blur";
 
 export interface SubtitleStyle {
   fontFamily: string;
@@ -30,7 +30,7 @@ export interface SubtitleConfig {
 }
 
 // --- Hook config ---
-export type HookPosition = "top" | "center" | "bottom";
+export type HookPosition = "top" | "center" | "bottom" | "above_blur" | "below_blur";
 export type HookSize = "S" | "M" | "L";
 export type HookEntrance = "spring" | "fade" | "slide-up" | "none";
 
@@ -91,13 +91,13 @@ export const subtitleStyleSchema = z.object({
 
 export const subtitleConfigSchema = z.object({
   captions: z.array(captionWordSchema),
-  position: z.enum(["top", "middle", "bottom"]),
+  position: z.enum(["top", "middle", "bottom", "above_blur", "below_blur"]),
   style: subtitleStyleSchema,
 });
 
 export const hookConfigSchema = z.object({
   text: z.string(),
-  position: z.enum(["top", "center", "bottom"]),
+  position: z.enum(["top", "center", "bottom", "above_blur", "below_blur"]),
   size: z.enum(["S", "M", "L"]),
   entranceAnimation: z.enum(["spring", "fade", "slide-up", "none"]),
   displayDurationSec: z.number().positive(),

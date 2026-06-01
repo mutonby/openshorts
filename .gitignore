@@ -41,3 +41,9 @@ output/
 skills/
 skills-lock.json
 
+# Node / OpenCode plugin
+node_modules/
+package-lock.json
+
+.opencode/index/
+

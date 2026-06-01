@@ -24,6 +24,8 @@ const POSITION_STYLE: Record<string, React.CSSProperties> = {
   top: { top: "18%", bottom: "auto" },
   center: { top: "50%", bottom: "auto", transform: "translateY(-50%)" },
   bottom: { top: "68%", bottom: "auto" },
+  above_blur: { top: "28%", bottom: "auto" },
+  below_blur: { top: "72%", bottom: "auto" },
 };
 
 export const HookOverlay: React.FC<HookOverlayProps> = ({ config }) => {

@@ -19,6 +19,8 @@ const POSITION_MAP: Record<string, React.CSSProperties> = {
   top: { top: "12%", bottom: "auto" },
   middle: { top: "45%", bottom: "auto" },
   bottom: { bottom: "10%", top: "auto" },
+  above_blur: { top: "26%", bottom: "auto" },
+  below_blur: { bottom: "26%", top: "auto" },
 };
 
 export const Subtitles: React.FC<SubtitlesProps> = ({ config }) => {

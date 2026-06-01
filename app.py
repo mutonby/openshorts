@@ -641,7 +641,7 @@ async def edit_clip(
 class SubtitleRequest(BaseModel):
     job_id: str
     clip_index: int
-    position: str = "bottom"  # top, middle, bottom
+    position: str = "bottom"  # top, middle, bottom, above_blur, below_blur
     font_size: int = 16
     font_name: str = "Verdana"
     font_color: str = "#FFFFFF"
@@ -1002,7 +1002,7 @@ class HookRequest(BaseModel):
     clip_index: int
     text: str
     input_filename: Optional[str] = None
-    position: Optional[str] = "top"  # top, center, bottom
+    position: Optional[str] = "top"  # top, center, bottom, above_blur, below_blur
     size: Optional[str] = "M"  # S, M, L
 
 
