@@ -69,6 +69,9 @@ Default when uncertain: 15-60 s
 - Prefer cutting 0.2-0.4 s BEFORE the hook and 0.2-0.4 s AFTER the payoff
 - Align cuts with scene boundaries when available
 - Never cut in the middle of a word or phrase
+- Each clip must start at a TOPIC BOUNDARY — the beginning of a sentence, thought, or narrative beat. Look at the transcript: the clip should open with a clear starting point, not join a sentence already in progress
+- Each clip must end at a TOPIC BOUNDARY — after a complete thought, sentence, or payoff resolves. Never cut off mid-explanation or mid-sentence
+- If a sentence spans across your proposed cut point, move the cut to the nearest sentence boundary (period, question mark, exclamation in transcript) or scene boundary
 - Avoid cutting near LOW-PROBABILITY words (p < 0.3 in WORDS_JSON) — they indicate transcription uncertainty
 - No generic intros/outros or purely sponsorship segments unless they contain a hook
 
@@ -78,7 +81,7 @@ TRANSCRIPT_TEXT (raw):
 WORDS_JSON (array of {{w, s, e, p}} where s/e are seconds, p is 0-1 transcription confidence):
 {words_json}
 
-OUTPUT — RETURN ONLY VALID JSON (no markdown fences, no extra text). Order clips by predicted performance (best first). Include a CTA in descriptions like "Follow me and comment X and I'll send you the workflow":
+OUTPUT — RETURN ONLY VALID JSON (no markdown fences, no extra text). Order clips by predicted performance (best first). Each clip MUST be self-contained — a viewer watching only that clip should understand the point without needing context from before or after. Include a CTA in descriptions like "Follow me and comment X and I'll send you the workflow":
 {{
   "content_type": "<TUTORIAL|STORYTELLING|INTERVIEW|REACTION|VLOG|REVIEW|DEBATE|OTHER>",
   "shorts": [
@@ -1475,6 +1478,108 @@ def post_process_clips(result_json, min_confidence=0.6, max_overlap=0.7, max_cli
     return result_json
 
 
+def snap_clip_to_boundaries(
+    clip, words, scene_boundaries, snap_padding=0.3, video_duration=None
+):
+    """Snap clip start/end to nearest clean word boundary or scene boundary."""
+    if not words:
+        return
+
+    start = clip["start"]
+    end = clip["end"]
+
+    # Build flat list of scene boundary points (just the seconds values)
+    scene_points = []
+    for s_start, s_end in scene_boundaries:
+        scene_points.append(s_start)
+        scene_points.append(s_end)
+    scene_points.sort()
+
+    def _snap_start(t):
+        # Check if t falls inside a word — snap to word end
+        for w in words:
+            if w["s"] <= t <= w["e"]:
+                return w["e"] + snap_padding
+
+        # Find nearest word boundary: previous word end or next word start
+        prev_end = None
+        next_start = None
+        for w in words:
+            if w["e"] <= t:
+                prev_end = w["e"]
+            if w["s"] >= t and next_start is None:
+                next_start = w["s"]
+                break
+
+        candidates = []
+        if prev_end is not None:
+            candidates.append(prev_end + snap_padding)
+        if next_start is not None:
+            candidates.append(next_start - snap_padding)
+
+        if not candidates:
+            return t
+
+        snapped = min(candidates, key=lambda x: abs(x - t))
+
+        # Prefer nearby scene boundary if within snap_padding
+        for sp in scene_points:
+            if abs(sp - snapped) <= snap_padding:
+                return sp
+        return snapped
+
+    def _snap_end(t):
+        # Check if t falls inside a word — snap to word start
+        for w in words:
+            if w["s"] <= t <= w["e"]:
+                return w["s"] - snap_padding
+
+        # Find nearest word boundary: previous word end or next word start
+        prev_end = None
+        next_start = None
+        for w in words:
+            if w["e"] <= t:
+                prev_end = w["e"]
+            if w["s"] >= t and next_start is None:
+                next_start = w["s"]
+                break
+
+        candidates = []
+        if prev_end is not None:
+            candidates.append(prev_end + snap_padding)
+        if next_start is not None:
+            candidates.append(next_start - snap_padding)
+
+        if not candidates:
+            return t
+
+        snapped = min(candidates, key=lambda x: abs(x - t))
+
+        # Prefer nearby scene boundary if within snap_padding
+        for sp in scene_points:
+            if abs(sp - snapped) <= snap_padding:
+                return sp
+        return snapped
+
+    new_start = _snap_start(start)
+    new_end = _snap_end(end)
+
+    # Clamp to valid range
+    new_start = max(0.0, new_start)
+    if video_duration:
+        new_end = min(video_duration, new_end)
+
+    # Ensure valid range: start < end and minimum duration
+    MIN_DURATION = 8
+    if new_start >= new_end:
+        return  # Keep original if snapping produces invalid range
+    if new_end - new_start < MIN_DURATION:
+        return  # Keep original if too short after snapping
+
+    clip["start"] = round(new_start, 3)
+    clip["end"] = round(new_end, 3)
+
+
 def _build_window_prompt(
     words,
     transcript_segments,
@@ -1491,12 +1596,10 @@ def _build_window_prompt(
     window_start = words[0]["s"]
     window_end = words[-1]["e"]
 
-    # Filter segments that overlap this window
-    window_segments = [
-        seg
-        for seg in transcript_segments
-        if seg["end"] >= window_start and seg["start"] <= window_end
-    ]
+    # Filter segments that overlap this window — include segments ending
+    # within the window even if they start before, so Gemini sees complete
+    # sentences at the left edge for better topic boundary detection
+    window_segments = [seg for seg in transcript_segments if seg["end"] >= window_start]
     if window_segments:
         window_text = " ".join(seg["text"] for seg in window_segments)
     else:
@@ -1633,7 +1736,7 @@ def get_viral_clips(transcript_result, video_duration, scene_boundaries=None):
                 pass
 
             result_json = post_process_clips(result_json)
-            return result_json
+            return result_json, words
 
         # --- Chunked: sliding windows ---
         print(
@@ -1686,10 +1789,16 @@ def get_viral_clips(transcript_result, video_duration, scene_boundaries=None):
             if window_prompt is None:
                 continue
 
-            # Safety: if window prompt still too large, trim words
+            # Safety: if window prompt still too large, trim words from both ends
             while len(window_prompt) > MAX_PROMPT_CHARS and len(window_words) > 200:
                 trim_count = int(len(window_words) * 0.15)
-                window_words = window_words[:-trim_count]
+                trim_start = trim_count // 2
+                trim_end = trim_count - trim_start
+                window_words = (
+                    window_words[trim_start:-trim_end]
+                    if trim_end > 0
+                    else window_words[trim_start:]
+                )
                 window_prompt, _ = _build_window_prompt(
                     window_words,
                     transcript_result["segments"],
@@ -1738,14 +1847,46 @@ def get_viral_clips(transcript_result, video_duration, scene_boundaries=None):
                 kept_dur = kept["end"] - kept["start"]
                 min_dur = min(clip_dur, kept_dur)
                 if (
-                    min_dur > 0 and overlap_dur / min_dur > 0.9
-                ):  # 90% overlap = same clip
+                    min_dur > 0 and overlap_dur / min_dur > 0.7
+                ):  # 70% overlap = same clip
                     is_dup = True
                     if clip.get("confidence", 0) > kept.get("confidence", 0):
                         merged[i] = clip
                     break
             if not is_dup:
                 merged.append(clip)
+
+        # Merge cross-window split clips: if two clips are close together
+        # and no scene boundary separates them, combine into one complete clip
+        MAX_GAP = 10  # max seconds between clips to consider merging
+        merged.sort(key=lambda s: s["start"])
+        fused = []
+        for clip in merged:
+            if fused and (clip["start"] - fused[-1]["end"] <= MAX_GAP):
+                prev = fused[-1]
+                # Check if a scene boundary separates them
+                gap_start = prev["end"]
+                gap_end = clip["start"]
+                has_scene_between = False
+                for s_start, s_end in scene_boundaries:
+                    if gap_start <= s_start <= gap_end or gap_start <= s_end <= gap_end:
+                        has_scene_between = True
+                        break
+                if not has_scene_between:
+                    # Merge: extend prev to cover this clip
+                    combined_dur = clip["end"] - prev["start"]
+                    if combined_dur <= 90:  # respect MAX_DURATION
+                        prev["end"] = clip["end"]
+                        prev["confidence"] = max(
+                            prev.get("confidence", 0), clip.get("confidence", 0)
+                        )
+                        if clip.get("reasoning"):
+                            prev["reasoning"] = (
+                                prev.get("reasoning", "") + " " + clip["reasoning"]
+                            )
+                        continue
+            fused.append(clip)
+        merged = fused
 
         result_json = {"shorts": merged}
         if content_types:
@@ -1757,11 +1898,11 @@ def get_viral_clips(transcript_result, video_duration, scene_boundaries=None):
         print(
             f"   ✅ Chunked analysis complete: {len(all_shorts)} raw → {len(result_json['shorts'])} after merge+filter"
         )
-        return result_json
+        return result_json, words
 
     except Exception as e:
         print(f"❌ AI Analysis Error: {e}")
-        return None
+        return None, None
 
 
 if __name__ == "__main__":
@@ -1905,7 +2046,9 @@ if __name__ == "__main__":
             print(f"   ⚠️ Scene detection skipped: {e}")
 
         # 4. AI Analysis
-        clips_data = get_viral_clips(transcript, duration, scene_boundaries)
+        clips_data, transcript_words = get_viral_clips(
+            transcript, duration, scene_boundaries
+        )
 
         if not clips_data or "shorts" not in clips_data:
             print("❌ Failed to identify clips. Converting whole video as fallback.")
@@ -1914,6 +2057,15 @@ if __name__ == "__main__":
                 input_video, output_file, crop_style=args.crop_style
             )
         else:
+            # Snap clip boundaries to clean word/scene cut points
+            for clip in clips_data["shorts"]:
+                snap_clip_to_boundaries(
+                    clip,
+                    transcript_words or [],
+                    scene_boundaries,
+                    video_duration=duration,
+                )
+
             print(f"🔥 Found {len(clips_data['shorts'])} viral clips!")
 
             # Save metadata

@@ -220,6 +220,7 @@ const WordSpan: React.FC<WordSpanProps> = ({
         transform,
         display: "inline-block",
         transition: "none",
+        textTransform: style.uppercase ? "uppercase" : "none",
         ...extraStyle,
       }}
     >

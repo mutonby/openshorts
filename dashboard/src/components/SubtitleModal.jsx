@@ -40,6 +40,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
     const [bgOpacity, setBgOpacity] = useState(0.0);
     const [animation, setAnimation] = useState('pop');
     const [showTextEditor, setShowTextEditor] = useState(false);
+    const [uppercase, setUppercase] = useState(false);
 
     // Remotion preview state
     const [captions, setCaptions] = useState([]);
@@ -109,6 +110,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
             bgColor,
             bgOpacity,
             animation,
+            uppercase,
         },
     };
 
@@ -262,6 +264,31 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
                             </select>
                         </div>
 
+                        {/* Font Size */}
+                        <div>
+                            <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2 block">Font Size</label>
+                            <div className="flex items-center gap-3">
+                                <input
+                                    type="range"
+                                    min="12"
+                                    max="64"
+                                    value={fontSize}
+                                    onChange={(e) => setFontSize(parseInt(e.target.value))}
+                                    className="flex-1 accent-primary"
+                                />
+                                <span className="text-sm text-white font-mono w-8 text-right">{fontSize}</span>
+                            </div>
+                        </div>
+
+                        {/* Uppercase */}
+                        <div className="flex items-center justify-between">
+                            <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Uppercase</label>
+                            <label className="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" checked={uppercase} onChange={(e) => setUppercase(e.target.checked)} className="sr-only peer" />
+                                <div className="w-8 h-4 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[0px] after:left-[0px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+                            </label>
+                        </div>
+
                         {/* Text Color */}
                         <div>
                             <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2 block">Text Color</label>
@@ -361,7 +388,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
 
                     <button
                         onClick={() => onGenerate({
-                            position, fontSize, fontName, fontColor, borderColor, borderWidth, bgColor, bgOpacity,
+                            position, fontSize, fontName, fontColor, borderColor, borderWidth, bgColor, bgOpacity, uppercase,
                             // Remotion data
                             remotion: useRemotionPreview ? subtitleConfig : null,
                         })}

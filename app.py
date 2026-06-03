@@ -649,6 +649,7 @@ class SubtitleRequest(BaseModel):
     border_width: int = 2
     bg_color: str = "#000000"
     bg_opacity: float = 0.0
+    uppercase: bool = False
     input_filename: Optional[str] = None
 
 
@@ -930,13 +931,19 @@ async def add_subtitles(req: SubtitleRequest):
             print(f"🎙️ Dubbed video detected, transcribing audio for subtitles...")
 
             def run_transcribe_srt():
-                return generate_srt_from_video(input_path, srt_path)
+                return generate_srt_from_video(
+                    input_path, srt_path, uppercase=req.uppercase
+                )
 
             loop = asyncio.get_event_loop()
             success = await loop.run_in_executor(None, run_transcribe_srt)
         else:
             success = generate_srt(
-                transcript, clip_data["start"], clip_data["end"], srt_path
+                transcript,
+                clip_data["start"],
+                clip_data["end"],
+                srt_path,
+                uppercase=req.uppercase,
             )
 
         if not success:

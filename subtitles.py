@@ -41,7 +41,9 @@ def transcribe_audio(video_path):
     return transcript
 
 
-def generate_srt_from_video(video_path, output_path, max_chars=20, max_duration=2.0):
+def generate_srt_from_video(
+    video_path, output_path, max_chars=20, max_duration=2.0, uppercase=False
+):
     """
     Transcribe a video and generate SRT directly.
     Used for dubbed videos that don't have a pre-existing transcript.
@@ -57,11 +59,19 @@ def generate_srt_from_video(video_path, output_path, max_chars=20, max_duration=
     duration = frame_count / fps if fps else 0
     cap.release()
 
-    return generate_srt(transcript, 0, duration, output_path, max_chars, max_duration)
+    return generate_srt(
+        transcript, 0, duration, output_path, max_chars, max_duration, uppercase
+    )
 
 
 def generate_srt(
-    transcript, clip_start, clip_end, output_path, max_chars=20, max_duration=2.0
+    transcript,
+    clip_start,
+    clip_end,
+    output_path,
+    max_chars=20,
+    max_duration=2.0,
+    uppercase=False,
 ):
     """
     Generates an SRT file from the transcript for a specific time range.
@@ -110,6 +120,8 @@ def generate_srt(
                 block_end = current_block[-1]["end"] - clip_start
 
                 text = " ".join([w["word"] for w in current_block]).strip()
+                if uppercase:
+                    text = text.upper()
                 srt_content += format_srt_block(index, block_start, block_end, text)
                 index += 1
 
@@ -122,6 +134,8 @@ def generate_srt(
     if current_block:
         block_end = current_block[-1]["end"] - clip_start
         text = " ".join([w["word"] for w in current_block]).strip()
+        if uppercase:
+            text = text.upper()
         srt_content += format_srt_block(index, block_start, block_end, text)
 
     with open(output_path, "w", encoding="utf-8") as f:

@@ -222,6 +222,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                     border_width: options.borderWidth,
                     bg_color: options.bgColor,
                     bg_opacity: options.bgOpacity,
+                    uppercase: options.uppercase || false,
                     input_filename: currentVideoUrl.split('/').pop()
                 })
             });

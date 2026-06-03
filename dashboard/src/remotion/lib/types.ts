@@ -21,6 +21,7 @@ export interface SubtitleStyle {
   bgColor: string;
   bgOpacity: number;
   animation: SubtitleAnimation;
+  uppercase: boolean;
 }
 
 export interface SubtitleConfig {
@@ -87,6 +88,7 @@ export const subtitleStyleSchema = z.object({
   bgColor: z.string(),
   bgOpacity: z.number().min(0).max(1),
   animation: z.enum(["none", "word-highlight", "pop", "karaoke"]),
+  uppercase: z.boolean(),
 });
 
 export const subtitleConfigSchema = z.object({
