@@ -1590,10 +1590,12 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                               body: JSON.stringify(payload),
                             });
                           } else if (uploadProvider === 'buffer') {
+                            const selectedChannel = bufferChannels?.find(ch => ch.id === selectedBufferChannel);
                             const payload = {
                               job_id: jobId,
                               buffer_api_key: bufferApiKey,
                               channel_id: selectedBufferChannel,
+                              service: selectedChannel?.service || null,
                               title: genResult.script?.title,
                               description: genResult.script?.caption || genResult.script?.full_narration,
                             };

@@ -450,11 +450,13 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                     body: JSON.stringify(payload)
                 });
             } else if (uploadProvider === 'buffer') {
+                const selectedChannel = bufferChannels?.find(ch => ch.id === selectedBufferChannel);
                 const payload = {
                     job_id: jobId,
                     clip_index: index,
                     buffer_api_key: bufferApiKey,
                     channel_id: selectedBufferChannel,
+                    service: selectedChannel?.service || null,
                     title: postTitle,
                     description: postDescription
                 };

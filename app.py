@@ -1709,6 +1709,8 @@ class BufferPostRequest(BaseModel):
     clip_index: int
     buffer_api_key: str
     channel_id: str
+    service: Optional[str] = None
+    category: Optional[str] = None
     title: Optional[str] = None
     description: Optional[str] = None
     scheduled_date: Optional[str] = None
@@ -1719,6 +1721,8 @@ class SaaSBufferPostRequest(BaseModel):
     job_id: str
     buffer_api_key: str
     channel_id: str
+    service: Optional[str] = None
+    category: Optional[str] = None
     title: Optional[str] = None
     description: Optional[str] = None
     scheduled_date: Optional[str] = None
@@ -1801,7 +1805,16 @@ async def get_buffer_channels(
     try:
         data = _buffer_graphql(buffer_api_key, query, {"orgId": organization_id})
         channels = data.get("data", {}).get("channels", [])
-        return {"channels": [{"id": c.get("id"), "display_name": c.get("name"), "service": c.get("service")} for c in channels]}
+        return {
+            "channels": [
+                {
+                    "id": c.get("id"),
+                    "display_name": c.get("name"),
+                    "service": c.get("service"),
+                }
+                for c in channels
+            ]
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -1824,9 +1837,7 @@ async def post_to_buffer(req: BufferPostRequest):
         # Resolve video file path
         if req.edited_video_filename:
             filename = req.edited_video_filename
-            file_path = os.path.join(
-                OUTPUT_DIR, req.job_id, "edited_videos", filename
-            )
+            file_path = os.path.join(OUTPUT_DIR, req.job_id, "edited_videos", filename)
         else:
             filename = clip["video_url"].split("/")[-1]
             file_path = os.path.join(OUTPUT_DIR, req.job_id, filename)
@@ -1888,6 +1899,16 @@ async def post_to_buffer(req: BufferPostRequest):
         }
         if req.scheduled_date:
             variables["input"]["dueAt"] = req.scheduled_date
+
+        # Add YouTube-specific metadata if channel is YouTube
+        if req.service == "youtube":
+            category_id = req.category or "24"  # Default: Entertainment
+            variables["input"]["metadata"] = {
+                "youtube": {
+                    "title": final_title,
+                    "categoryId": category_id,
+                }
+            }
 
         print(f"📡 [Buffer] Creating post on channel {req.channel_id}...")
         result = _buffer_graphql(req.buffer_api_key, mutation, variables)
@@ -1975,6 +1996,16 @@ async def saasshorts_post_buffer(req: SaaSBufferPostRequest):
         }
         if req.scheduled_date:
             variables["input"]["dueAt"] = req.scheduled_date
+
+        # Add YouTube-specific metadata if channel is YouTube
+        if req.service == "youtube":
+            category_id = req.category or "24"  # Default: Entertainment
+            variables["input"]["metadata"] = {
+                "youtube": {
+                    "title": final_title,
+                    "categoryId": category_id,
+                }
+            }
 
         print(f"📡 [AI Shorts/Buffer] Creating post on channel {req.channel_id}...")
         result = _buffer_graphql(req.buffer_api_key, mutation, variables)
@@ -2626,7 +2657,9 @@ async def thumbnail_publish_buffer(
             print(f"📤 [Thumbnail/Buffer] Uploading video to R2...")
             s3_video_url = upload_video_to_r2(video_path)
             if not s3_video_url:
-                raise Exception("Failed to upload video to Cloudflare R2. Check CLOUDFLARE_R2_* env vars.")
+                raise Exception(
+                    "Failed to upload video to Cloudflare R2. Check CLOUDFLARE_R2_* env vars."
+                )
 
             post_text = title
             if description:
