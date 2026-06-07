@@ -183,6 +183,17 @@ function App() {
   });
   const [replizAccounts, setReplizAccounts] = useState([]);
   
+  // Buffer API State - Load encrypted
+  const [bufferApiKey, setBufferApiKey] = useState(() => {
+    const stored = localStorage.getItem('bufferApiKey_v1');
+    if (stored) return decrypt(stored);
+    return '';
+  });
+  const [bufferOrganizations, setBufferOrganizations] = useState([]);
+  const [bufferChannels, setBufferChannels] = useState([]);
+  const [selectedBufferOrg, setSelectedBufferOrg] = useState('');
+  const [bufferConnecting, setBufferConnecting] = useState(false);
+
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [jobId, setJobId] = useState(null);
   const [status, setStatus] = useState('idle'); // idle, processing, complete, error
@@ -287,6 +298,18 @@ function App() {
   }, [replizAccessKey, replizSecretKey]);
 
   useEffect(() => {
+    if (bufferApiKey) {
+      localStorage.setItem('bufferApiKey_v1', encrypt(bufferApiKey));
+    }
+  }, [bufferApiKey]);
+
+  useEffect(() => {
+    if (bufferApiKey && bufferOrganizations.length === 0) {
+      fetchBufferOrganizations();
+    }
+  }, [bufferApiKey]);
+
+  useEffect(() => {
     if (elevenLabsKey) {
       localStorage.setItem('elevenLabsKey_v1', encrypt(elevenLabsKey));
     }
@@ -388,6 +411,39 @@ function App() {
     }
   };
 
+  const fetchBufferOrganizations = async () => {
+    if (!bufferApiKey) return;
+    setBufferConnecting(true);
+    try {
+      const res = await fetch(getApiUrl(`/api/buffer/organizations?buffer_api_key=${encodeURIComponent(bufferApiKey)}`));
+      if (!res.ok) throw new Error("Failed to fetch");
+      const data = await res.json();
+      setBufferOrganizations(data.organizations || []);
+      if (data.organizations?.length > 0 && !selectedBufferOrg) {
+        setSelectedBufferOrg(data.organizations[0].id);
+        fetchBufferChannels(data.organizations[0].id);
+      }
+    } catch (e) {
+      console.error("Error fetching Buffer organizations:", e);
+      setBufferOrganizations([]);
+    } finally {
+      setBufferConnecting(false);
+    }
+  };
+
+  const fetchBufferChannels = async (orgId) => {
+    if (!bufferApiKey || !orgId) return;
+    try {
+      const res = await fetch(getApiUrl(`/api/buffer/channels?buffer_api_key=${encodeURIComponent(bufferApiKey)}&organization_id=${encodeURIComponent(orgId)}`));
+      if (!res.ok) throw new Error("Failed to fetch");
+      const data = await res.json();
+      setBufferChannels(data.channels || []);
+    } catch (e) {
+      console.error("Error fetching Buffer channels:", e);
+      setBufferChannels([]);
+    }
+  };
+
   const handleProcess = async (data) => {
     if (!apiKey || !uploadPostKey) {
       setShowKeyModal(true);
@@ -404,12 +460,13 @@ function App() {
 
       if (data.type === 'url') {
         headers['Content-Type'] = 'application/json';
-        body = JSON.stringify({ 
-          url: data.payload, 
+        body = JSON.stringify({
+          url: data.payload,
           acknowledged: !!data.acknowledged,
           transcription_method: transcriptionMethod,
           groq_key: groqKey,
-          crop_style: data.cropStyle || 'blur_bars'
+          crop_style: data.cropStyle || 'blur_bars',
+          category: data.category || 'general'
         });
       } else {
         const formData = new FormData();
@@ -418,6 +475,7 @@ function App() {
         formData.append('transcription_method', transcriptionMethod);
         if (groqKey) formData.append('groq_key', groqKey);
         formData.append('crop_style', data.cropStyle || 'blur_bars');
+        formData.append('category', data.category || 'general');
         body = formData;
       }
 
@@ -771,6 +829,71 @@ function App() {
                 </div>
               </div>
 
+              <div className={`glass-panel p-6 mt-8 ${!bufferApiKey ? 'border-purple-500/30 ring-1 ring-purple-500/20' : ''}`}>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-semibold">Buffer API</h2>
+                  <span className="text-[10px] bg-purple-500/10 border border-purple-500/30 px-2 py-0.5 rounded text-purple-400 uppercase tracking-wider">Alternative</span>
+                </div>
+                <p className="text-xs text-zinc-500 mb-6 leading-relaxed">
+                  Publish directly to your Buffer channels. Supports all platforms connected to your Buffer account.
+                </p>
+                <div className="space-y-4">
+                  <label className="block text-sm text-zinc-400">Buffer API Key</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      value={bufferApiKey}
+                      onChange={(e) => setBufferApiKey(e.target.value)}
+                      className="input-field"
+                      placeholder="Your Buffer API Key"
+                    />
+                    <button onClick={fetchBufferOrganizations} className="btn-primary py-2 px-4 text-sm" disabled={!bufferApiKey || bufferConnecting}>
+                      {bufferConnecting ? 'Connecting...' : 'Connect'}
+                    </button>
+                  </div>
+
+                  {bufferOrganizations.length > 0 && (
+                    <div>
+                      <label className="block text-sm text-zinc-400 mb-2">Organization</label>
+                      <select
+                        value={selectedBufferOrg}
+                        onChange={(e) => {
+                          setSelectedBufferOrg(e.target.value);
+                          fetchBufferChannels(e.target.value);
+                        }}
+                        className="input-field"
+                      >
+                        {bufferOrganizations.map((org) => (
+                          <option key={org.id} value={org.id}>{org.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {bufferChannels.length > 0 && (
+                    <div className="mt-4 p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
+                      <p className="text-xs text-green-400 font-medium mb-2">Channels ({bufferChannels.length}):</p>
+                      <div className="space-y-1">
+                        {bufferChannels.map((ch) => (
+                          <div key={ch.id} className="flex items-center gap-2 text-xs text-zinc-300">
+                            <span className="w-2 h-2 rounded-full bg-green-400"></span>
+                            {ch.display_name} ({ch.service})
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <p className="text-xs text-zinc-500 leading-relaxed">
+                    <a href="https://publish.buffer.com/settings/api" target="_blank" rel="noopener noreferrer" className="text-purple-400 hover:text-purple-300 underline">Get your API key from Buffer settings</a>
+                    <br />
+                    <span className="text-zinc-600 italic">
+                      Keys are only stored in your browser. They are sent to the backend only to process your request, never stored server-side.
+                    </span>
+                  </p>
+                </div>
+              </div>
+
               <div className="glass-panel p-6 mt-8">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-lg font-semibold">Video Translation</h2>
@@ -936,7 +1059,7 @@ function App() {
 
           {/* View: SaaS Shorts */}
           {activeTab === 'saasshorts' && (
-            <SaaShortsTab geminiApiKey={apiKey} elevenLabsKey={elevenLabsKey} falKey={falKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} replizAccessKey={replizAccessKey} replizSecretKey={replizSecretKey} replizAccounts={replizAccounts} />
+            <SaaShortsTab geminiApiKey={apiKey} elevenLabsKey={elevenLabsKey} falKey={falKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} replizAccessKey={replizAccessKey} replizSecretKey={replizSecretKey} replizAccounts={replizAccounts} bufferApiKey={bufferApiKey} bufferChannels={bufferChannels} />
           )}
 
           {/* View: AI Agent */}
@@ -1062,7 +1185,7 @@ function App() {
 
           {/* View: Thumbnails */}
           {activeTab === 'thumbnails' && (
-            <ThumbnailStudio geminiApiKey={apiKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} replizAccessKey={replizAccessKey} replizSecretKey={replizSecretKey} replizAccounts={replizAccounts} />
+            <ThumbnailStudio geminiApiKey={apiKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} replizAccessKey={replizAccessKey} replizSecretKey={replizSecretKey} replizAccounts={replizAccounts} bufferApiKey={bufferApiKey} bufferChannels={bufferChannels} />
           )}
 
           {/* View: Gallery */}
@@ -1190,6 +1313,8 @@ function App() {
                           replizAccessKey={replizAccessKey}
                           replizSecretKey={replizSecretKey}
                           replizAccounts={replizAccounts}
+                          bufferApiKey={bufferApiKey}
+                          bufferChannels={bufferChannels}
                           geminiApiKey={apiKey}
                           elevenLabsKey={elevenLabsKey}
                           onPlay={(time) => handleClipPlay(time)}

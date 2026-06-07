@@ -188,6 +188,7 @@ Need to search for a regex in files?
 
 ### Server-side (`.env`)
 - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_S3_BUCKET`: S3 backup configuration.
+- `CLOUDFLARE_R2_ACCOUNT_ID`, `CLOUDFLARE_R2_ACCESS_KEY_ID`, `CLOUDFLARE_R2_SECRET_ACCESS_KEY`, `CLOUDFLARE_R2_BUCKET_NAME`, `CLOUDFLARE_R2_PUBLIC_URL`: Cloudflare R2 storage for Buffer video uploads.
 - `MAX_CONCURRENT_JOBS`: Max parallel processing tasks (default: 5).
 - `VITE_API_URL`: Override for production API URL.
 
@@ -196,3 +197,4 @@ Need to search for a regex in files?
 - `FAL_KEY`: fal.ai API key (Required for AI Shorts).
 - `ELEVENLABS_API_KEY`: ElevenLabs API key (Optional).
 - `UPLOAD_POST_API_KEY`: Upload-Post API key (Optional).
+- `BUFFER_API_KEY`: Buffer API key (Optional, for Buffer publishing).

@@ -92,7 +92,7 @@ function DragDropZone({ label, accept, onFile, file, onClear, icon: Icon }) {
   );
 }
 
-export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUserId, replizAccessKey, replizSecretKey, replizAccounts }) {
+export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUserId, replizAccessKey, replizSecretKey, replizAccounts, bufferApiKey, bufferChannels }) {
   // Step management
   const [step, setStep] = useState(0);
   const [mode, setMode] = useState(null); // 'video' or 'manual'
@@ -131,6 +131,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
   // Upload provider selection
   const [uploadProvider, setUploadProvider] = useState('upload-post');
   const [selectedReplizAccount, setSelectedReplizAccount] = useState('');
+  const [selectedBufferChannel, setSelectedBufferChannel] = useState('');
 
   // Background preprocessing state
   const [preprocessSessionId, setPreprocessSessionId] = useState(null);
@@ -382,6 +383,9 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
     if (uploadProvider === 'repliz' && (!replizAccessKey || !replizSecretKey || !selectedReplizAccount)) {
       return alert('Please configure your Repliz API credentials and select an account in Settings first.');
     }
+    if (uploadProvider === 'buffer' && (!bufferApiKey || !selectedBufferChannel)) {
+      return alert('Please configure your Buffer API key and select a channel in Settings first.');
+    }
 
     setIsPublishing(true);
     setPublishResult(null);
@@ -419,6 +423,49 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
               const statusData = await statusRes.json();
 
               if (statusData.status === 'done') {
+                clearInterval(interval);
+                setPublishResult({ success: true, data: statusData.result });
+                resolve();
+              } else if (statusData.status === 'failed') {
+                clearInterval(interval);
+                reject(new Error(statusData.error || 'Upload failed'));
+              }
+            } catch (e) {
+              clearInterval(interval);
+              reject(e);
+            }
+          }, 2000);
+          setTimeout(() => { clearInterval(interval); reject(new Error('Timeout')); }, 300000);
+        });
+      } else if (uploadProvider === 'buffer') {
+        const formData = new FormData();
+        formData.append('session_id', sessionId);
+        formData.append('title', finalTitle);
+        formData.append('description', description);
+        formData.append('thumbnail_url', selectedThumbnail);
+        formData.append('buffer_api_key', bufferApiKey);
+        formData.append('channel_id', selectedBufferChannel);
+
+        const res = await fetch(getApiUrl('/api/thumbnail/publish-buffer'), {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!res.ok) {
+          const err = await res.text();
+          throw new Error(err);
+        }
+
+        const { publish_id } = await res.json();
+
+        await new Promise((resolve, reject) => {
+          const interval = setInterval(async () => {
+            try {
+              const statusRes = await fetch(getApiUrl(`/api/thumbnail/publish-buffer/status/${publish_id}`));
+              if (!statusRes.ok) { clearInterval(interval); reject(new Error('Status check failed')); return; }
+              const statusData = await statusRes.json();
+
+              if (statusData.status === 'completed') {
                 clearInterval(interval);
                 setPublishResult({ success: true, data: statusData.result });
                 resolve();
@@ -1123,7 +1170,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                 <h3 className="text-sm font-semibold text-white flex items-center gap-2">
                   <Send size={14} /> Publish Provider
                 </h3>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   <button
                     onClick={() => setUploadProvider('upload-post')}
                     className={`p-3 rounded-lg border text-xs font-medium transition-all ${uploadProvider === 'upload-post'
@@ -1141,6 +1188,15 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                   >
                     <div className="font-bold">Repliz</div>
                     <div className="text-[10px] mt-1 opacity-70">Single platform</div>
+                  </button>
+                  <button
+                    onClick={() => setUploadProvider('buffer')}
+                    className={`p-3 rounded-lg border text-xs font-medium transition-all ${uploadProvider === 'buffer'
+                      ? 'bg-purple-500/10 border-purple-500/30 text-purple-400'
+                      : 'bg-white/5 border-white/10 text-zinc-400 hover:bg-white/10'}`}
+                  >
+                    <div className="font-bold">Buffer</div>
+                    <div className="text-[10px] mt-1 opacity-70">Social channels</div>
                   </button>
                 </div>
 
@@ -1160,6 +1216,30 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                         </option>
                       ))}
                     </select>
+                  </div>
+                )}
+
+                {/* Buffer channel selector */}
+                {uploadProvider === 'buffer' && bufferApiKey && (
+                  <div className="mt-2">
+                    <label className="block text-xs font-bold text-zinc-400 mb-1">Buffer Channel</label>
+                    <select
+                      value={selectedBufferChannel}
+                      onChange={(e) => setSelectedBufferChannel(e.target.value)}
+                      className="w-full bg-black/40 border border-white/10 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-purple-500/50"
+                    >
+                      <option value="">Select a channel...</option>
+                      {bufferChannels?.map(ch => (
+                        <option key={ch.id} value={ch.id}>
+                          {ch.display_name} ({ch.service})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {uploadProvider === 'buffer' && !bufferApiKey && (
+                  <div className="mt-2">
+                    <p className="text-xs text-purple-400">Set your Buffer API key in Settings to enable publishing.</p>
                   </div>
                 )}
               </div>
@@ -1201,7 +1281,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
               )}
 
               {/* Publish Button */}
-              {((uploadProvider === 'upload-post' && uploadPostKey && uploadUserId) || (uploadProvider === 'repliz' && replizAccessKey && replizSecretKey && selectedReplizAccount)) && (
+              {((uploadProvider === 'upload-post' && uploadPostKey && uploadUserId) || (uploadProvider === 'repliz' && replizAccessKey && replizSecretKey && selectedReplizAccount) || (uploadProvider === 'buffer' && bufferApiKey && selectedBufferChannel)) && (
                 <button
                   onClick={handlePublish}
                   disabled={isPublishing}

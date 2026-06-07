@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Youtube, Upload, FileVideo, X, Film, Crop } from 'lucide-react';
+import { Youtube, Upload, FileVideo, X, Film, Crop, Tag } from 'lucide-react';
 import { getApiUrl } from '../config';
 
 export default function MediaInput({ onProcess, isProcessing }) {
@@ -9,6 +9,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [file, setFile] = useState(null);
     const [acknowledged, setAcknowledged] = useState(false);
     const [cropStyle, setCropStyle] = useState('blur_bars'); // 'blur_bars' | 'auto'
+    const [category, setCategory] = useState('general'); // 'general' | 'podcast' | ...
 
     useEffect(() => {
         fetch(getApiUrl('/api/config'))
@@ -26,9 +27,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
         e.preventDefault();
         if (!acknowledged) return;
         if (mode === 'url' && url) {
-            onProcess({ type: 'url', payload: url, acknowledged: true, cropStyle });
+            onProcess({ type: 'url', payload: url, acknowledged: true, cropStyle, category });
         } else if (mode === 'file' && file) {
-            onProcess({ type: 'file', payload: file, acknowledged: true, cropStyle });
+            onProcess({ type: 'file', payload: file, acknowledged: true, cropStyle, category });
         }
     };
 
@@ -113,6 +114,32 @@ export default function MediaInput({ onProcess, isProcessing }) {
                         )}
                     </div>
                 )}
+
+                <div className="mt-5 p-4 bg-white/5 rounded-xl border border-white/5">
+                    <label htmlFor="category" className="flex items-center gap-2 text-xs text-zinc-500 mb-3 uppercase tracking-wider">
+                        <Tag size={12} />
+                        Kategori Konten
+                    </label>
+                    <select
+                        id="category"
+                        value={category}
+                        onChange={(e) => setCategory(e.target.value)}
+                        className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-primary/50 transition-colors"
+                    >
+                        <option value="general">Umum (Auto-Detect)</option>
+                        <option value="podcast">Podcast / Diskusi</option>
+                        <option value="tutorial">Tutorial / Edukasi</option>
+                        <option value="gaming">Gaming</option>
+                        <option value="reaction">Reaksi</option>
+                        <option value="interview">Wawancara</option>
+                        <option value="news">Berita</option>
+                    </select>
+                    <p className="text-[10px] text-zinc-600 mt-2">
+                        {category === 'general'
+                            ? 'AI akan mendeteksi jenis konten otomatis dan menerapkan aturan yang sesuai.'
+                            : 'AI akan menggunakan aturan khusus untuk kategori ini.'}
+                    </p>
+                </div>
 
                 <div className="mt-5 p-4 bg-white/5 rounded-xl border border-white/5">
                     <p className="text-xs text-zinc-500 mb-3 uppercase tracking-wider">Crop Style</p>

@@ -30,75 +30,143 @@ load_dotenv()
 # --- Constants ---
 ASPECT_RATIO = 9 / 16
 
-GEMINI_PROMPT_TEMPLATE = """
-You are a senior short-form video editor for TikTok/IG Reels/YouTube Shorts. Identify the 3-15 most viral-worthy moments from the transcript.
+GEMINI_BASE_PROMPT = """
+You are a world-class short-form video editor for TikTok, Instagram Reels, and YouTube Shorts. Identify the 3-10 most viral-worthy moments from the transcript. Each clip MUST be self-contained — a viewer watching only that clip must understand the point without prior context.
 
-VIDEO_DURATION_SECONDS: {video_duration}
-DETECTED_LANGUAGE: {language}
+VIDEO_DURATION: {video_duration}s | LANGUAGE: {language}
+SCENE_BOUNDARIES (align clip edges here when possible): {scene_boundaries}
 
-SCENE_BOUNDARIES (natural visual cut points in seconds — prefer aligning clip edges here):
-{scene_boundaries}
-
---- VIRAL CRITERIA ---
-Evaluate each candidate moment against these viral pattern types:
-1. PATTERN_INTERRUPT: Unexpected twist, surprise reveal, "wait what?!" moment
-2. EMOTIONAL_PEAK: High emotion — anger, excitement, laughter, tears, passion
-3. VALUE_DROP: Actionable tip, hack, insight, or framework the viewer can use immediately
+--- VIRAL PATTERNS (pick the best one per clip) ---
+1. CURIOSITY_GAP: Opens a compelling question the viewer MUST know the answer to
+2. EMOTIONAL_PEAK: High emotion — anger, excitement, laughter, tears, intense passion
+3. VALUE_DROP: Actionable tip, life hack, insight, or framework usable immediately
 4. CONTROVERSY: Hot take, debate trigger, strong opinion that sparks comments
-5. CLIFFHANGER: Unfinished story, looming reveal, "you won't believe what happened next"
-6. CURIOSITY_GAP: Opens a question the viewer MUST know the answer to
-7. STORY_BEAT: Key narrative moment — setup, conflict, resolution
-8. RELATABLE_MOMENT: "That's so me" — universal experience, high shareability
+5. CLIFFHANGER: Unfinished story, looming reveal
+6. STORY_BEAT: Clear setup, conflict, or resolution
+7. PATTERN_INTERRUPT: Unexpected twist, surprise reveal, "wait, what?!" moment
+8. RELATABLE_MOMENT: "That's so me" — universal experience with high shareability
 
---- CONTENT TYPE ---
-First, classify the dominant content type: TUTORIAL / STORYTELLING / INTERVIEW / REACTION / VLOG / REVIEW / DEBATE / OTHER. This guides clip length and selection logic.
+--- HOOK SIGNALS (check the FIRST sentence of the clip) ---
+ANGKA_BESAR: "3 cara...", "5 hal...", "Rp50 juta..."
+KLAIM_BERANI: "Ini yang terbaik...", "Gak ada yang berani ngomong ini..."
+PERTANYAAN: Opens with "Kenapa...", "Gimana cara...", "Lo tau gak..."
+BONGKAR_RAHASIA: "Akhirnya gue buka...", "Rahasianya adalah..."
+DRAMA_EMOSI: Immediate laughter, shouting, crying, or intense reaction
+Clips without any hook signal → max PERUNGGU.
 
---- CLIP DIVERSITY ---
-Select clips covering at least 3 DIFFERENT viral pattern types. Avoid homogeneous picks.
+{category_instructions}
 
---- DURATION GUIDANCE ---
-Fast-paced/reactions/quick tips: 8-25 s
-Storytelling/narrative: 40-90 s
-Tutorials/interviews: 20-60 s
-Default when uncertain: 15-60 s
+--- AVOID (jangan pilih ini) ---
+- Pembukaan generic: "Halo semua, kembali lagi di channel gue..."
+- CTA kosong: "Jangan lupa like, comment, subscribe"
+- Recap yang sudah dibahas, perkenalan tamu panjang
+- Kalimat yang bergantung ke visual: "Lihat nih grafiknya"
+- Jeda panjang atau "anu... eee..." berulang
+- Segmen sponsor murni tanpa hook
 
---- TIMING RULES ---
-- Return timestamps in ABSOLUTE SECONDS from video start (usable in: ffmpeg -ss <start> -to <end> -i <input> ...)
-- Only NUMBERS with decimal point, up to 3 decimals (e.g., 12.340)
-- Ensure 0 ≤ start < end ≤ VIDEO_DURATION_SECONDS
-- Prefer cutting 0.2-0.4 s BEFORE the hook and 0.2-0.4 s AFTER the payoff
-- Align cuts with scene boundaries when available
-- Never cut in the middle of a word or phrase
-- Each clip must start at a TOPIC BOUNDARY — the beginning of a sentence, thought, or narrative beat. Look at the transcript: the clip should open with a clear starting point, not join a sentence already in progress
-- Each clip must end at a TOPIC BOUNDARY — after a complete thought, sentence, or payoff resolves. Never cut off mid-explanation or mid-sentence
-- If a sentence spans across your proposed cut point, move the cut to the nearest sentence boundary (period, question mark, exclamation in transcript) or scene boundary
-- Avoid cutting near LOW-PROBABILITY words (p < 0.3 in WORDS_JSON) — they indicate transcription uncertainty
-- No generic intros/outros or purely sponsorship segments unless they contain a hook
+--- CUTTING RULES ---
+- Start 0.2-0.4s BEFORE the hook, end 0.2-0.4s AFTER the payoff
+- NEVER cut mid-word or mid-sentence — align to topic boundaries (period, question, natural pause)
+- Align with scene boundaries when available
+- Avoid low-confidence words (p < 0.3 in WORDS_JSON)
+- Timestamps in absolute seconds, 3 decimal places (e.g., 12.340)
+- 0 ≤ start < end ≤ VIDEO_DURATION
 
-TRANSCRIPT_TEXT (raw):
-{transcript_text}
+--- CONFIDENCE TIERS ---
+EMAS: Hook kuat <2 detik + payoff jelas + high shareability — langsung stop scroll
+PERAK: Momen bagus tapi hook butuh 2-4 detik atau payoff agak lemah
+PERUNGGU: Hook lambat atau konten generik, works as filler
+TOLAK: Intro, outro, sponsor, atau filler tanpa hook (JANGAN output)
 
-WORDS_JSON (array of {{w, s, e, p}} where s/e are seconds, p is 0-1 transcription confidence):
-{words_json}
+TRANSCRIPT: {transcript_text}
+WORDS_JSON (array of {{"w", "s", "e", "p"}} where s/e are seconds, p is 0-1 confidence): {words_json}
 
-OUTPUT — RETURN ONLY VALID JSON (no markdown fences, no extra text). Order clips by predicted performance (best first). Each clip MUST be self-contained — a viewer watching only that clip should understand the point without needing context from before or after. Include a CTA in descriptions like "Follow me and comment X and I'll send you the workflow":
+--- OUTPUT ---
+RETURN ONLY VALID JSON. No markdown fences, no extra text, no apologies. Order EMAS first.
+
 {{
   "content_type": "<TUTORIAL|STORYTELLING|INTERVIEW|REACTION|VLOG|REVIEW|DEBATE|OTHER>",
-  "shorts": [
-    {{
-      "start": <number>,
-      "end": <number>,
-      "confidence": <0.0 to 1.0, your confidence this clip will perform well>,
-      "reasoning": "<2-3 sentences: which viral pattern this hits, why it works, why the timestamps are optimal>",
-      "viral_pattern_type": "<one of the 8 types above>",
-      "video_description_for_tiktok": "<description for TikTok>",
-      "video_description_for_instagram": "<description for Instagram>",
-      "video_title_for_youtube_short": "<title for YouTube Short, 100 chars max>",
-      "viral_hook_text": "<SHORT punchy overlay (max 10 words). MUST BE IN THE SAME LANGUAGE AS THE VIDEO>"
-    }}
-  ]
+  "shorts": [{{
+    "start": <float>,
+    "end": <float>,
+    "confidence": "<EMAS|PERAK|PERUNGGU>",
+    "reasoning": "<2-3 sentences: viral pattern, why it works, timing rationale>",
+    "viral_pattern_type": "<one of the 8 patterns above>",
+    "viral_hook_text": "<2-5 words, punchy hook overlay text, EXACT SAME LANGUAGE AS VIDEO>",
+    "social_caption": "<engaging caption + 3-5 relevant hashtags, EXACT SAME LANGUAGE AS VIDEO>"
+  }}]
 }}
 """
+
+CATEGORY_INSTRUCTIONS = {
+    "podcast": """--- CATEGORY: PODCAST/DISKUSI ---
+- DURASI IDEAL: 40-80 detik (diskusi serius) / 15-40 detik (komedi/roasting)
+- Best clips: hot takes, bongkar rahasia, cliffhanger di akhir cerita, ketawa spontan
+- Hook signals khusus: "Lo tau gak...", "Gue dulu mikir...", "Ini yang orang gak sadar..."
+- Prioritas patterns: CURIOSITY_GAP, CONTROVERSY, CLIFFHANGER, STORY_BEAT, EMOTIONAL_PEAK
+- Hindari: basa-basi pembuka, perkenalan tamu >5 detik, topik yang baru mulai dibangun""",
+    "tutorial": """--- CATEGORY: TUTORIAL/EDUKASI ---
+- DURASI IDEAL: 15-45 detik
+- Best clips: actionable tip + hasil instan, before/after reveal, "cuma butuh X menit"
+- Prioritas patterns: VALUE_DROP, CURIOSITY_GAP, PATTERN_INTERRUPT
+- Hindari: penjelasan teknis panjang, setup tanpa payoff""",
+    "gaming": """--- CATEGORY: GAMING ---
+- DURASI IDEAL: 8-25 detik
+- Best clips: clutch win, funny glitch, rage moment, unexpected kill
+- Hook signals: jeritan, ketawa spontan, "Gak mungkin!", "WTF!"
+- Prioritas patterns: EMOTIONAL_PEAK, PATTERN_INTERRUPT
+- Hindari: gameplay biasa tanpa reaksi, loading screen, menu navigation""",
+    "reaction": """--- CATEGORY: REAKSI ---
+- DURASI IDEAL: 15-40 detik
+- Best clips: emotional spike — kaget, nangis, ngakak, marah intens
+- Hook signals: reaksi vokal keras, jeda dramatis, ekspresi kaget
+- Prioritas patterns: EMOTIONAL_PEAK, PATTERN_INTERRUPT, RELATABLE_MOMENT
+- Hindari: reaksi datar, komentar panjang tanpa emosi""",
+    "interview": """--- CATEGORY: WAWANCARA ---
+- DURASI IDEAL: 30-60 detik
+- Best clips: reveal mengejutkan, soundbite kuat, cerita personal yang emosional
+- Prioritas patterns: STORY_BEAT, EMOTIONAL_PEAK, CURIOSITY_GAP
+- Hindari: perkenalan tamu, pertanyaan basa-basi interviewer, jawaban "ya/tidak" singkat""",
+    "news": """--- CATEGORY: BERITA ---
+- DURASI IDEAL: 20-50 detik
+- Best clips: breaking news moment, kontroversi, angka mengejutkan
+- Prioritas patterns: CONTROVERSY, CURIOSITY_GAP, PATTERN_INTERRUPT
+- Hindari: pembacaan berita monoton, konteks background panjang""",
+    "general": """--- AUTO-DETECT ---
+Pertama, klasifikasikan jenis konten video ini, lalu terapkan aturan yang sesuai:
+- PODCAST/DISKUSI → 40-80s, fokus hot takes, bongkar rahasia, cliffhanger
+- TUTORIAL/EDUKASI → 15-45s, fokus actionable tips, before/after
+- GAMING → 8-25s, fokus clutch/funny/rage
+- REAKSI → 15-40s, fokus emotional spikes
+- WAWANCARA → 30-60s, fokus reveals & soundbites
+- BERITA → 20-50s, fokus breaking points & kontroversi
+- Tidak jelas → default 15-60s, apply all patterns equally""",
+}
+
+
+def _build_prompt(
+    video_duration,
+    language,
+    scene_boundaries,
+    transcript_text,
+    words_json,
+    category="general",
+):
+    """Build the full Gemini prompt by injecting category-specific instructions."""
+    cat_instructions = CATEGORY_INSTRUCTIONS.get(
+        category, CATEGORY_INSTRUCTIONS["general"]
+    )
+    return GEMINI_BASE_PROMPT.format(
+        video_duration=video_duration,
+        language=language,
+        scene_boundaries=scene_boundaries,
+        category_instructions=cat_instructions,
+        transcript_text=transcript_text,
+        words_json=words_json,
+    )
+
+
+GEMINI_PROMPT_TEMPLATE = GEMINI_BASE_PROMPT
 
 # Load the YOLO model once (Keep for backup or scene analysis if needed)
 model = YOLO("yolov8n.pt")
@@ -1392,11 +1460,43 @@ def transcribe_with_faster_whisper(video_path):
     }
 
 
-def post_process_clips(result_json, min_confidence=0.6, max_overlap=0.7, max_clips=10):
+CONFIDENCE_TIER_MAP = {
+    "EMAS": 0.9,
+    "PERAK": 0.75,
+    "PERUNGGU": 0.5,
+    "GOLD": 0.9,
+    "SILVER": 0.75,
+    "BRONZE": 0.5,
+}
+
+
+def _normalize_confidence(value):
+    """Convert tier label (EMAS/PERAK/PERUNGGU) or float to numeric score."""
+    if isinstance(value, str):
+        return CONFIDENCE_TIER_MAP.get(value.strip().upper(), 0.5)
+    if isinstance(value, (int, float)):
+        return float(value)
+    return 0.5
+
+
+def _min_confidence_score(min_confidence):
+    """Resolve a min_confidence arg that may be a float or a tier label."""
+    if isinstance(min_confidence, str):
+        return CONFIDENCE_TIER_MAP.get(min_confidence.strip().upper(), 0.5)
+    return float(min_confidence)
+
+
+def post_process_clips(result_json, min_confidence=0.5, max_overlap=0.7, max_clips=10):
     """Filter, deduplicate, and rank clips by quality, duration, and diversity."""
     shorts = result_json.get("shorts", [])
     if not shorts:
         return result_json
+
+    # Normalize all confidence values to numeric for consistent filtering/sorting
+    for s in shorts:
+        s["confidence"] = _normalize_confidence(s.get("confidence"))
+
+    threshold = _min_confidence_score(min_confidence)
 
     # 0. Filter by duration — enforce absolute floor and ceiling
     MIN_DURATION = 8
@@ -1422,9 +1522,7 @@ def post_process_clips(result_json, min_confidence=0.6, max_overlap=0.7, max_cli
     # 1. Filter by confidence (keep low-confidence as fallback)
     has_confidence = any("confidence" in s for s in duration_filtered)
     if has_confidence:
-        filtered = [
-            s for s in duration_filtered if s.get("confidence", 0) >= min_confidence
-        ]
+        filtered = [s for s in duration_filtered if s.get("confidence", 0) >= threshold]
         if not filtered:
             print(f"   ⚠️ All clips below confidence {min_confidence}, keeping top 3")
             filtered = sorted(
@@ -1468,6 +1566,24 @@ def post_process_clips(result_json, min_confidence=0.6, max_overlap=0.7, max_cli
     # 4. Sort by confidence desc, limit to max_clips
     diversified.sort(key=lambda s: s.get("confidence", 0), reverse=True)
     result_json["shorts"] = diversified[:max_clips]
+
+    # 5. Backward-compat shim: synthesize legacy field names from new tier-based schema
+    # so downstream consumers (ResultCard, ScheduleWeekModal, S3, app.py) keep working.
+    for clip in result_json["shorts"]:
+        hook = clip.get("viral_hook_text") or "Viral Short"
+        caption = clip.get("social_caption") or ""
+        clip.setdefault("video_title_for_youtube_short", hook[:100])
+        clip.setdefault("video_description_for_tiktok", caption)
+        clip.setdefault("video_description_for_instagram", caption)
+        # Convert numeric confidence back to tier label for any consumer that reads it as string
+        if not isinstance(clip.get("confidence_label"), str):
+            score = clip.get("confidence", 0)
+            if score >= 0.85:
+                clip["confidence_label"] = "EMAS"
+            elif score >= 0.7:
+                clip["confidence_label"] = "PERAK"
+            else:
+                clip["confidence_label"] = "PERUNGGU"
 
     filtered_out = len(shorts) - len(result_json["shorts"])
     if filtered_out > 0:
@@ -1588,6 +1704,7 @@ def _build_window_prompt(
     scene_boundaries,
     window_num,
     total_windows,
+    category="general",
 ):
     """Build a reduced prompt for a window of words."""
     if not words:
@@ -1619,22 +1736,25 @@ def _build_window_prompt(
     else:
         window_scene_text = "No scene data available"
 
-    prompt = GEMINI_PROMPT_TEMPLATE.format(
+    prompt = _build_prompt(
         video_duration=video_duration,
         language=language,
         scene_boundaries=f"WINDOW {window_num + 1}/{total_windows} [{window_start:.1f}s - {window_end:.1f}s]: {window_scene_text}",
         transcript_text=json.dumps(window_text),
         words_json=json.dumps(words),
+        category=category,
     )
 
     return prompt, window_text
 
 
-MAX_PROMPT_CHARS = 380_000  # ~100K tokens, safe budget per chunk
+MAX_PROMPT_CHARS = 380_0000  # ~100K tokens, safe budget per chunk
 
 
-def get_viral_clips(transcript_result, video_duration, scene_boundaries=None):
-    print("🤖  Analyzing with AI...")
+def get_viral_clips(
+    transcript_result, video_duration, scene_boundaries=None, category="general"
+):
+    print(f"🤖  Analyzing with AI (category={category})...")
 
     if not transcript_result:
         print("❌ Error: No transcript available. Skipping viral clip analysis.")
@@ -1651,7 +1771,7 @@ def get_viral_clips(transcript_result, video_duration, scene_boundaries=None):
             "OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"
         ),
     )
-    model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    model_name = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
 
     print(f"🤖  Initializing model: {model_name}")
 
@@ -1686,7 +1806,10 @@ def get_viral_clips(transcript_result, video_duration, scene_boundaries=None):
             messages.append({"role": "system", "content": extra_system_prompt})
         messages.append({"role": "user", "content": prompt_content})
         return client.chat.completions.create(
-            model=model_name, messages=messages, response_format={"type": "json_object"}
+            model=model_name,
+            messages=messages,
+            response_format={"type": "json_object"},
+            temperature=1.0,
         )
 
     def _analyze_single(prompt_content):
@@ -1710,12 +1833,13 @@ def get_viral_clips(transcript_result, video_duration, scene_boundaries=None):
         # --- Estimate prompt size and decide single-call vs chunked ---
         transcript_json = json.dumps(transcript_result["text"])
         words_json = json.dumps(words)
-        full_prompt = GEMINI_PROMPT_TEMPLATE.format(
+        full_prompt = _build_prompt(
             video_duration=video_duration,
             language=language,
             scene_boundaries=scene_text,
             transcript_text=transcript_json,
             words_json=words_json,
+            category=category,
         )
 
         if len(full_prompt) <= MAX_PROMPT_CHARS:
@@ -1744,12 +1868,13 @@ def get_viral_clips(transcript_result, video_duration, scene_boundaries=None):
         )
 
         # Calculate window size: fit words + transcript within budget
-        template_overhead = GEMINI_PROMPT_TEMPLATE.format(
+        template_overhead = _build_prompt(
             video_duration=video_duration,
             language=language,
             scene_boundaries="",
             transcript_text="",
             words_json="",
+            category=category,
         )
         # Account for both words_json AND transcript_json in per-word estimate
         total_data_chars = len(transcript_json) + len(words_json)
@@ -1785,6 +1910,7 @@ def get_viral_clips(transcript_result, video_duration, scene_boundaries=None):
                 scene_boundaries,
                 win_idx // max(words_per_window - overlap_words, 1),
                 total_windows,
+                category,
             )
             if window_prompt is None:
                 continue
@@ -1807,6 +1933,7 @@ def get_viral_clips(transcript_result, video_duration, scene_boundaries=None):
                     scene_boundaries,
                     win_idx // max(words_per_window - overlap_words, 1),
                     total_windows,
+                    category,
                 )
 
             if len(window_prompt) > MAX_PROMPT_CHARS:
@@ -1948,6 +2075,21 @@ if __name__ == "__main__":
         default="blur_bars",
         help="Crop style: blur_bars (full content on blurred background, sharp output) or auto (AI scene detection with TRACK/GENERAL). Default: blur_bars.",
     )
+    parser.add_argument(
+        "--category",
+        type=str,
+        choices=[
+            "podcast",
+            "tutorial",
+            "gaming",
+            "reaction",
+            "interview",
+            "news",
+            "general",
+        ],
+        default="general",
+        help="Content category for tailored clip detection. 'general' auto-detects. Default: general.",
+    )
 
     args = parser.parse_args()
 
@@ -2047,7 +2189,7 @@ if __name__ == "__main__":
 
         # 4. AI Analysis
         clips_data, transcript_words = get_viral_clips(
-            transcript, duration, scene_boundaries
+            transcript, duration, scene_boundaries, category=args.category
         )
 
         if not clips_data or "shorts" not in clips_data:
@@ -2081,7 +2223,7 @@ if __name__ == "__main__":
                 end = clip["end"]
                 print(f"\n🎬 Processing Clip {i + 1}: {start}s - {end}s")
                 print(
-                    f"   Title: {clip.get('video_title_for_youtube_short', 'No Title')}"
+                    f"   Title: {clip.get('video_title_for_youtube_short') or clip.get('viral_hook_text', 'No Title')}"
                 )
 
                 # Cut clip

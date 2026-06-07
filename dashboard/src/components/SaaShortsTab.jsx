@@ -34,7 +34,7 @@ function saveCache(url, analysis, webResearch, scripts) {
   } catch { /* localStorage full */ }
 }
 
-export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uploadPostKey, uploadUserId, replizAccessKey, replizSecretKey, replizAccounts }) {
+export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uploadPostKey, uploadUserId, replizAccessKey, replizSecretKey, replizAccounts, bufferApiKey, bufferChannels }) {
   // Wizard state
   const [step, setStep] = useState(() => {
     const cache = loadCache();
@@ -88,9 +88,10 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   const [scheduleDate, setScheduleDate] = useState('');
   
   // Upload provider selection
-  const [uploadProvider, setUploadProvider] = useState('upload-post'); // 'upload-post' or 'repliz'
+  const [uploadProvider, setUploadProvider] = useState('upload-post'); // 'upload-post', 'repliz', or 'buffer'
   const [selectedReplizAccount, setSelectedReplizAccount] = useState('');
   const [selectedReplizPlatform, setSelectedReplizPlatform] = useState('youtube');
+  const [selectedBufferChannel, setSelectedBufferChannel] = useState('');
 
   // UI
   const [copied, setCopied] = useState('');
@@ -1407,7 +1408,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                     </h3>
 
                     {/* Upload Provider Selector */}
-                    <div className="grid grid-cols-2 gap-2 mb-3">
+                    <div className="grid grid-cols-3 gap-2 mb-3">
                       <button
                         onClick={() => setUploadProvider('upload-post')}
                         className={`p-2 rounded-lg border text-xs font-medium transition-all ${uploadProvider === 'upload-post'
@@ -1426,6 +1427,15 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                         <div className="font-bold">Repliz</div>
                         <div className="text-[10px] mt-0.5 opacity-70">Single platform</div>
                       </button>
+                      <button
+                        onClick={() => setUploadProvider('buffer')}
+                        className={`p-2 rounded-lg border text-xs font-medium transition-all ${uploadProvider === 'buffer'
+                          ? 'bg-purple-500/10 border-purple-500/30 text-purple-400'
+                          : 'bg-white/5 border-white/10 text-zinc-400 hover:bg-white/10'}`}
+                      >
+                        <div className="font-bold">Buffer</div>
+                        <div className="text-[10px] mt-0.5 opacity-70">Social channels</div>
+                      </button>
                     </div>
 
                     {/* Provider-specific warnings */}
@@ -1434,6 +1444,28 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                     )}
                     {uploadProvider === 'repliz' && (!replizAccessKey || !replizSecretKey) && (
                       <p className="text-xs text-blue-400">Set your Repliz API credentials in Settings to enable publishing.</p>
+                    )}
+                    {uploadProvider === 'buffer' && !bufferApiKey && (
+                      <p className="text-xs text-purple-400">Set your Buffer API key in Settings to enable publishing.</p>
+                    )}
+
+                    {/* Buffer-specific fields */}
+                    {uploadProvider === 'buffer' && bufferApiKey && (
+                      <div>
+                        <label className="block text-xs font-bold text-zinc-400 mb-1">Buffer Channel</label>
+                        <select
+                          value={selectedBufferChannel}
+                          onChange={(e) => setSelectedBufferChannel(e.target.value)}
+                          className="w-full bg-black/40 border border-white/10 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-purple-500/50"
+                        >
+                          <option value="">Select a channel...</option>
+                          {bufferChannels?.map(ch => (
+                            <option key={ch.id} value={ch.id}>
+                              {ch.display_name} ({ch.service})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     )}
 
                     {/* Repliz-specific fields */}
@@ -1529,6 +1561,9 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                           if (selected.length === 0) { setPublishResult({ ok: false, msg: 'Select at least one platform' }); return; }
                         } else if (uploadProvider === 'repliz') {
                           if (!selectedReplizAccount) { setPublishResult({ ok: false, msg: 'Select a Repliz account' }); return; }
+                        } else if (uploadProvider === 'buffer') {
+                          if (!bufferApiKey) { setPublishResult({ ok: false, msg: 'Missing Buffer API Key' }); return; }
+                          if (!selectedBufferChannel) { setPublishResult({ ok: false, msg: 'Select a Buffer channel' }); return; }
                         }
                         if (isScheduling && !scheduleDate) { setPublishResult({ ok: false, msg: 'Select a date' }); return; }
 
@@ -1550,6 +1585,22 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                               payload.scheduled_date = new Date(scheduleDate).toISOString();
                             }
                             const res = await fetch(getApiUrl('/api/saasshorts/post-repliz'), {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify(payload),
+                            });
+                          } else if (uploadProvider === 'buffer') {
+                            const payload = {
+                              job_id: jobId,
+                              buffer_api_key: bufferApiKey,
+                              channel_id: selectedBufferChannel,
+                              title: genResult.script?.title,
+                              description: genResult.script?.caption || genResult.script?.full_narration,
+                            };
+                            if (isScheduling && scheduleDate) {
+                              payload.scheduled_date = new Date(scheduleDate).toISOString();
+                            }
+                            const res = await fetch(getApiUrl('/api/saasshorts/post-buffer'), {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify(payload),
@@ -1586,7 +1637,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                           setPublishing(false);
                         }
                       }}
-                      disabled={publishing || (uploadProvider === 'upload-post' && !uploadPostKey) || (uploadProvider === 'repliz' && (!replizAccessKey || !replizSecretKey || !selectedReplizAccount))}
+                      disabled={publishing || (uploadProvider === 'upload-post' && !uploadPostKey) || (uploadProvider === 'repliz' && (!replizAccessKey || !replizSecretKey || !selectedReplizAccount)) || (uploadProvider === 'buffer' && (!bufferApiKey || !selectedBufferChannel))}
                       className="w-full btn-primary py-2 text-sm flex items-center justify-center gap-2 disabled:opacity-50"
                     >
                       {publishing ? (

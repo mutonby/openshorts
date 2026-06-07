@@ -20,6 +20,7 @@ from fastapi import (
     Request,
     Header,
     BackgroundTasks,
+    Query,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -371,6 +372,7 @@ async def process_endpoint(
     transcription_method: Optional[str] = Form("faster-whisper"),
     groq_key: Optional[str] = Form(None),
     crop_style: Optional[str] = Form("blur_bars"),
+    category: Optional[str] = Form("general"),
 ):
     api_key = request.headers.get("X-Gemini-Key")
     if not api_key:
@@ -387,6 +389,7 @@ async def process_endpoint(
         transcription_method = body.get("transcription_method", "faster-whisper")
         groq_key = body.get("groq_key")
         crop_style = body.get("crop_style", "blur_bars")
+        category = body.get("category", "general")
 
     if not url and not file:
         raise HTTPException(status_code=400, detail="Must provide URL or File")
@@ -455,6 +458,7 @@ async def process_endpoint(
     cmd.extend(["-o", job_output_dir])
     cmd.extend(["--transcription-method", transcription_method])
     cmd.extend(["--crop-style", crop_style])
+    cmd.extend(["--category", category])
 
     print(
         f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true"
@@ -1697,6 +1701,298 @@ async def saasshorts_post_repliz(req: SaaSReplizPostRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# --- Buffer API Endpoints ---
+
+
+class BufferPostRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    buffer_api_key: str
+    channel_id: str
+    title: Optional[str] = None
+    description: Optional[str] = None
+    scheduled_date: Optional[str] = None
+    edited_video_filename: Optional[str] = None
+
+
+class SaaSBufferPostRequest(BaseModel):
+    job_id: str
+    buffer_api_key: str
+    channel_id: str
+    title: Optional[str] = None
+    description: Optional[str] = None
+    scheduled_date: Optional[str] = None
+
+
+BUFFER_API_URL = "https://api.buffer.com"
+
+
+def _buffer_graphql(api_key: str, query: str, variables: dict = None):
+    """Execute a GraphQL query against the Buffer Publish API."""
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    payload = {"query": query}
+    if variables:
+        payload["variables"] = variables
+
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.post(BUFFER_API_URL, headers=headers, json=payload)
+
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail=f"Buffer API Error: {resp.text}",
+        )
+
+    data = resp.json()
+    if "errors" in data:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Buffer GraphQL Error: {data['errors']}",
+        )
+    return data
+
+
+@app.get("/api/buffer/organizations")
+async def get_buffer_organizations(buffer_api_key: str = Query(...)):
+    """Fetch organizations from Buffer API."""
+    if not buffer_api_key:
+        raise HTTPException(status_code=400, detail="Missing Buffer API key")
+
+    query = """
+    query GetOrganizations {
+        account {
+            organizations {
+                id
+                name
+            }
+        }
+    }
+    """
+    try:
+        data = _buffer_graphql(buffer_api_key, query)
+        orgs = data.get("data", {}).get("account", {}).get("organizations", [])
+        return {"organizations": orgs}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/buffer/channels")
+async def get_buffer_channels(
+    buffer_api_key: str = Query(...), organization_id: str = Query(...)
+):
+    """Fetch channels for a Buffer organization."""
+    if not buffer_api_key:
+        raise HTTPException(status_code=400, detail="Missing Buffer API key")
+
+    query = """
+    query GetChannels($orgId: ID!) {
+        channels(input: { organizationId: $orgId }) {
+            id
+            name
+            service
+        }
+    }
+    """
+    try:
+        data = _buffer_graphql(buffer_api_key, query, {"orgId": organization_id})
+        channels = data.get("data", {}).get("channels", [])
+        return {"channels": [{"id": c.get("id"), "display_name": c.get("name"), "service": c.get("service")} for c in channels]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/social/post-buffer")
+async def post_to_buffer(req: BufferPostRequest):
+    """Post a clip to Buffer."""
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs[req.job_id]
+    if "result" not in job or "clips" not in job["result"]:
+        raise HTTPException(status_code=400, detail="Job result not available")
+
+    try:
+        clip = job["result"]["clips"][req.clip_index]
+
+        # Resolve video file path
+        if req.edited_video_filename:
+            filename = req.edited_video_filename
+            file_path = os.path.join(
+                OUTPUT_DIR, req.job_id, "edited_videos", filename
+            )
+        else:
+            filename = clip["video_url"].split("/")[-1]
+            file_path = os.path.join(OUTPUT_DIR, req.job_id, filename)
+
+        if not os.path.exists(file_path):
+            raise HTTPException(
+                status_code=404, detail=f"Video file not found: {file_path}"
+            )
+
+        # Upload to R2 for public URL
+        from s3_uploader import upload_video_to_r2
+
+        print(f"📤 [Buffer] Uploading video to R2...")
+        s3_video_url = upload_video_to_r2(file_path)
+        if not s3_video_url:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to upload video to Cloudflare R2. Check CLOUDFLARE_R2_* env vars.",
+            )
+        print(f"✅ [Buffer] Video uploaded to R2: {s3_video_url}")
+
+        # Build post text
+        final_title = req.title or clip.get("title", "Viral Short")
+        final_description = (
+            req.description
+            or clip.get("video_description_for_instagram")
+            or clip.get("video_description_for_tiktok")
+            or ""
+        )
+        post_text = final_title
+        if final_description:
+            post_text = f"{final_title}\n\n{final_description}"
+
+        # Create update via Buffer GraphQL API
+        mode = "customScheduled" if req.scheduled_date else "addToQueue"
+        mutation = """
+        mutation CreatePost($input: CreatePostInput!) {
+            createPost(input: $input) {
+                ... on PostActionSuccess {
+                    post {
+                        id
+                        text
+                    }
+                }
+                ... on MutationError {
+                    message
+                }
+            }
+        }
+        """
+        variables = {
+            "input": {
+                "text": post_text,
+                "channelId": req.channel_id,
+                "schedulingType": "automatic",
+                "mode": mode,
+                "assets": [{"video": {"url": s3_video_url}}],
+            }
+        }
+        if req.scheduled_date:
+            variables["input"]["dueAt"] = req.scheduled_date
+
+        print(f"📡 [Buffer] Creating post on channel {req.channel_id}...")
+        result = _buffer_graphql(req.buffer_api_key, mutation, variables)
+
+        post_data = result.get("data", {}).get("createPost", {})
+        if "message" in post_data:
+            raise HTTPException(status_code=400, detail=post_data["message"])
+
+        print(f"✅ [Buffer] Post created successfully")
+        return post_data
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [Buffer] Post Exception: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/saasshorts/post-buffer")
+async def saasshorts_post_buffer(req: SaaSBufferPostRequest):
+    """Post an AI Shorts video to Buffer."""
+    if req.job_id not in saas_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = saas_jobs[req.job_id]
+    result = job.get("result")
+    if not result or not result.get("video_url"):
+        raise HTTPException(status_code=400, detail="No video available for this job")
+
+    try:
+        video_url = result["video_url"]
+        rel_path = video_url.replace("/videos/", "")
+        file_path = os.path.join(OUTPUT_DIR, rel_path)
+
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Video file not found")
+
+        # Upload to R2 for public URL
+        from s3_uploader import upload_video_to_r2
+
+        print(f"📤 [AI Shorts/Buffer] Uploading video to R2...")
+        s3_video_url = upload_video_to_r2(file_path)
+        if not s3_video_url:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to upload video to Cloudflare R2. Check CLOUDFLARE_R2_* env vars.",
+            )
+        print(f"✅ [AI Shorts/Buffer] Video uploaded to R2: {s3_video_url}")
+
+        script = result.get("script", {})
+        final_title = req.title or script.get("title", "AI Short")
+        final_description = req.description or script.get("caption", "")
+        if not final_description:
+            final_description = script.get("full_narration", "")
+
+        post_text = final_title
+        if final_description:
+            post_text = f"{final_title}\n\n{final_description}"
+
+        # Create update via Buffer GraphQL API
+        mode = "customScheduled" if req.scheduled_date else "addToQueue"
+        mutation = """
+        mutation CreatePost($input: CreatePostInput!) {
+            createPost(input: $input) {
+                ... on PostActionSuccess {
+                    post {
+                        id
+                        text
+                    }
+                }
+                ... on MutationError {
+                    message
+                }
+            }
+        }
+        """
+        variables = {
+            "input": {
+                "text": post_text,
+                "channelId": req.channel_id,
+                "schedulingType": "automatic",
+                "mode": mode,
+                "assets": [{"video": {"url": s3_video_url}}],
+            }
+        }
+        if req.scheduled_date:
+            variables["input"]["dueAt"] = req.scheduled_date
+
+        print(f"📡 [AI Shorts/Buffer] Creating post on channel {req.channel_id}...")
+        result = _buffer_graphql(req.buffer_api_key, mutation, variables)
+
+        post_data = result.get("data", {}).get("createPost", {})
+        if "message" in post_data:
+            raise HTTPException(status_code=400, detail=post_data["message"])
+
+        print(f"✅ [AI Shorts/Buffer] Post created successfully")
+        return post_data
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [AI Shorts/Buffer] Post Exception: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # --- Thumbnail Studio Endpoints ---
 
 
@@ -2296,6 +2592,93 @@ async def thumbnail_publish_repliz(
 @app.get("/api/thumbnail/publish-repliz/status/{publish_id}")
 async def thumbnail_publish_repliz_status(publish_id: str):
     """Poll the status of a Repliz background publish job."""
+    if publish_id not in publish_jobs:
+        raise HTTPException(status_code=404, detail="Publish job not found")
+    return publish_jobs[publish_id]
+
+
+@app.post("/api/thumbnail/publish-buffer")
+async def thumbnail_publish_buffer(
+    background_tasks: BackgroundTasks,
+    session_id: str = Form(...),
+    title: str = Form(...),
+    description: str = Form(...),
+    thumbnail_url: str = Form(...),
+    buffer_api_key: str = Form(...),
+    channel_id: str = Form(...),
+):
+    """Kick off a background upload to Buffer and return immediately."""
+    if session_id not in thumbnail_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = thumbnail_sessions[session_id]
+    video_path = session.get("video_path")
+    if not video_path or not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail="Original video file not found")
+
+    publish_id = str(uuid.uuid4())
+    publish_jobs[publish_id] = {"status": "uploading", "result": None, "error": None}
+
+    def do_upload():
+        try:
+            from s3_uploader import upload_video_to_r2
+
+            print(f"📤 [Thumbnail/Buffer] Uploading video to R2...")
+            s3_video_url = upload_video_to_r2(video_path)
+            if not s3_video_url:
+                raise Exception("Failed to upload video to Cloudflare R2. Check CLOUDFLARE_R2_* env vars.")
+
+            post_text = title
+            if description:
+                post_text = f"{title}\n\n{description}"
+
+            # Create update via Buffer GraphQL API
+            mutation = """
+            mutation CreatePost($input: CreatePostInput!) {
+                createPost(input: $input) {
+                    ... on PostActionSuccess {
+                        post { id text }
+                    }
+                    ... on MutationError {
+                        message
+                    }
+                }
+            }
+            """
+            variables = {
+                "input": {
+                    "text": post_text,
+                    "channelId": channel_id,
+                    "schedulingType": "automatic",
+                    "mode": "addToQueue",
+                    "assets": [{"video": {"url": s3_video_url}}],
+                }
+            }
+
+            print(f"📡 [Thumbnail/Buffer] Creating post...")
+            result = _buffer_graphql(buffer_api_key, mutation, variables)
+
+            post_data = result.get("data", {}).get("createPost", {})
+            if "message" in post_data:
+                raise Exception(post_data["message"])
+
+            publish_jobs[publish_id]["status"] = "completed"
+            publish_jobs[publish_id]["result"] = post_data
+            print(f"✅ [Thumbnail/Buffer] Published successfully")
+
+        except Exception as e:
+            err = str(e)
+            print(f"❌ Thumbnail Publish Buffer Background Error: {err}")
+            publish_jobs[publish_id]["status"] = "failed"
+            publish_jobs[publish_id]["error"] = err
+
+    background_tasks.add_task(do_upload)
+    return {"publish_id": publish_id, "status": "uploading"}
+
+
+@app.get("/api/thumbnail/publish-buffer/status/{publish_id}")
+async def thumbnail_publish_buffer_status(publish_id: str):
+    """Poll the status of a Buffer background publish job."""
     if publish_id not in publish_jobs:
         raise HTTPException(status_code=404, detail="Publish job not found")
     return publish_jobs[publish_id]

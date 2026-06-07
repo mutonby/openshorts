@@ -494,3 +494,72 @@ def upload_job_artifacts(directory, job_id):
             upload_file_to_s3(file_path, bucket_name, s3_key)
 
 
+def get_r2_client():
+    """Returns an authenticated S3-compatible client for Cloudflare R2."""
+    account_id = os.environ.get('CLOUDFLARE_R2_ACCOUNT_ID')
+    access_key = os.environ.get('CLOUDFLARE_R2_ACCESS_KEY_ID')
+    secret_key = os.environ.get('CLOUDFLARE_R2_SECRET_ACCESS_KEY')
+
+    if not account_id or not access_key or not secret_key:
+        return None
+
+    from botocore.config import Config
+
+    return boto3.client(
+        's3',
+        endpoint_url=f'https://{account_id}.r2.cloudflarestorage.com',
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        region_name='auto',
+        config=Config(signature_version='s3v4'),
+    )
+
+
+def upload_video_to_r2(file_path):
+    """
+    Upload a video file to Cloudflare R2 for use with Buffer API.
+    Returns the public URL or None on failure.
+
+    Requires env vars:
+      CLOUDFLARE_R2_ACCOUNT_ID
+      CLOUDFLARE_R2_ACCESS_KEY_ID
+      CLOUDFLARE_R2_SECRET_ACCESS_KEY
+      CLOUDFLARE_R2_BUCKET_NAME
+      CLOUDFLARE_R2_PUBLIC_URL  (e.g. https://media.yourdomain.com or https://pub-xxx.r2.dev)
+    """
+    bucket_name = os.environ.get('CLOUDFLARE_R2_BUCKET_NAME')
+    public_url_base = os.environ.get('CLOUDFLARE_R2_PUBLIC_URL')
+
+    if not bucket_name or not public_url_base:
+        logger.warning("R2 bucket name or public URL not configured")
+        return None
+
+    r2_client = get_r2_client()
+    if not r2_client:
+        return None
+
+    import uuid
+    import datetime
+    unique_id = str(uuid.uuid4())[:8]
+    filename = os.path.basename(file_path)
+    r2_key = f"buffer/{unique_id}/{filename}"
+
+    try:
+        if not os.path.exists(file_path):
+            logger.warning(f"File not found: {file_path}")
+            return None
+
+        r2_client.upload_file(
+            file_path, bucket_name, r2_key,
+            ExtraArgs={'ContentType': 'video/mp4'},
+        )
+
+        public_url = f"{public_url_base.rstrip('/')}/{r2_key}"
+
+        logger.info(f"Uploaded video to R2: {public_url}")
+        return public_url
+    except Exception as e:
+        logger.error(f"Failed to upload video to R2: {e}")
+        return None
+
+

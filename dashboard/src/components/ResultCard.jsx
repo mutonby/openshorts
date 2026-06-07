@@ -6,7 +6,7 @@ import HookModal from './HookModal';
 import TranslateModal from './TranslateModal';
 import { renderInBrowser } from '../lib/renderInBrowser';
 
-export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, replizAccessKey, replizSecretKey, replizAccounts, geminiApiKey, elevenLabsKey, onPlay, onPause, cropStyle }) {
+export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, replizAccessKey, replizSecretKey, replizAccounts, bufferApiKey, bufferChannels, geminiApiKey, elevenLabsKey, onPlay, onPause, cropStyle }) {
     const [showModal, setShowModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
     const videoRef = React.useRef(null);
@@ -14,9 +14,10 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
     const [currentVideoUrl, setCurrentVideoUrl] = useState(originalVideoUrl);
 
     // Upload provider selection
-    const [uploadProvider, setUploadProvider] = useState('upload-post'); // 'upload-post' or 'repliz'
+    const [uploadProvider, setUploadProvider] = useState('upload-post'); // 'upload-post', 'repliz', or 'buffer'
     const [selectedReplizAccount, setSelectedReplizAccount] = useState('');
     const [selectedReplizPlatform, setSelectedReplizPlatform] = useState('youtube');
+    const [selectedBufferChannel, setSelectedBufferChannel] = useState('');
 
     const [platforms, setPlatforms] = useState({
         tiktok: true,
@@ -375,6 +376,15 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                 setPostResult({ success: false, msg: "Please select a Repliz account." });
                 return;
             }
+        } else if (uploadProvider === 'buffer') {
+            if (!bufferApiKey) {
+                setPostResult({ success: false, msg: "Missing Buffer API Key." });
+                return;
+            }
+            if (!selectedBufferChannel) {
+                setPostResult({ success: false, msg: "Please select a Buffer channel." });
+                return;
+            }
         }
 
         if (isScheduling && !scheduleDate) {
@@ -435,6 +445,29 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                 }
 
                 res = await fetch(getApiUrl('/api/social/post-repliz'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+            } else if (uploadProvider === 'buffer') {
+                const payload = {
+                    job_id: jobId,
+                    clip_index: index,
+                    buffer_api_key: bufferApiKey,
+                    channel_id: selectedBufferChannel,
+                    title: postTitle,
+                    description: postDescription
+                };
+
+                if (editedVideoFilename) {
+                    payload.edited_video_filename = editedVideoFilename;
+                }
+
+                if (isScheduling && scheduleDate) {
+                    payload.scheduled_date = new Date(scheduleDate).toISOString();
+                }
+
+                res = await fetch(getApiUrl('/api/social/post-buffer'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -670,7 +703,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                         {/* Upload Provider Selector */}
                         <div className="mb-4">
                             <label className="block text-xs font-bold text-zinc-400 mb-2">Upload Provider</label>
-                            <div className="grid grid-cols-2 gap-2">
+                            <div className="grid grid-cols-3 gap-2">
                                 <button
                                     onClick={() => setUploadProvider('upload-post')}
                                     className={`p-3 rounded-lg border text-xs font-medium transition-all ${uploadProvider === 'upload-post'
@@ -688,6 +721,15 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                                 >
                                     <div className="font-bold">Repliz</div>
                                     <div className="text-[10px] mt-1 opacity-70">Single platform</div>
+                                </button>
+                                <button
+                                    onClick={() => setUploadProvider('buffer')}
+                                    className={`p-3 rounded-lg border text-xs font-medium transition-all ${uploadProvider === 'buffer'
+                                        ? 'bg-purple-500/10 border-purple-500/30 text-purple-400'
+                                        : 'bg-white/5 border-white/10 text-zinc-400 hover:bg-white/10'}`}
+                                >
+                                    <div className="font-bold">Buffer</div>
+                                    <div className="text-[10px] mt-1 opacity-70">Social channels</div>
                                 </button>
                             </div>
                         </div>
@@ -747,6 +789,31 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                                     </div>
                                 </div>
                             </>
+                        )}
+
+                        {/* Buffer-specific fields */}
+                        {uploadProvider === 'buffer' && !bufferApiKey && (
+                            <div className="mb-4 p-3 bg-purple-500/10 border border-purple-500/20 text-purple-200 text-xs rounded-lg flex items-start gap-2">
+                                <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                                <div>Configure Buffer API Key in Settings first.</div>
+                            </div>
+                        )}
+                        {uploadProvider === 'buffer' && bufferApiKey && (
+                            <div>
+                                <label className="block text-xs font-bold text-zinc-400 mb-1">Buffer Channel</label>
+                                <select
+                                    value={selectedBufferChannel}
+                                    onChange={(e) => setSelectedBufferChannel(e.target.value)}
+                                    className="w-full bg-black/40 border border-white/10 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-purple-500/50"
+                                >
+                                    <option value="">Select a channel...</option>
+                                    {bufferChannels?.map(ch => (
+                                        <option key={ch.id} value={ch.id}>
+                                            {ch.display_name} ({ch.service})
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
                         )}
 
                         <div className="space-y-4 mb-6">
@@ -832,7 +899,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
 
                         <button
                             onClick={handlePost}
-                            disabled={posting || (uploadProvider === 'upload-post' && !uploadPostKey) || (uploadProvider === 'repliz' && (!replizAccessKey || !replizSecretKey || !selectedReplizAccount))}
+                            disabled={posting || (uploadProvider === 'upload-post' && !uploadPostKey) || (uploadProvider === 'repliz' && (!replizAccessKey || !replizSecretKey || !selectedReplizAccount)) || (uploadProvider === 'buffer' && (!bufferApiKey || !selectedBufferChannel))}
                             className="w-full py-3 bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl text-white font-bold transition-all flex items-center justify-center gap-2"
                         >
                             {posting ? <><Loader2 size={16} className="animate-spin" /> {isScheduling ? 'Scheduling...' : 'Publishing...'}</> : <><Share2 size={16} /> {isScheduling ? 'Schedule Post' : 'Publish Now'}</>}

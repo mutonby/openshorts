@@ -1,20 +1,22 @@
-# OpenShorts.app
+# Virlo
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Forked from](https://img.shields.io/badge/Forked%20from-mutonby%2Fopenshorts-blue)](https://github.com/mutonby/openshorts)
 [![Open Source](https://badges.frapsoft.com/os/v1/open-source.svg?v=103)](https://opensource.org/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
-[![GitHub stars](https://img.shields.io/github/stars/mutonby/openshorts?style=social)](https://github.com/mutonby/openshorts)
-[![Last Commit](https://img.shields.io/github/last-commit/mutonby/openshorts)](https://github.com/mutonby/openshorts/commits/main)
+<!-- TODO: Replace 'your-username' with your actual GitHub username -->
+[![GitHub stars](https://img.shields.io/github/stars/your-username/Virlo?style=social)](https://github.com/your-username/Virlo)
+[![Last Commit](https://img.shields.io/github/last-commit/your-username/Virlo)](https://github.com/your-username/Virlo/commits/main)
 
 **Free & open source AI video platform** with 3 tools in one: **Clip Generator**, **AI Shorts (UGC videos with AI actors)**, and **YouTube Studio**. Self-hosted with Docker. No watermarks, no limits.
 
+*(Note: The demo video and screenshots below are from the original OpenShorts project.)*
+
 https://github.com/user-attachments/assets/b45fa983-16b4-48b5-ac5b-a267836b9ad9
 
-
-
 ### Video Tutorial: How it works
-[![OpenShorts Tutorial](https://img.youtube.com/vi/xlyjD1qCaX0/maxresdefault.jpg)](https://www.youtube.com/watch?v=xlyjD1qCaX0 "Click to watch the video on YouTube")
+[![Virlo Tutorial](https://img.youtube.com/vi/xlyjD1qCaX0/maxresdefault.jpg)](https://www.youtube.com/watch?v=xlyjD1qCaX0 "Click to watch the video on YouTube")
 
 *Click the image above to watch the full walkthrough.*
 
@@ -89,7 +91,7 @@ All generated videos and avatars are saved to a public gallery with SEO pages fo
 
 ### Social Auto-Publishing
 - **One-click posting** to TikTok, Instagram Reels, and YouTube Shorts simultaneously
-- **Schedule uploads** for any date and time — plan your content calendar and let OpenShorts publish automatically
+- **Schedule uploads** for any date and time — plan your content calendar and let Virlo publish automatically
 - **Multi-platform distribution** — publish to all your social networks at once from a single interface
 - Upload-Post integration with async uploads
 
@@ -114,7 +116,7 @@ All generated videos and avatars are saved to a public gallery with SEO pages fo
 
 ## AI Shorts Showcase
 
-Videos generated with OpenShorts AI Shorts — no camera, no studio, no actors:
+Videos generated with Virlo AI Shorts — no camera, no studio, no actors:
 
 | | | |
 |:---:|:---:|:---:|
@@ -125,9 +127,9 @@ Videos generated with OpenShorts AI Shorts — no camera, no studio, no actors:
 
 ---
 
-## OpenShorts vs Competitors
+## Virlo vs Competitors
 
-| Feature | OpenShorts | Opus Clip | CapCut | Vizard | Klap | Descript |
+| Feature | Virlo | Opus Clip | CapCut | Vizard | Klap | Descript |
 |---------|:---:|:---:|:---:|:---:|:---:|:---:|
 | **Price** | **Free** | $15-29/mo | $8/mo | $15-20/mo | $23-63/mo | $24-65/mo |
 | **Self-hosted** | **Yes** | No | No | No | No | No |
@@ -150,7 +152,7 @@ Videos generated with OpenShorts AI Shorts — no camera, no studio, no actors:
 
 ## How Much Does It Cost?
 
-OpenShorts is free. You only pay for the AI APIs you use — and most have generous free tiers:
+Virlo is free. You only pay for the AI APIs you use — and most have generous free tiers:
 
 | Service | Free Tier | Paid Cost | Used For |
 |---------|-----------|-----------|----------|
@@ -178,8 +180,8 @@ OpenShorts is free. You only pay for the AI APIs you use — and most have gener
 
 ### 1. Clone
 ```bash
-git clone https://github.com/your-username/OpenShorts.git
-cd OpenShorts
+git clone https://github.com/your-username/Virlo.git
+cd Virlo
 ```
 
 ### 2. Configure (optional)
@@ -280,13 +282,13 @@ Navigate to **`http://localhost:5175`**
 2. **Create Profile**: Go to [Manage Users](https://app.upload-post.com/manage-users)
 3. **Connect Accounts**: Link TikTok, Instagram, and/or YouTube
 4. **Get API Key**: Navigate to [API Keys](https://app.upload-post.com/api-keys)
-5. **Use in OpenShorts**: Paste the key in Settings
+5. **Use in Virlo**: Paste the key in Settings
 
 ---
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=mutonby/openshorts&type=Date)](https://star-history.com/#mutonby/openshorts&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=your-username/Virlo&type=Date)](https://star-history.com/#your-username/Virlo&Date)
 
 ## Contributions
 
@@ -294,4 +296,4 @@ Contributions are welcome! Whether it's adding new AI models, improving the lip-
 
 ## License
 
-MIT License. OpenShorts is yours to use, modify, and scale.
+MIT License. Virlo is yours to use, modify, and scale.
