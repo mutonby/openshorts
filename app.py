@@ -1790,7 +1790,7 @@ async def get_buffer_channels(
         raise HTTPException(status_code=400, detail="Missing Buffer API key")
 
     query = """
-    query GetChannels($orgId: ID!) {
+    query GetChannels($orgId: OrganizationId!) {
         channels(input: { organizationId: $orgId }) {
             id
             name
