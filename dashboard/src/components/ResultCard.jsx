@@ -15,9 +15,9 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
 
     // Upload provider selection
     const [uploadProvider, setUploadProvider] = useState('upload-post'); // 'upload-post', 'repliz', or 'buffer'
-    const [selectedReplizAccount, setSelectedReplizAccount] = useState('');
+    const [selectedReplizAccounts, setSelectedReplizAccounts] = useState([]);
     const [selectedReplizPlatform, setSelectedReplizPlatform] = useState('youtube');
-    const [selectedBufferChannel, setSelectedBufferChannel] = useState('');
+    const [selectedBufferChannels, setSelectedBufferChannels] = useState([]);
 
     const [platforms, setPlatforms] = useState({
         tiktok: true,
@@ -31,6 +31,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
 
     const [posting, setPosting] = useState(false);
     const [postResult, setPostResult] = useState(null);
+    const [postProgress, setPostProgress] = useState(null);
 
     const [isEditing, setIsEditing] = useState(false);
     const [isSubtitling, setIsSubtitling] = useState(false);
@@ -102,6 +103,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
             setIsScheduling(false);
             setScheduleDate("");
             setPostResult(null);
+            setPostProgress(null);
         }
     }, [showModal, clip]);
 
@@ -372,8 +374,8 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                 setPostResult({ success: false, msg: "Missing Repliz API credentials." });
                 return;
             }
-            if (!selectedReplizAccount) {
-                setPostResult({ success: false, msg: "Please select a Repliz account." });
+            if (selectedReplizAccounts.length === 0) {
+                setPostResult({ success: false, msg: "Please select at least one Repliz account." });
                 return;
             }
         } else if (uploadProvider === 'buffer') {
@@ -381,8 +383,8 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                 setPostResult({ success: false, msg: "Missing Buffer API Key." });
                 return;
             }
-            if (!selectedBufferChannel) {
-                setPostResult({ success: false, msg: "Please select a Buffer channel." });
+            if (selectedBufferChannels.length === 0) {
+                setPostResult({ success: false, msg: "Please select at least one Buffer channel." });
                 return;
             }
         }
@@ -421,61 +423,101 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                 editedVideoFilename = uploadData.filename;
             }
 
-            let res;
-            
+            let results = [];
+
             if (uploadProvider === 'repliz') {
-                // Repliz: single platform per post
-                const payload = {
-                    job_id: jobId,
-                    clip_index: index,
-                    access_key: replizAccessKey,
-                    secret_key: replizSecretKey,
-                    account_id: selectedReplizAccount,
-                    platform: selectedReplizPlatform,
-                    title: postTitle,
-                    description: postDescription
-                };
+                // Repliz: post to each selected account
+                const total = selectedReplizAccounts.length;
+                for (let i = 0; i < total; i++) {
+                    const accountId = selectedReplizAccounts[i];
+                    const account = replizAccounts?.find(a => a.id === accountId);
+                    setPostProgress({ current: i + 1, total, channel: account?.name || accountId });
 
-                if (editedVideoFilename) {
-                    payload.edited_video_filename = editedVideoFilename;
+                    const payload = {
+                        job_id: jobId,
+                        clip_index: index,
+                        access_key: replizAccessKey,
+                        secret_key: replizSecretKey,
+                        account_id: accountId,
+                        platform: selectedReplizPlatform,
+                        title: postTitle,
+                        description: postDescription
+                    };
+
+                    if (editedVideoFilename) {
+                        payload.edited_video_filename = editedVideoFilename;
+                    }
+
+                    if (isScheduling && scheduleDate) {
+                        payload.scheduled_date = new Date(scheduleDate).toISOString();
+                    }
+
+                    try {
+                        const res = await fetch(getApiUrl('/api/social/post-repliz'), {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
+                        if (!res.ok) {
+                            const errText = await res.text();
+                            let detail = errText;
+                            try { detail = JSON.parse(errText).detail || errText; } catch {}
+                            results.push({ success: false, name: account?.name || accountId, error: detail });
+                        } else {
+                            results.push({ success: true, name: account?.name || accountId });
+                        }
+                    } catch (err) {
+                        results.push({ success: false, name: account?.name || accountId, error: err.message });
+                    }
                 }
-
-                if (isScheduling && scheduleDate) {
-                    payload.scheduled_date = new Date(scheduleDate).toISOString();
-                }
-
-                res = await fetch(getApiUrl('/api/social/post-repliz'), {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
             } else if (uploadProvider === 'buffer') {
-                const selectedChannel = bufferChannels?.find(ch => ch.id === selectedBufferChannel);
-                const payload = {
-                    job_id: jobId,
-                    clip_index: index,
-                    buffer_api_key: bufferApiKey,
-                    channel_id: selectedBufferChannel,
-                    service: selectedChannel?.service || null,
-                    title: postTitle,
-                    description: postDescription
-                };
+                // Buffer: post to each selected channel
+                const total = selectedBufferChannels.length;
+                for (let i = 0; i < total; i++) {
+                    const channelId = selectedBufferChannels[i];
+                    const channel = bufferChannels?.find(ch => ch.id === channelId);
+                    setPostProgress({ current: i + 1, total, channel: channel?.display_name || channelId });
 
-                if (editedVideoFilename) {
-                    payload.edited_video_filename = editedVideoFilename;
+                    const payload = {
+                        job_id: jobId,
+                        clip_index: index,
+                        buffer_api_key: bufferApiKey,
+                        channel_id: channelId,
+                        service: channel?.service || null,
+                        title: postTitle,
+                        description: postDescription
+                    };
+
+                    if (editedVideoFilename) {
+                        payload.edited_video_filename = editedVideoFilename;
+                    }
+
+                    if (isScheduling && scheduleDate) {
+                        payload.scheduled_date = new Date(scheduleDate).toISOString();
+                    }
+
+                    try {
+                        const res = await fetch(getApiUrl('/api/social/post-buffer'), {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
+                        if (!res.ok) {
+                            const errText = await res.text();
+                            let detail = errText;
+                            try { detail = JSON.parse(errText).detail || errText; } catch {}
+                            results.push({ success: false, name: channel?.display_name || channelId, error: detail });
+                        } else {
+                            results.push({ success: true, name: channel?.display_name || channelId });
+                        }
+                    } catch (err) {
+                        results.push({ success: false, name: channel?.display_name || channelId, error: err.message });
+                    }
                 }
-
-                if (isScheduling && scheduleDate) {
-                    payload.scheduled_date = new Date(scheduleDate).toISOString();
-                }
-
-                res = await fetch(getApiUrl('/api/social/post-buffer'), {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
             } else {
-                // Upload-Post: multi-platform
+                // Upload-Post: multi-platform (single API call)
                 const selectedPlatforms = Object.keys(platforms).filter(k => platforms[k]);
                 if (selectedPlatforms.length === 0) {
                     setPostResult({ success: false, msg: "Select at least one platform." });
@@ -502,28 +544,57 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                     payload.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
                 }
 
-                res = await fetch(getApiUrl('/api/social/post'), {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-            }
+                setPostProgress({ current: 1, total: 1, channel: 'Upload-Post' });
 
-            if (!res.ok) {
-                const errText = await res.text();
                 try {
-                    const jsonErr = JSON.parse(errText);
-                    throw new Error(jsonErr.detail || errText);
-                } catch (e) {
-                    throw new Error(errText);
+                    const res = await fetch(getApiUrl('/api/social/post'), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!res.ok) {
+                        const errText = await res.text();
+                        let detail = errText;
+                        try { detail = JSON.parse(errText).detail || errText; } catch {}
+                        results.push({ success: false, name: 'Upload-Post', error: detail });
+                    } else {
+                        results.push({ success: true, name: 'Upload-Post' });
+                    }
+                } catch (err) {
+                    results.push({ success: false, name: 'Upload-Post', error: err.message });
                 }
             }
 
-            setPostResult({ success: true, msg: isScheduling ? "Scheduled successfully!" : "Posted successfully!" });
-            setTimeout(() => {
-                setShowModal(false);
-                setPostResult(null);
-            }, 3000);
+            setPostProgress(null);
+
+            // Aggregate results
+            const succeeded = results.filter(r => r.success);
+            const failed = results.filter(r => !r.success);
+
+            if (failed.length === 0) {
+                const msg = isScheduling
+                    ? `Scheduled to ${succeeded.length} channel${succeeded.length > 1 ? 's' : ''}!`
+                    : `Posted to ${succeeded.length} channel${succeeded.length > 1 ? 's' : ''}!`;
+                setPostResult({ success: true, msg });
+                setTimeout(() => {
+                    setShowModal(false);
+                    setPostResult(null);
+                }, 3000);
+            } else if (succeeded.length === 0) {
+                const failNames = failed.map(f => f.name).join(', ');
+                setPostResult({ success: false, msg: `Failed for all channels: ${failNames}` });
+            } else {
+                const failNames = failed.map(f => f.name).join(', ');
+                setPostResult({
+                    success: true,
+                    msg: `Posted to ${succeeded.length}/${results.length} channels. Failed: ${failNames}`
+                });
+                setTimeout(() => {
+                    setShowModal(false);
+                    setPostResult(null);
+                }, 4000);
+            }
 
         } catch (e) {
             setPostResult({ success: false, msg: `Failed: ${e.message}` });
@@ -578,6 +649,16 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                     </h3>
                     <div className="flex flex-wrap gap-2 text-[10px] text-zinc-500 font-mono">
                         <span className="bg-white/5 px-1.5 py-0.5 rounded border border-white/5 shrink-0">{Math.floor(clip.end - clip.start)}s</span>
+                        {clip.confidence_label && (
+                            <span className={`px-1.5 py-0.5 rounded border shrink-0 ${
+                                clip.confidence_label === 'EMAS' ? 'bg-yellow-500/20 border-yellow-500/30 text-yellow-400' :
+                                clip.confidence_label === 'PERAK' ? 'bg-zinc-400/20 border-zinc-400/30 text-zinc-300' :
+                                'bg-orange-800/20 border-orange-800/30 text-orange-400'
+                            }`}>{clip.confidence_label}</span>
+                        )}
+                        {typeof clip.score === 'number' && (
+                            <span className="bg-white/5 px-1.5 py-0.5 rounded border border-white/5 shrink-0">{(clip.score * 100).toFixed(0)}%</span>
+                        )}
                         <span className="bg-white/5 px-1.5 py-0.5 rounded border border-white/5 shrink-0">#shorts</span>
                         <span className="bg-white/5 px-1.5 py-0.5 rounded border border-white/5 shrink-0">#viral</span>
                     </div>
@@ -707,7 +788,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                             <label className="block text-xs font-bold text-zinc-400 mb-2">Upload Provider</label>
                             <div className="grid grid-cols-3 gap-2">
                                 <button
-                                    onClick={() => setUploadProvider('upload-post')}
+                                    onClick={() => { setUploadProvider('upload-post'); setSelectedReplizAccounts([]); setSelectedBufferChannels([]); }}
                                     className={`p-3 rounded-lg border text-xs font-medium transition-all ${uploadProvider === 'upload-post'
                                         ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
                                         : 'bg-white/5 border-white/10 text-zinc-400 hover:bg-white/10'}`}
@@ -716,7 +797,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                                     <div className="text-[10px] mt-1 opacity-70">Multi-platform</div>
                                 </button>
                                 <button
-                                    onClick={() => setUploadProvider('repliz')}
+                                    onClick={() => { setUploadProvider('repliz'); setSelectedBufferChannels([]); }}
                                     className={`p-3 rounded-lg border text-xs font-medium transition-all ${uploadProvider === 'repliz'
                                         ? 'bg-blue-500/10 border-blue-500/30 text-blue-400'
                                         : 'bg-white/5 border-white/10 text-zinc-400 hover:bg-white/10'}`}
@@ -725,7 +806,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                                     <div className="text-[10px] mt-1 opacity-70">Single platform</div>
                                 </button>
                                 <button
-                                    onClick={() => setUploadProvider('buffer')}
+                                    onClick={() => { setUploadProvider('buffer'); setSelectedReplizAccounts([]); }}
                                     className={`p-3 rounded-lg border text-xs font-medium transition-all ${uploadProvider === 'buffer'
                                         ? 'bg-purple-500/10 border-purple-500/30 text-purple-400'
                                         : 'bg-white/5 border-white/10 text-zinc-400 hover:bg-white/10'}`}
@@ -754,19 +835,32 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                         {uploadProvider === 'repliz' && (
                             <>
                                 <div>
-                                    <label className="block text-xs font-bold text-zinc-400 mb-1">Repliz Account</label>
-                                    <select
-                                        value={selectedReplizAccount}
-                                        onChange={(e) => setSelectedReplizAccount(e.target.value)}
-                                        className="w-full bg-black/40 border border-white/10 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-blue-500/50"
-                                    >
-                                        <option value="">Select an account...</option>
+                                    <label className="block text-xs font-bold text-zinc-400 mb-2">Repliz Accounts</label>
+                                    <div className="grid grid-cols-1 gap-2">
                                         {replizAccounts?.map(account => (
-                                            <option key={account.id} value={account.id}>
-                                                {account.name} ({account.platform})
-                                            </option>
+                                            <label key={account.id} className="flex items-center gap-3 p-3 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10 transition-colors border border-white/5">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedReplizAccounts.includes(account.id)}
+                                                    onChange={(e) => {
+                                                        if (e.target.checked) {
+                                                            setSelectedReplizAccounts([...selectedReplizAccounts, account.id]);
+                                                        } else {
+                                                            setSelectedReplizAccounts(selectedReplizAccounts.filter(id => id !== account.id));
+                                                        }
+                                                    }}
+                                                    className="w-4 h-4 rounded border-zinc-600 bg-black/50 text-blue-500 focus:ring-blue-500"
+                                                />
+                                                <div className="flex items-center gap-2 text-sm text-white">
+                                                    {account.platform === 'youtube' && <Youtube size={16} className="text-red-400" />}
+                                                    {account.platform === 'tiktok' && <Video size={16} className="text-cyan-400" />}
+                                                    {account.platform === 'instagram' && <Instagram size={16} className="text-pink-400" />}
+                                                    <span>{account.name}</span>
+                                                    <span className="text-[10px] text-zinc-500">({account.platform})</span>
+                                                </div>
+                                            </label>
                                         ))}
-                                    </select>
+                                    </div>
                                 </div>
 
                                 <div>
@@ -802,19 +896,32 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                         )}
                         {uploadProvider === 'buffer' && bufferApiKey && (
                             <div>
-                                <label className="block text-xs font-bold text-zinc-400 mb-1">Buffer Channel</label>
-                                <select
-                                    value={selectedBufferChannel}
-                                    onChange={(e) => setSelectedBufferChannel(e.target.value)}
-                                    className="w-full bg-black/40 border border-white/10 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-purple-500/50"
-                                >
-                                    <option value="">Select a channel...</option>
+                                <label className="block text-xs font-bold text-zinc-400 mb-2">Buffer Channels</label>
+                                <div className="grid grid-cols-1 gap-2">
                                     {bufferChannels?.map(ch => (
-                                        <option key={ch.id} value={ch.id}>
-                                            {ch.display_name} ({ch.service})
-                                        </option>
+                                        <label key={ch.id} className="flex items-center gap-3 p-3 bg-white/5 rounded-lg cursor-pointer hover:bg-white/10 transition-colors border border-white/5">
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedBufferChannels.includes(ch.id)}
+                                                onChange={(e) => {
+                                                    if (e.target.checked) {
+                                                        setSelectedBufferChannels([...selectedBufferChannels, ch.id]);
+                                                    } else {
+                                                        setSelectedBufferChannels(selectedBufferChannels.filter(id => id !== ch.id));
+                                                    }
+                                                }}
+                                                className="w-4 h-4 rounded border-zinc-600 bg-black/50 text-purple-500 focus:ring-purple-500"
+                                            />
+                                            <div className="flex items-center gap-2 text-sm text-white">
+                                                {ch.service === 'tiktok' && <Video size={16} className="text-cyan-400" />}
+                                                {ch.service === 'instagram' && <Instagram size={16} className="text-pink-400" />}
+                                                {ch.service === 'youtube' && <Youtube size={16} className="text-red-400" />}
+                                                <span>{ch.display_name}</span>
+                                                <span className="text-[10px] text-zinc-500">({ch.service})</span>
+                                            </div>
+                                        </label>
                                     ))}
-                                </select>
+                                </div>
                             </div>
                         )}
 
@@ -892,6 +999,13 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                             )}
                         </div>
 
+                        {postProgress && (
+                            <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/20 text-blue-200 text-xs rounded-lg flex items-center gap-2">
+                                <Loader2 size={14} className="animate-spin shrink-0" />
+                                <div>Posting to {postProgress.channel} ({postProgress.current}/{postProgress.total})...</div>
+                            </div>
+                        )}
+
                         {postResult && (
                             <div className={`mb-4 p-3 rounded-lg text-xs flex items-start gap-2 ${postResult.success ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
                                 {postResult.success ? <CheckCircle size={14} className="mt-0.5 shrink-0" /> : <AlertCircle size={14} className="mt-0.5 shrink-0" />}
@@ -901,7 +1015,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
 
                         <button
                             onClick={handlePost}
-                            disabled={posting || (uploadProvider === 'upload-post' && !uploadPostKey) || (uploadProvider === 'repliz' && (!replizAccessKey || !replizSecretKey || !selectedReplizAccount)) || (uploadProvider === 'buffer' && (!bufferApiKey || !selectedBufferChannel))}
+                            disabled={posting || (uploadProvider === 'upload-post' && !uploadPostKey) || (uploadProvider === 'repliz' && (!replizAccessKey || !replizSecretKey || selectedReplizAccounts.length === 0)) || (uploadProvider === 'buffer' && (!bufferApiKey || selectedBufferChannels.length === 0))}
                             className="w-full py-3 bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl text-white font-bold transition-all flex items-center justify-center gap-2"
                         >
                             {posting ? <><Loader2 size={16} className="animate-spin" /> {isScheduling ? 'Scheduling...' : 'Publishing...'}</> : <><Share2 size={16} /> {isScheduling ? 'Schedule Post' : 'Publish Now'}</>}

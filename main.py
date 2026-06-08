@@ -29,6 +29,9 @@ load_dotenv()
 
 # --- Constants ---
 ASPECT_RATIO = 9 / 16
+MIN_CLIP_DURATION = 15
+MAX_CLIP_DURATION = 60
+MIN_HIGHLIGHT_SCORE = 0.85
 
 GEMINI_BASE_PROMPT = """
 You are a world-class short-form video editor for TikTok, Instagram Reels, and YouTube Shorts. Identify the 3-10 most viral-worthy moments from the transcript. Each clip MUST be self-contained — a viewer watching only that clip must understand the point without prior context.
@@ -144,6 +147,240 @@ Pertama, klasifikasikan jenis konten video ini, lalu terapkan aturan yang sesuai
 }
 
 
+def _get_podcast_prompt(
+    transcript_text,
+    video_duration,
+    words_json="[]",
+    scene_boundaries="No scene data",
+    max_clips=10,
+    min_duration=None,
+    max_duration=None,
+    min_score=None,
+):
+    """Full podcast prompt adapted from ai-repurposer, outputting standard Virlo JSON."""
+    min_dur = min_duration or MIN_CLIP_DURATION
+    max_dur = max_duration or MAX_CLIP_DURATION
+    m_score = min_score or MIN_HIGHLIGHT_SCORE
+    return f"""
+# ROLE
+You are a Viral Growth Hacker and Expert Podcast Editor. Your goal is to find "Gold Nuggets" in a transcript that will stop the scroll on TikTok, Reels, and Shorts.
+
+# VIDEO METADATA
+- Total Duration: {video_duration} seconds
+- Maximum Clips: {max_clips} (return fewer if not enough high-quality moments exist)
+- Clip Duration Range: {min_dur}-{max_dur} seconds (let the natural content dictate exact duration)
+- Minimum Quality Score: {m_score} (only include clips scoring >= {m_score})
+
+# SCENE_BOUNDARIES (align clip edges here when possible):
+{scene_boundaries}
+
+# INPUT TRANSCRIPT
+{transcript_text}
+
+# WORDS_JSON (word-level timestamps for precise timing):
+{words_json}
+
+# TASK
+Analyze the transcript and identify ALL highly engaging highlights. You must look for segments where the retention will be highest. Return up to {max_clips} clips, ordered by score (highest first). Only include clips with score >= {m_score}.
+
+# SELECTION CRITERIA (The "Viral" Framework)
+1. **The "Wait, What?" Moment**: Something so unexpected or controversial it forces a replay.
+2. **High-Value Insight**: A "lightbulb moment" where the listener learns something new.
+3. **Emotional Peak**: Intense laughter, anger, sadness, or deep vulnerability.
+4. **Standalone Value**: The clip must make sense and be impactful even if the viewer hasn't seen the whole podcast.
+
+# VIRAL PATTERNS (pick the best one per clip)
+1. CURIOSITY_GAP: Opens a compelling question the viewer MUST know the answer to
+2. EMOTIONAL_PEAK: High emotion — anger, excitement, laughter, tears, intense passion
+3. VALUE_DROP: Actionable tip, life hack, insight, or framework usable immediately
+4. CONTROVERSY: Hot take, debate trigger, strong opinion that sparks comments
+5. CLIFFHANGER: Unfinished story, looming reveal
+6. STORY_BEAT: Clear setup, conflict, or resolution
+7. PATTERN_INTERRUPT: Unexpected twist, surprise reveal, "wait, what?!" moment
+8. RELATABLE_MOMENT: "That's so me" — universal experience with high shareability
+
+# CUTTING RULES
+- Start 0.2-0.4s BEFORE the hook, end 0.2-0.4s AFTER the payoff
+- NEVER cut mid-word or mid-sentence — align to topic boundaries (period, question, natural pause)
+- Align with scene boundaries when available
+- Timestamps in absolute seconds, 3 decimal places (e.g., 12.340)
+- 0 ≤ start < end ≤ VIDEO_DURATION
+
+# ANTI-HALLUCINATION RULES (CRITICAL)
+- NEVER fabricate timestamps not present in the transcript
+- NEVER write a viral_hook_text that misrepresents what is actually spoken
+- NEVER write a social_caption about a topic not discussed in the clip's timestamp range
+- NEVER invent quotes or paraphrase content that doesn't exist in the transcript
+- EVERY clip's viral_hook_text and social_caption MUST be directly derivable from the transcript text at that clip's timestamps
+- If you cannot find enough genuinely engaging moments, return FEWER clips — do NOT pad with mediocre or fabricated content
+
+# CONFIDENCE ASSESSMENT
+After generating clips, assess the quality of your analysis:
+1. **analysis_confidence** (0.0-1.0): How confident are you in identifying the best moments?
+2. **needs_deep_analysis** (true/false): Flag true if content has nuanced insights or layered storytelling.
+3. **complexity_reason** (string): Brief explanation if needs_deep_analysis is true.
+
+# OUTPUT REQUIREMENTS (IN INDONESIAN)
+For each clip, generate:
+1. **Timestamps**: Precise start and end (decimal) matching actual transcript timestamps.
+2. **Viral Hook**: MUST be provocative, grounded in what is actually said. MAX 6 WORDS, ALL CAPS.
+3. **Score**: Float from {m_score} to 1.0. Only include truly engaging moments.
+4. **Reasoning**: 2-3 sentences. MUST quote or reference the specific transcript content that makes this clip engaging.
+5. **Social Caption**: Engaging caption + 3-5 hashtags. MUST accurately describe the actual clip content.
+
+# STRICT JSON FORMAT
+Return ONLY a valid JSON object. No conversational filler.
+
+{{
+  "content_type": "PODCAST",
+  "analysis_confidence": float,
+  "needs_deep_analysis": false,
+  "complexity_reason": "",
+  "shorts": [
+    {{
+      "start": float,
+      "end": float,
+      "score": float,
+      "reasoning": "2-3 sentences quoting specific transcript content",
+      "viral_pattern_type": "<one of the 8 patterns above>",
+      "viral_hook_text": "MAX 6 WORDS ALL CAPS",
+      "social_caption": "engaging caption + 3-5 hashtags"
+    }}
+  ]
+}}
+
+# CRITICAL RULES
+- Each clip MUST be between {min_dur} and {max_dur} seconds.
+- The "viral_hook_text" field MUST NOT exceed 6 words.
+- NO mid-sentence cuts. Start and end on natural pauses.
+- All text (except hashtags) MUST be in natural, engaging INDONESIAN.
+- Ensure timestamps match the transcript markers exactly.
+- **Grounding First**: Title and caption MUST reflect the actual spoken content at the clip's timestamps.
+- **Quality Over Quantity**: Only include clips scoring >= {m_score}. Return fewer clips if not enough quality moments exist.
+"""
+
+
+def _get_podcast_comedy_prompt(
+    transcript_text,
+    video_duration,
+    words_json="[]",
+    scene_boundaries="No scene data",
+    max_clips=10,
+    min_duration=None,
+    max_duration=None,
+    min_score=None,
+):
+    """Full comedy podcast prompt adapted from ai-repurposer, outputting standard Virlo JSON."""
+    min_dur = min_duration or MIN_CLIP_DURATION
+    max_dur = max_duration or MAX_CLIP_DURATION
+    m_score = min_score or MIN_HIGHLIGHT_SCORE
+    return f"""
+# ROLE
+You are a Viral Comedy Scout. Your job is to find the absolute funniest "Comedic Beats" from this transcript that will go viral on TikTok and Reels.
+
+# VIDEO METADATA
+- Content Type: COMEDY PODCAST
+- Total Duration: {video_duration} seconds
+- Maximum Clips: {max_clips} (return fewer if not enough high-quality moments exist)
+- Clip Duration Range: {min_dur}-{max_dur} seconds (let the natural content dictate exact duration)
+- Minimum Quality Score: {m_score} (only include clips scoring >= {m_score})
+
+# SCENE_BOUNDARIES (align clip edges here when possible):
+{scene_boundaries}
+
+# INPUT TRANSCRIPT
+{transcript_text}
+
+# WORDS_JSON (word-level timestamps for precise timing):
+{words_json}
+
+# TASK
+Identify ALL hilarious moments. Return up to {max_clips} clips, ordered by score (highest first). Only include clips with score >= {m_score}.
+
+# THE COMEDY BEAT FORMULA (CRITICAL)
+For each clip, you MUST capture the full cycle:
+1. **The Setup (Start 5-8s early)**: Give context so the joke makes sense.
+2. **The Build**: The rising tension or banter.
+3. **The Punchline**: The hilarious payoff.
+4. **The Reaction (End 2-3s late)**: Include the laughter or shocked silence.
+
+# VIRAL PATTERNS (pick the best one per clip)
+1. CURIOSITY_GAP: Opens a compelling question the viewer MUST know the answer to
+2. EMOTIONAL_PEAK: High emotion — anger, excitement, laughter, tears, intense passion
+3. VALUE_DROP: Actionable tip, life hack, insight, or framework usable immediately
+4. CONTROVERSY: Hot take, debate trigger, strong opinion that sparks comments
+5. CLIFFHANGER: Unfinished story, looming reveal
+6. STORY_BEAT: Clear setup, conflict, or resolution
+7. PATTERN_INTERRUPT: Unexpected twist, surprise reveal, "wait, what?!" moment
+8. RELATABLE_MOMENT: "That's so me" — universal experience with high shareability
+
+# CUTTING RULES
+- Start 0.2-0.4s BEFORE the hook, end 0.2-0.4s AFTER the payoff
+- NEVER cut mid-word or mid-sentence — align to topic boundaries (period, question, natural pause)
+- Align with scene boundaries when available
+- Timestamps in absolute seconds, 3 decimal places (e.g., 12.340)
+- 0 ≤ start < end ≤ VIDEO_DURATION
+
+# PROFANITY FILTER (MANDATORY)
+You MUST identify Indonesian curse words or sensitive slang (e.g., "anjing", "bangsat", "tolol", "goblok", "kontol", etc.) in the output (viral_hook_text, reasoning).
+- SENSOR them using an asterisk (*) in the middle.
+- Example: "ANJING" -> "ANJ*NG", "TOLOL" -> "T*LOL".
+
+# ANTI-HALLUCINATION RULES (CRITICAL)
+- NEVER fabricate timestamps not present in the transcript
+- NEVER write a viral_hook_text that misrepresents what is actually spoken
+- NEVER write a social_caption about a topic not discussed in the clip's timestamp range
+- NEVER invent quotes or paraphrase content that doesn't exist in the transcript
+- EVERY clip's viral_hook_text and social_caption MUST be directly derivable from the transcript text at that clip's timestamps
+- If you cannot find enough genuinely funny moments, return FEWER clips — do NOT pad with mediocre or fabricated content
+
+# CONFIDENCE ASSESSMENT
+After generating clips, assess the quality of your analysis:
+1. **analysis_confidence** (0.0-1.0): How confident are you in identifying the funniest moments?
+2. **needs_deep_analysis** (true/false): Flag true if comedy relies on subtle timing, cultural references, or inside jokes.
+3. **complexity_reason** (string): Brief explanation if needs_deep_analysis is true.
+
+# OUTPUT REQUIREMENTS (IN INDONESIAN)
+For each clip, generate:
+1. **Timestamps**: Precise start and end (decimal) matching actual transcript timestamps.
+2. **Viral Hook**: MUST be ALL CAPS, provocative, and MAX 6 WORDS. Do not spoil the joke. Grounded in what is actually said.
+3. **Score**: Float from {m_score} to 1.0. Only include truly hilarious moments.
+4. **Reasoning**: 2-3 sentences explaining the comedic timing. MUST quote or reference the specific transcript content.
+5. **Social Caption**: Catchy caption + 5-8 comedy-focused hashtags. MUST accurately describe the actual clip content.
+
+# STRICT JSON FORMAT
+Return ONLY a valid JSON object. No conversational filler.
+
+{{
+  "content_type": "PODCAST_COMEDY",
+  "analysis_confidence": float,
+  "needs_deep_analysis": false,
+  "complexity_reason": "",
+  "shorts": [
+    {{
+      "start": float,
+      "end": float,
+      "score": float,
+      "reasoning": "2-3 sentences quoting specific transcript content",
+      "viral_pattern_type": "<one of the 8 patterns above>",
+      "viral_hook_text": "MAX 6 WORDS ALL CAPS CENSORED",
+      "social_caption": "catchy caption + 5-8 hashtags"
+    }}
+  ]
+}}
+
+# CRITICAL RULES
+- **HOOK LIMIT**: Strictly MAX 6 WORDS for the "viral_hook_text" field.
+- **ALL CAPS HOOK**: Use ALL CAPS for the "viral_hook_text" field.
+- **CENSORSHIP**: If a funny moment involves a curse word, sensor it in the JSON output.
+- **DURATION**: Each clip MUST be between {min_dur} and {max_dur} seconds.
+- **COMEDY MARKERS**: Prioritize segments with "(laughs)", "hahaha", or rapid banter.
+- **NO MID-WORD CUTS**: Always start and end on natural pauses or laughter aftermath.
+- **Grounding First**: Title and caption MUST reflect the actual spoken content at the clip's timestamps.
+- **Quality Over Quantity**: Only include clips scoring >= {m_score}. Return fewer clips if not enough quality moments exist.
+"""
+
+
 def _build_prompt(
     video_duration,
     language,
@@ -153,6 +390,15 @@ def _build_prompt(
     category="general",
 ):
     """Build the full Gemini prompt by injecting category-specific instructions."""
+    if category == "podcast":
+        return _get_podcast_prompt(
+            transcript_text, video_duration, words_json, scene_boundaries
+        )
+    elif category == "podcast_comedy":
+        return _get_podcast_comedy_prompt(
+            transcript_text, video_duration, words_json, scene_boundaries
+        )
+
     cat_instructions = CATEGORY_INSTRUCTIONS.get(
         category, CATEGORY_INSTRUCTIONS["general"]
     )
@@ -1488,9 +1734,14 @@ def _min_confidence_score(min_confidence):
 
 def post_process_clips(result_json, min_confidence=0.5, max_overlap=0.7, max_clips=10):
     """Filter, deduplicate, and rank clips by quality, duration, and diversity."""
-    shorts = result_json.get("shorts", [])
+    shorts = result_json.get("shorts") or result_json.get("highlights", [])
     if not shorts:
         return result_json
+
+    # Normalize score → confidence for downstream consumers
+    for s in shorts:
+        if "score" in s and "confidence" not in s:
+            s["confidence"] = s["score"]
 
     # Normalize all confidence values to numeric for consistent filtering/sorting
     for s in shorts:
@@ -2080,6 +2331,7 @@ if __name__ == "__main__":
         type=str,
         choices=[
             "podcast",
+            "podcast_comedy",
             "tutorial",
             "gaming",
             "reaction",
