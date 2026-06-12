@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Upload, FileVideo, Sparkles, Youtube, Instagram, Share2, LogOut, ChevronDown, Check, Activity, LayoutDashboard, Settings, PlusCircle, History, Menu, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Layers } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
@@ -166,9 +166,23 @@ function App() {
   const [logsVisible, setLogsVisible] = useState(true);
   const [processingMedia, setProcessingMedia] = useState(null);
 
+  const BATCH_SESSION_KEY = 'openshorts_batch_session';
+
   // Batch processing state
   // Each entry: { id, jobId, status: 'queued'|'submitting'|'processing'|'complete'|'error', media, results, logs, error }
-  const [batchJobs, setBatchJobs] = useState([]);
+  const [batchJobs, setBatchJobs] = useState(() => {
+    try {
+      const saved = localStorage.getItem(BATCH_SESSION_KEY);
+      if (!saved) return [];
+      const parsed = JSON.parse(saved);
+      // Restore jobs that were in-flight; mark them processing so polling picks them up
+      return parsed.map(j => ({
+        ...j,
+        status: (j.status === 'submitting' || j.status === 'processing') ? 'processing' : j.status,
+      }));
+    } catch (_) { return []; }
+  });
+  const batchJobsRef = useRef(batchJobs);
   const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, settings
 
   const [sessionRecovered, setSessionRecovered] = useState(false);
@@ -302,12 +316,22 @@ function App() {
   }, [status, jobId]);
 
 
-  // Batch polling — runs whenever batchJobs changes
+  // Keep ref in sync so the polling interval always sees the latest state
   useEffect(() => {
-    const active = batchJobs.filter(j => j.status === 'processing' && j.jobId);
-    if (active.length === 0) return;
+    batchJobsRef.current = batchJobs;
+    // Persist to localStorage (strip non-serialisable file payloads — only metadata needed)
+    try {
+      const serialisable = batchJobs.map(j => ({ ...j })); // payloads are never stored here
+      localStorage.setItem(BATCH_SESSION_KEY, JSON.stringify(serialisable));
+    } catch (_) {}
+  }, [batchJobs]);
 
+  // Batch polling — single long-lived interval reads from ref to avoid stale-closure resets
+  useEffect(() => {
     const interval = setInterval(async () => {
+      const active = batchJobsRef.current.filter(j => j.status === 'processing' && j.jobId);
+      if (active.length === 0) return;
+
       await Promise.allSettled(active.map(async (bj) => {
         try {
           const data = await pollJob(bj.jobId);
@@ -327,7 +351,7 @@ function App() {
     }, 2500);
 
     return () => clearInterval(interval);
-  }, [batchJobs]);
+  }, []); // ← empty deps: interval is created once, reads live state via ref
 
   const handleBatchProcess = async (items) => {
     if (!apiKey) { setShowKeyModal(true); return; }
@@ -1116,7 +1140,7 @@ function App() {
                   )}
                 </div>
                 <button
-                  onClick={() => setBatchJobs([])}
+                  onClick={() => { setBatchJobs([]); localStorage.removeItem(BATCH_SESSION_KEY); }}
                   className="text-xs text-zinc-500 hover:text-white flex items-center gap-1.5 transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5"
                 >
                   <RotateCcw size={13} /> New Session
