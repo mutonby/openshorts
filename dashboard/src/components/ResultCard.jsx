@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, CheckCircle, AlertCircle, X, Loader2, Copy, Wand2, Type, Calendar, Clock, Languages } from 'lucide-react';
+import { Download, Share2, Instagram, Youtube, Video, CheckCircle, AlertCircle, X, Loader2, Copy, Wand2, Type, Calendar, Clock, Languages, Trash2 } from 'lucide-react';
 import { getApiUrl } from '../config';
 import SubtitleModal from './SubtitleModal';
 import HookModal from './HookModal';
 import TranslateModal from './TranslateModal';
 import { renderInBrowser } from '../lib/renderInBrowser';
 
-export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, onPlay, onPause }) {
+export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, onPlay, onPause, onDelete }) {
     const [showModal, setShowModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
     const videoRef = React.useRef(null);
@@ -33,6 +33,8 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
     const [showHookModal, setShowHookModal] = useState(false);
     const [showTranslateModal, setShowTranslateModal] = useState(false);
     const [editError, setEditError] = useState(null);
+    const [confirmDelete, setConfirmDelete] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
 
     const [clipDuration, setClipDuration] = useState(clip.end && clip.start ? clip.end - clip.start : 30);
 
@@ -382,6 +384,21 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
         }
     };
 
+    const handleDelete = async () => {
+        setIsDeleting(true);
+        try {
+            const res = await fetch(getApiUrl(`/api/clip/${jobId}/${index}`), { method: 'DELETE' });
+            if (!res.ok) throw new Error(await res.text());
+            onDelete && onDelete(index);
+        } catch (e) {
+            setEditError(e.message);
+            setTimeout(() => setEditError(null), 5000);
+        } finally {
+            setIsDeleting(false);
+            setConfirmDelete(false);
+        }
+    };
+
     return (
         <div className="bg-surface border border-white/5 rounded-2xl overflow-hidden flex flex-col md:flex-row group hover:border-white/10 transition-all animate-[fadeIn_0.5s_ease-out] min-h-[300px] h-auto" style={{ animationDelay: `${index * 0.1}s` }}>
             {/* Left: Video Preview (Responsive Width) */}
@@ -536,6 +553,34 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                     >
                         <Download size={14} className="shrink-0" /> Download
                     </button>
+
+                    {/* Delete — full width, with inline confirm */}
+                    {!confirmDelete ? (
+                        <button
+                            onClick={() => setConfirmDelete(true)}
+                            className="col-span-2 py-2 bg-white/5 hover:bg-red-500/10 text-zinc-500 hover:text-red-400 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-2 border border-white/5 hover:border-red-500/20"
+                        >
+                            <Trash2 size={13} className="shrink-0" /> Delete Clip
+                        </button>
+                    ) : (
+                        <div className="col-span-2 flex gap-2 animate-[fadeIn_0.15s_ease-out]">
+                            <button
+                                onClick={() => setConfirmDelete(false)}
+                                disabled={isDeleting}
+                                className="flex-1 py-2 bg-white/5 hover:bg-white/10 text-zinc-400 rounded-lg text-xs font-medium transition-colors border border-white/5"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleDelete}
+                                disabled={isDeleting}
+                                className="flex-1 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 hover:text-red-300 rounded-lg text-xs font-bold transition-colors border border-red-500/30 flex items-center justify-center gap-1.5"
+                            >
+                                {isDeleting ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                                {isDeleting ? 'Deleting...' : 'Confirm Delete'}
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
 

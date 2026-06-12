@@ -10,6 +10,7 @@ const LANGUAGES = {
     "pt": "Portuguese",
     "pl": "Polish",
     "hi": "Hindi",
+    "mr": "Marathi",
     "ja": "Japanese",
     "ko": "Korean",
     "zh": "Chinese",

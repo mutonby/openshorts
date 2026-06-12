@@ -145,16 +145,39 @@ def hex_to_ass_color(hex_color, opacity=1.0):
     return f"&H{alpha:02X}{b:02X}{g:02X}{r:02X}"
 
 
+LANGUAGE_FONTS = {
+    "hi": "Noto Sans Devanagari",
+    "mr": "Noto Sans Devanagari",
+    "ne": "Noto Sans Devanagari",
+    "ar": "Noto Sans Arabic",
+    "ja": "Noto Sans CJK JP",
+    "ko": "Noto Sans CJK KR",
+    "zh": "Noto Sans CJK SC",
+    "ta": "Noto Sans Tamil",
+    "th": "Noto Sans Thai",
+}
+
+
+def get_font_for_language(language_code: str, default: str = "Verdana") -> str:
+    """Return an appropriate font name for the given ISO 639-1 language code."""
+    return LANGUAGE_FONTS.get(language_code, default)
+
+
 def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
                    font_name="Verdana", font_color="#FFFFFF",
                    border_color="#000000", border_width=2,
-                   bg_color="#000000", bg_opacity=0.0):
+                   bg_color="#000000", bg_opacity=0.0,
+                   language: str = "en"):
     """
     Burns subtitles into the video using FFmpeg.
     Supports two modes:
     - Outline mode (bg_opacity=0): Text with colored outline/border
     - Box mode (bg_opacity>0): Text with semi-transparent background box
     """
+    # Override font if the requested font can't render this language's script
+    if font_name == "Verdana":
+        font_name = get_font_for_language(language, default="Verdana")
+
     # Position mapping
     ass_alignment = 2
     align_lower = str(alignment).lower()

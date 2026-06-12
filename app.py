@@ -29,7 +29,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # Default to 1 if not set, but user can set higher for powerful servers
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "5"))
 MAX_FILE_SIZE_MB = 2048  # 2GB limit
-JOB_RETENTION_SECONDS = 3600  # 1 hour retention
+JOB_RETENTION_SECONDS = int(os.environ.get("JOB_RETENTION_SECONDS", str(24 * 3600)))  # default 24 hours
 DISABLE_YOUTUBE_URL = os.environ.get("DISABLE_YOUTUBE_URL", "false").lower() in ("1", "true", "yes")
 
 # Application State
@@ -822,13 +822,15 @@ async def add_subtitles(req: SubtitleRequest):
              raise HTTPException(status_code=400, detail="No words found for this clip range.")
 
         # 2. Burn Subtitles
+        video_language = transcript.get("language", "en") if not is_dubbed else "en"
         # Run in thread pool
         def run_burn():
              burn_subtitles(input_path, srt_path, output_path,
                            alignment=req.position, fontsize=req.font_size,
                            font_name=req.font_name, font_color=req.font_color,
                            border_color=req.border_color, border_width=req.border_width,
-                           bg_color=req.bg_color, bg_opacity=req.bg_opacity)
+                           bg_color=req.bg_color, bg_opacity=req.bg_opacity,
+                           language=video_language)
         
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, run_burn)
@@ -861,6 +863,51 @@ async def add_subtitles(req: SubtitleRequest):
         "success": True,
         "new_video_url": f"/videos/{req.job_id}/{output_filename}"
     }
+
+@app.delete("/api/clip/{job_id}/{clip_index}")
+async def delete_clip(job_id: str, clip_index: int):
+    """Delete a single clip's video file and remove it from job metadata."""
+    output_dir = os.path.join(OUTPUT_DIR, job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+
+    with open(json_files[0], 'r') as f:
+        data = json.load(f)
+
+    clips = data.get('shorts', [])
+    if clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    clip_data = clips[clip_index]
+    video_filename = clip_data.get('video_url', '').split('/')[-1]
+
+    # Delete every version of this clip (subtitled_, translated_, edited_, etc.)
+    deleted = []
+    if video_filename:
+        for fname in os.listdir(output_dir):
+            if fname.endswith('.mp4') and (fname == video_filename or fname.endswith(f'_{video_filename}')):
+                try:
+                    os.remove(os.path.join(output_dir, fname))
+                    deleted.append(fname)
+                except OSError:
+                    pass
+
+    # Remove from metadata
+    clips.pop(clip_index)
+    data['shorts'] = clips
+    with open(json_files[0], 'w') as f:
+        json.dump(data, f, indent=4)
+
+    # Update in-memory state
+    if job_id in jobs and 'result' in jobs[job_id]:
+        in_mem = jobs[job_id]['result'].get('clips', [])
+        if clip_index < len(in_mem):
+            in_mem.pop(clip_index)
+
+    return {"success": True, "deleted_files": deleted}
+
 
 class HookRequest(BaseModel):
     job_id: str

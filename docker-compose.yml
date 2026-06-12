@@ -2,6 +2,7 @@ services:
   backend:
     build: .
     container_name: openshorts-backend
+    user: "0"
     ports:
       - "8000:8000"
     volumes:

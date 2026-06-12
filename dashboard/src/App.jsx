@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, FileVideo, Sparkles, Youtube, Instagram, Share2, LogOut, ChevronDown, Check, Activity, LayoutDashboard, Settings, PlusCircle, History, Menu, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2 } from 'lucide-react';
+import { Upload, FileVideo, Sparkles, Youtube, Instagram, Share2, LogOut, ChevronDown, Check, Activity, LayoutDashboard, Settings, PlusCircle, History, Menu, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Layers } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import ResultCard from './components/ResultCard';
+import BatchJobPanel from './components/BatchJobPanel';
 import ProcessingAnimation from './components/ProcessingAnimation';
 // import Gallery from './components/Gallery';
 import ThumbnailStudio from './components/ThumbnailStudio';
@@ -164,6 +165,10 @@ function App() {
   const [logs, setLogs] = useState([]);
   const [logsVisible, setLogsVisible] = useState(true);
   const [processingMedia, setProcessingMedia] = useState(null);
+
+  // Batch processing state
+  // Each entry: { id, jobId, status: 'queued'|'submitting'|'processing'|'complete'|'error', media, results, logs, error }
+  const [batchJobs, setBatchJobs] = useState([]);
   const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, settings
 
   const [sessionRecovered, setSessionRecovered] = useState(false);
@@ -296,6 +301,84 @@ function App() {
     return () => clearInterval(interval);
   }, [status, jobId]);
 
+
+  // Batch polling — runs whenever batchJobs changes
+  useEffect(() => {
+    const active = batchJobs.filter(j => j.status === 'processing' && j.jobId);
+    if (active.length === 0) return;
+
+    const interval = setInterval(async () => {
+      await Promise.allSettled(active.map(async (bj) => {
+        try {
+          const data = await pollJob(bj.jobId);
+          if (data.status === 'completed') {
+            setBatchJobs(prev => prev.map(j => j.id === bj.id
+              ? { ...j, status: 'complete', results: data.result, logs: data.logs || j.logs }
+              : j));
+          } else if (data.status === 'failed') {
+            setBatchJobs(prev => prev.map(j => j.id === bj.id
+              ? { ...j, status: 'error', error: data.error || 'Processing failed', logs: data.logs || j.logs }
+              : j));
+          } else if (data.logs) {
+            setBatchJobs(prev => prev.map(j => j.id === bj.id ? { ...j, logs: data.logs } : j));
+          }
+        } catch (_) {}
+      }));
+    }, 2500);
+
+    return () => clearInterval(interval);
+  }, [batchJobs]);
+
+  const handleBatchProcess = async (items) => {
+    if (!apiKey) { setShowKeyModal(true); return; }
+
+    // Reset single-job state to avoid confusion
+    setStatus('idle');
+    setJobId(null);
+    setResults(null);
+
+    const initial = items.map(item => ({
+      id: item.id,
+      jobId: null,
+      status: 'submitting',
+      media: { type: item.type, name: item.name },
+      results: null,
+      logs: [],
+      error: null,
+    }));
+    setBatchJobs(initial);
+
+    // Submit all in parallel
+    await Promise.allSettled(items.map(async (item) => {
+      try {
+        let body;
+        const headers = { 'X-Gemini-Key': apiKey };
+        if (item.type === 'url') {
+          headers['Content-Type'] = 'application/json';
+          body = JSON.stringify({ url: item.payload, acknowledged: true });
+        } else {
+          const fd = new FormData();
+          fd.append('file', item.payload);
+          fd.append('acknowledged', 'true');
+          body = fd;
+        }
+        const res = await fetch(getApiUrl('/api/process'), {
+          method: 'POST',
+          headers: item.type === 'url' ? headers : { 'X-Gemini-Key': apiKey },
+          body,
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const { job_id } = await res.json();
+        setBatchJobs(prev => prev.map(j => j.id === item.id
+          ? { ...j, jobId: job_id, status: 'processing' }
+          : j));
+      } catch (e) {
+        setBatchJobs(prev => prev.map(j => j.id === item.id
+          ? { ...j, status: 'error', error: e.message }
+          : j));
+      }
+    }));
+  };
 
   const fetchUserProfiles = async () => {
     if (!uploadPostKey) return;
@@ -873,7 +956,11 @@ function App() {
                   </p>
                 </div>
 
-                <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} />
+                <MediaInput
+                  onProcess={handleProcess}
+                  onBatchProcess={handleBatchProcess}
+                  isProcessing={status === 'processing' || batchJobs.some(j => j.status === 'processing' || j.status === 'submitting')}
+                />
 
                 <div className="flex items-center justify-center gap-8 text-zinc-500 text-sm">
                   <span className="flex items-center gap-2"><Youtube size={16} /> YouTube</span>
@@ -981,6 +1068,10 @@ function App() {
                           elevenLabsKey={elevenLabsKey}
                           onPlay={(time) => handleClipPlay(time)}
                           onPause={handleClipPause}
+                          onDelete={(deletedIndex) => setResults(prev => ({
+                            ...prev,
+                            clips: prev.clips.filter((_, ci) => ci !== deletedIndex)
+                          }))}
                         />
                       ))}
                     </div>
@@ -999,6 +1090,57 @@ function App() {
                 </div>
               </div>
 
+            </div>
+          )}
+
+          {/* View: Batch Processing */}
+          {activeTab === 'dashboard' && batchJobs.length > 0 && status === 'idle' && (
+            <div className="h-full flex flex-col animate-[fadeIn_0.3s_ease-out]">
+              {/* Batch header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 shrink-0">
+                <div className="flex items-center gap-3">
+                  <Layers className="text-primary" size={20} />
+                  <h2 className="text-lg font-semibold text-white">Batch Processing</h2>
+                  <span className="text-xs bg-white/10 text-white px-2 py-0.5 rounded-full">
+                    {batchJobs.length} videos
+                  </span>
+                  {batchJobs.some(j => j.status === 'processing' || j.status === 'submitting') && (
+                    <span className="text-xs bg-primary/10 border border-primary/20 text-primary px-2 py-0.5 rounded-full animate-pulse">
+                      {batchJobs.filter(j => j.status === 'processing').length} running
+                    </span>
+                  )}
+                  {batchJobs.every(j => j.status === 'complete' || j.status === 'error') && (
+                    <span className="text-xs bg-green-500/10 border border-green-500/20 text-green-400 px-2 py-0.5 rounded-full">
+                      All done — {batchJobs.filter(j => j.status === 'complete').length} completed
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={() => setBatchJobs([])}
+                  className="text-xs text-zinc-500 hover:text-white flex items-center gap-1.5 transition-colors px-3 py-1.5 rounded-lg hover:bg-white/5"
+                >
+                  <RotateCcw size={13} /> New Session
+                </button>
+              </div>
+
+              {/* Job list */}
+              <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-3">
+                {batchJobs.map(job => (
+                  <BatchJobPanel
+                    key={job.id}
+                    job={job}
+                    uploadPostKey={uploadPostKey}
+                    uploadUserId={uploadUserId}
+                    geminiApiKey={apiKey}
+                    elevenLabsKey={elevenLabsKey}
+                    onDeleteClip={(jobLocalId, clipIndex) => {
+                      setBatchJobs(prev => prev.map(j => j.id === jobLocalId
+                        ? { ...j, results: { ...j.results, clips: j.results.clips.filter((_, ci) => ci !== clipIndex) } }
+                        : j));
+                    }}
+                  />
+                ))}
+              </div>
             </div>
           )}
 

@@ -823,12 +823,30 @@ def get_viral_clips(transcript_result, video_duration):
         words_json=json.dumps(words)
     )
 
+    max_attempts = 3
+    last_error = None
+    response = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            if attempt > 1:
+                wait = 2 ** (attempt - 1)  # 2s, 4s
+                print(f"⏳ Retry {attempt}/{max_attempts} — waiting {wait}s...")
+                time.sleep(wait)
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt
+            )
+            last_error = None
+            break
+        except Exception as e:
+            last_error = e
+            print(f"❌ Gemini Error (attempt {attempt}/{max_attempts}): {e}")
+
+    if last_error is not None:
+        print(f"❌ All {max_attempts} Gemini attempts failed.")
+        return None
+
     try:
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt
-        )
-        
         # --- Cost Calculation ---
         try:
             usage = response.usage_metadata
@@ -880,7 +898,7 @@ def get_viral_clips(transcript_result, video_duration):
             
         return result_json
     except Exception as e:
-        print(f"❌ Gemini Error: {e}")
+        print(f"❌ Gemini response parsing error: {e}")
         return None
 
 if __name__ == '__main__':
@@ -961,8 +979,24 @@ if __name__ == '__main__':
         
         if not clips_data or 'shorts' not in clips_data:
             print("❌ Failed to identify clips. Converting whole video as fallback.")
-            output_file = os.path.join(output_dir, f"{video_title}_vertical.mp4")
+            clip_filename = f"{video_title}_clip_1.mp4"
+            output_file = os.path.join(output_dir, clip_filename)
             process_video_to_vertical(input_video, output_file)
+            # Write minimal metadata so app.py can surface the result
+            fallback_meta = {
+                "shorts": [{
+                    "start": 0,
+                    "end": duration,
+                    "video_title_for_youtube_short": video_title,
+                    "hook": "",
+                    "why_viral": "Full video fallback (Gemini unavailable)",
+                }],
+                "cost_analysis": None,
+            }
+            metadata_file = os.path.join(output_dir, f"{video_title}_metadata.json")
+            with open(metadata_file, 'w') as f:
+                json.dump(fallback_meta, f, indent=2)
+            print(f"   Saved fallback metadata to {metadata_file}")
         else:
             print(f"🔥 Found {len(clips_data['shorts'])} viral clips!")
             
