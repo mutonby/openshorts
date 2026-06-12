@@ -1,6 +1,61 @@
 import os
 import subprocess
 
+# Native-script seed prompts per language code.
+# Passing one of these as initial_prompt forces Whisper's decoder to stay
+# in the correct Unicode block (e.g. Devanagari for hi/mr) instead of
+# hallucinating phonetically-similar Arabic or Latin codepoints.
+_SCRIPT_SEED = {
+    'hi': 'हिंदी',
+    'mr': 'मराठी',
+    'ne': 'नेपाली',
+    'sa': 'संस्कृत',
+    'ar': 'العربية',
+    'fa': 'فارسی',
+    'ur': 'اردو',
+    'ta': 'தமிழ்',
+    'te': 'తెలుగు',
+    'kn': 'ಕನ್ನಡ',
+    'ml': 'മലയാളം',
+    'th': 'ภาษาไทย',
+    'zh': '中文',
+    'ja': '日本語',
+    'ko': '한국어',
+}
+
+
+def _whisper_transcribe(model, audio_path, word_timestamps=True):
+    """
+    Two-pass transcription that prevents Whisper from using the wrong
+    Unicode script for non-Latin languages:
+      1. Fast pass (beam_size=1, no word timestamps) to detect language.
+      2. Full pass with the detected language + a native-script seed prompt
+         so the decoder is anchored to the correct codepoint range.
+    """
+    # Pass 1 — language detection only (fast)
+    detect_segs, info = model.transcribe(
+        audio_path,
+        word_timestamps=False,
+        beam_size=1,
+        without_timestamps=True,
+    )
+    for _ in detect_segs:
+        pass  # consume generator to complete detection
+
+    lang = info.language
+    seed = _SCRIPT_SEED.get(lang)
+    print(f"   Detected language '{lang}' ({info.language_probability:.2f})"
+          f"{' — using script seed prompt' if seed else ''}")
+
+    # Pass 2 — full transcription with language + optional seed prompt
+    segments, info = model.transcribe(
+        audio_path,
+        word_timestamps=word_timestamps,
+        language=lang,
+        initial_prompt=seed,
+    )
+    return segments, info
+
 
 def transcribe_audio(video_path):
     """
@@ -14,7 +69,7 @@ def transcribe_audio(video_path):
     # Run on CPU with INT8 quantization for speed
     model = WhisperModel("base", device="cpu", compute_type="int8")
 
-    segments, info = model.transcribe(video_path, word_timestamps=True)
+    segments, info = _whisper_transcribe(model, video_path, word_timestamps=True)
 
     transcript = {
         "segments": [],

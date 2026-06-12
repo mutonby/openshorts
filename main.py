@@ -750,13 +750,16 @@ def process_video_to_vertical(input_video, final_output_video):
 def transcribe_video(video_path):
     print("🎙️  Transcribing video with Faster-Whisper (CPU Optimized)...")
     from faster_whisper import WhisperModel
-    
+    from subtitles import _whisper_transcribe
+
     # Run on CPU with INT8 quantization for speed
     model = WhisperModel("base", device="cpu", compute_type="int8")
-    
-    segments, info = model.transcribe(video_path, word_timestamps=True)
-    
-    print(f"   Detected language '{info.language}' with probability {info.language_probability:.2f}")
+
+    # Two-pass transcription: detect language first, then re-transcribe with
+    # language + native-script seed so Devanagari/Arabic/CJK aren't garbled.
+    segments, info = _whisper_transcribe(model, video_path, word_timestamps=True)
+
+    print(f"   Transcribing in '{info.language}' with probability {info.language_probability:.2f}")
     
     # Convert to openai-whisper compatible format
     transcript_segments = []
