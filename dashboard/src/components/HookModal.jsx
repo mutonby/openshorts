@@ -13,7 +13,7 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
     const [text, setText] = useState(initialText || 'POV: You are using the viral hook feature');
     const [position, setPosition] = useState('top');
     const [size, setSize] = useState('M');
-    const [entranceAnimation, setEntranceAnimation] = useState('spring');
+    const [entranceAnimation, setEntranceAnimation] = useState('none');
     const [displayDuration, setDisplayDuration] = useState(5);
 
     if (!isOpen) return null;

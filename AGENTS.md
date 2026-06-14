@@ -140,13 +140,20 @@ Use the pyramid approach — start cheap, go deep only when needed:
 4. **`codebase_search`** — full semantic search for implementation details (expensive, use last)
 
 ### Mandatory Workflow for EVERY Task
-1. **RECALL CONTEXT** → `skill` (recall) or `skill` (handoff) to load past decisions
-2. **INDEX** → `index_codebase` if code has changed since last session
-3. **PLAN** → `sequential-thinking_sequentialthinking` for non-trivial problems
-4. **SEARCH** → `codebase_peek` first, then `codebase_search` if needed
-5. **EXECUTE** → file tools + `bash` for code changes
-6. **VERIFY** → run lint, typecheck, and tests
-7. **SAVE** → `skill` (remember) to persist key decisions/learnings
+1. **RECALL** → `skill` (recall) scoped to the task at hand (not blanket dump)
+2. **PRE-FLIGHT** → `index_codebase` (always run, fast incremental check)
+3. **CLARIFY** → `question` if intent is ambiguous; skip if clear
+4. **SCOPE** → `codebase_peek` to find relevant files (metadata only, ~90% token savings vs full search)
+5. **DEEP DIVE** → `read` + `codebase_search` only on files identified in step 4
+6. **PLAN** → `sequential-thinking_sequentialthinking` for non-trivial problems
+7. **EXECUTE** → file tools + `bash` for code changes
+8. **VERIFY** → run lint, typecheck, and tests
+9. **SAVE** → `skill` (remember) to persist key decisions/learnings
+
+**When to go deep vs. abort early:**
+- **Always do steps 1-2** (Recall + Index) — cheap, high-value context
+- **Steps 3-9 scale with complexity** — simple questions ("what port is the server on?") can abort after step 2; complex features ("implement clip generator reframing") go all the way
+- If unsure, err on the side of going deeper
 
 ### When to Use Each Search Tool
 ```

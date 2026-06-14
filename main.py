@@ -5,6 +5,7 @@ import subprocess
 import argparse
 import re
 import sys
+import math
 from scenedetect import open_video, SceneManager
 from scenedetect.detectors import ContentDetector
 from ultralytics import YOLO
@@ -32,6 +33,15 @@ ASPECT_RATIO = 9 / 16
 MIN_CLIP_DURATION = 15
 MAX_CLIP_DURATION = 60
 MIN_HIGHLIGHT_SCORE = 0.85
+PODCAST_COMEDY_LANES = ("COMEDY", "HOT_TAKE", "PERSONAL_STORY")
+PODCAST_COMEDY_MAX_CANDIDATES = 24
+PODCAST_COMEDY_CONTEXT_BEFORE = 8.0
+PODCAST_COMEDY_CONTEXT_AFTER = 5.0
+PODCAST_COMEDY_HARD_MIN_DURATION = 15.0
+PODCAST_COMEDY_HARD_MAX_DURATION = 70.0
+PODCAST_COMEDY_DURATION_TOLERANCE = 5.0
+PODCAST_COMEDY_BALANCE_GAP = 0.12
+PODCAST_COMEDY_JUDGE_MIN_SCORE = 0.7
 
 GEMINI_BASE_PROMPT = """
 You are a world-class short-form video editor for TikTok, Instagram Reels, and YouTube Shorts. Identify the 3-10 most viral-worthy moments from the transcript. Each clip MUST be self-contained — a viewer watching only that clip must understand the point without prior context.
@@ -58,6 +68,12 @@ DRAMA_EMOSI: Immediate laughter, shouting, crying, or intense reaction
 Clips without any hook signal → max PERUNGGU.
 
 {category_instructions}
+
+--- QUALITY GATES ---
+- START_QUALITY_CHECK: The FIRST 2 SECONDS must contain an understandable hook, reaction, or strong claim.
+- COMPLETE_THOUGHT: Include the setup needed to understand the payoff and end after the thought resolves.
+- QUOTE_EVIDENCE: Reasoning must cite words actually present inside the selected timestamps.
+- SELF-CONTAINED CHECK: Reject clips that require earlier conversation to make sense.
 
 --- AVOID (jangan pilih ini) ---
 - Pembukaan generic: "Halo semua, kembali lagi di channel gue..."
@@ -147,6 +163,487 @@ Pertama, klasifikasikan jenis konten video ini, lalu terapkan aturan yang sesuai
 }
 
 
+def _normalize_whitespace(value):
+    """Collapse repeated whitespace and return a safe string."""
+    return " ".join(str(value or "").split())
+
+
+def _normalize_hook_text(value):
+    """Normalize hook overlays to uppercase and a maximum of six words."""
+    words = _normalize_whitespace(value or "Viral Short").split()
+    return " ".join(words[:6]).upper() or "VIRAL SHORT"
+
+
+def _safe_float(value, default=0.0):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if math.isfinite(parsed) else default
+
+
+def _safe_int(value, default):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _split_segment_for_ai(segment, max_duration=30.0):
+    """Split long timestamped segments at word boundaries."""
+    start = _safe_float(segment.get("start"))
+    end = _safe_float(segment.get("end"))
+    text = _normalize_whitespace(segment.get("text"))
+    words = sorted(
+        segment.get("words", []),
+        key=lambda word: _safe_float(word.get("start")),
+    )
+    if end - start <= max_duration or not words:
+        return [(start, end, text, words)]
+    first_word_start = _safe_float(words[0].get("start"), start)
+    last_word_end = _safe_float(words[-1].get("end"), end)
+    if first_word_start > start + 1.0 or last_word_end < end - 1.0:
+        return [(start, end, text, words)]
+
+    chunks = []
+    current_words = []
+    current_start = None
+    for word in words:
+        word_start = _safe_float(word.get("start"), start)
+        word_end = _safe_float(word.get("end"), word_start)
+        if current_words and word_end - current_start > max_duration:
+            chunk_text = _normalize_whitespace(
+                " ".join(
+                    _normalize_whitespace(item.get("word"))
+                    for item in current_words
+                )
+            )
+            chunks.append(
+                (
+                    current_start,
+                    _safe_float(current_words[-1].get("end"), current_start),
+                    chunk_text,
+                    current_words,
+                )
+            )
+            current_words = []
+            current_start = None
+        if current_start is None:
+            current_start = word_start
+        current_words.append(word)
+
+    if current_words:
+        chunk_text = _normalize_whitespace(
+            " ".join(
+                _normalize_whitespace(item.get("word")) for item in current_words
+            )
+        )
+        chunks.append(
+            (
+                current_start,
+                _safe_float(current_words[-1].get("end"), current_start),
+                chunk_text,
+                current_words,
+            )
+        )
+    return chunks
+
+
+def _build_timestamped_transcript(transcript_result):
+    """Build one compact segment transcript for AI analysis."""
+    chunks = []
+    for segment in sorted(
+        transcript_result.get("segments", []),
+        key=lambda item: _safe_float(item.get("start")),
+    ):
+        chunks.extend(_split_segment_for_ai(segment))
+
+    timestamped = []
+    for start, end, text, words in chunks:
+        if not text or end <= start:
+            continue
+        probabilities = [
+            max(0.0, min(_safe_float(word.get("probability"), 1.0), 1.0))
+            for word in words
+            if word.get("probability") is not None
+        ]
+        confidence = (
+            sum(probabilities) / len(probabilities) if probabilities else 1.0
+        )
+        timestamped.append(
+            {
+                "id": len(timestamped),
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "text": text,
+                "confidence": round(confidence, 3),
+            }
+        )
+    return timestamped
+
+
+def _segments_for_window(segments, window_start, window_end):
+    """Return only transcript segments overlapping a bounded time window."""
+    return [
+        segment
+        for segment in segments
+        if _safe_float(segment.get("end")) >= window_start
+        and _safe_float(segment.get("start")) <= window_end
+    ]
+
+
+def _build_podcast_comedy_scout_prompt(
+    timestamped_segments,
+    video_duration,
+    max_candidates=PODCAST_COMEDY_MAX_CANDIDATES,
+    window_num=1,
+    total_windows=1,
+):
+    """Build the Indonesian candidate-discovery prompt using one transcript."""
+    transcript_json = json.dumps(timestamped_segments, ensure_ascii=False)
+    return f"""
+# ROLE: INDONESIAN_PODCAST_CANDIDATE_SCOUT
+Cari kandidat clip terbaik dari podcast Indonesia dengan gaya obrolan natural,
+roasting, slang, sarkasme, hot take, dan cerita personal.
+
+# VIDEO
+- Duration: {video_duration:.3f}s
+- Window: {window_num}/{total_windows}
+- Maximum candidates across this response: {max_candidates}
+
+# CONTENT LANES
+- COMEDY: setup -> build -> punchline -> reaction bernilai
+- HOT_TAKE: klaim kuat + alasan/konsekuensi, bukan rage bait kosong
+- PERSONAL_STORY: cerita dengan perubahan, reveal, pelajaran, atau payoff emosi
+
+# QUALITY GATES
+- START_QUALITY_CHECK: hook/reaction/klaim harus dipahami dalam 1-3 detik.
+- COMPLETE_THOUGHT: sertakan konteks minimum dan akhiri setelah payoff selesai.
+- QUOTE_EVIDENCE: hook_evidence dan payoff_evidence harus berasal dari timestamp.
+- SELF-CONTAINED CHECK: tolak inside joke yang tidak bisa dipahami penonton baru.
+- Hindari salam, sponsor, filler, pengulangan, dan acknowledgement kosong.
+- SENSOR kata kasar Indonesia pada suggested_hook dengan tanda * di tengah kata.
+- COMEDY target 20-40 detik; HOT_TAKE/PERSONAL_STORY target 35-60 detik.
+- Semua timestamp absolut dan harus berada dalam video.
+
+# OUTPUT
+Return ONLY valid JSON:
+{{
+  "candidates": [{{
+    "candidate_id": "w{window_num}-c1",
+    "content_lane": "COMEDY|HOT_TAKE|PERSONAL_STORY",
+    "start": 0.0,
+    "end": 0.0,
+    "setup_start": 0.0,
+    "payoff_start": 0.0,
+    "payoff_end": 0.0,
+    "reaction_end": 0.0,
+    "hook_evidence": "kutipan atau referensi langsung",
+    "payoff_evidence": "kutipan atau referensi langsung",
+    "standalone_summary": "apa yang dipahami penonton baru",
+    "suggested_hook": "maksimal enam kata",
+    "scout_score": 0.0
+  }}]
+}}
+
+# TIMESTAMPED_TRANSCRIPT
+{transcript_json}
+""".strip()
+
+
+def _normalize_content_lane(value):
+    lane = _normalize_whitespace(value).upper().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "ROASTING": "COMEDY",
+        "FUNNY": "COMEDY",
+        "CONTROVERSY": "HOT_TAKE",
+        "HOTTAKE": "HOT_TAKE",
+        "STORY": "PERSONAL_STORY",
+        "PERSONAL": "PERSONAL_STORY",
+    }
+    lane = aliases.get(lane, lane)
+    return lane if lane in PODCAST_COMEDY_LANES else ""
+
+
+def _candidate_overlap_ratio(first, second):
+    overlap = max(
+        0.0,
+        min(first["end"], second["end"]) - max(first["start"], second["start"]),
+    )
+    min_duration = min(
+        first["end"] - first["start"], second["end"] - second["start"]
+    )
+    return overlap / min_duration if min_duration > 0 else 0.0
+
+
+def _consolidate_scout_candidates(
+    candidates,
+    video_duration,
+    max_candidates=PODCAST_COMEDY_MAX_CANDIDATES,
+    max_overlap=0.7,
+):
+    """Validate, normalize, and deduplicate candidates from scout windows."""
+    normalized = []
+    for index, raw in enumerate(candidates or []):
+        start = _safe_float(raw.get("start"), -1.0)
+        end = _safe_float(raw.get("end"), -1.0)
+        duration = end - start
+        lane = _normalize_content_lane(raw.get("content_lane"))
+        hook_evidence = _normalize_whitespace(raw.get("hook_evidence"))
+        payoff_evidence = _normalize_whitespace(raw.get("payoff_evidence"))
+        if (
+            not lane
+            or not hook_evidence
+            or not payoff_evidence
+            or start < 0
+            or end > video_duration
+            or duration < PODCAST_COMEDY_HARD_MIN_DURATION
+            or duration > PODCAST_COMEDY_HARD_MAX_DURATION
+        ):
+            continue
+
+        score = _safe_float(
+            raw.get("scout_score", raw.get("score", raw.get("confidence"))), 0.0
+        )
+        setup_start = _safe_float(raw.get("setup_start"), start)
+        payoff_start = _safe_float(raw.get("payoff_start"), end)
+        payoff_end = _safe_float(raw.get("payoff_end"), end)
+        reaction_end = _safe_float(raw.get("reaction_end"), end)
+        if not (
+            start <= setup_start <= end
+            and start <= payoff_start <= payoff_end <= reaction_end <= end
+        ):
+            continue
+
+        candidate = dict(raw)
+        candidate.update(
+            {
+                "candidate_id": _normalize_whitespace(raw.get("candidate_id"))
+                or f"candidate-{index + 1}",
+                "content_lane": lane,
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "setup_start": round(setup_start, 3),
+                "payoff_start": round(payoff_start, 3),
+                "payoff_end": round(payoff_end, 3),
+                "reaction_end": round(reaction_end, 3),
+                "hook_evidence": hook_evidence,
+                "payoff_evidence": payoff_evidence,
+                "standalone_summary": _normalize_whitespace(
+                    raw.get("standalone_summary")
+                ),
+                "suggested_hook": _normalize_hook_text(raw.get("suggested_hook")),
+                "scout_score": max(0.0, min(score, 1.0)),
+            }
+        )
+        normalized.append(candidate)
+
+    deduped = []
+    for candidate in sorted(
+        normalized, key=lambda item: item["scout_score"], reverse=True
+    ):
+        if any(
+            _candidate_overlap_ratio(candidate, kept) > max_overlap
+            for kept in deduped
+        ):
+            continue
+        deduped.append(candidate)
+        if len(deduped) >= max_candidates:
+            break
+    return deduped
+
+
+def _attach_candidate_context(
+    candidates,
+    timestamped_segments,
+    context_before=PODCAST_COMEDY_CONTEXT_BEFORE,
+    context_after=PODCAST_COMEDY_CONTEXT_AFTER,
+    video_duration=None,
+):
+    """Attach bounded transcript context for global judging."""
+    contextualized = []
+    for candidate in candidates:
+        item = dict(candidate)
+        context_start = max(0.0, candidate["start"] - context_before)
+        context_end = candidate["end"] + context_after
+        if video_duration is not None:
+            context_end = min(video_duration, context_end)
+        item["context_start"] = round(context_start, 3)
+        item["context_end"] = round(context_end, 3)
+        item["transcript_context"] = _segments_for_window(
+            timestamped_segments, context_start, context_end
+        )
+        contextualized.append(item)
+    return contextualized
+
+
+def _build_podcast_comedy_judge_prompt(candidates, max_clips=10):
+    """Build the global Indonesian editor/judge prompt."""
+    candidates_json = json.dumps(candidates, ensure_ascii=False)
+    return f"""
+# ROLE: INDONESIAN_EDITOR_JUDGE
+Bandingkan seluruh kandidat podcast Indonesia secara global. Pahami slang,
+sarkasme, roasting, callback, banter antarpembicara, dan konteks budaya.
+
+# PRIORITAS PENILAIAN
+1. Hook dipahami dalam 1-3 detik.
+2. Setup efisien dan payoff kuat.
+3. Clip berdiri sendiri tanpa percakapan sebelumnya.
+4. Ending selesai; reaction komedi hanya dipertahankan jika menambah nilai.
+5. Pilih campuran COMEDY, HOT_TAKE, PERSONAL_STORY jika kualitasnya sebanding.
+6. Jangan promosikan lane lemah hanya demi variasi.
+7. Jangan membuat candidate_id baru atau klaim yang tidak ada di context.
+8. SENSOR kata kasar Indonesia pada hook/caption dengan tanda * di tengah kata.
+
+# DURASI
+- COMEDY ideal 20-40 detik, toleransi 5 detik.
+- HOT_TAKE/PERSONAL_STORY ideal 35-60 detik, toleransi 5 detik.
+- Maksimum output: {max_clips}
+
+# OUTPUT
+Return ONLY valid JSON:
+{{
+  "shorts": [{{
+    "candidate_id": "existing-id",
+    "start": 0.0,
+    "end": 0.0,
+    "judge_score": 0.0,
+    "hook_score": 0.0,
+    "payoff_score": 0.0,
+    "standalone_score": 0.0,
+    "ending_score": 0.0,
+    "reasoning": "alasan dalam Bahasa Indonesia",
+    "viral_pattern_type": "EMOTIONAL_PEAK",
+    "viral_hook_text": "MAKSIMAL ENAM KATA",
+    "social_caption": "caption akurat + hashtag relevan"
+  }}]
+}}
+
+# CANDIDATES_WITH_LOCAL_CONTEXT
+{candidates_json}
+""".strip()
+
+
+def _duration_allowed_for_lane(lane, duration):
+    tolerance = PODCAST_COMEDY_DURATION_TOLERANCE
+    if lane == "COMEDY":
+        return 20.0 - tolerance <= duration <= 40.0 + tolerance
+    return 35.0 - tolerance <= duration <= 60.0 + tolerance
+
+
+def _rank_balanced_clips(
+    clips, max_clips=10, balance_gap=PODCAST_COMEDY_BALANCE_GAP
+):
+    """Prefer strong lane diversity without promoting weak candidates."""
+    ordered = sorted(
+        clips, key=lambda item: _safe_float(item.get("confidence")), reverse=True
+    )
+    if not ordered:
+        return []
+
+    selected = [ordered[0]]
+    selected_ids = {id(ordered[0])}
+    best_score = _safe_float(ordered[0].get("confidence"))
+    for lane in PODCAST_COMEDY_LANES:
+        if lane == ordered[0].get("content_lane"):
+            continue
+        lane_candidate = next(
+            (item for item in ordered if item.get("content_lane") == lane), None
+        )
+        if (
+            lane_candidate
+            and _safe_float(lane_candidate.get("confidence"))
+            >= best_score - balance_gap
+            and len(selected) < max_clips
+        ):
+            selected.append(lane_candidate)
+            selected_ids.add(id(lane_candidate))
+
+    for item in ordered:
+        if id(item) not in selected_ids and len(selected) < max_clips:
+            selected.append(item)
+            selected_ids.add(id(item))
+    return selected
+
+
+def _validate_judge_output(
+    judge_payload,
+    candidates,
+    max_clips=10,
+    min_score=PODCAST_COMEDY_JUDGE_MIN_SCORE,
+):
+    """Validate judge selections against the immutable scout candidate set."""
+    candidate_map = {item["candidate_id"]: item for item in candidates}
+    validated = []
+    seen_ids = set()
+    for selected in (judge_payload or {}).get("shorts", []):
+        candidate_id = _normalize_whitespace(selected.get("candidate_id"))
+        candidate = candidate_map.get(candidate_id)
+        if not candidate or candidate_id in seen_ids:
+            continue
+
+        start = _safe_float(selected.get("start"), candidate["start"])
+        end = _safe_float(selected.get("end"), candidate["end"])
+        duration = end - start
+        context_start = candidate.get("context_start", candidate["start"])
+        context_end = candidate.get("context_end", candidate["end"])
+        if (
+            start < context_start
+            or end > context_end
+            or start > candidate["payoff_start"]
+            or end < candidate["payoff_end"]
+            or duration < PODCAST_COMEDY_HARD_MIN_DURATION
+            or duration > PODCAST_COMEDY_HARD_MAX_DURATION
+            or not _duration_allowed_for_lane(candidate["content_lane"], duration)
+        ):
+            continue
+
+        score = max(
+            0.0,
+            min(
+                _safe_float(
+                    selected.get("judge_score"), candidate.get("scout_score", 0.0)
+                ),
+                1.0,
+            ),
+        )
+        if score < min_score:
+            continue
+        clip = dict(candidate)
+        clip.update(selected)
+        clip.update(
+            {
+                "candidate_id": candidate_id,
+                "content_lane": candidate["content_lane"],
+                "hook_evidence": candidate["hook_evidence"],
+                "payoff_evidence": candidate["payoff_evidence"],
+                "standalone_summary": candidate["standalone_summary"],
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "confidence": score,
+                "score": score,
+                "viral_hook_text": _normalize_hook_text(
+                    selected.get("viral_hook_text") or candidate.get("suggested_hook")
+                ),
+                "social_caption": _normalize_whitespace(
+                    selected.get("social_caption")
+                    or candidate.get("standalone_summary")
+                ),
+                "reasoning": _normalize_whitespace(
+                    selected.get("reasoning")
+                    or (
+                        f"Hook: {candidate['hook_evidence']}. "
+                        f"Payoff: {candidate['payoff_evidence']}."
+                    )
+                ),
+            }
+        )
+        validated.append(clip)
+        seen_ids.add(candidate_id)
+    return _rank_balanced_clips(validated, max_clips=max_clips)
+
+
 def _get_podcast_prompt(
     transcript_text,
     video_duration,
@@ -188,6 +685,12 @@ Analyze the transcript and identify ALL highly engaging highlights. You must loo
 2. **High-Value Insight**: A "lightbulb moment" where the listener learns something new.
 3. **Emotional Peak**: Intense laughter, anger, sadness, or deep vulnerability.
 4. **Standalone Value**: The clip must make sense and be impactful even if the viewer hasn't seen the whole podcast.
+
+# QUALITY GATES
+- START_QUALITY_CHECK: The first sentence must hook the viewer quickly.
+- COMPLETE_THOUGHT: Include enough setup and finish after the payoff resolves.
+- QUOTE_EVIDENCE: Cite transcript words inside the selected timestamp range.
+- SELF-CONTAINED CHECK: Reject moments that require earlier conversation.
 
 # VIRAL PATTERNS (pick the best one per clip)
 1. CURIOSITY_GAP: Opens a compelling question the viewer MUST know the answer to
@@ -303,6 +806,12 @@ For each clip, you MUST capture the full cycle:
 2. **The Build**: The rising tension or banter.
 3. **The Punchline**: The hilarious payoff.
 4. **The Reaction (End 2-3s late)**: Include the laughter or shocked silence.
+
+# QUALITY GATES
+- START_QUALITY_CHECK: The first sentence or reaction must create curiosity quickly.
+- COMPLETE_THOUGHT: Preserve the minimum setup, punchline, and valuable reaction.
+- QUOTE_EVIDENCE: Cite transcript words for both setup/hook and payoff.
+- SELF-CONTAINED CHECK: Reject inside jokes that need earlier conversation.
 
 # VIRAL PATTERNS (pick the best one per clip)
 1. CURIOSITY_GAP: Opens a compelling question the viewer MUST know the answer to
@@ -1821,11 +2330,16 @@ def post_process_clips(result_json, min_confidence=0.5, max_overlap=0.7, max_cli
     # 5. Backward-compat shim: synthesize legacy field names from new tier-based schema
     # so downstream consumers (ResultCard, ScheduleWeekModal, S3, app.py) keep working.
     for clip in result_json["shorts"]:
-        hook = clip.get("viral_hook_text") or "Viral Short"
-        caption = clip.get("social_caption") or ""
-        clip.setdefault("video_title_for_youtube_short", hook[:100])
-        clip.setdefault("video_description_for_tiktok", caption)
-        clip.setdefault("video_description_for_instagram", caption)
+        hook = _normalize_hook_text(clip.get("viral_hook_text"))
+        caption = _normalize_whitespace(clip.get("social_caption"))
+        clip["viral_hook_text"] = hook
+        clip["social_caption"] = caption
+        if not _normalize_whitespace(clip.get("video_title_for_youtube_short")):
+            clip["video_title_for_youtube_short"] = hook[:100]
+        if not _normalize_whitespace(clip.get("video_description_for_tiktok")):
+            clip["video_description_for_tiktok"] = caption
+        if not _normalize_whitespace(clip.get("video_description_for_instagram")):
+            clip["video_description_for_instagram"] = caption
         # Convert numeric confidence back to tier label for any consumer that reads it as string
         if not isinstance(clip.get("confidence_label"), str):
             score = clip.get("confidence", 0)
@@ -1862,11 +2376,19 @@ def snap_clip_to_boundaries(
         scene_points.append(s_end)
     scene_points.sort()
 
+    def _prefer_scene_boundary(value):
+        nearby = [
+            point for point in scene_points if abs(point - value) <= snap_padding
+        ]
+        if nearby:
+            return min(nearby, key=lambda point: abs(point - value))
+        return value
+
     def _snap_start(t):
-        # Check if t falls inside a word — snap to word end
+        # If the proposed cut lands inside speech, expand before the whole word.
         for w in words:
             if w["s"] <= t <= w["e"]:
-                return w["e"] + snap_padding
+                return _prefer_scene_boundary(w["s"] - snap_padding)
 
         # Find nearest word boundary: previous word end or next word start
         prev_end = None
@@ -1889,17 +2411,13 @@ def snap_clip_to_boundaries(
 
         snapped = min(candidates, key=lambda x: abs(x - t))
 
-        # Prefer nearby scene boundary if within snap_padding
-        for sp in scene_points:
-            if abs(sp - snapped) <= snap_padding:
-                return sp
-        return snapped
+        return _prefer_scene_boundary(snapped)
 
     def _snap_end(t):
-        # Check if t falls inside a word — snap to word start
+        # If the proposed cut lands inside speech, retain the whole final word.
         for w in words:
             if w["s"] <= t <= w["e"]:
-                return w["s"] - snap_padding
+                return w["e"]
 
         # Find nearest word boundary: previous word end or next word start
         prev_end = None
@@ -1922,11 +2440,7 @@ def snap_clip_to_boundaries(
 
         snapped = min(candidates, key=lambda x: abs(x - t))
 
-        # Prefer nearby scene boundary if within snap_padding
-        for sp in scene_points:
-            if abs(sp - snapped) <= snap_padding:
-                return sp
-        return snapped
+        return _prefer_scene_boundary(snapped)
 
     new_start = _snap_start(start)
     new_end = _snap_end(end)
@@ -1964,10 +2478,12 @@ def _build_window_prompt(
     window_start = words[0]["s"]
     window_end = words[-1]["e"]
 
-    # Filter segments that overlap this window — include segments ending
-    # within the window even if they start before, so Gemini sees complete
-    # sentences at the left edge for better topic boundary detection
-    window_segments = [seg for seg in transcript_segments if seg["end"] >= window_start]
+    # Include only segments that overlap this bounded word window.
+    window_segments = [
+        seg
+        for seg in transcript_segments
+        if seg["end"] >= window_start and seg["start"] <= window_end
+    ]
     if window_segments:
         window_text = " ".join(seg["text"] for seg in window_segments)
     else:
@@ -2002,6 +2518,197 @@ def _build_window_prompt(
 MAX_PROMPT_CHARS = 380_0000  # ~100K tokens, safe budget per chunk
 
 
+def _chunk_timestamped_segments(timestamped_segments, max_chars=120_000):
+    """Split timestamped transcript into bounded prompt chunks."""
+    if not timestamped_segments:
+        return []
+
+    chunks = []
+    current = []
+    current_chars = 0
+    for segment in timestamped_segments:
+        segment_chars = len(json.dumps(segment, ensure_ascii=False))
+        if current and current_chars + segment_chars > max_chars:
+            chunks.append(current)
+            current = current[-2:]
+            current_chars = sum(
+                len(json.dumps(item, ensure_ascii=False)) for item in current
+            )
+        current.append(segment)
+        current_chars += segment_chars
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _scout_candidates_to_clips(candidates, max_clips=10):
+    """Create grounded fallback clips when the judge pass is unavailable."""
+    fallback_payload = {
+        "shorts": [
+            {
+                "candidate_id": candidate["candidate_id"],
+                "start": candidate["start"],
+                "end": candidate["end"],
+                "judge_score": candidate["scout_score"],
+                "reasoning": (
+                    f"Hook: {candidate['hook_evidence']}. "
+                    f"Payoff: {candidate['payoff_evidence']}."
+                ),
+                "viral_pattern_type": (
+                    "EMOTIONAL_PEAK"
+                    if candidate["content_lane"] == "COMEDY"
+                    else "CONTROVERSY"
+                    if candidate["content_lane"] == "HOT_TAKE"
+                    else "STORY_BEAT"
+                ),
+                "viral_hook_text": candidate.get("suggested_hook"),
+                "social_caption": candidate.get("standalone_summary"),
+            }
+            for candidate in candidates
+        ]
+    }
+    return _validate_judge_output(
+        fallback_payload, candidates, max_clips=max_clips, min_score=0.0
+    )
+
+
+def _format_lane_counts(clips):
+    counts = {
+        lane: sum(1 for clip in clips if clip.get("content_lane") == lane)
+        for lane in PODCAST_COMEDY_LANES
+    }
+    return ", ".join(f"{lane}={count}" for lane, count in counts.items())
+
+
+def _run_podcast_comedy_multipass(
+    timestamped_segments,
+    video_duration,
+    analyze_prompt,
+    max_clips=10,
+    max_candidates=PODCAST_COMEDY_MAX_CANDIDATES,
+):
+    """Run scout, global judge, and deterministic fallback for podcast comedy."""
+    max_scout_chars = _safe_int(
+        os.getenv("PODCAST_COMEDY_SCOUT_MAX_CHARS"), 120_000
+    )
+    scout_temperature = _safe_float(
+        os.getenv("PODCAST_COMEDY_SCOUT_TEMPERATURE"), 0.8
+    )
+    judge_temperature = _safe_float(
+        os.getenv("PODCAST_COMEDY_JUDGE_TEMPERATURE"), 0.2
+    )
+    judge_min_score = _safe_float(
+        os.getenv("PODCAST_COMEDY_JUDGE_MIN_SCORE"),
+        PODCAST_COMEDY_JUDGE_MIN_SCORE,
+    )
+    windows = _chunk_timestamped_segments(
+        timestamped_segments, max_chars=max_scout_chars
+    )
+    window_label = "window" if len(windows) == 1 else "windows"
+    print(
+        f"   🎭 Multi-pass started: {len(timestamped_segments)} transcript segments, "
+        f"{len(windows)} scout {window_label}",
+        flush=True,
+    )
+    raw_candidates = []
+    used_candidate_ids = set()
+    for window_index, window_segments in enumerate(windows, start=1):
+        window_start = window_segments[0]["start"]
+        window_end = window_segments[-1]["end"]
+        print(
+            f"   🔎 Scout {window_index}/{len(windows)} started: "
+            f"{len(window_segments)} segments ({window_start:.1f}s-{window_end:.1f}s)",
+            flush=True,
+        )
+        prompt = _build_podcast_comedy_scout_prompt(
+            window_segments,
+            video_duration=video_duration,
+            max_candidates=max_candidates,
+            window_num=window_index,
+            total_windows=len(windows),
+        )
+        payload = analyze_prompt(prompt, scout_temperature) or {}
+        window_candidates = payload.get("candidates") or payload.get("shorts") or []
+        print(
+            f"   ✅ Scout {window_index}/{len(windows)} completed: "
+            f"{len(window_candidates)} raw candidates",
+            flush=True,
+        )
+        for candidate_index, candidate in enumerate(window_candidates, start=1):
+            candidate = dict(candidate)
+            candidate_id = _normalize_whitespace(candidate.get("candidate_id"))
+            if not candidate_id:
+                candidate_id = f"w{window_index}-c{candidate_index}"
+            elif candidate_id in used_candidate_ids:
+                candidate_id = f"w{window_index}-{candidate_id}"
+            suffix = 2
+            unique_id = candidate_id
+            while unique_id in used_candidate_ids:
+                unique_id = f"{candidate_id}-{suffix}"
+                suffix += 1
+            candidate["candidate_id"] = unique_id
+            used_candidate_ids.add(unique_id)
+            raw_candidates.append(candidate)
+
+    candidates = _consolidate_scout_candidates(
+        raw_candidates,
+        video_duration=video_duration,
+        max_candidates=max_candidates,
+    )
+    print(
+        f"   🧹 Candidate validation completed: {len(raw_candidates)} raw -> "
+        f"{len(candidates)} valid",
+        flush=True,
+    )
+    contextualized = _attach_candidate_context(
+        candidates, timestamped_segments, video_duration=video_duration
+    )
+    contextualized = [
+        candidate
+        for candidate in contextualized
+        if candidate.get("transcript_context")
+    ]
+    if not contextualized:
+        print("   ⚠️ Multi-pass stopped: no valid candidates with transcript context")
+        return {"content_type": "PODCAST_COMEDY", "shorts": []}
+
+    print(
+        f"   🧑‍⚖️ Judge started: reviewing {len(contextualized)} candidates",
+        flush=True,
+    )
+    judge_prompt = _build_podcast_comedy_judge_prompt(
+        contextualized, max_clips=max_clips
+    )
+    try:
+        judge_payload = analyze_prompt(judge_prompt, judge_temperature)
+        judged = _validate_judge_output(
+            judge_payload,
+            contextualized,
+            max_clips=max_clips,
+            min_score=judge_min_score,
+        )
+        if judged:
+            print(
+                f"   ✅ Judge completed: {len(judged)} clips selected "
+                f"({_format_lane_counts(judged)})",
+                flush=True,
+            )
+            return {"content_type": "PODCAST_COMEDY", "shorts": judged}
+        print("   ⚠️ Judge returned no valid clips; using scout fallback")
+    except Exception as judge_error:
+        print(f"   ⚠️ Judge pass failed; using scout fallback: {judge_error}")
+
+    fallback = _scout_candidates_to_clips(
+        contextualized, max_clips=max_clips
+    )
+    print(
+        f"   ✅ Scout fallback completed: {len(fallback)} clips selected "
+        f"({_format_lane_counts(fallback)})",
+        flush=True,
+    )
+    return {"content_type": "PODCAST_COMEDY", "shorts": fallback}
+
+
 def get_viral_clips(
     transcript_result, video_duration, scene_boundaries=None, category="general"
 ):
@@ -2022,7 +2729,9 @@ def get_viral_clips(
             "OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"
         ),
     )
-    model_name = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+    model_name = os.getenv("AI_MODEL") or os.getenv(
+        "GEMINI_MODEL", "gemini-3.5-flash"
+    )
 
     print(f"🤖  Initializing model: {model_name}")
 
@@ -2051,7 +2760,7 @@ def get_viral_clips(
 
     from utils import extract_json
 
-    def _call_llm(prompt_content, extra_system_prompt=None):
+    def _call_llm(prompt_content, extra_system_prompt=None, temperature=1.0):
         messages = []
         if extra_system_prompt:
             messages.append({"role": "system", "content": extra_system_prompt})
@@ -2060,11 +2769,11 @@ def get_viral_clips(
             model=model_name,
             messages=messages,
             response_format={"type": "json_object"},
-            temperature=1.0,
+            temperature=temperature,
         )
 
-    def _analyze_single(prompt_content):
-        response = _call_llm(prompt_content)
+    def _analyze_single(prompt_content, temperature=1.0):
+        response = _call_llm(prompt_content, temperature=temperature)
         text = response.choices[0].message.content
         result = extract_json(text)
         if result is None:
@@ -2073,6 +2782,7 @@ def get_viral_clips(
                 response = _call_llm(
                     prompt_content,
                     "CRITICAL: Return ONLY a single valid JSON object. Start your response with '{' and end with '}'. No markdown, no code fences, no explanatory text.",
+                    temperature=temperature,
                 )
                 text = response.choices[0].message.content
                 result = extract_json(text)
@@ -2081,6 +2791,28 @@ def get_viral_clips(
         return result, response
 
     try:
+        multipass_enabled = os.getenv(
+            "PODCAST_COMEDY_MULTIPASS", "true"
+        ).strip().lower() not in {"0", "false", "no", "off"}
+        if category == "podcast_comedy" and multipass_enabled:
+            timestamped_segments = _build_timestamped_transcript(transcript_result)
+
+            def _analyze_payload(prompt_content, temperature):
+                payload, _ = _analyze_single(
+                    prompt_content, temperature=temperature
+                )
+                return payload
+
+            result_json = _run_podcast_comedy_multipass(
+                timestamped_segments,
+                video_duration=video_duration,
+                analyze_prompt=_analyze_payload,
+            )
+            if not result_json.get("shorts"):
+                raise ValueError("No valid podcast comedy candidates found")
+            result_json = post_process_clips(result_json)
+            return result_json, words
+
         # --- Estimate prompt size and decide single-call vs chunked ---
         transcript_json = json.dumps(transcript_result["text"])
         words_json = json.dumps(words)

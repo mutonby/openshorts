@@ -29,7 +29,7 @@ const ANIMATION_OPTIONS = [
 ];
 
 export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessing, videoUrl, jobId, clipIndex, existingHook, cropStyle }) {
-    const [position, setPosition] = useState('bottom');
+    const [position, setPosition] = useState('below_blur');
     const [fontSize, setFontSize] = useState(24);
     const [fontName, setFontName] = useState('Verdana');
     const [fontColor, setFontColor] = useState('#FFFFFF');
@@ -38,9 +38,9 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, isProcessin
     const [borderWidth, setBorderWidth] = useState(2);
     const [bgColor, setBgColor] = useState('#000000');
     const [bgOpacity, setBgOpacity] = useState(0.0);
-    const [animation, setAnimation] = useState('pop');
+    const [animation, setAnimation] = useState('none');
     const [showTextEditor, setShowTextEditor] = useState(false);
-    const [uppercase, setUppercase] = useState(false);
+    const [uppercase, setUppercase] = useState(true);
 
     // Remotion preview state
     const [captions, setCaptions] = useState([]);
