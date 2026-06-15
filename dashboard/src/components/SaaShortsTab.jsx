@@ -61,6 +61,8 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
 
   // Step 2: Configure
   const [voices, setVoices] = useState([]);
+  const [voicesSource, setVoicesSource] = useState('defaults');
+  const [voicesLoading, setVoicesLoading] = useState(false);
   const [selectedVoice, setSelectedVoice] = useState('21m00Tcm4TlvDq8ikWAM');
   const [actorDescription, setActorDescription] = useState('');
   const [editedNarration, setEditedNarration] = useState('');
@@ -125,13 +127,15 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
       'es-male': 'ErXwobaYiN019PkySvjV',     // Antoni
     };
     // If we have fetched voices, pick the first matching one; otherwise use hardcoded default
-    const matchingVoice = voices.find(v => (v.labels?.gender || '').toLowerCase() === actorGender);
+    const matchingVoice = voices.find(v => (v.labels?.gender || '').toLowerCase() === actorGender)
+      || voices.find(v => v.is_custom || v.is_premium)
+      || voices[0];
     if (matchingVoice) {
       setSelectedVoice(matchingVoice.voice_id);
     } else {
       setSelectedVoice(genderDefaults[`${language}-${actorGender}`] || genderDefaults['en-female']);
     }
-  }, [actorGender, language]);
+  }, [actorGender, language, voices]);
 
   // Poll generation status
   useEffect(() => {
@@ -171,6 +175,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   }, [jobId, genStatus]);
 
   const fetchVoices = async () => {
+    setVoicesLoading(true);
     try {
       const res = await fetch(getApiUrl('/api/saasshorts/voices'), {
         headers: { 'X-ElevenLabs-Key': elevenLabsKey },
@@ -178,9 +183,12 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
       if (res.ok) {
         const data = await res.json();
         setVoices(data.voices || []);
+        setVoicesSource(data.source || 'elevenlabs');
       }
     } catch (e) {
       console.error('Voices fetch error:', e);
+    } finally {
+      setVoicesLoading(false);
     }
   };
 
@@ -866,10 +874,18 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                   const filtered = voices.length > 0
                     ? voices.filter((v) => {
                         const gender = (v.labels?.gender || '').toLowerCase();
-                        // Only show voices that match the selected gender
-                        return gender === actorGender;
+                        // Custom/pro account voices often do not include gender labels.
+                        return !gender || gender === actorGender;
                       })
                       .sort((a, b) => {
+                        const aGender = (a.labels?.gender || '').toLowerCase();
+                        const bGender = (b.labels?.gender || '').toLowerCase();
+                        const aAccount = a.is_custom || a.is_premium ? 0 : 1;
+                        const bAccount = b.is_custom || b.is_premium ? 0 : 1;
+                        if (aAccount !== bAccount) return aAccount - bAccount;
+                        const aGenderScore = aGender === actorGender ? 0 : 1;
+                        const bGenderScore = bGender === actorGender ? 0 : 1;
+                        if (aGenderScore !== bGenderScore) return aGenderScore - bGenderScore;
                         const aAccent = (a.labels?.accent || '').toLowerCase();
                         const bAccent = (b.labels?.accent || '').toLowerCase();
                         if (language === 'es') {
@@ -899,8 +915,12 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                             }`}
                           >
                             <div className="flex-1 min-w-0">
-                              <div className="text-sm font-medium truncate">{v.name}</div>
-                              <div className="text-[10px] text-zinc-500">
+                              <div className="text-sm font-medium truncate flex items-center gap-1.5">
+                                <span className="truncate">{v.name}</span>
+                                {v.is_premium && <span className="shrink-0 text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/20">Premium</span>}
+                                {v.is_custom && !v.is_premium && <span className="shrink-0 text-[9px] px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-300 border border-violet-500/20">Custom</span>}
+                              </div>
+                              <div className="text-[10px] text-zinc-500 truncate">
                                 {v.labels?.accent || ''} {v.labels?.gender || ''} {v.category ? `· ${v.category}` : ''}
                               </div>
                             </div>
@@ -949,7 +969,11 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                   );
                 })()}
                 <p className="text-[10px] text-zinc-600 mt-1">
-                  {language === 'es'
+                  {voicesLoading
+                    ? 'Loading ElevenLabs account voices...'
+                    : voices.length > 0
+                    ? `${voices.length} voices loaded from ${voicesSource === 'defaults' ? 'defaults' : 'your ElevenLabs account'} · Premium and custom voices included when available`
+                    : language === 'es'
                     ? `Voces ${actorGender === 'female' ? 'femeninas' : 'masculinas'} · Todas hablan español con modelo multilingual · Click altavoz para preview`
                     : `${actorGender === 'female' ? 'Female' : 'Male'} voices · Click speaker to preview`}
                 </p>

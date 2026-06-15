@@ -794,25 +794,84 @@ def generate_voiceover(
 
 
 def get_elevenlabs_voices(elevenlabs_key: str) -> list:
-    """Fetch available voices from ElevenLabs."""
-    url = f"{ELEVENLABS_API_BASE}/voices"
+    """Fetch available account voices from ElevenLabs, including premium and custom voices."""
     headers = {"xi-api-key": elevenlabs_key}
 
-    with httpx.Client(timeout=15.0) as client:
-        resp = client.get(url, headers=headers)
+    voices = []
+    seen = set()
+
+    def add_voice(v: dict, source: str = "elevenlabs") -> None:
+        voice_id = v.get("voice_id")
+        if not voice_id or voice_id in seen:
+            return
+        seen.add(voice_id)
+
+        sharing = v.get("sharing") or {}
+        labels = v.get("labels") or sharing.get("labels") or {}
+        category = v.get("category") or sharing.get("category") or ""
+        is_custom = category in {"cloned", "generated", "professional"} or bool(v.get("is_owner"))
+        is_premium = category == "professional" or sharing.get("financial_rewards_enabled") is True
+
+        voices.append({
+            "voice_id": voice_id,
+            "name": v.get("name") or sharing.get("name") or "Untitled voice",
+            "category": category,
+            "labels": labels,
+            "description": v.get("description") or sharing.get("description") or "",
+            "preview_url": v.get("preview_url") or "",
+            "available_for_tiers": v.get("available_for_tiers") or [],
+            "verified_languages": v.get("verified_languages") or [],
+            "high_quality_base_model_ids": v.get("high_quality_base_model_ids") or [],
+            "voice_type": v.get("voice_type") or "",
+            "is_owner": bool(v.get("is_owner")),
+            "is_custom": is_custom,
+            "is_premium": is_premium,
+            "source": source,
+        })
+
+    with httpx.Client(timeout=30.0) as client:
+        # v2 returns all voices available to the authenticated account and supports
+        # pagination plus filters for default, personal, workspace, community, and saved voices.
+        v2_url = f"{ELEVENLABS_API_BASE.replace('/v1', '/v2')}/voices"
+        voice_types = [None, "personal", "workspace", "default", "saved", "community"]
+        for voice_type in voice_types:
+            next_page_token = None
+            for _ in range(10):
+                params = {
+                    "page_size": 100,
+                    "include_total_count": "false",
+                    "sort": "name",
+                    "sort_direction": "asc",
+                }
+                if voice_type:
+                    params["voice_type"] = voice_type
+                if next_page_token:
+                    params["next_page_token"] = next_page_token
+
+                resp = client.get(v2_url, headers=headers, params=params)
+                if resp.status_code == 404:
+                    break
+                if resp.status_code != 200:
+                    break
+
+                data = resp.json()
+                for v in data.get("voices", []):
+                    add_voice(v, "elevenlabs-v2")
+
+                if not data.get("has_more") or not data.get("next_page_token"):
+                    break
+                next_page_token = data["next_page_token"]
+
+        if voices:
+            return voices
+
+        # Fallback for older ElevenLabs accounts or deployments that still expose v1 only.
+        resp = client.get(f"{ELEVENLABS_API_BASE}/voices", headers=headers)
         if resp.status_code != 200:
             return []
         data = resp.json()
-
-    voices = []
-    for v in data.get("voices", []):
-        voices.append({
-            "voice_id": v["voice_id"],
-            "name": v["name"],
-            "category": v.get("category", ""),
-            "labels": v.get("labels", {}),
-            "preview_url": v.get("preview_url", ""),
-        })
+        for v in data.get("voices", []):
+            add_voice(v, "elevenlabs-v1")
 
     return voices
 
