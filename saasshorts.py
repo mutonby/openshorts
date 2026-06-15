@@ -39,6 +39,36 @@ DEFAULT_VOICES = {
 
 GEMINI_MODEL = "gemini-3-flash-preview"
 
+SUPPORTED_LANGUAGES = {
+    "en": {
+        "name": "English",
+        "tone": "natural casual American English like a real person on TikTok",
+        "cta": '"link in bio"',
+        "examples": '"Okay so I just found this tool and...", "Stop doing this manually, there\'s a better way", "I can\'t believe nobody told me about this sooner..."',
+    },
+    "es": {
+        "name": "Spanish",
+        "tone": "natural casual Spanish for TikTok, suitable for Spain and Latin America",
+        "cta": '"enlace en la bio"',
+        "examples": '"Tio, no me puedo creer que nadie me haya dicho esto antes...", "Si usas Excel para esto, necesitas ver esto YA", "Os voy a ensenar algo que me ha cambiado la vida..."',
+    },
+    "hi": {"name": "Hindi", "tone": "natural conversational Hindi for Indian short-form video", "cta": '"link bio mein hai"', "examples": '"Agar aap ye kaam manually kar rahe ho, to ye dekho...", "Mujhe yakeen nahi hua ki ye tool itna simple hai..."'},
+    "bn": {"name": "Bengali", "tone": "natural conversational Bengali for Indian short-form video", "cta": '"link bio-te ache"', "examples": '"Ei tool ta dekhar por amar kaj onek easy hoye geche...", "Jodi eta manually korchen, tahole eta dekhen..."'},
+    "ta": {"name": "Tamil", "tone": "natural conversational Tamil for Indian short-form video", "cta": '"link bio-la irukku"', "examples": '"Indha tool pathi therinja apram work romba easy aayiduchu...", "Idha manual-a panreenga na, idha paarunga..."'},
+    "te": {"name": "Telugu", "tone": "natural conversational Telugu for Indian short-form video", "cta": '"link bio lo undi"', "examples": '"Ee tool chusaka work chala easy ayyindi...", "Meeru idi manual ga chestunte, idi chudandi..."'},
+    "mr": {"name": "Marathi", "tone": "natural conversational Marathi for Indian short-form video", "cta": '"link bio madhye aahe"', "examples": '"He tool baghitlyanantar majha kaam khup easy zala...", "Tumhi he manually kart asal tar he nakki paha..."'},
+    "gu": {"name": "Gujarati", "tone": "natural conversational Gujarati for Indian short-form video", "cta": '"link bio ma chhe"', "examples": '"Aa tool joya pachi kaam khub easy thai gayu...", "Tame aa manually karta hoy to aa jarur juo..."'},
+    "kn": {"name": "Kannada", "tone": "natural conversational Kannada for Indian short-form video", "cta": '"link bio nalli ide"', "examples": '"Ee tool nodida mele work tumba easy aytu...", "Neevu idanna manual aagi madtidre, idanna nodi..."'},
+    "ml": {"name": "Malayalam", "tone": "natural conversational Malayalam for Indian short-form video", "cta": '"link bio-il undu"', "examples": '"Ee tool kandathinu shesham work valare easy aayi...", "Ithu manual aayi cheyyunnengil, ithu nokku..."'},
+    "pa": {"name": "Punjabi", "tone": "natural conversational Punjabi for Indian short-form video", "cta": '"link bio vich hai"', "examples": '"Eh tool vekhan ton baad mera kaam bahut easy ho gaya...", "Je tusi eh manually kar rahe ho, ta eh zaroor vekho..."'},
+    "ur": {"name": "Urdu", "tone": "natural conversational Urdu for Indian short-form video", "cta": '"link bio mein hai"', "examples": '"Agar aap ye kaam manually kar rahe hain, to ye dekhein...", "Mujhe yaqeen nahi hua ke ye tool itna asan hai..."'},
+}
+
+
+def get_language_config(language: str) -> dict:
+    """Return language metadata, defaulting safely to English."""
+    return SUPPORTED_LANGUAGES.get(language, SUPPORTED_LANGUAGES["en"])
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Phase 1: Website Scraping, Web Research & Analysis
@@ -377,7 +407,8 @@ def generate_scripts(
     from google import genai
     from google.genai import types
 
-    lang_name = "Spanish" if language == "es" else "English"
+    lang_cfg = get_language_config(language)
+    lang_name = lang_cfg["name"]
     print(f"[SaaSShorts] 📝 Generating {num_scripts} scripts ({style}, {lang_name})...")
 
     client = genai.Client(api_key=gemini_key)
@@ -390,18 +421,10 @@ def generate_scripts(
         "comparison": "Before/after comparison.",
     }
 
-    lang_instructions = ""
-    if language == "es":
-        lang_instructions = """
-LANGUAGE: ALL narrations, subtitles, captions, and hashtags MUST be in SPANISH (Spain/Latin America).
-Use natural casual Spanish like a real person would speak on TikTok. Contractions, slang OK.
-Examples of Spanish UGC hooks: "Tío, no me puedo creer que nadie me haya dicho esto antes...", "Si usas Excel para esto, necesitas ver esto YA", "Os voy a enseñar algo que me ha cambiado la vida..."
-"""
-    else:
-        lang_instructions = """
-LANGUAGE: ALL narrations, subtitles, captions, and hashtags MUST be in ENGLISH.
-Use natural casual American English like a real person on TikTok. Contractions, slang OK.
-Examples of English UGC hooks: "Okay so I just found this tool and...", "Stop doing this manually, there's a better way", "I can't believe nobody told me about this sooner..."
+    lang_instructions = f"""
+LANGUAGE: ALL narrations, subtitles, captions, overlays, CTA text, and hashtags MUST be in {lang_name.upper()} only.
+Use {lang_cfg["tone"]}. Do not mix English or Spanish unless it is an unavoidable brand/product name.
+Examples of {lang_name} UGC hooks, shown as style references: {lang_cfg["examples"]}
 """
 
     prompt = f"""You are a viral short-form video scriptwriter for TikTok/Instagram Reels.
@@ -491,7 +514,8 @@ Return a JSON array:
         "full_narration": "All narration text joined (only actor_talking segments)",
         "actor_description": "Specific person description: age, gender, ethnicity, hair style, clothing. Casual everyday look.",
         "hashtags": ["#saas", "#productivity", "#techtools"],
-        "caption": "Suggested Instagram/TikTok caption"
+        "caption": "Suggested Instagram/TikTok caption",
+        "language": "{language}"
     }}
 ]
 
@@ -507,6 +531,8 @@ RULES:
 - Vary actor demographics across scripts
 - CTA MUST always mention "link in bio" / "enlace en la bio". Examples: "Link in bio, go try it", "Check the link in my bio", "El enlace está en la bio, probadlo"
 - Write ALL text in {lang_name}
+- For this selected language, CTA MUST use the local phrase {lang_cfg["cta"]}; do not use English CTA wording unless the selected language is English.
+- Set the script field "language" to "{language}".
 - Actor gender: {actor_gender}. ALL actor_description fields MUST describe a {actor_gender} person. Use diverse ages/ethnicities across scripts.
 - IMPORTANT: actor_description MUST ALWAYS be in ENGLISH regardless of script language. Only describe physical appearance: age, gender, ethnicity, hair, clothing. NO actions, NO background, NO scene description.
 - Actors must look European, attractive but natural, slightly nerdy/tech vibe. Vary across: blonde, brunette, redhead. Ages 22-35.
@@ -543,6 +569,10 @@ RULES:
         raise Exception(f"Failed to parse scripts JSON: {e}\nRaw: {text[:500]}")
 
     print(f"[SaaSShorts] ✅ Generated {len(scripts)} scripts")
+    for script in scripts:
+        if isinstance(script, dict):
+            script["language"] = language
+
     return scripts
 
 
@@ -800,6 +830,28 @@ def get_elevenlabs_voices(elevenlabs_key: str) -> list:
     voices = []
     seen = set()
 
+    def normalize_gender(v: dict, labels: dict, sharing: dict) -> str:
+        raw = str(labels.get("gender") or sharing.get("labels", {}).get("gender") or "").strip().lower()
+        if raw in {"female", "woman", "feminine"}:
+            return "female"
+        if raw in {"male", "man", "masculine"}:
+            return "male"
+
+        haystack = " ".join(
+            str(part or "").lower()
+            for part in [
+                v.get("name"),
+                v.get("description"),
+                sharing.get("name"),
+                sharing.get("description"),
+            ]
+        )
+        if any(token in haystack for token in ["female", "woman", "girl", "feminine"]):
+            return "female"
+        if any(token in haystack for token in ["male", " man ", "boy", "masculine"]):
+            return "male"
+        return ""
+
     def add_voice(v: dict, source: str = "elevenlabs") -> None:
         voice_id = v.get("voice_id")
         if not voice_id or voice_id in seen:
@@ -811,12 +863,16 @@ def get_elevenlabs_voices(elevenlabs_key: str) -> list:
         category = v.get("category") or sharing.get("category") or ""
         is_custom = category in {"cloned", "generated", "professional"} or bool(v.get("is_owner"))
         is_premium = category == "professional" or sharing.get("financial_rewards_enabled") is True
+        gender = normalize_gender(v, labels, sharing)
+        if gender and not labels.get("gender"):
+            labels = {**labels, "gender": gender}
 
         voices.append({
             "voice_id": voice_id,
             "name": v.get("name") or sharing.get("name") or "Untitled voice",
             "category": category,
             "labels": labels,
+            "gender": gender,
             "description": v.get("description") or sharing.get("description") or "",
             "preview_url": v.get("preview_url") or "",
             "available_for_tiers": v.get("available_for_tiers") or [],
@@ -829,12 +885,29 @@ def get_elevenlabs_voices(elevenlabs_key: str) -> list:
             "source": source,
         })
 
-    with httpx.Client(timeout=30.0) as client:
+    with httpx.Client(timeout=45.0) as client:
         # v2 returns all voices available to the authenticated account and supports
-        # pagination plus filters for default, personal, workspace, community, and saved voices.
+        # pagination plus filters for default, personal, workspace, community,
+        # saved, cloned, generated, and professional voices.
         v2_url = f"{ELEVENLABS_API_BASE.replace('/v1', '/v2')}/voices"
-        voice_types = [None, "personal", "workspace", "default", "saved", "community"]
-        for voice_type in voice_types:
+        query_sets = [{}]
+        query_sets.extend({"voice_type": voice_type} for voice_type in [
+            "personal",
+            "community",
+            "default",
+            "workspace",
+            "non-default",
+            "non-community",
+            "saved",
+        ])
+        query_sets.extend({"category": category} for category in [
+            "premade",
+            "cloned",
+            "generated",
+            "professional",
+        ])
+
+        for extra_params in query_sets:
             next_page_token = None
             for _ in range(10):
                 params = {
@@ -843,8 +916,7 @@ def get_elevenlabs_voices(elevenlabs_key: str) -> list:
                     "sort": "name",
                     "sort_direction": "asc",
                 }
-                if voice_type:
-                    params["voice_type"] = voice_type
+                params.update(extra_params)
                 if next_page_token:
                     params["next_page_token"] = next_page_token
 
@@ -1105,7 +1177,7 @@ def _format_ass_time(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
-def transcribe_audio_for_subs(audio_path: str) -> list:
+def transcribe_audio_for_subs(audio_path: str, language: str = "en") -> list:
     """
     Transcribe audio with word-level timestamps using faster-whisper.
     Returns list of {"word": str, "start": float, "end": float}.
@@ -1114,7 +1186,8 @@ def transcribe_audio_for_subs(audio_path: str) -> list:
 
     print(f"[SaaSShorts] 🎙️ Transcribing audio for subtitles...")
     model = WhisperModel("base", device="cpu", compute_type="int8")
-    segments, info = model.transcribe(audio_path, word_timestamps=True)
+    whisper_language = language if language in SUPPORTED_LANGUAGES else None
+    segments, info = model.transcribe(audio_path, word_timestamps=True, language=whisper_language)
 
     words = []
     for segment in segments:
@@ -1130,14 +1203,14 @@ def transcribe_audio_for_subs(audio_path: str) -> list:
     return words
 
 
-def generate_tiktok_subs(audio_path: str, output_path: str, max_words: int = 3) -> str:
+def generate_tiktok_subs(audio_path: str, output_path: str, max_words: int = 3, language: str = "en") -> str:
     """
     Generate TikTok-style ASS subtitles from audio using Whisper transcription.
 
     Style: Big bold centered text, 1-3 words at a time, white with black outline.
     Matches actual spoken words with precise timestamps.
     """
-    words = transcribe_audio_for_subs(audio_path)
+    words = transcribe_audio_for_subs(audio_path, language=language)
     if not words:
         # Fallback: empty subtitle file
         with open(output_path, "w") as f:
@@ -1375,6 +1448,7 @@ def generate_full_video(
     elevenlabs_key = config["elevenlabs_key"]
     voice_id = config.get("voice_id", "21m00Tcm4TlvDq8ikWAM")
     actor_desc = config.get("actor_description") or script.get("actor_description", "a young professional in their late 20s, wearing a casual modern outfit, clean background")
+    language = script.get("language", "en")
 
     title_slug = re.sub(r"[^a-z0-9]+", "_", script.get("title", "video").lower())[:30]
 
@@ -1493,7 +1567,7 @@ def generate_full_video(
 
     # ── Step 5: Generate subtitles (from actual audio, not script text) ──
     log("[5/6] Transcribing audio and generating TikTok-style subtitles...")
-    generate_tiktok_subs(audio_path, srt_path, max_words=2)
+    generate_tiktok_subs(audio_path, srt_path, max_words=2, language=language)
 
     # ── Step 6: Composite final video ──
     log("[6/6] Compositing final video with FFmpeg...")
