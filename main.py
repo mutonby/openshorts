@@ -6,6 +6,7 @@ import argparse
 import re
 import sys
 import math
+import tempfile
 from scenedetect import open_video, SceneManager
 from scenedetect.detectors import ContentDetector
 from ultralytics import YOLO
@@ -24,6 +25,8 @@ import json
 import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf")
+
+from ffmpeg_utils import get_video_encoder_opts, get_audio_encoder_opts, has_cuda
 
 # Load environment variables
 load_dotenv()
@@ -1533,27 +1536,9 @@ def process_video_blur_bars(
     # Already 9:16? Stream-copy or light re-encode.
     if abs(input_aspect - canvas_aspect) < 0.02:
         print("   📐 Video already 9:16 — encoding pass only.")
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            input_video,
-            "-c:v",
-            "libx264",
-            "-preset",
-            "slow",
-            "-crf",
-            "15",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-movflags",
-            "+faststart",
-            output_video,
-        ]
+        video_opts = get_video_encoder_opts() + ["-pix_fmt", "yuv420p"]
+        audio_opts = get_audio_encoder_opts()
+        cmd = ["ffmpeg", "-y", "-i", input_video] + video_opts + audio_opts + ["-movflags", "+faststart", output_video]
         subprocess.run(cmd, capture_output=True, check=True)
         print(f"   ✅ Blur Bars complete: {output_video}")
         return True
@@ -1585,6 +1570,8 @@ def process_video_blur_bars(
         f"[blurred][scaled]overlay=(W-w)/2:(H-h)/2[out]"
     )
 
+    video_opts = get_video_encoder_opts() + ["-pix_fmt", "yuv420p"]
+    audio_opts = get_audio_encoder_opts()
     cmd = [
         "ffmpeg",
         "-y",
@@ -1596,22 +1583,7 @@ def process_video_blur_bars(
         "[out]",
         "-map",
         "0:a?",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "slow",
-        "-crf",
-        "15",
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-movflags",
-        "+faststart",
-        output_video,
-    ]
+    ] + video_opts + audio_opts + ["-movflags", "+faststart", output_video]
 
     print("   🎨 Applying blur bars...")
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -1685,6 +1657,7 @@ def process_video_to_vertical(input_video, final_output_video, crop_style="blur_
 
     print("\n   ✂️ Step 4: Processing video frames...")
 
+    video_opts = get_video_encoder_opts() + ["-pix_fmt", "yuv420p"]
     command = [
         "ffmpeg",
         "-y",
@@ -1700,17 +1673,7 @@ def process_video_to_vertical(input_video, final_output_video, crop_style="blur_
         str(fps),
         "-i",
         "-",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "slow",
-        "-crf",
-        "15",
-        "-pix_fmt",
-        "yuv420p",
-        "-an",
-        temp_video_output,
-    ]
+    ] + video_opts + ["-an", temp_video_output]
 
     ffmpeg_process = subprocess.Popen(
         command,
@@ -1948,7 +1911,7 @@ def transcribe_with_groq(video_path):
     client = Groq(api_key=api_key)
 
     # Extract audio from video first
-    temp_audio = "/tmp/temp_audio.wav"
+    temp_audio = tempfile.mktemp(suffix=".wav")
     extract_audio_cmd = [
         "ffmpeg",
         "-y",
@@ -3217,6 +3180,8 @@ if __name__ == "__main__":
 
                 # ffmpeg cut
                 # Using re-encoding for precision as requested by strict seconds
+                video_opts = get_video_encoder_opts() + ["-pix_fmt", "yuv420p"]
+                audio_opts = get_audio_encoder_opts()
                 cut_command = [
                     "ffmpeg",
                     "-y",
@@ -3226,20 +3191,7 @@ if __name__ == "__main__":
                     str(end),
                     "-i",
                     input_video,
-                    "-c:v",
-                    "libx264",
-                    "-crf",
-                    "15",
-                    "-preset",
-                    "slow",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    "192k",
-                    clip_temp_path,
-                ]
+                ] + video_opts + audio_opts + [clip_temp_path]
                 subprocess.run(
                     cut_command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
                 )

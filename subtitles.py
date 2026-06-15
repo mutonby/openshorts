@@ -1,6 +1,8 @@
 import os
 import subprocess
 
+from ffmpeg_utils import get_video_encoder_opts, get_audio_encoder_opts
+
 
 def transcribe_audio(video_path):
     """
@@ -242,6 +244,8 @@ def burn_subtitles(
         f"Bold=1"
     )
 
+    video_opts = get_video_encoder_opts(cq=23, crf=23)
+    audio_opts = get_audio_encoder_opts()
     cmd = [
         "ffmpeg",
         "-y",
@@ -249,16 +253,7 @@ def burn_subtitles(
         video_path,
         "-vf",
         f"subtitles='{safe_srt_path}':force_style='{style_string}'",
-        "-c:a",
-        "copy",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "fast",
-        "-crf",
-        "23",
-        output_path,
-    ]
+    ] + video_opts + audio_opts + [output_path]
 
     print(f"🎬 Burning subtitles: {' '.join(cmd)}")
     result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)

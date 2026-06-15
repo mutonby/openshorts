@@ -4,6 +4,8 @@ import subprocess
 import urllib.request
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
+from ffmpeg_utils import get_video_encoder_opts, get_audio_encoder_opts
+
 FONT_URL = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSerif/NotoSerif-Bold.ttf"
 FONT_DIR = "fonts"
 FONT_PATH = os.path.join(FONT_DIR, "NotoSerif-Bold.ttf")
@@ -238,6 +240,8 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
         # 4. FFmpeg Command
         print(f"🎬 Overlaying hook: '{text}' at {overlay_x},{overlay_y}")
 
+        video_opts = get_video_encoder_opts(cq=22, crf=22)
+        audio_opts = ["-c:a", "copy"]
         ffmpeg_cmd = [
             "ffmpeg",
             "-y",
@@ -247,16 +251,7 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
             img_path,
             "-filter_complex",
             f"[0:v][1:v]overlay={overlay_x}:{overlay_y}",
-            "-c:a",
-            "copy",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "fast",
-            "-crf",
-            "22",
-            output_path,
-        ]
+        ] + video_opts + audio_opts + [output_path]
 
         subprocess.run(
             ffmpeg_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE

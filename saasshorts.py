@@ -22,6 +22,8 @@ from urllib.parse import urljoin
 from typing import Optional, List, Dict, Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from ffmpeg_utils import get_video_encoder_opts, get_audio_encoder_opts
+
 
 ELEVENLABS_API_BASE = "https://api.elevenlabs.io/v1"
 FAL_QUEUE_BASE = "https://queue.fal.run"
@@ -955,6 +957,8 @@ def generate_broll(
         f"d={total_frames}:s=1080x1920:fps={fps},"
         f"setsar=1"
     )
+    video_opts = get_video_encoder_opts(cq=22, crf=22) + ["-pix_fmt", "yuv420p"]
+    audio_opts = ["-c:a", "aac", "-b:a", "128k"]
     cmd = [
         "ffmpeg", "-y",
         "-loop", "1", "-i", img_path,          # Input 0: image
@@ -962,12 +966,7 @@ def generate_broll(
         "-vf", zoompan_filter,
         "-t", str(dur_secs),
         "-map", "0:v", "-map", "1:a",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "128k",
-        "-shortest",
-        output_path,
-    ]
+    ] + video_opts + audio_opts + ["-shortest", output_path]
 
     subprocess.run(cmd, check=True, capture_output=True)
 
@@ -1150,14 +1149,13 @@ def composite_video(
 
     if not broll_clips:
         # Simple: talking head + subtitles only
+        video_opts = get_video_encoder_opts(cq=22, crf=22)
+        audio_opts = ["-c:a", "aac", "-b:a", "128k"]
         cmd = [
             "ffmpeg", "-y",
             "-i", talking_head_path,
             "-vf", sub_filter,
-            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-            "-c:a", "aac", "-b:a", "128k",
-            output_path,
-        ]
+        ] + video_opts + audio_opts + [output_path]
         subprocess.run(cmd, check=True)
         print(f"[SaaSShorts] ✅ Final video (simple): {output_path}")
         return output_path
@@ -1238,16 +1236,15 @@ def composite_video(
 
     filter_str = ";".join(filter_parts)
 
+    video_opts = get_video_encoder_opts(cq=22, crf=22)
+    audio_opts = ["-c:a", "aac", "-b:a", "128k"]
     cmd = [
         "ffmpeg", "-y",
         *inputs,
         "-filter_complex", filter_str,
         "-map", "[finalv]",
         "-map", "[outa]",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-        "-c:a", "aac", "-b:a", "128k",
-        output_path,
-    ]
+    ] + video_opts + audio_opts + [output_path]
 
     subprocess.run(cmd, check=True)
     print(f"[SaaSShorts] ✅ Final video (composite): {output_path}")

@@ -5,6 +5,8 @@ import subprocess
 import time
 from openai import OpenAI
 
+from ffmpeg_utils import get_video_encoder_opts, get_audio_encoder_opts
+
 class VideoEditor:
     def __init__(self, api_key):
         self.client = OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"))
@@ -282,14 +284,13 @@ class VideoEditor:
 
         print(f"🎬 Executing AI Filter: {filter_string}")
         
+        video_opts = get_video_encoder_opts(cq=22, crf=22)
+        audio_opts = get_audio_encoder_opts()
         cmd = [
             'ffmpeg', '-y',
             '-i', input_path,
             '-vf', filter_string,
-            '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
-            '-c:a', 'copy',
-            output_path
-        ]
+        ] + video_opts + audio_opts + [output_path]
         
         # Use explicit environment with UTF-8 to avoid ascii errors in subprocess
         env = os.environ.copy()
