@@ -10,6 +10,21 @@ const STYLE_OPTIONS = [
   { id: 'comparison', label: 'Before/After', desc: 'Comparison style' },
 ];
 
+const LANGUAGE_OPTIONS = [
+  { id: 'en', label: 'English', region: 'US' },
+  { id: 'es', label: 'Spanish', region: 'ES' },
+  { id: 'hi', label: 'Hindi', region: 'IN' },
+  { id: 'bn', label: 'Bengali', region: 'IN' },
+  { id: 'ta', label: 'Tamil', region: 'IN' },
+  { id: 'te', label: 'Telugu', region: 'IN' },
+  { id: 'mr', label: 'Marathi', region: 'IN' },
+  { id: 'gu', label: 'Gujarati', region: 'IN' },
+  { id: 'kn', label: 'Kannada', region: 'IN' },
+  { id: 'ml', label: 'Malayalam', region: 'IN' },
+  { id: 'pa', label: 'Punjabi', region: 'IN' },
+  { id: 'ur', label: 'Urdu', region: 'IN' },
+];
+
 const CACHE_KEY = 'saasshorts_cache';
 const CACHE_MAX_AGE = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -61,6 +76,8 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
 
   // Step 2: Configure
   const [voices, setVoices] = useState([]);
+  const [voicesSource, setVoicesSource] = useState('defaults');
+  const [voicesLoading, setVoicesLoading] = useState(false);
   const [selectedVoice, setSelectedVoice] = useState('21m00Tcm4TlvDq8ikWAM');
   const [actorDescription, setActorDescription] = useState('');
   const [editedNarration, setEditedNarration] = useState('');
@@ -89,6 +106,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
 
   // UI
   const [copied, setCopied] = useState('');
+  const selectedLanguageOption = LANGUAGE_OPTIONS.find((l) => l.id === language) || LANGUAGE_OPTIONS[0];
   const [logsExpanded, setLogsExpanded] = useState(true);
 
   // Pre-fill from cache on mount
@@ -125,13 +143,13 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
       'es-male': 'ErXwobaYiN019PkySvjV',     // Antoni
     };
     // If we have fetched voices, pick the first matching one; otherwise use hardcoded default
-    const matchingVoice = voices.find(v => (v.labels?.gender || '').toLowerCase() === actorGender);
+    const matchingVoice = voices.find(v => (v.gender || v.labels?.gender || '').toLowerCase() === actorGender);
     if (matchingVoice) {
       setSelectedVoice(matchingVoice.voice_id);
     } else {
       setSelectedVoice(genderDefaults[`${language}-${actorGender}`] || genderDefaults['en-female']);
     }
-  }, [actorGender, language]);
+  }, [actorGender, language, voices]);
 
   // Poll generation status
   useEffect(() => {
@@ -171,6 +189,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   }, [jobId, genStatus]);
 
   const fetchVoices = async () => {
+    setVoicesLoading(true);
     try {
       const res = await fetch(getApiUrl('/api/saasshorts/voices'), {
         headers: { 'X-ElevenLabs-Key': elevenLabsKey },
@@ -178,9 +197,12 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
       if (res.ok) {
         const data = await res.json();
         setVoices(data.voices || []);
+        setVoicesSource(data.source || 'elevenlabs');
       }
     } catch (e) {
       console.error('Voices fetch error:', e);
+    } finally {
+      setVoicesLoading(false);
     }
   };
 
@@ -270,6 +292,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
       const scriptToSend = { ...scripts[selectedScript] };
       scriptToSend._product_name = analysis?.product_name || analysis?.name || '';
       scriptToSend._product_url = url;
+      scriptToSend.language = language;
       if (editedNarration !== scriptToSend.full_narration) {
         scriptToSend.full_narration = editedNarration;
       }
@@ -316,6 +339,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
       const scriptToSend = { ...scripts[selectedScript] };
       scriptToSend._product_name = analysis?.product_name || analysis?.name || '';
       scriptToSend._product_url = url;
+      scriptToSend.language = language;
       if (editedNarration !== scriptToSend.full_narration) {
         scriptToSend.full_narration = editedNarration;
       }
@@ -496,21 +520,18 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
 
               <div>
                 <label className="block text-sm font-medium text-zinc-300 mb-3">Language</label>
-                <div className="flex gap-2 mb-6">
-                  {[
-                    { id: 'en', label: 'English', flag: '🇺🇸' },
-                    { id: 'es', label: 'Español', flag: '🇪🇸' },
-                  ].map((l) => (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 mb-6">
+                  {LANGUAGE_OPTIONS.map((l) => (
                     <button
                       key={l.id}
                       onClick={() => setLanguage(l.id)}
-                      className={`flex-1 p-3 rounded-xl border text-center transition-all ${
+                      className={`p-3 rounded-xl border text-center transition-all ${
                         language === l.id
                           ? 'border-violet-500/50 bg-violet-500/10 text-violet-300'
                           : 'border-white/10 bg-white/5 text-zinc-400 hover:bg-white/10'
                       }`}
                     >
-                      <span className="text-lg">{l.flag}</span>
+                      <span className="text-[10px] font-mono text-zinc-500">{l.region}</span>
                       <div className="text-xs font-medium mt-1">{l.label}</div>
                     </button>
                   ))}
@@ -859,17 +880,24 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
               {/* Voice Selection */}
               <div>
                 <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center gap-2">
-                  <Volume2 size={14} /> Voice {language === 'es' ? '(Spanish)' : '(English)'}
+                  <Volume2 size={14} /> Voice ({selectedLanguageOption.label})
                 </label>
                 {(() => {
                   // Filter voices by language/accent
                   const filtered = voices.length > 0
                     ? voices.filter((v) => {
-                        const gender = (v.labels?.gender || '').toLowerCase();
-                        // Only show voices that match the selected gender
+                        const gender = (v.gender || v.labels?.gender || '').toLowerCase();
                         return gender === actorGender;
                       })
                       .sort((a, b) => {
+                        const aGender = (a.gender || a.labels?.gender || '').toLowerCase();
+                        const bGender = (b.gender || b.labels?.gender || '').toLowerCase();
+                        const aAccount = a.is_custom || a.is_premium ? 0 : 1;
+                        const bAccount = b.is_custom || b.is_premium ? 0 : 1;
+                        if (aAccount !== bAccount) return aAccount - bAccount;
+                        const aGenderScore = aGender === actorGender ? 0 : 1;
+                        const bGenderScore = bGender === actorGender ? 0 : 1;
+                        if (aGenderScore !== bGenderScore) return aGenderScore - bGenderScore;
                         const aAccent = (a.labels?.accent || '').toLowerCase();
                         const bAccent = (b.labels?.accent || '').toLowerCase();
                         if (language === 'es') {
@@ -899,8 +927,12 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                             }`}
                           >
                             <div className="flex-1 min-w-0">
-                              <div className="text-sm font-medium truncate">{v.name}</div>
-                              <div className="text-[10px] text-zinc-500">
+                              <div className="text-sm font-medium truncate flex items-center gap-1.5">
+                                <span className="truncate">{v.name}</span>
+                                {v.is_premium && <span className="shrink-0 text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/20">Premium</span>}
+                                {v.is_custom && !v.is_premium && <span className="shrink-0 text-[9px] px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-300 border border-violet-500/20">Custom</span>}
+                              </div>
+                              <div className="text-[10px] text-zinc-500 truncate">
                                 {v.labels?.accent || ''} {v.labels?.gender || ''} {v.category ? `· ${v.category}` : ''}
                               </div>
                             </div>
@@ -941,7 +973,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                     ],
                   };
                   const key = `${language}-${actorGender}`;
-                  const opts = defaults[key] || defaults['en-female'];
+                  const opts = defaults[key] || defaults[`en-${actorGender}`] || defaults['en-female'];
                   return (
                     <select value={selectedVoice} onChange={(e) => setSelectedVoice(e.target.value)} className="input-field">
                       {opts.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
@@ -949,7 +981,11 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                   );
                 })()}
                 <p className="text-[10px] text-zinc-600 mt-1">
-                  {language === 'es'
+                  {voicesLoading
+                    ? 'Loading ElevenLabs account voices...'
+                    : voices.length > 0
+                    ? `${voices.length} voices loaded from ${voicesSource === 'defaults' ? 'defaults' : 'your ElevenLabs account'} · Premium and custom voices included when available`
+                    : language === 'es'
                     ? `Voces ${actorGender === 'female' ? 'femeninas' : 'masculinas'} · Todas hablan español con modelo multilingual · Click altavoz para preview`
                     : `${actorGender === 'female' ? 'Female' : 'Male'} voices · Click speaker to preview`}
                 </p>

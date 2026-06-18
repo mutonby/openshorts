@@ -1652,6 +1652,7 @@ from saasshorts import (
     generate_actor_images,
     get_elevenlabs_voices,
     DEFAULT_VOICES,
+    SUPPORTED_LANGUAGES,
 )
 
 # State for SaaSShorts jobs (separate from video processing jobs)
@@ -1679,6 +1680,8 @@ async def saasshorts_analyze(
 
     if not req.url and not req.description:
         raise HTTPException(status_code=400, detail="Provide a URL or a product description")
+    if req.language not in SUPPORTED_LANGUAGES:
+        raise HTTPException(status_code=400, detail=f"Unsupported language: {req.language}")
 
     try:
         loop = asyncio.get_event_loop()
@@ -2080,6 +2083,8 @@ async def saasshorts_generate(
         raise HTTPException(status_code=400, detail="Missing fal.ai API Key (X-Fal-Key header)")
     if not elevenlabs_key:
         raise HTTPException(status_code=400, detail="Missing ElevenLabs API Key (X-ElevenLabs-Key header)")
+    if req.script.get("language", "en") not in SUPPORTED_LANGUAGES:
+        raise HTTPException(status_code=400, detail=f"Unsupported language: {req.script.get('language')}")
 
     # Support retry: reuse output_dir so cached assets (image, voice, head, broll) are kept
     reused = False
@@ -2249,7 +2254,13 @@ async def saasshorts_voices(
     # Fallback to default voices
     return {
         "voices": [
-            {"voice_id": vid, "name": name, "category": "default"}
+            {
+                "voice_id": vid,
+                "name": name,
+                "category": "default",
+                "gender": "female" if "Female" in name else "male",
+                "labels": {"gender": "female" if "Female" in name else "male"},
+            }
             for name, vid in DEFAULT_VOICES.items()
         ],
         "source": "defaults",
