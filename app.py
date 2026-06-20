@@ -1927,7 +1927,12 @@ async def post_to_buffer(req: BufferPostRequest):
 
         # Add Instagram type if channel is Instagram
         if req.service == "instagram":
-            variables["input"]["type"] = req.instagram_post_type
+            variables["input"]["metadata"] = {
+                "instagram": {
+                    "type": req.instagram_post_type,
+                    "shouldShareToFeed": True,
+                }
+            }
 
         print(f"📡 [Buffer] Creating post on channel {req.channel_id}...")
         result = _buffer_graphql(req.buffer_api_key, mutation, variables)
@@ -2028,7 +2033,12 @@ async def saasshorts_post_buffer(req: SaaSBufferPostRequest):
 
         # Add Instagram type if channel is Instagram
         if req.service == "instagram":
-            variables["input"]["type"] = req.instagram_post_type
+            variables["input"]["metadata"] = {
+                "instagram": {
+                    "type": req.instagram_post_type,
+                    "shouldShareToFeed": True,
+                }
+            }
 
         print(f"📡 [AI Shorts/Buffer] Creating post on channel {req.channel_id}...")
         result = _buffer_graphql(req.buffer_api_key, mutation, variables)
@@ -2714,7 +2724,12 @@ async def thumbnail_publish_buffer(
             }
 
             if service == "instagram":
-                variables["input"]["type"] = instagram_post_type
+                variables["input"]["metadata"] = {
+                    "instagram": {
+                        "type": instagram_post_type,
+                        "shouldShareToFeed": True,
+                    }
+                }
 
             print(f"📡 [Thumbnail/Buffer] Creating post...")
             result = _buffer_graphql(buffer_api_key, mutation, variables)
