@@ -1598,6 +1598,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                               service: selectedChannel?.service || null,
                               title: genResult.script?.title,
                               description: genResult.script?.caption || genResult.script?.full_narration,
+                              instagram_post_type: "reel",
                             };
                             if (isScheduling && scheduleDate) {
                               payload.scheduled_date = new Date(scheduleDate).toISOString();

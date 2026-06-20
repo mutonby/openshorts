@@ -486,7 +486,8 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                         channel_id: channelId,
                         service: channel?.service || null,
                         title: postTitle,
-                        description: postDescription
+                        description: postDescription,
+                        instagram_post_type: "reel"
                     };
 
                     if (editedVideoFilename) {

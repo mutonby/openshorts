@@ -34,6 +34,7 @@ from s3_uploader import (
     upload_video_to_gallery,
     list_video_gallery,
 )
+from learning.routes import router as learning_router, init_learning
 
 load_dotenv()
 
@@ -197,6 +198,8 @@ async def lifespan(app: FastAPI):
     # Start worker and cleanup
     worker_task = asyncio.create_task(process_queue())
     cleanup_task = asyncio.create_task(cleanup_jobs())
+    # Initialize learning system
+    init_learning()
     yield
     # Cleanup (optional: cancel worker)
 
@@ -219,6 +222,9 @@ app.mount("/videos", StaticFiles(directory=OUTPUT_DIR), name="videos")
 THUMBNAILS_DIR = os.path.join(OUTPUT_DIR, "thumbnails")
 os.makedirs(THUMBNAILS_DIR, exist_ok=True)
 app.mount("/thumbnails", StaticFiles(directory=THUMBNAILS_DIR), name="thumbnails")
+
+# Include learning system routes
+app.include_router(learning_router)
 
 
 class ProcessRequest(BaseModel):
@@ -373,6 +379,8 @@ async def process_endpoint(
     groq_key: Optional[str] = Form(None),
     crop_style: Optional[str] = Form("blur_bars"),
     category: Optional[str] = Form("general"),
+    rag_profile: Optional[str] = Form(None),
+    rag_fallback: Optional[bool] = Form(True),
 ):
     api_key = request.headers.get("X-Gemini-Key")
     if not api_key:
@@ -390,6 +398,8 @@ async def process_endpoint(
         groq_key = body.get("groq_key")
         crop_style = body.get("crop_style", "blur_bars")
         category = body.get("category", "general")
+        rag_profile = body.get("rag_profile")
+        rag_fallback = body.get("rag_fallback", True)
 
     if not url and not file:
         raise HTTPException(status_code=400, detail="Must provide URL or File")
@@ -459,6 +469,9 @@ async def process_endpoint(
     cmd.extend(["--transcription-method", transcription_method])
     cmd.extend(["--crop-style", crop_style])
     cmd.extend(["--category", category])
+    if rag_profile:
+        cmd.extend(["--rag-profile", rag_profile])
+    cmd.extend(["--rag-fallback", "true" if rag_fallback else "false"])
 
     print(
         f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true"
@@ -1715,6 +1728,7 @@ class BufferPostRequest(BaseModel):
     description: Optional[str] = None
     scheduled_date: Optional[str] = None
     edited_video_filename: Optional[str] = None
+    instagram_post_type: Optional[str] = "reel"
 
 
 class SaaSBufferPostRequest(BaseModel):
@@ -1726,6 +1740,7 @@ class SaaSBufferPostRequest(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     scheduled_date: Optional[str] = None
+    instagram_post_type: Optional[str] = "reel"
 
 
 BUFFER_API_URL = "https://api.buffer.com"
@@ -1910,6 +1925,10 @@ async def post_to_buffer(req: BufferPostRequest):
                 }
             }
 
+        # Add Instagram type if channel is Instagram
+        if req.service == "instagram":
+            variables["input"]["type"] = req.instagram_post_type
+
         print(f"📡 [Buffer] Creating post on channel {req.channel_id}...")
         result = _buffer_graphql(req.buffer_api_key, mutation, variables)
 
@@ -2006,6 +2025,10 @@ async def saasshorts_post_buffer(req: SaaSBufferPostRequest):
                     "categoryId": category_id,
                 }
             }
+
+        # Add Instagram type if channel is Instagram
+        if req.service == "instagram":
+            variables["input"]["type"] = req.instagram_post_type
 
         print(f"📡 [AI Shorts/Buffer] Creating post on channel {req.channel_id}...")
         result = _buffer_graphql(req.buffer_api_key, mutation, variables)
@@ -2637,6 +2660,8 @@ async def thumbnail_publish_buffer(
     thumbnail_url: str = Form(...),
     buffer_api_key: str = Form(...),
     channel_id: str = Form(...),
+    service: Optional[str] = Form(None),
+    instagram_post_type: Optional[str] = Form("reel"),
 ):
     """Kick off a background upload to Buffer and return immediately."""
     if session_id not in thumbnail_sessions:
@@ -2687,6 +2712,9 @@ async def thumbnail_publish_buffer(
                     "assets": [{"video": {"url": s3_video_url}}],
                 }
             }
+
+            if service == "instagram":
+                variables["input"]["type"] = instagram_post_type
 
             print(f"📡 [Thumbnail/Buffer] Creating post...")
             result = _buffer_graphql(buffer_api_key, mutation, variables)

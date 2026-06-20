@@ -900,28 +900,55 @@ def _build_prompt(
     transcript_text,
     words_json,
     category="general",
+    rag_examples="",
 ):
     """Build the full Gemini prompt by injecting category-specific instructions."""
-    if category == "podcast":
-        return _get_podcast_prompt(
-            transcript_text, video_duration, words_json, scene_boundaries
-        )
-    elif category == "podcast_comedy":
-        return _get_podcast_comedy_prompt(
-            transcript_text, video_duration, words_json, scene_boundaries
-        )
+    if rag_examples:
+        # Podcast and podcast_comedy prompts prepend RAG examples
+        if category == "podcast":
+            base = _get_podcast_prompt(
+                transcript_text, video_duration, words_json, scene_boundaries
+            )
+            return rag_examples + "\n\n" + base
+        elif category == "podcast_comedy":
+            base = _get_podcast_comedy_prompt(
+                transcript_text, video_duration, words_json, scene_boundaries
+            )
+            return rag_examples + "\n\n" + base
 
-    cat_instructions = CATEGORY_INSTRUCTIONS.get(
-        category, CATEGORY_INSTRUCTIONS["general"]
-    )
-    return GEMINI_BASE_PROMPT.format(
-        video_duration=video_duration,
-        language=language,
-        scene_boundaries=scene_boundaries,
-        category_instructions=cat_instructions,
-        transcript_text=transcript_text,
-        words_json=words_json,
-    )
+        cat_instructions = CATEGORY_INSTRUCTIONS.get(
+            category, CATEGORY_INSTRUCTIONS["general"]
+        )
+        base = GEMINI_BASE_PROMPT.format(
+            video_duration=video_duration,
+            language=language,
+            scene_boundaries=scene_boundaries,
+            category_instructions=cat_instructions,
+            transcript_text=transcript_text,
+            words_json=words_json,
+        )
+        return rag_examples + "\n\n" + base
+    else:
+        if category == "podcast":
+            return _get_podcast_prompt(
+                transcript_text, video_duration, words_json, scene_boundaries
+            )
+        elif category == "podcast_comedy":
+            return _get_podcast_comedy_prompt(
+                transcript_text, video_duration, words_json, scene_boundaries
+            )
+
+        cat_instructions = CATEGORY_INSTRUCTIONS.get(
+            category, CATEGORY_INSTRUCTIONS["general"]
+        )
+        return GEMINI_BASE_PROMPT.format(
+            video_duration=video_duration,
+            language=language,
+            scene_boundaries=scene_boundaries,
+            category_instructions=cat_instructions,
+            transcript_text=transcript_text,
+            words_json=words_json,
+        )
 
 
 GEMINI_PROMPT_TEMPLATE = GEMINI_BASE_PROMPT
@@ -2433,6 +2460,7 @@ def _build_window_prompt(
     window_num,
     total_windows,
     category="general",
+    rag_examples="",
 ):
     """Build a reduced prompt for a window of words."""
     if not words:
@@ -2473,6 +2501,7 @@ def _build_window_prompt(
         transcript_text=json.dumps(window_text),
         words_json=json.dumps(words),
         category=category,
+        rag_examples=rag_examples,
     )
 
     return prompt, window_text
@@ -2673,7 +2702,12 @@ def _run_podcast_comedy_multipass(
 
 
 def get_viral_clips(
-    transcript_result, video_duration, scene_boundaries=None, category="general"
+    transcript_result,
+    video_duration,
+    scene_boundaries=None,
+    category="general",
+    rag_profile=None,
+    rag_fallback=True,
 ):
     print(f"🤖  Analyzing with AI (category={category})...")
 
@@ -2722,6 +2756,35 @@ def get_viral_clips(
         scene_text = "No scene data available — use transcript context to find natural cut points"
 
     from utils import extract_json
+
+    # Initialize RAG injector if profile specified
+    _rag_injector = None
+    if rag_profile:
+        try:
+            from learning.rag_injector import RAGInjector
+            from learning.vector_store import VectorStore
+            from learning.embedder import LocalEmbedder
+            from learning.example_builder import FewShotBuilder
+
+            _rag_vs = VectorStore()
+            _rag_emb = LocalEmbedder()
+            _rag_injector = RAGInjector(_rag_vs, _rag_emb, FewShotBuilder())
+            print(f"   📚 RAG learning profile enabled: {rag_profile}")
+        except Exception as e:
+            print(f"   ⚠️ RAG initialization failed (continuing without learning): {e}")
+
+    def _get_rag_examples(window_text=None):
+        if not _rag_injector:
+            return ""
+        try:
+            text = window_text or transcript_result.get("text", "")[:2000]
+            return _rag_injector.get_few_shot(
+                text, rag_profile,
+                fallback_category=category if rag_fallback else None
+            )
+        except Exception as e:
+            print(f"   ⚠️ RAG example retrieval failed: {e}")
+            return ""
 
     def _call_llm(prompt_content, extra_system_prompt=None, temperature=1.0):
         messages = []
@@ -2779,6 +2842,10 @@ def get_viral_clips(
         # --- Estimate prompt size and decide single-call vs chunked ---
         transcript_json = json.dumps(transcript_result["text"])
         words_json = json.dumps(words)
+
+        # Get RAG examples for the full transcript
+        rag_examples = _get_rag_examples()
+
         full_prompt = _build_prompt(
             video_duration=video_duration,
             language=language,
@@ -2786,6 +2853,7 @@ def get_viral_clips(
             transcript_text=transcript_json,
             words_json=words_json,
             category=category,
+            rag_examples=rag_examples,
         )
 
         if len(full_prompt) <= MAX_PROMPT_CHARS:
@@ -2848,6 +2916,17 @@ def get_viral_clips(
             if len(window_words) < 200:
                 continue
 
+            # Build window transcript text for RAG
+            ws_start = window_words[0]["s"]
+            ws_end = window_words[-1]["e"]
+            ws_segments = [
+                seg
+                for seg in transcript_result["segments"]
+                if seg["end"] >= ws_start and seg["start"] <= ws_end
+            ]
+            window_transcript = " ".join(seg["text"] for seg in ws_segments) if ws_segments else ""
+            window_rag = _get_rag_examples(window_transcript)
+
             window_prompt, _ = _build_window_prompt(
                 window_words,
                 transcript_result["segments"],
@@ -2857,6 +2936,7 @@ def get_viral_clips(
                 win_idx // max(words_per_window - overlap_words, 1),
                 total_windows,
                 category,
+                rag_examples=window_rag,
             )
             if window_prompt is None:
                 continue
@@ -2880,6 +2960,7 @@ def get_viral_clips(
                     win_idx // max(words_per_window - overlap_words, 1),
                     total_windows,
                     category,
+                    rag_examples=window_rag,
                 )
 
             if len(window_prompt) > MAX_PROMPT_CHARS:
@@ -3037,6 +3118,19 @@ if __name__ == "__main__":
         default="general",
         help="Content category for tailored clip detection. 'general' auto-detects. Default: general.",
     )
+    parser.add_argument(
+        "--rag-profile",
+        type=str,
+        default=None,
+        help="Learning profile ID to use for RAG few-shot examples.",
+    )
+    parser.add_argument(
+        "--rag-fallback",
+        type=str,
+        default="true",
+        choices=["true", "false"],
+        help="Fallback to category-based retrieval if profile has insufficient clips.",
+    )
 
     args = parser.parse_args()
 
@@ -3136,7 +3230,12 @@ if __name__ == "__main__":
 
         # 4. AI Analysis
         clips_data, transcript_words = get_viral_clips(
-            transcript, duration, scene_boundaries, category=args.category
+            transcript,
+            duration,
+            scene_boundaries,
+            category=args.category,
+            rag_profile=args.rag_profile,
+            rag_fallback=args.rag_fallback == "true",
         )
 
         if not clips_data or "shorts" not in clips_data:

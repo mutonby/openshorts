@@ -47,3 +47,7 @@ package-lock.json
 
 .opencode/index/
 
+# Learning system (RAG data)
+/data/chromadb/
+/data/profiles.json
+
