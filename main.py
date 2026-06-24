@@ -46,6 +46,123 @@ PODCAST_COMEDY_DURATION_TOLERANCE = 5.0
 PODCAST_COMEDY_BALANCE_GAP = 0.12
 PODCAST_COMEDY_JUDGE_MIN_SCORE = 0.7
 
+MULTIPASS_LANES = (
+    "CURIOSITY_GAP",
+    "EMOTIONAL_PEAK",
+    "VALUE_DROP",
+    "CONTROVERSY",
+    "CLIFFHANGER",
+    "STORY_BEAT",
+    "PATTERN_INTERRUPT",
+    "RELATABLE_MOMENT",
+)
+
+MULTIPASS_DEFAULT_CONFIG = {
+    "lanes": MULTIPASS_LANES,
+    "max_candidates": 24,
+    "context_before": 8.0,
+    "context_after": 5.0,
+    "hard_min_duration": 15.0,
+    "hard_max_duration": 70.0,
+    "duration_tolerance": 5.0,
+    "balance_gap": 0.12,
+    "judge_min_score": 0.7,
+    "scout_temp": 0.8,
+    "judge_temp": 0.2,
+}
+
+MULTIPASS_CATEGORY_CONFIG = {
+    "podcast": {
+        "lanes": MULTIPASS_LANES,
+        "hard_min_duration": 15.0,
+        "hard_max_duration": 75.0,
+        "lane_durations": {
+            "CURIOSITY_GAP": {"min": 25, "max": 60},
+            "EMOTIONAL_PEAK": {"min": 15, "max": 45},
+            "VALUE_DROP": {"min": 20, "max": 50},
+            "CONTROVERSY": {"min": 20, "max": 55},
+            "CLIFFHANGER": {"min": 25, "max": 60},
+            "STORY_BEAT": {"min": 25, "max": 65},
+            "PATTERN_INTERRUPT": {"min": 15, "max": 40},
+            "RELATABLE_MOMENT": {"min": 15, "max": 40},
+        },
+        "scout_instructions": "Cari momen podcast terbaik: hot take yang bikin mikir, cerita personal yang kuat, momen emosional, reveal tak terduga, dan bantengan seru antar host/tamu.",
+        "judge_instructions": "Evaluasi kandidat podcast Indonesia. Prioritas: hook kuat di 3 detik pertama, setup efisien, payoff berbobot, dan ending yang bersih.",
+    },
+    "tutorial": {
+        "hard_min_duration": 12.0,
+        "hard_max_duration": 55.0,
+        "lane_durations": {
+            "VALUE_DROP": {"min": 20, "max": 45},
+            "CURIOSITY_GAP": {"min": 15, "max": 40},
+            "PATTERN_INTERRUPT": {"min": 12, "max": 30},
+            "EMOTIONAL_PEAK": {"min": 12, "max": 30},
+            "STORY_BEAT": {"min": 20, "max": 50},
+            "RELATABLE_MOMENT": {"min": 12, "max": 30},
+        },
+        "scout_instructions": "Cari momen tutorial terbaik: tip yang bisa langsung dipraktekkan, before/after reveal, 'cuma butuh X menit', hasil instan, dan trik yang bikin penonton 'wait, what?!'.",
+        "judge_instructions": "Prioritas: value yang actionable, hook yang bikin penasaran, tutorial yang lengkap dalam potongan pendek, dan ending yang kuat.",
+    },
+    "gaming": {
+        "hard_min_duration": 8.0,
+        "hard_max_duration": 40.0,
+        "lane_durations": {
+            "EMOTIONAL_PEAK": {"min": 8, "max": 25},
+            "PATTERN_INTERRUPT": {"min": 8, "max": 20},
+            "CURIOSITY_GAP": {"min": 10, "max": 25},
+            "CONTROVERSY": {"min": 10, "max": 30},
+            "STORY_BEAT": {"min": 15, "max": 35},
+            "RELATABLE_MOMENT": {"min": 8, "max": 20},
+        },
+        "scout_instructions": "Cari momen gaming terbaik: clutch win, rage momen, glitch lucu, kill tak terduga, dan reaksi spontan. Jeritan + ketawa = emas.",
+        "judge_instructions": "Prioritas: reaksi emosional yang kuat (teriak/ketawa/marah), momen tak terduga, durasi singkat (<25 detik ideal), hook instan.",
+    },
+    "reaction": {
+        "hard_min_duration": 10.0,
+        "hard_max_duration": 50.0,
+        "lane_durations": {
+            "EMOTIONAL_PEAK": {"min": 10, "max": 35},
+            "PATTERN_INTERRUPT": {"min": 10, "max": 30},
+            "RELATABLE_MOMENT": {"min": 10, "max": 30},
+            "CURIOSITY_GAP": {"min": 15, "max": 35},
+            "CONTROVERSY": {"min": 15, "max": 40},
+            "STORY_BEAT": {"min": 15, "max": 45},
+        },
+        "scout_instructions": "Cari momen reaksi terbaik: emotional spike (kaget, nangis, ngakak, marah), jeda dramatis saat proses, dan reaksi vokal keras yang menular.",
+        "judge_instructions": "Prioritas: intensitas reaksi, hook emosional instan, durasi efisien, dan kelengkapan reaksi (before → during → after).",
+    },
+    "interview": {
+        "hard_min_duration": 15.0,
+        "hard_max_duration": 70.0,
+        "lane_durations": {
+            "STORY_BEAT": {"min": 25, "max": 60},
+            "EMOTIONAL_PEAK": {"min": 15, "max": 50},
+            "CURIOSITY_GAP": {"min": 20, "max": 50},
+            "CONTROVERSY": {"min": 20, "max": 55},
+            "VALUE_DROP": {"min": 20, "max": 50},
+            "CLIFFHANGER": {"min": 25, "max": 55},
+            "RELATABLE_MOMENT": {"min": 15, "max": 40},
+        },
+        "scout_instructions": "Cari momen wawancara terbaik: reveal mengejutkan, soundbite kuat, cerita personal yang emosional, jawaban jujur yang jarang diomongin, dan momen 'ga nyangka'.",
+        "judge_instructions": "Prioritas: bobot konten, kekuatan soundbite, emosi narasumber, hook yang kuat, dan kelengkapan cerita (jangan potong di tengah reveal).",
+    },
+    "news": {
+        "hard_min_duration": 12.0,
+        "hard_max_duration": 60.0,
+        "lane_durations": {
+            "CONTROVERSY": {"min": 15, "max": 45},
+            "CURIOSITY_GAP": {"min": 15, "max": 40},
+            "PATTERN_INTERRUPT": {"min": 12, "max": 35},
+            "EMOTIONAL_PEAK": {"min": 12, "max": 35},
+            "STORY_BEAT": {"min": 20, "max": 55},
+            "VALUE_DROP": {"min": 15, "max": 40},
+        },
+        "scout_instructions": "Cari momen berita terbaik: angka mengejutkan, klaim kontroversial, detail yang bikin penasaran, dan momen 'breaking news'. Fokus ke informasi berbobot bukan sekadar sensasi.",
+        "judge_instructions": "Prioritas: bobot informasi, hook penasaran, durasi efisien, akurasi klaim, dan kelengkapan konteks minimal.",
+    },
+    "general": {},
+}
+
 GEMINI_BASE_PROMPT = """
 You are a world-class short-form video editor for TikTok, Instagram Reels, and YouTube Shorts. Identify the 3-10 most viral-worthy moments from the transcript. Each clip MUST be self-contained — a viewer watching only that clip must understand the point without prior context.
 
@@ -296,38 +413,93 @@ def _segments_for_window(segments, window_start, window_end):
     ]
 
 
-def _build_podcast_comedy_scout_prompt(
+def _get_multipass_config(category, config_key=None):
+    """Get effective multi-pass config for a category, falling back to defaults."""
+    base = dict(MULTIPASS_DEFAULT_CONFIG)
+    overrides = MULTIPASS_CATEGORY_CONFIG.get(category, {})
+    base.update(overrides)
+    if config_key:
+        return base.get(config_key)
+    return base
+
+
+def _get_lanes_for_category(category):
+    """Get valid content lanes for a category."""
+    if category == "podcast_comedy":
+        return PODCAST_COMEDY_LANES
+    config = _get_multipass_config(category)
+    return config.get("lanes", MULTIPASS_LANES)
+
+
+def _build_lane_instructions(category, config):
+    """Build CONTENT LANES section for the scout prompt."""
+    lanes = _get_lanes_for_category(category)
+    if category == "podcast_comedy":
+        return (
+            "# CONTENT LANES\n"
+            "- COMEDY: setup -> build -> punchline -> reaction bernilai\n"
+            "- HOT_TAKE: klaim kuat + alasan/konsekuensi, bukan rage bait kosong\n"
+            "- PERSONAL_STORY: cerita dengan perubahan, reveal, pelajaran, atau payoff emosi"
+        )
+    lane_descriptions = {
+        "CURIOSITY_GAP": "Hook pertanyaan yang bikin penonton HARUS tau jawabannya",
+        "EMOTIONAL_PEAK": "Emosi kuat: marah, excited, ketawa, nangis, gak percaya",
+        "VALUE_DROP": "Tip actionable, insight, framework yang bisa langsung dipake",
+        "CONTROVERSY": "Hot take, debat, opini kuat yang bikin komen rame",
+        "CLIFFHANGER": "Cerita belum selesai, reveal mengintai, 'terus gimana?!'",
+        "STORY_BEAT": "Setup jelas -> konflik -> resolusi, cerita utuh dalam potongan",
+        "PATTERN_INTERRUPT": "Twist tak terduga, plot twist, momen 'wait, what?!'",
+        "RELATABLE_MOMENT": "'Gue juga gitu!' — pengalaman universal yang relatable",
+    }
+    lines = ["# CONTENT LANES"]
+    for lane in lanes:
+        desc = lane_descriptions.get(lane, lane)
+        lines.append(f"- {lane}: {desc}")
+    return "\n".join(lines)
+
+
+def _build_multipass_scout_prompt(
     timestamped_segments,
     video_duration,
-    max_candidates=PODCAST_COMEDY_MAX_CANDIDATES,
+    category="general",
+    max_candidates=None,
     window_num=1,
     total_windows=1,
 ):
-    """Build the Indonesian candidate-discovery prompt using one transcript."""
+    """Build the candidate-discovery prompt for any category."""
+    config = _get_multipass_config(category)
+    if max_candidates is None:
+        max_candidates = config.get("max_candidates", 24)
     transcript_json = json.dumps(timestamped_segments, ensure_ascii=False)
+    lanes = _get_lanes_for_category(category)
+    lane_instructions = _build_lane_instructions(category, config)
+    cat_instructions = config.get("scout_instructions", "Cari momen terbaik dari konten ini.")
+
+    duration_hints = _build_duration_hints(category, config, lanes)
+
+    role_name = f"MULTIPASS_SCOUT_{category.upper()}" if category != "podcast_comedy" else "INDONESIAN_PODCAST_CANDIDATE_SCOUT"
+
     return f"""
-# ROLE: INDONESIAN_PODCAST_CANDIDATE_SCOUT
-Cari kandidat clip terbaik dari podcast Indonesia dengan gaya obrolan natural,
-roasting, slang, sarkasme, hot take, dan cerita personal.
+# ROLE: {role_name}
+{cat_instructions}
 
 # VIDEO
 - Duration: {video_duration:.3f}s
 - Window: {window_num}/{total_windows}
 - Maximum candidates across this response: {max_candidates}
 
-# CONTENT LANES
-- COMEDY: setup -> build -> punchline -> reaction bernilai
-- HOT_TAKE: klaim kuat + alasan/konsekuensi, bukan rage bait kosong
-- PERSONAL_STORY: cerita dengan perubahan, reveal, pelajaran, atau payoff emosi
+{lane_instructions}
+
+# DURATION GUIDELINES
+{duration_hints}
 
 # QUALITY GATES
 - START_QUALITY_CHECK: hook/reaction/klaim harus dipahami dalam 1-3 detik.
 - COMPLETE_THOUGHT: sertakan konteks minimum dan akhiri setelah payoff selesai.
-- QUOTE_EVIDENCE: hook_evidence dan payoff_evidence harus berasal dari timestamp.
-- SELF-CONTAINED CHECK: tolak inside joke yang tidak bisa dipahami penonton baru.
+- QUOTE_EVIDENCE: hook_evidence dan payoff_evidence harus berasal dari timestamp transcript.
+- SELF-CONTAINED CHECK: tolak momen yang butuh konteks percakapan sebelumnya.
 - Hindari salam, sponsor, filler, pengulangan, dan acknowledgement kosong.
 - SENSOR kata kasar Indonesia pada suggested_hook dengan tanda * di tengah kata.
-- COMEDY target 20-40 detik; HOT_TAKE/PERSONAL_STORY target 35-60 detik.
 - Semua timestamp absolut dan harus berada dalam video.
 
 # OUTPUT
@@ -335,15 +507,15 @@ Return ONLY valid JSON:
 {{
   "candidates": [{{
     "candidate_id": "w{window_num}-c1",
-    "content_lane": "COMEDY|HOT_TAKE|PERSONAL_STORY",
+    "content_lane": "{'|'.join(lanes)}",
     "start": 0.0,
     "end": 0.0,
     "setup_start": 0.0,
     "payoff_start": 0.0,
     "payoff_end": 0.0,
     "reaction_end": 0.0,
-    "hook_evidence": "kutipan atau referensi langsung",
-    "payoff_evidence": "kutipan atau referensi langsung",
+    "hook_evidence": "kutipan atau referensi langsung dari transcript",
+    "payoff_evidence": "kutipan atau referensi langsung dari transcript",
     "standalone_summary": "apa yang dipahami penonton baru",
     "suggested_hook": "maksimal enam kata",
     "scout_score": 0.0
@@ -355,7 +527,22 @@ Return ONLY valid JSON:
 """.strip()
 
 
-def _normalize_content_lane(value):
+def _build_duration_hints(category, config, lanes):
+    """Build duration guideline text for scout prompt."""
+    if category == "podcast_comedy":
+        return "- COMEDY target 20-40 detik; HOT_TAKE/PERSONAL_STORY target 35-60 detik."
+    lane_durs = config.get("lane_durations", {})
+    parts = []
+    for lane in lanes:
+        ld = lane_durs.get(lane)
+        if ld:
+            parts.append(f"- {lane}: {ld['min']}-{ld['max']} detik")
+    if not parts:
+        return "- Target durasi 15-60 detik"
+    return "\n".join(parts)
+
+
+def _normalize_content_lane(value, valid_lanes=None):
     lane = _normalize_whitespace(value).upper().replace("-", "_").replace(" ", "_")
     aliases = {
         "ROASTING": "COMEDY",
@@ -366,7 +553,9 @@ def _normalize_content_lane(value):
         "PERSONAL": "PERSONAL_STORY",
     }
     lane = aliases.get(lane, lane)
-    return lane if lane in PODCAST_COMEDY_LANES else ""
+    if valid_lanes is None:
+        valid_lanes = PODCAST_COMEDY_LANES
+    return lane if lane in valid_lanes else ""
 
 
 def _candidate_overlap_ratio(first, second):
@@ -383,16 +572,24 @@ def _candidate_overlap_ratio(first, second):
 def _consolidate_scout_candidates(
     candidates,
     video_duration,
-    max_candidates=PODCAST_COMEDY_MAX_CANDIDATES,
+    max_candidates=None,
     max_overlap=0.7,
+    config=None,
 ):
     """Validate, normalize, and deduplicate candidates from scout windows."""
+    if config is None:
+        config = _get_multipass_config("podcast_comedy")
+    if max_candidates is None:
+        max_candidates = config.get("max_candidates", 24)
+    valid_lanes = _get_lanes_for_category(config.get("_category", "podcast_comedy"))
+    hard_min = config.get("hard_min_duration", 15.0)
+    hard_max = config.get("hard_max_duration", 70.0)
     normalized = []
     for index, raw in enumerate(candidates or []):
         start = _safe_float(raw.get("start"), -1.0)
         end = _safe_float(raw.get("end"), -1.0)
         duration = end - start
-        lane = _normalize_content_lane(raw.get("content_lane"))
+        lane = _normalize_content_lane(raw.get("content_lane"), valid_lanes=valid_lanes)
         hook_evidence = _normalize_whitespace(raw.get("hook_evidence"))
         payoff_evidence = _normalize_whitespace(raw.get("payoff_evidence"))
         if (
@@ -401,8 +598,8 @@ def _consolidate_scout_candidates(
             or not payoff_evidence
             or start < 0
             or end > video_duration
-            or duration < PODCAST_COMEDY_HARD_MIN_DURATION
-            or duration > PODCAST_COMEDY_HARD_MAX_DURATION
+            or duration < hard_min
+            or duration > hard_max
         ):
             continue
 
@@ -460,11 +657,18 @@ def _consolidate_scout_candidates(
 def _attach_candidate_context(
     candidates,
     timestamped_segments,
-    context_before=PODCAST_COMEDY_CONTEXT_BEFORE,
-    context_after=PODCAST_COMEDY_CONTEXT_AFTER,
+    context_before=None,
+    context_after=None,
     video_duration=None,
+    config=None,
 ):
     """Attach bounded transcript context for global judging."""
+    if config is None:
+        config = _get_multipass_config("podcast_comedy")
+    if context_before is None:
+        context_before = config.get("context_before", 8.0)
+    if context_after is None:
+        context_after = config.get("context_after", 5.0)
     contextualized = []
     for candidate in candidates:
         item = dict(candidate)
@@ -481,27 +685,34 @@ def _attach_candidate_context(
     return contextualized
 
 
-def _build_podcast_comedy_judge_prompt(candidates, max_clips=10):
-    """Build the global Indonesian editor/judge prompt."""
+def _build_multipass_judge_prompt(candidates, category="general", max_clips=10):
+    """Build the judge prompt for any category."""
+    config = _get_multipass_config(category)
     candidates_json = json.dumps(candidates, ensure_ascii=False)
+    lanes = _get_lanes_for_category(category)
+    cat_instructions = config.get("judge_instructions", "Evaluasi kandidat secara global.")
+
+    lane_duration_lines = _build_judge_duration_lines(category, config, lanes)
+    lane_balance = ", ".join(lanes)
+
+    role_name = f"MULTIPASS_JUDGE_{category.upper()}" if category != "podcast_comedy" else "INDONESIAN_EDITOR_JUDGE"
+
     return f"""
-# ROLE: INDONESIAN_EDITOR_JUDGE
-Bandingkan seluruh kandidat podcast Indonesia secara global. Pahami slang,
-sarkasme, roasting, callback, banter antarpembicara, dan konteks budaya.
+# ROLE: {role_name}
+{cat_instructions}
 
 # PRIORITAS PENILAIAN
 1. Hook dipahami dalam 1-3 detik.
 2. Setup efisien dan payoff kuat.
 3. Clip berdiri sendiri tanpa percakapan sebelumnya.
-4. Ending selesai; reaction komedi hanya dipertahankan jika menambah nilai.
-5. Pilih campuran COMEDY, HOT_TAKE, PERSONAL_STORY jika kualitasnya sebanding.
+4. Ending selesai; reaksi hanya dipertahankan jika menambah nilai.
+5. Pilih campuran {lane_balance} jika kualitasnya sebanding.
 6. Jangan promosikan lane lemah hanya demi variasi.
 7. Jangan membuat candidate_id baru atau klaim yang tidak ada di context.
 8. SENSOR kata kasar Indonesia pada hook/caption dengan tanda * di tengah kata.
 
 # DURASI
-- COMEDY ideal 20-40 detik, toleransi 5 detik.
-- HOT_TAKE/PERSONAL_STORY ideal 35-60 detik, toleransi 5 detik.
+{lane_duration_lines}
 - Maksimum output: {max_clips}
 
 # OUTPUT
@@ -528,17 +739,40 @@ Return ONLY valid JSON:
 """.strip()
 
 
-def _duration_allowed_for_lane(lane, duration):
-    tolerance = PODCAST_COMEDY_DURATION_TOLERANCE
-    if lane == "COMEDY":
-        return 20.0 - tolerance <= duration <= 40.0 + tolerance
-    return 35.0 - tolerance <= duration <= 60.0 + tolerance
+def _build_judge_duration_lines(category, config, lanes):
+    if category == "podcast_comedy":
+        return "- COMEDY ideal 20-40 detik, toleransi 5 detik.\n- HOT_TAKE/PERSONAL_STORY ideal 35-60 detik, toleransi 5 detik."
+    lane_durs = config.get("lane_durations", {})
+    tolerance = config.get("duration_tolerance", 5.0)
+    parts = []
+    for lane in lanes:
+        ld = lane_durs.get(lane)
+        if ld:
+            parts.append(f"- {lane} ideal {ld['min']}-{ld['max']} detik, toleransi {tolerance:.0f} detik.")
+    if not parts:
+        parts.append(f"- Target durasi 15-60 detik, toleransi {tolerance:.0f} detik.")
+    return "\n".join(parts)
+
+
+def _duration_allowed_for_lane(lane, duration, config=None):
+    if config is None:
+        config = _get_multipass_config("podcast_comedy")
+    tolerance = config.get("duration_tolerance", 5.0)
+    lane_durs = config.get("lane_durations", {})
+    ld = lane_durs.get(lane)
+    if ld:
+        return ld["min"] - tolerance <= duration <= ld["max"] + tolerance
+    return 15.0 - tolerance <= duration <= 60.0 + tolerance
 
 
 def _rank_balanced_clips(
-    clips, max_clips=10, balance_gap=PODCAST_COMEDY_BALANCE_GAP
+    clips, max_clips=10, balance_gap=None, lanes=None
 ):
     """Prefer strong lane diversity without promoting weak candidates."""
+    if balance_gap is None:
+        balance_gap = PODCAST_COMEDY_BALANCE_GAP
+    if lanes is None:
+        lanes = PODCAST_COMEDY_LANES
     ordered = sorted(
         clips, key=lambda item: _safe_float(item.get("confidence")), reverse=True
     )
@@ -548,7 +782,7 @@ def _rank_balanced_clips(
     selected = [ordered[0]]
     selected_ids = {id(ordered[0])}
     best_score = _safe_float(ordered[0].get("confidence"))
-    for lane in PODCAST_COMEDY_LANES:
+    for lane in lanes:
         if lane == ordered[0].get("content_lane"):
             continue
         lane_candidate = next(
@@ -574,12 +808,20 @@ def _validate_judge_output(
     judge_payload,
     candidates,
     max_clips=10,
-    min_score=PODCAST_COMEDY_JUDGE_MIN_SCORE,
+    min_score=None,
+    config=None,
 ):
     """Validate judge selections against the immutable scout candidate set."""
+    if config is None:
+        config = _get_multipass_config("podcast_comedy")
+    if min_score is None:
+        min_score = config.get("judge_min_score", 0.7)
+    hard_min = config.get("hard_min_duration", 15.0)
+    hard_max = config.get("hard_max_duration", 70.0)
     candidate_map = {item["candidate_id"]: item for item in candidates}
     validated = []
     seen_ids = set()
+    lanes = _get_lanes_for_category(config.get("_category", "general"))
     for selected in (judge_payload or {}).get("shorts", []):
         candidate_id = _normalize_whitespace(selected.get("candidate_id"))
         candidate = candidate_map.get(candidate_id)
@@ -596,9 +838,9 @@ def _validate_judge_output(
             or end > context_end
             or start > candidate["payoff_start"]
             or end < candidate["payoff_end"]
-            or duration < PODCAST_COMEDY_HARD_MIN_DURATION
-            or duration > PODCAST_COMEDY_HARD_MAX_DURATION
-            or not _duration_allowed_for_lane(candidate["content_lane"], duration)
+            or duration < hard_min
+            or duration > hard_max
+            or not _duration_allowed_for_lane(candidate["content_lane"], duration, config)
         ):
             continue
 
@@ -644,7 +886,7 @@ def _validate_judge_output(
         )
         validated.append(clip)
         seen_ids.add(candidate_id)
-    return _rank_balanced_clips(validated, max_clips=max_clips)
+    return _rank_balanced_clips(validated, max_clips=max_clips, balance_gap=config.get("balance_gap"), lanes=lanes)
 
 
 def _get_podcast_prompt(
@@ -2533,8 +2775,11 @@ def _chunk_timestamped_segments(timestamped_segments, max_chars=120_000):
     return chunks
 
 
-def _scout_candidates_to_clips(candidates, max_clips=10):
+def _scout_candidates_to_clips(candidates, max_clips=10, config=None):
     """Create grounded fallback clips when the judge pass is unavailable."""
+    if config is None:
+        config = _get_multipass_config("podcast_comedy")
+    is_podcast_comedy = config.get("_category") == "podcast_comedy"
     fallback_payload = {
         "shorts": [
             {
@@ -2546,13 +2791,7 @@ def _scout_candidates_to_clips(candidates, max_clips=10):
                     f"Hook: {candidate['hook_evidence']}. "
                     f"Payoff: {candidate['payoff_evidence']}."
                 ),
-                "viral_pattern_type": (
-                    "EMOTIONAL_PEAK"
-                    if candidate["content_lane"] == "COMEDY"
-                    else "CONTROVERSY"
-                    if candidate["content_lane"] == "HOT_TAKE"
-                    else "STORY_BEAT"
-                ),
+                "viral_pattern_type": _lane_to_viral_pattern(candidate["content_lane"], is_podcast_comedy),
                 "viral_hook_text": candidate.get("suggested_hook"),
                 "social_caption": candidate.get("standalone_summary"),
             }
@@ -2560,45 +2799,65 @@ def _scout_candidates_to_clips(candidates, max_clips=10):
         ]
     }
     return _validate_judge_output(
-        fallback_payload, candidates, max_clips=max_clips, min_score=0.0
+        fallback_payload, candidates, max_clips=max_clips, min_score=0.0, config=config
     )
 
 
-def _format_lane_counts(clips):
+def _lane_to_viral_pattern(lane, is_podcast_comedy):
+    if is_podcast_comedy:
+        return (
+            "EMOTIONAL_PEAK" if lane == "COMEDY"
+            else "CONTROVERSY" if lane == "HOT_TAKE"
+            else "STORY_BEAT"
+        )
+    return lane
+
+
+def _format_lane_counts(clips, lanes=None):
+    if lanes is None:
+        lanes = PODCAST_COMEDY_LANES
     counts = {
         lane: sum(1 for clip in clips if clip.get("content_lane") == lane)
-        for lane in PODCAST_COMEDY_LANES
+        for lane in lanes
     }
     return ", ".join(f"{lane}={count}" for lane, count in counts.items())
 
 
-def _run_podcast_comedy_multipass(
+def _run_multipass(
     timestamped_segments,
     video_duration,
     analyze_prompt,
+    category="podcast_comedy",
     max_clips=10,
-    max_candidates=PODCAST_COMEDY_MAX_CANDIDATES,
+    max_candidates=None,
 ):
-    """Run scout, global judge, and deterministic fallback for podcast comedy."""
+    """Run scout, global judge, and deterministic fallback for any category."""
+    config = _get_multipass_config(category)
+    config["_category"] = category
+    if max_candidates is None:
+        max_candidates = config.get("max_candidates", 24)
+    lanes = _get_lanes_for_category(category)
+    content_type = category.upper()
+
     max_scout_chars = _safe_int(
-        os.getenv("PODCAST_COMEDY_SCOUT_MAX_CHARS"), 120_000
+        os.getenv(f"{category.upper()}_SCOUT_MAX_CHARS") or os.getenv("PODCAST_COMEDY_SCOUT_MAX_CHARS"), 120_000
     )
     scout_temperature = _safe_float(
-        os.getenv("PODCAST_COMEDY_SCOUT_TEMPERATURE"), 0.8
+        os.getenv(f"{category.upper()}_SCOUT_TEMPERATURE") or os.getenv("PODCAST_COMEDY_SCOUT_TEMPERATURE"), config.get("scout_temp", 0.8)
     )
     judge_temperature = _safe_float(
-        os.getenv("PODCAST_COMEDY_JUDGE_TEMPERATURE"), 0.2
+        os.getenv(f"{category.upper()}_JUDGE_TEMPERATURE") or os.getenv("PODCAST_COMEDY_JUDGE_TEMPERATURE"), config.get("judge_temp", 0.2)
     )
     judge_min_score = _safe_float(
-        os.getenv("PODCAST_COMEDY_JUDGE_MIN_SCORE"),
-        PODCAST_COMEDY_JUDGE_MIN_SCORE,
+        os.getenv(f"{category.upper()}_JUDGE_MIN_SCORE") or os.getenv("PODCAST_COMEDY_JUDGE_MIN_SCORE"), config.get("judge_min_score", 0.7)
     )
+
     windows = _chunk_timestamped_segments(
         timestamped_segments, max_chars=max_scout_chars
     )
     window_label = "window" if len(windows) == 1 else "windows"
     print(
-        f"   🎭 Multi-pass started: {len(timestamped_segments)} transcript segments, "
+        f"   🎭 Multi-pass ({category}) started: {len(timestamped_segments)} transcript segments, "
         f"{len(windows)} scout {window_label}",
         flush=True,
     )
@@ -2612,9 +2871,10 @@ def _run_podcast_comedy_multipass(
             f"{len(window_segments)} segments ({window_start:.1f}s-{window_end:.1f}s)",
             flush=True,
         )
-        prompt = _build_podcast_comedy_scout_prompt(
+        prompt = _build_multipass_scout_prompt(
             window_segments,
             video_duration=video_duration,
+            category=category,
             max_candidates=max_candidates,
             window_num=window_index,
             total_windows=len(windows),
@@ -2646,6 +2906,7 @@ def _run_podcast_comedy_multipass(
         raw_candidates,
         video_duration=video_duration,
         max_candidates=max_candidates,
+        config=config,
     )
     print(
         f"   🧹 Candidate validation completed: {len(raw_candidates)} raw -> "
@@ -2653,7 +2914,7 @@ def _run_podcast_comedy_multipass(
         flush=True,
     )
     contextualized = _attach_candidate_context(
-        candidates, timestamped_segments, video_duration=video_duration
+        candidates, timestamped_segments, video_duration=video_duration, config=config
     )
     contextualized = [
         candidate
@@ -2661,15 +2922,15 @@ def _run_podcast_comedy_multipass(
         if candidate.get("transcript_context")
     ]
     if not contextualized:
-        print("   ⚠️ Multi-pass stopped: no valid candidates with transcript context")
-        return {"content_type": "PODCAST_COMEDY", "shorts": []}
+        print(f"   ⚠️ Multi-pass ({category}) stopped: no valid candidates with transcript context")
+        return {"content_type": content_type, "shorts": []}
 
     print(
         f"   🧑‍⚖️ Judge started: reviewing {len(contextualized)} candidates",
         flush=True,
     )
-    judge_prompt = _build_podcast_comedy_judge_prompt(
-        contextualized, max_clips=max_clips
+    judge_prompt = _build_multipass_judge_prompt(
+        contextualized, category=category, max_clips=max_clips
     )
     try:
         judge_payload = analyze_prompt(judge_prompt, judge_temperature)
@@ -2678,27 +2939,34 @@ def _run_podcast_comedy_multipass(
             contextualized,
             max_clips=max_clips,
             min_score=judge_min_score,
+            config=config,
         )
         if judged:
             print(
                 f"   ✅ Judge completed: {len(judged)} clips selected "
-                f"({_format_lane_counts(judged)})",
+                f"({_format_lane_counts(judged, lanes=lanes)})",
                 flush=True,
             )
-            return {"content_type": "PODCAST_COMEDY", "shorts": judged}
+            return {"content_type": content_type, "shorts": judged}
         print("   ⚠️ Judge returned no valid clips; using scout fallback")
     except Exception as judge_error:
         print(f"   ⚠️ Judge pass failed; using scout fallback: {judge_error}")
 
     fallback = _scout_candidates_to_clips(
-        contextualized, max_clips=max_clips
+        contextualized, max_clips=max_clips, config=config
     )
     print(
         f"   ✅ Scout fallback completed: {len(fallback)} clips selected "
-        f"({_format_lane_counts(fallback)})",
+        f"({_format_lane_counts(fallback, lanes=lanes)})",
         flush=True,
     )
-    return {"content_type": "PODCAST_COMEDY", "shorts": fallback}
+    return {"content_type": content_type, "shorts": fallback}
+
+
+# Backward-compatible aliases
+_run_podcast_comedy_multipass = _run_multipass
+_build_podcast_comedy_scout_prompt = _build_multipass_scout_prompt
+_build_podcast_comedy_judge_prompt = _build_multipass_judge_prompt
 
 
 def get_viral_clips(
@@ -2817,10 +3085,22 @@ def get_viral_clips(
         return result, response
 
     try:
-        multipass_enabled = os.getenv(
+        multipass_global = os.getenv(
+            "MULTIPASS_ENABLED", "true"
+        ).strip().lower() not in {"0", "false", "no", "off"}
+        multipass_comedy = os.getenv(
             "PODCAST_COMEDY_MULTIPASS", "true"
         ).strip().lower() not in {"0", "false", "no", "off"}
-        if category == "podcast_comedy" and multipass_enabled:
+        disabled_categories = set(
+            cat.strip()
+            for cat in os.getenv("MULTIPASS_DISABLED_CATEGORIES", "").split(",")
+            if cat.strip()
+        )
+        multipass_for_category = (
+            (category == "podcast_comedy" and multipass_comedy)
+            or (category != "podcast_comedy" and multipass_global)
+        ) and category not in disabled_categories
+        if multipass_for_category:
             timestamped_segments = _build_timestamped_transcript(transcript_result)
 
             def _analyze_payload(prompt_content, temperature):
@@ -2829,13 +3109,14 @@ def get_viral_clips(
                 )
                 return payload
 
-            result_json = _run_podcast_comedy_multipass(
+            result_json = _run_multipass(
                 timestamped_segments,
                 video_duration=video_duration,
                 analyze_prompt=_analyze_payload,
+                category=category,
             )
             if not result_json.get("shorts"):
-                raise ValueError("No valid podcast comedy candidates found")
+                raise ValueError(f"No valid candidates found for {category}")
             result_json = post_process_clips(result_json)
             return result_json, words
 

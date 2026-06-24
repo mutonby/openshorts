@@ -129,8 +129,6 @@ export default function MediaInput({ onProcess, isProcessing }) {
                         <option value="general">Umum (Auto-Detect)</option>
                         <option value="podcast">Podcast / Diskusi</option>
                         <option value="podcast_comedy">Podcast Komedi</option>
-                        <option value="grindboys">Grind Boys Podcast</option>
-                        <option value="3-stage">3-stage</option>
                         <option value="tutorial">Tutorial / Edukasi</option>
                         <option value="gaming">Gaming</option>
                         <option value="reaction">Reaksi</option>
@@ -138,9 +136,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
                         <option value="news">Berita</option>
                     </select>
                     <p className="text-[10px] text-zinc-600 mt-2">
-                        {category === 'general'
-                            ? 'AI akan mendeteksi jenis konten otomatis dan menerapkan aturan yang sesuai.'
-                            : 'AI akan menggunakan aturan khusus untuk kategori ini.'}
+                        Semua kategori menggunakan multi-pass AI (scout → judge) untuk hasil terbaik.
+                        {category === 'general' && ' AI akan mendeteksi jenis konten otomatis.'}
                     </p>
                 </div>
 
