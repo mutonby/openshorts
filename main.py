@@ -1,6 +1,5 @@
 import time
 import cv2
-import scenedetect
 import subprocess
 import argparse
 import re
@@ -68,7 +67,8 @@ OUTPUT — RETURN ONLY VALID JSON (no markdown, no comments). Order clips by pre
 """
 
 # Load the YOLO model once (Keep for backup or scene analysis if needed)
-model = YOLO('yolov8n.pt')
+YOLO_MODEL_PATH = os.environ.get("YOLO_MODEL_PATH", "yolov8n.pt")
+model = YOLO(YOLO_MODEL_PATH)
 
 # --- MediaPipe Setup ---
 # Use standard Face Detection (BlazeFace) for speed

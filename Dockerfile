@@ -13,7 +13,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+# Install PyTorch CPU-only first (smaller image: ~4.6 GB vs ~11 GB).
+# GPU users: docker compose build --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 RUN pip install --upgrade pip
+RUN pip install --no-cache-dir --index-url ${TORCH_INDEX_URL} torch==2.11.0 torchvision==0.26.0
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Final stage
@@ -37,6 +41,9 @@ COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 
+# Point YOLO to pre-downloaded model (survives volume mount)
+ENV YOLO_MODEL_PATH=/tmp/Ultralytics/yolov8n.pt
+
 # Always upgrade yt-dlp to latest (YouTube bot-detection changes frequently)
 RUN pip install --upgrade --no-cache-dir yt-dlp
 
@@ -55,7 +62,7 @@ RUN chown -R appuser:appuser /app /tmp/Ultralytics
 USER appuser
 
 # Pre-download YOLO model on build (now running as appuser)
-RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
+RUN python -c "from ultralytics import YOLO; YOLO('/tmp/Ultralytics/yolov8n.pt')"
 
 # Expose FastAPI port
 EXPOSE 8000
