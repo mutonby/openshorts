@@ -48,9 +48,5 @@ cookies.txt
 # Runtime-downloaded models
 *.tflite
 
-# Runtime stats / local working notes
 .phase_stats.json
-Planundfixes.md
 
-# Local AI dev instructions (not published)
-CLAUDE.md
