@@ -1,8 +1,11 @@
-import { StrictMode, useState, useEffect } from 'react'
+import { StrictMode, useState, useEffect, lazy, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-import App from './App.jsx'
-import Landing from './Landing.jsx'
+
+// Only one of the two is ever shown; lazy-load both so returning app users
+// don't download the landing page and first-time visitors don't download the app.
+const App = lazy(() => import('./App.jsx'))
+const Landing = lazy(() => import('./Landing.jsx'))
 
 function Root() {
   const [showApp, setShowApp] = useState(() => {
@@ -24,10 +27,18 @@ function Root() {
   };
 
   if (showApp) {
-    return <App />;
+    return (
+      <Suspense fallback={null}>
+        <App />
+      </Suspense>
+    );
   }
 
-  return <Landing onLaunchApp={handleLaunchApp} />;
+  return (
+    <Suspense fallback={null}>
+      <Landing onLaunchApp={handleLaunchApp} />
+    </Suspense>
+  );
 }
 
 createRoot(document.getElementById('root')).render(

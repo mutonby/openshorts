@@ -3,13 +3,34 @@ import json
 import re
 import subprocess
 import time
+from typing import List
 from google import genai
 from google.genai import types
+from pydantic import BaseModel
+
+from edit_builder import build_filter_string
+
+
+class EditDecision(BaseModel):
+    type: str
+    start: float
+    end: float
+    strength: float = 0.0
+    reason: str = ""
+
+
+class EditPlan(BaseModel):
+    edits: List[EditDecision]
+
 
 class VideoEditor:
     def __init__(self, api_key):
         self.client = genai.Client(api_key=api_key)
-        self.model_name = "gemini-3-flash-preview" 
+        self.model_name = (
+            os.environ.get("GEMINI_MODEL_EDITOR")
+            or os.environ.get("GEMINI_MODEL")
+            or "gemini-3-flash-preview"
+        )
 
     def upload_video(self, video_path):
         """Uploads video to Gemini File API."""
@@ -28,127 +49,147 @@ class VideoEditor:
         
         # Wait for processing
         print("⏳ Waiting for video processing by Gemini...")
+        deadline = time.time() + 120
         while True:
             file_info = self.client.files.get(name=file_upload.name)
-            if file_info.state == "ACTIVE":
+            state = getattr(file_info, "state", file_info)
+            state_name = str(getattr(state, "name", state)).upper()
+            if state_name == "ACTIVE":
                 print("✅ Video processed and ready.")
                 return file_upload
-            elif file_info.state == "FAILED":
+            if state_name == "FAILED":
                 raise Exception("Video processing failed by Gemini.")
+            if time.time() > deadline:
+                raise TimeoutError("Gemini file processing timed out after 120s.")
             time.sleep(2)
 
-    def get_ffmpeg_filter(self, video_file_obj, duration, fps=30, width=None, height=None, transcript=None):
-        """Asks Gemini for a raw FFmpeg filter string."""
+    def get_ffmpeg_filter(self, video_file_obj, duration, fps=30, width=None, height=None, transcript=None, has_captions=False):
+        """Asks Gemini for an edit decision list, then builds the FFmpeg filter
+        deterministically (edit_builder) so syntax and zoom limits are always safe."""
         if width is None or height is None:
             # Keep prompt usable even if caller didn't pass dimensions.
             width, height = 1080, 1920
-        
+
         transcript_text = json.dumps(transcript) if transcript else "Not available."
 
-        prompt = f"""
-        You are an expert FFmpeg video editor. Your task is to generate a complex video filter string to make a short video viral, BUT ONLY apply effects where they make sense contextually.
+        caption_rule = ""
+        if has_captions:
+            caption_rule = (
+                "\n        CRITICAL: This video already has burned-in captions and/or a hook text. "
+                "Any zoom would crop or shift them off screen. Do NOT use zoom_in, punch_in or zoom_pulse — "
+                "only color_pop, bw_moment, flash and vignette are allowed.\n"
+            )
 
-        Video Duration: {duration} seconds.
-        Video FPS: {fps}
-        Video Resolution (MUST KEEP EXACT): {width}x{height}
-        
-        TRANSCRIPT (Context of what is being said):
+        prompt = f"""
+        You are a viral short-form video editor (TikTok / Reels / Shorts). You receive a video and its transcript.
+        Decide WHERE a small set of tasteful, high-impact effects belongs. You do NOT write FFmpeg —
+        you return an edit decision list, and a deterministic renderer applies it safely.
+
+        Video duration: {duration:.1f} seconds. Resolution: {width}x{height}.
+
+        Available effect types:
+        - "zoom_in": slow push-in across the segment. Builds tension or focus on a key statement. strength 0.06-0.15, segment 1.5-6s.
+        - "punch_in": instant tighter framing for the whole segment. Emphasis, punchlines, "listen to this" moments. strength 0.06-0.15, segment 0.8-5s.
+        - "zoom_pulse": quick in-and-out pulse peaking mid-segment. Beat drops, single impactful words. strength 0.04-0.10, segment 0.4-1.2s.
+        - "color_pop": richer saturation/contrast. Energy, excitement, product/visual highlights. strength 0.2-1.0.
+        - "bw_moment": black & white. Drama, serious quotes, flashbacks.
+        - "flash": brief bright flash at segment start. Hard-cut energy, reveals. Use at most 2.
+        - "vignette": darkened edges. Focus, intimacy, storytelling moments.
+
+        Rules:
+        1. Match effects to the CONTENT: place them on the exact words or moments they emphasize, using the transcript timestamps.
+        2. Less is more: 2-6 edits per 30 seconds of video. A random effect is worse than no effect.
+        3. Never overlap two zoom-type edits (zoom_in/punch_in/zoom_pulse).
+        4. Calm, serious delivery => few or no motion effects. High-energy content => more punch.
+        {caption_rule}
+        TRANSCRIPT (with timestamps, the context of what is being said):
         {transcript_text}
 
-        Goal: Enhance the video with dynamic zooms, cuts (simulated with punch-ins), and visual effects to increase retention, but DO NOT overdo it. Random effects are bad. Contextual effects are good.
-
-        Instructions:
-        1. ANALYZE THE VIDEO AND TRANSCRIPT: Understand the mood, the pacing, and the key moments.
-        2. APPLY EFFECTS ONLY WHEN RELEVANT:
-           - Use "punch-in" zooms (zoompan) to emphasize key points, jokes, or dramatic moments in the speech.
-           - slow zooms to face when the speaker is speaking
-           - Use visual effects (contrast, saturation, sharpness) to highlight mood changes or specific segments.
-           - If nothing significant is happening, keep it simple. It is BETTER to have no effect than a random/distracting one.
-           - Avoid constant motion if the speaker is delivering a serious or steady message.
-        3. Create a single valid FFmpeg filter complex string (for the -vf flag).
-        4. Use filters like `zoompan`, `eq` (contrast), `hue` (saturation/bw), `unsharp`.
-        5. Pacing: Align effects with the rhythm of the speech (from transcript) or visual action.
-        6. CRITICAL SYNTAX RULES:
-           - DO NOT use comparison operators like `<`, `>`, `<=`, `>=` anywhere. They frequently break FFmpeg expression parsing.
-           - USE FFmpeg expression FUNCTIONS instead:
-             - `between(x,a,b)`
-             - `lt(x,y)`, `lte(x,y)`, `gt(x,y)`, `gte(x,y)`
-             - `if(cond,then,else)`
-           - Always wrap expression values in single quotes: `z='...'`, `x='...'`, `y='...'`, `enable='...'`.
-           
-           - FOR `zoompan`: 
-             - Prefer `on` (output frame index) to avoid time-variable quirks.
-             - Convert seconds to frames using FPS={fps}: `frame = seconds * {fps}`.
-             - Use `between(on, startFrame, endFrame)` for segmenting and pacing.
-             - Example:
-              `zoompan=z='1.1*between(on,0,75)+1.3*between(on,76,150)+1.15*between(on,151,300)+1.2*gte(on,301)'`
-             - ALWAYS set zoompan output size to EXACT `{width}x{height}` using `s={width}x{height}`.
-             - ALWAYS set `fps={fps}` and `d=1`.
-             - DO NOT use `scale`, `crop`, `pad` unless you keep EXACT `{width}x{height}` (no aspect ratio changes).
-             
-           - FOR `eq`, `hue`, `curves`, `unsharp` (Visual Effects): 
-             - **DO NOT** use dynamic expressions for parameter values (e.g. `contrast='1+0.5*t'`).
-             - **USE TIMELINE EDITING** via the `enable` option.
-             - Create MULTIPLE filter instances for different time ranges.
-             - **SYNTAX FOR ENABLE:**
-              - **USE** `between(t,start,end)` for clarity and robustness.
-              - **USE** single quotes around the enable expression.
-              - **Example:** `eq=contrast=1.2:enable='between(t,0,3)'`
-              - **Example:** `hue=s=0:enable='between(t,10,12)'`
-             - This is much safer and robust than boolean multiplication.
-        
-        Constraints:
-        - Output JSON with a single key: "filter_string".
-        - The value must be the RAW filter string ready to be passed to `-vf`.
-        - OUTPUT MUST KEEP EXACT RESOLUTION AND ASPECT RATIO: {width}x{height}.
-        - Do NOT output 1280x720 or 1080x1080 unless the input is exactly that.
-        - IMPORTANT: Do NOT include the `-vf` flag itself, just the filter content.
-        - IMPORTANT: Ensure syntax is correct for FFmpeg. 
-        
-        Output JSON:
-        {{
-            "filter_string": "..."
-        }}
+        Return JSON only:
+        {{"edits": [{{"type": "punch_in", "start": 3.2, "end": 5.4, "strength": 0.1, "reason": "punchline"}}]}}
+        If no effects genuinely improve the video, return {{"edits": []}}.
         """
 
-        print("🤖 Asking Gemini for FFmpeg filter...")
-        response = self.client.models.generate_content(
-            model=self.model_name,
-            contents=[video_file_obj, prompt],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json"
-            )
-        )
-        
-        print(f"🔍 DEBUG: Gemini Raw Response:\n{response.text}")
-
+        print("🤖 Asking Gemini for an edit decision list...")
+        # Low media resolution: Gemini samples at 1 FPS and normalizes frames to
+        # fixed token sizes, so "low" (~70 tokens/frame) cuts video-input cost
+        # without hurting motion/scene understanding. Fall back to defaults if
+        # the SDK or model rejects the option.
         try:
-            # Clean response text (remove potential markdown blocks)
-            text = response.text
-            if text.startswith("```json"):
-                text = text[7:]
-            elif text.startswith("```"):
-                text = text[3:]
-            
-            if text.endswith("```"):
-                text = text[:-3]
-                
-            text = text.strip()
-            
-            # Additional cleanup for potential trailing characters outside JSON
-            # Find the first '{' and last '}'
-            start_idx = text.find('{')
-            end_idx = text.rfind('}')
-            
-            if start_idx != -1 and end_idx != -1:
-                text = text[start_idx:end_idx+1]
-            
-            print(f"🔍 DEBUG: Cleaned JSON Text:\n{text}")
-                
-            return json.loads(text)
-        except json.JSONDecodeError:
-            print(f"❌ Failed to parse JSON: {response.text}")
+            config = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=EditPlan,
+                media_resolution=types.MediaResolution.MEDIA_RESOLUTION_LOW,
+            )
+        except Exception:
+            config = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=EditPlan,
+            )
+        try:
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=[video_file_obj, prompt],
+                config=config,
+            )
+        except Exception as e:
+            if getattr(config, "media_resolution", None) is None:
+                raise
+            print(f"⚠️ media_resolution=low rejected ({e}); retrying with defaults...")
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=[video_file_obj, prompt],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=EditPlan,
+                ),
+            )
+
+        raw_edits = self._extract_edits(response)
+        if raw_edits is None:
             return None
+
+        filter_string, applied = build_filter_string(
+            raw_edits, duration=duration, fps=fps, width=width, height=height,
+            has_captions=has_captions,
+        )
+        if not filter_string:
+            print("ℹ️ Gemini suggested no (valid) edits — keeping the clip untouched.")
+            return {"filter_string": None, "edits": []}
+        print(f"🎯 Applying {len(applied)} edits: " + ", ".join(f"{e['type']}@{e['start']:.1f}s" for e in applied))
+        return {"filter_string": filter_string, "edits": applied}
+
+    @staticmethod
+    def _extract_edits(response):
+        """Pull the edit list out of a Gemini response (parsed schema preferred,
+        raw-JSON fallback). Returns a list of dicts, or None on hard failure."""
+        parsed = getattr(response, "parsed", None)
+        if parsed is not None:
+            try:
+                return [edit.model_dump() for edit in parsed.edits]
+            except Exception:
+                pass
+
+        text = (getattr(response, "text", None) or "").strip()
+        print(f"🔍 DEBUG: Gemini Raw Response:\n{text}")
+        if text.startswith("```json"):
+            text = text[7:]
+        elif text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+        start_idx = text.find('{')
+        end_idx = text.rfind('}')
+        if start_idx != -1 and end_idx != -1:
+            text = text[start_idx:end_idx + 1]
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            print(f"❌ Failed to parse edit plan JSON: {text[:500]}")
+            return None
+        edits = data.get("edits") if isinstance(data, dict) else None
+        return edits if isinstance(edits, list) else []
 
     @staticmethod
     def _split_filter_chain(filter_string: str) -> list[str]:
@@ -201,12 +242,76 @@ class VideoEditor:
 
         return s
 
+    @staticmethod
+    def _test_filter(input_path, filter_string, env):
+        """Dry-run the filter on the first 2 seconds (no output written).
+
+        Catches broken Gemini-generated filter syntax in seconds instead of
+        failing after a full-length encode. Returns (ok, stderr_tail)."""
+        cmd = [
+            'ffmpeg', '-v', 'error', '-t', '2',
+            '-i', input_path,
+            '-vf', filter_string,
+            '-f', 'null', '-',
+        ]
+        try:
+            result = subprocess.run(
+                [a.encode('utf-8') if isinstance(a, str) else a for a in cmd],
+                env=env, capture_output=True, timeout=120,
+            )
+        except subprocess.TimeoutExpired:
+            return False, "filter dry-run timed out after 120s"
+        if result.returncode == 0:
+            return True, ""
+        stderr_text = (result.stderr or b"").decode(errors="replace")
+        return False, stderr_text[-1500:]
+
+    def _repair_filter(self, filter_string, error_text, width, height):
+        """One self-repair round-trip: show Gemini the FFmpeg error and ask for
+        a corrected filter string. Returns the new string or None."""
+        if not self.client:
+            return None
+        prompt = f"""
+        The following FFmpeg -vf filter string you generated fails to run.
+
+        FILTER:
+        {filter_string}
+
+        FFMPEG ERROR:
+        {error_text}
+
+        Fix the filter. Keep the same creative intent, obey the same rules as before:
+        - exact output resolution {width}x{height} (zoompan must set s={width}x{height}),
+        - no bare comparison operators (use between/lt/lte/gt/gte),
+        - expression values in single quotes.
+        Output JSON only: {{"filter_string": "..."}}
+        """
+        try:
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(response_mime_type="application/json"),
+            )
+            text = (response.text or "").strip()
+            start_idx = text.find('{')
+            end_idx = text.rfind('}')
+            if start_idx != -1 and end_idx != -1:
+                text = text[start_idx:end_idx + 1]
+            repaired = json.loads(text).get("filter_string")
+            return repaired if isinstance(repaired, str) and repaired.strip() else None
+        except Exception as e:
+            print(f"⚠️ Filter self-repair failed: {e}")
+            return None
+
     def apply_edits(self, input_path, output_path, filter_data):
         """Executes FFmpeg with the generated filter."""
         
-        if not filter_data or "filter_string" not in filter_data:
+        if not filter_data or not filter_data.get("filter_string"):
             print("⚠️ No filter string found. Copying original.")
-            subprocess.run(['ffmpeg', '-y', '-i', input_path, '-c', 'copy', output_path])
+            try:
+                subprocess.run(['ffmpeg', '-y', '-i', input_path, '-c', 'copy', output_path], timeout=1800)
+            except subprocess.TimeoutExpired:
+                raise RuntimeError("FFmpeg copy timed out after 1800s.")
             return
 
         filter_string = filter_data["filter_string"]
@@ -214,7 +319,7 @@ class VideoEditor:
         # Get input dimensions so we can enforce geometry (avoid broken aspect ratios).
         try:
             probe_cmd = ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=s=x:p=0', input_path]
-            res_out = subprocess.check_output(probe_cmd, env={**os.environ, "LANG": "C.UTF-8"}).decode().strip()
+            res_out = subprocess.check_output(probe_cmd, env={**os.environ, "LANG": "C.UTF-8"}, timeout=60).decode().strip()
             w, h = map(int, res_out.split('x'))
         except Exception as e:
             print(f"⚠️ Could not probe resolution: {e}")
@@ -239,23 +344,43 @@ class VideoEditor:
             if "setsar=" not in filter_string:
                 filter_string = f"{filter_string},setsar=1"
 
-        print(f"🎬 Executing AI Filter: {filter_string}")
-        
-        cmd = [
-            'ffmpeg', '-y',
-            '-i', input_path,
-            '-vf', filter_string,
-            '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
-            '-c:a', 'copy',
-            output_path
-        ]
-        
         # Use explicit environment with UTF-8 to avoid ascii errors in subprocess
         env = os.environ.copy()
         # On some minimal docker images, we need to ensure we use a UTF-8 locale
         # Try C.UTF-8 first, fallback to en_US.UTF-8 if available, but C.UTF-8 is usually safer for minimal
         env["LANG"] = "C.UTF-8"
         env["LC_ALL"] = "C.UTF-8"
+
+        # Dry-run the filter on 2 seconds before committing to a full encode;
+        # on failure, give Gemini one self-repair attempt with the real error.
+        ok, error_text = self._test_filter(input_path, filter_string, env)
+        if not ok:
+            print(f"⚠️ AI filter failed dry-run: {error_text}")
+            repaired = self._repair_filter(filter_string, error_text, w or 1080, h or 1920)
+            if repaired:
+                repaired = self._sanitize_filter_string(repaired)
+                if w and h:
+                    repaired = self._enforce_zoompan_output_size(repaired, w, h)
+                    if "setsar=" not in repaired:
+                        repaired = f"{repaired},setsar=1"
+                ok, error_text = self._test_filter(input_path, repaired, env)
+                if ok:
+                    print("🔧 Self-repaired AI filter passed dry-run.")
+                    filter_string = repaired
+            if not ok:
+                raise RuntimeError(f"AI filter failed validation even after self-repair: {error_text}")
+
+        print(f"🎬 Executing AI Filter: {filter_string}")
+
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', input_path,
+            '-vf', filter_string,
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+            '-c:a', 'copy',
+            '-movflags', '+faststart',
+            output_path
+        ]
         
         try:
             # We must encode arguments if filesystem is ascii but we have unicode chars
@@ -272,7 +397,10 @@ class VideoEditor:
                 else:
                     cmd_bytes.append(arg)
             
-            subprocess.run(cmd_bytes, check=True, env=env)
+            subprocess.run(cmd_bytes, check=True, env=env, timeout=1800)
+        except subprocess.TimeoutExpired:
+            print("❌ FFmpeg filter timed out after 1800s.")
+            raise RuntimeError("FFmpeg filter timed out after 1800s.")
         except subprocess.CalledProcessError as e:
             print(f"❌ FFmpeg failed: {e}")
             raise e

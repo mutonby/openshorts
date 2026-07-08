@@ -16,6 +16,7 @@ import os
 import re
 import json
 import time
+import hashlib
 import subprocess
 import httpx
 from urllib.parse import urljoin
@@ -37,7 +38,11 @@ DEFAULT_VOICES = {
 }
 
 
-GEMINI_MODEL = "gemini-3-flash-preview"
+GEMINI_MODEL = (
+    os.environ.get("GEMINI_MODEL_SAAS")
+    or os.environ.get("GEMINI_MODEL")
+    or "gemini-3-flash-preview"
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -670,6 +675,32 @@ def _fal_upload_file(file_path: str, fal_key: str) -> str:
     return file_url
 
 
+def _download_media(url: str, output_path: str, kind: str = "media", timeout: float = 120.0) -> str:
+    """
+    Download a media file (image/video) to disk with error + sanity checks.
+
+    Guards against an HTTP error page (HTML/JSON body) being written to disk as a
+    "media file", which would otherwise cause a misleading FFmpeg crash later.
+    """
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        resp = client.get(url)
+
+    if resp.status_code != 200:
+        raise Exception(f"Failed to download {kind} ({resp.status_code}) from {url[:200]}")
+
+    content_type = resp.headers.get("content-type", "").lower()
+    if kind == "image" and not content_type.startswith("image/"):
+        raise Exception(f"Expected image but got content-type '{content_type}' from {url[:200]}")
+    if kind == "video" and not (content_type.startswith("video/") or "octet-stream" in content_type):
+        raise Exception(f"Expected video but got content-type '{content_type}' from {url[:200]}")
+    if len(resp.content) < 1024:
+        raise Exception(f"Downloaded {kind} too small ({len(resp.content)} bytes) from {url[:200]}")
+
+    with open(output_path, "wb") as f:
+        f.write(resp.content)
+    return output_path
+
+
 def generate_actor_images(
     description: str, fal_key: str, output_dir: str, title_slug: str, num_options: int = 3,
     product_description: str = None,
@@ -714,10 +745,7 @@ def generate_actor_images(
             raise Exception(f"No images in actor result: {list(result.keys())}")
         img_url = images[0]["url"] if isinstance(images[0], dict) else images[0]
         img_path = os.path.join(output_dir, f"{title_slug}_actor_option_{i}.png")
-        with httpx.Client(timeout=60.0) as client:
-            img_resp = client.get(img_url)
-            with open(img_path, "wb") as f:
-                f.write(img_resp.content)
+        _download_media(img_url, img_path, kind="image", timeout=60.0)
         print(f"[SaaSShorts] ✅ Actor option {i+1}: {img_path}")
         return img_path
 
@@ -727,18 +755,6 @@ def generate_actor_images(
             paths.append(future.result())
 
     return sorted(paths)
-
-    paths = []
-    for i, img in enumerate(result.get("images", [])):
-        img_path = os.path.join(output_dir, f"{title_slug}_actor_option_{i}.png")
-        with httpx.Client(timeout=60.0) as client:
-            img_resp = client.get(img["url"])
-            with open(img_path, "wb") as f:
-                f.write(img_resp.content)
-        paths.append(img_path)
-        print(f"[SaaSShorts] ✅ Actor option {i+1}: {img_path}")
-
-    return paths
 
 
 def generate_actor_image(
@@ -853,10 +869,7 @@ def generate_talking_head(
     video_url = result["video"]["url"]
 
     # Download video
-    with httpx.Client(timeout=180.0) as client:
-        vid_resp = client.get(video_url)
-        with open(output_path, "wb") as f:
-            f.write(vid_resp.content)
+    _download_media(video_url, output_path, kind="video", timeout=180.0)
 
     print(f"[SaaSShorts] ✅ Talking head: {output_path}")
     return output_path
@@ -909,10 +922,7 @@ def generate_talking_head_lowcost(
             raise Exception(f"No video in Hailuo result: {hailuo_result}")
 
         # Save Hailuo clip locally for retry cache
-        with httpx.Client(timeout=180.0) as client:
-            vid_resp = client.get(hailuo_video_url)
-            with open(hailuo_cache_path, "wb") as f:
-                f.write(vid_resp.content)
+        _download_media(hailuo_video_url, hailuo_cache_path, kind="video", timeout=180.0)
 
         print(f"[SaaSShorts]   Hailuo 2.3 Fast 6s clip ready (cached for retry).")
 
@@ -936,10 +946,7 @@ def generate_talking_head_lowcost(
     else:
         raise Exception(f"No video in VEED Lipsync result: {lipsync_result}")
 
-    with httpx.Client(timeout=180.0) as client:
-        vid_resp = client.get(lipsync_video_url)
-        with open(output_path, "wb") as f:
-            f.write(vid_resp.content)
+    _download_media(lipsync_video_url, output_path, kind="video", timeout=180.0)
 
     print(f"[SaaSShorts] ✅ Talking head (low cost): {output_path}")
     return output_path
@@ -974,10 +981,7 @@ def generate_broll(
         raise Exception(f"No images in b-roll result: {list(result.keys())}")
     img_url = images[0]["url"] if isinstance(images[0], dict) else images[0]
 
-    with httpx.Client(timeout=60.0) as client:
-        img_resp = client.get(img_url)
-        with open(img_path, "wb") as f:
-            f.write(img_resp.content)
+    _download_media(img_url, img_path, kind="image", timeout=60.0)
 
     # Step 2: Ken Burns effect — slow zoom in with slight pan
     fps = 30
@@ -1317,7 +1321,12 @@ def generate_full_video(
     voice_id = config.get("voice_id", "21m00Tcm4TlvDq8ikWAM")
     actor_desc = config.get("actor_description") or script.get("actor_description", "a young professional in their late 20s, wearing a casual modern outfit, clean background")
 
-    title_slug = re.sub(r"[^a-z0-9]+", "_", script.get("title", "video").lower())[:30]
+    # Include a short stable hash of the FULL title so similar/empty titles that
+    # truncate to the same 30-char slug don't collide and return foreign cached assets.
+    raw_title = (script.get("title") or "").strip()
+    title_hash = hashlib.sha1(raw_title.encode("utf-8")).hexdigest()[:8]
+    base_slug = re.sub(r"[^a-z0-9]+", "_", raw_title.lower()).strip("_")[:30] or "video"
+    title_slug = f"{base_slug}_{title_hash}"
 
     # Paths
     actor_img = os.path.join(output_dir, f"{title_slug}_actor.png")

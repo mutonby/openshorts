@@ -1,17 +1,25 @@
 import React, { useState } from 'react';
-import { Youtube, Upload, FileVideo, X } from 'lucide-react';
+import { Youtube, Upload, FileVideo, X, Sparkles, Smartphone, Monitor, Square } from 'lucide-react';
+
+const FORMAT_OPTIONS = [
+    { id: 'auto', label: 'Auto', hint: 'Smart detect', Icon: Sparkles },
+    { id: 'vertical', label: '9:16', hint: 'Shorts / Reels', Icon: Smartphone },
+    { id: 'horizontal', label: '16:9', hint: 'Original wide', Icon: Monitor },
+    { id: 'square', label: '1:1', hint: 'Square feed', Icon: Square },
+];
 
 export default function MediaInput({ onProcess, isProcessing }) {
     const [mode, setMode] = useState('url'); // 'url' | 'file'
     const [url, setUrl] = useState('');
     const [file, setFile] = useState(null);
+    const [outputFormat, setOutputFormat] = useState('auto');
 
     const handleSubmit = (e) => {
         e.preventDefault();
         if (mode === 'url' && url) {
-            onProcess({ type: 'url', payload: url });
+            onProcess({ type: 'url', payload: url, outputFormat });
         } else if (mode === 'file' && file) {
-            onProcess({ type: 'file', payload: file });
+            onProcess({ type: 'file', payload: file, outputFormat });
         }
     };
 
@@ -94,6 +102,28 @@ export default function MediaInput({ onProcess, isProcessing }) {
                         )}
                     </div>
                 )}
+
+                {/* Output format */}
+                <div className="mt-5">
+                    <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Output Format</div>
+                    <div className="grid grid-cols-4 gap-2">
+                        {FORMAT_OPTIONS.map(({ id, label, hint, Icon }) => (
+                            <button
+                                key={id}
+                                type="button"
+                                onClick={() => setOutputFormat(id)}
+                                className={`flex flex-col items-center gap-1 py-2.5 px-1 rounded-xl border text-center transition-all ${outputFormat === id
+                                    ? 'border-primary/60 bg-primary/10 text-white'
+                                    : 'border-white/5 bg-white/5 text-zinc-400 hover:border-white/15 hover:text-white'
+                                    }`}
+                            >
+                                <Icon size={16} className={outputFormat === id ? 'text-primary' : ''} />
+                                <span className="text-xs font-bold">{label}</span>
+                                <span className="text-[9px] text-zinc-500 leading-tight">{hint}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
 
                 <button
                     type="submit"

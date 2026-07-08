@@ -1,6 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { X, Loader2, Globe, Languages, AlertCircle } from 'lucide-react';
-import { getApiUrl } from '../config';
 
 const LANGUAGES = {
     "es": "Spanish",

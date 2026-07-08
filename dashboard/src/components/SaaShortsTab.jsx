@@ -70,8 +70,6 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   const [actorGallery, setActorGallery] = useState([]);
   const [loadingGallery, setLoadingGallery] = useState(false);
   const [uploadedActorPreview, setUploadedActorPreview] = useState(null); // {localPreview, serverUrl}
-  const [productPhoto, setProductPhoto] = useState(null); // {preview, serverUrl}
-  const [productDescription, setProductDescription] = useState('');
 
   // Step 3: Generate
   const [generating, setGenerating] = useState(false);
@@ -97,6 +95,8 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
       setActorDescription(scripts[0].actor_description || '');
       setEditedNarration(scripts[0].full_narration || '');
     }
+    // Restore-from-cache should only run on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Fetch actor gallery on mount
@@ -114,44 +114,74 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
     if (elevenLabsKey) {
       fetchVoices();
     }
+    // Only re-fetch when the key changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [elevenLabsKey]);
 
   // Poll generation status
   useEffect(() => {
-    let interval;
-    if (jobId && genStatus === 'processing') {
-      interval = setInterval(async () => {
-        try {
-          const res = await fetch(getApiUrl(`/api/saasshorts/status/${jobId}`));
-          if (res.status === 404) {
-            // Job lost (server restart) — treat as failed so Retry appears
-            setGenStatus('failed');
-            setGenerating(false);
-            setGenLogs((prev) => [...prev, 'Job lost after server restart. Click Retry to resume from cached assets.']);
-            clearInterval(interval);
-            return;
-          }
-          if (!res.ok) return;
-          const data = await res.json();
-          if (data.logs) setGenLogs(data.logs);
-          if (data.status === 'completed') {
-            setGenStatus('completed');
-            setGenResult(data.result);
-            setGenerating(false);
-            setStep(4);
-            clearInterval(interval);
-          } else if (data.status === 'failed') {
-            setGenStatus('failed');
-            setGenerating(false);
-            clearInterval(interval);
-          }
-        } catch (e) {
-          console.error('Poll error:', e);
+    if (!jobId || genStatus !== 'processing') return undefined;
+
+    let cancelled = false;
+    let failures = 0;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(getApiUrl(`/api/saasshorts/status/${jobId}`));
+        // Ignore responses that resolve after this effect was torn down.
+        if (cancelled) return;
+        if (res.status === 404) {
+          // Job lost (server restart) — treat as failed so Retry appears
+          setGenStatus('failed');
+          setGenerating(false);
+          setGenLogs((prev) => [...prev, 'Job lost after server restart. Click Retry to resume from cached assets.']);
+          clearInterval(interval);
+          return;
         }
-      }, 2000);
-    }
-    return () => clearInterval(interval);
+        if (!res.ok) {
+          // Tolerate transient errors, but stop after too many consecutive ones.
+          if (++failures >= 5) {
+            setGenStatus('failed');
+            setGenerating(false);
+            setGenLogs((prev) => [...prev, `Status check failed repeatedly (HTTP ${res.status}). Click Retry to resume from cached assets.`]);
+            clearInterval(interval);
+          }
+          return;
+        }
+        failures = 0;
+        const data = await res.json();
+        if (cancelled) return;
+        if (data.logs) setGenLogs(data.logs);
+        if (data.status === 'completed') {
+          setGenStatus('completed');
+          setGenResult(data.result);
+          setGenerating(false);
+          setStep(4);
+          clearInterval(interval);
+        } else if (data.status === 'failed') {
+          setGenStatus('failed');
+          setGenerating(false);
+          clearInterval(interval);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        console.error('Poll error:', e);
+        if (++failures >= 5) {
+          setGenStatus('failed');
+          setGenerating(false);
+          setGenLogs((prev) => [...prev, `Polling failed repeatedly: ${e.message}. Click Retry to resume from cached assets.`]);
+          clearInterval(interval);
+        }
+      }
+    }, 2000);
+
+    return () => { cancelled = true; clearInterval(interval); };
   }, [jobId, genStatus]);
+
+  // Revoke the uploaded-actor preview blob URL when it changes or on unmount.
+  useEffect(() => {
+    const preview = uploadedActorPreview?.localPreview;
+    return () => { if (preview) URL.revokeObjectURL(preview); };
+  }, [uploadedActorPreview?.localPreview]);
 
   const fetchVoices = async () => {
     try {

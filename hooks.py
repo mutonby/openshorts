@@ -1,12 +1,104 @@
 import os
+import re
 import textwrap
 import subprocess
 import urllib.request
+import uuid
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 FONT_URL = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSerif/NotoSerif-Bold.ttf"
 FONT_DIR = "fonts"
 FONT_PATH = os.path.join(FONT_DIR, "NotoSerif-Bold.ttf")
+
+# Codepoint ranges NotoSerif has no glyphs for (would render as tofu boxes).
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F000-\U0001FAFF"  # emoticons, symbols, transport, supplemental
+    "\U00002600-\U000027BF"  # misc symbols + dingbats
+    "\U0001F1E6-\U0001F1FF"  # regional indicators (flags)
+    "\U00002B00-\U00002BFF"  # arrows, stars
+    "\U0000FE0E\U0000FE0F"   # variation selectors
+    "\U0000200D"             # zero-width joiner
+    "\U000020E3"             # combining keycap
+    "]+"
+)
+
+# Emoji-capable fonts, probed at runtime (Windows, WSL, Linux/Docker).
+_EMOJI_FONT_CANDIDATES = [
+    "C:\\Windows\\Fonts\\seguiemj.ttf",
+    "/mnt/c/Windows/Fonts/seguiemj.ttf",
+    "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+    "/usr/share/fonts/noto-emoji/NotoColorEmoji.ttf",
+]
+
+
+def _load_emoji_font(font_size):
+    """Return an emoji-capable font at the requested size, or None.
+
+    Fonts that only support a fixed bitmap size (e.g. NotoColorEmoji) fail to
+    load at arbitrary sizes; those are treated as unavailable rather than
+    breaking the layout with wrongly-sized glyphs."""
+    for path in _EMOJI_FONT_CANDIDATES:
+        if not os.path.exists(path):
+            continue
+        try:
+            return ImageFont.truetype(path, font_size)
+        except Exception:
+            continue
+    return None
+
+
+def _split_emoji_runs(text):
+    """Split text into (is_emoji, chunk) runs."""
+    runs = []
+    pos = 0
+    for m in _EMOJI_RE.finditer(text):
+        if m.start() > pos:
+            runs.append((False, text[pos:m.start()]))
+        runs.append((True, m.group()))
+        pos = m.end()
+    if pos < len(text):
+        runs.append((False, text[pos:]))
+    return runs
+
+
+def _measure_width(draw, text, font, emoji_font):
+    """Pixel width of a line, measuring emoji runs with the emoji font."""
+    width = 0.0
+    for is_emoji, chunk in _split_emoji_runs(text):
+        use_font = emoji_font if (is_emoji and emoji_font) else font
+        width += draw.textlength(chunk, font=use_font)
+    return width
+
+
+def _draw_mixed(draw, xy, text, font, emoji_font, fill):
+    """Draw a line, rendering emoji runs with the emoji font (in color if supported)."""
+    x, y = xy
+    for is_emoji, chunk in _split_emoji_runs(text):
+        if is_emoji and emoji_font:
+            try:
+                draw.text((x, y), chunk, font=emoji_font, embedded_color=True)
+            except TypeError:
+                draw.text((x, y), chunk, font=emoji_font, fill=fill)
+            x += draw.textlength(chunk, font=emoji_font)
+        else:
+            draw.text((x, y), chunk, font=font, fill=fill)
+            x += draw.textlength(chunk, font=font)
+
+
+def _break_long_word(draw, word, font, emoji_font, max_width):
+    """Character-level hard wrap for a single word wider than max_width."""
+    pieces = []
+    current = ""
+    for ch in word:
+        if current and _measure_width(draw, current + ch, font, emoji_font) > max_width:
+            pieces.append(current)
+            current = ch
+        else:
+            current += ch
+    if current:
+        pieces.append(current)
+    return pieces
 
 def download_font_if_needed():
     """Downloads a serif font for the hook text if not present."""
@@ -51,58 +143,72 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
         print(f"⚠️ Warning: Could not load font {FONT_PATH}, using default. Error: {e}")
         font = ImageFont.load_default()
 
+    # Emoji handling: render with an emoji-capable font if one exists,
+    # otherwise strip emoji instead of drawing tofu boxes.
+    emoji_font = None
+    if _EMOJI_RE.search(text):
+        emoji_font = _load_emoji_font(font_size)
+        if emoji_font is None:
+            text = _EMOJI_RE.sub("", text)
+            text = re.sub(r"[ \t]{2,}", " ", text).strip()
+
     # Wrap text logic (Pixel-based)
     dummy_img = Image.new('RGBA', (1, 1))
     draw = ImageDraw.Draw(dummy_img)
-    
+
     max_text_width = target_width - (2 * padding_x)
-    
+
     # Handle manual newlines first
     paragraphs = text.split('\n')
     lines = []
-    
+
     for p in paragraphs:
         if not p.strip():
-            lines.append("") 
+            lines.append("")
             continue
-            
+
         words = p.split()
         current_line = []
-        
+
         for word in words:
             # Test if adding word fits
             test_line = ' '.join(current_line + [word])
-            bbox = draw.textbbox((0, 0), test_line, font=font)
-            w = bbox[2] - bbox[0]
-            
+            w = _measure_width(draw, test_line, font, emoji_font)
+
             if w <= max_text_width:
                 current_line.append(word)
+                continue
+
+            # Word doesn't fit on the current line
+            if current_line:
+                lines.append(' '.join(current_line))
+                current_line = []
+
+            if _measure_width(draw, word, font, emoji_font) <= max_text_width:
+                current_line = [word]
             else:
-                # Line full, push current_line and start new
-                if current_line:
-                    lines.append(' '.join(current_line))
-                    current_line = [word]
-                else:
-                    # Single word too long? Force it.
-                    lines.append(word)
-                    current_line = []
-        
+                # Single word wider than the box: hard-wrap it character-wise
+                # so it can't get cut off at the edges.
+                pieces = _break_long_word(draw, word, font, emoji_font, max_text_width)
+                lines.extend(pieces[:-1])
+                current_line = [pieces[-1]] if pieces else []
+
         if current_line:
             lines.append(' '.join(current_line))
-    
+
     # Recalculate true width/height
     max_line_width = 0
     text_heights = []
-    
+
     for line in lines:
         if not line:
             text_heights.append(font_size) # Use font size for empty line height
             continue
-            
+
+        w = _measure_width(draw, line, font, emoji_font)
         bbox = draw.textbbox((0, 0), line, font=font)
-        w = bbox[2] - bbox[0]
         h = bbox[3] - bbox[1]
-        max_line_width = max(max_line_width, w)
+        max_line_width = max(max_line_width, int(w))
         text_heights.append(h)
     
     # Box dimensions
@@ -153,16 +259,16 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
             current_y += font_size + line_spacing 
             continue
             
+        line_w = _measure_width(draw_final, line, font, emoji_font)
         bbox = draw_final.textbbox((0, 0), line, font=font)
-        line_w = bbox[2] - bbox[0]
         line_h = text_heights[i] if i < len(text_heights) else bbox[3] - bbox[1]
-        
+
         # Center X
-        x = 20 + (box_width - line_w) // 2
-        
-        # Draw Black Text
-        draw_final.text((x, current_y), line, font=font, fill="black")
-        
+        x = 20 + int(box_width - line_w) // 2
+
+        # Draw Black Text (emoji runs use the emoji font)
+        _draw_mixed(draw_final, (x, current_y), line, font, emoji_font, fill="black")
+
         current_y += line_h + line_spacing
         
     img.save(output_image_path)
@@ -180,7 +286,7 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
     # 1. Probe video width to scale text properly
     try:
         cmd = ['ffprobe', '-v', 'error', '-show_entries', 'stream=width,height', '-of', 'csv=s=x:p=0', video_path]
-        res = subprocess.check_output(cmd).decode().strip()
+        res = subprocess.check_output(cmd, timeout=60).decode().strip()
         # Takes first stream if multiple
         dims = res.split('\n')[0].split('x')
         video_width = int(dims[0])
@@ -194,8 +300,8 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
     # Box check: Don't let it be wider than 90% of screen
     target_box_width = int(video_width * 0.9)
     
-    hook_filename = f"temp_hook_{os.path.basename(video_path)}.png"
-    # Ensure unique or temp location if needed, but relative is fine for this app structure
+    # Unique per invocation so parallel jobs can't overwrite each other's overlay.
+    hook_filename = f"temp_hook_{uuid.uuid4().hex[:8]}_{os.path.basename(video_path)}.png"
     
     try:
         img_path, box_w, box_h = create_hook_image(text, target_box_width, hook_filename, font_scale=font_scale)
@@ -222,13 +328,17 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
             '-filter_complex', f"[0:v][1:v]overlay={overlay_x}:{overlay_y}",
             '-c:a', 'copy',
             '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+            '-movflags', '+faststart',
             output_path
         ]
         
-        subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
         print(f"✅ Hook added to {output_path}")
         return True
-        
+
+    except subprocess.TimeoutExpired:
+        print("❌ FFmpeg hook overlay timed out after 1800s.")
+        raise RuntimeError("FFmpeg hook overlay timed out after 1800s.")
     except subprocess.CalledProcessError as e:
         print(f"❌ FFmpeg Error: {e.stderr.decode() if e.stderr else 'Unknown'}")
         raise e

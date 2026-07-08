@@ -46,6 +46,33 @@ SUPPORTED_LANGUAGES = {
     "ta": "Tamil",
 }
 
+# HTTP status codes worth retrying (server-side / rate-limit hiccups).
+_TRANSIENT_STATUS = {429, 500, 502, 503, 504}
+
+
+class _TransientHTTPError(Exception):
+    """Raised for retryable HTTP responses (5xx / 429)."""
+
+
+def _with_retry(operation, description, max_attempts=3, base_delay=2.0):
+    """
+    Run `operation` (a zero-arg callable) with exponential backoff on transient
+    failures: HTTP 5xx/429, timeouts, and connection errors. Backoff is ~2s/4s/8s.
+    Non-transient errors (e.g. 4xx) propagate immediately and fail fast.
+    """
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return operation()
+        except (_TransientHTTPError, httpx.TransportError) as e:
+            if attempt >= max_attempts:
+                raise Exception(f"{description} failed after {max_attempts} attempts: {e}")
+            delay = base_delay * (2 ** (attempt - 1))
+            print(
+                f"[ElevenLabs] {description} transient error "
+                f"(attempt {attempt}/{max_attempts}): {e}. Retrying in {int(delay)}s..."
+            )
+            time.sleep(delay)
+
 
 def create_dubbing_project(
     video_path: str,
@@ -82,24 +109,29 @@ def create_dubbing_project(
     if source_language:
         data["source_lang"] = source_language
 
-    # Open and send the video file
-    with open(video_path, "rb") as video_file:
-        files = {
-            "file": (os.path.basename(video_path), video_file, "video/mp4")
-        }
+    def _submit():
+        # Re-open the file per attempt so a retry uploads from the start.
+        with open(video_path, "rb") as video_file:
+            files = {
+                "file": (os.path.basename(video_path), video_file, "video/mp4")
+            }
+            with httpx.Client(timeout=300.0) as client:
+                resp = client.post(url, headers=headers, data=data, files=files)
+        if resp.status_code in _TRANSIENT_STATUS:
+            raise _TransientHTTPError(f"HTTP {resp.status_code}")
+        return resp
 
-        print(f"[ElevenLabs] Creating dubbing project for {target_language}...")
-        with httpx.Client(timeout=300.0) as client:
-            response = client.post(url, headers=headers, data=data, files=files)
+    print(f"[ElevenLabs] Creating dubbing project for {target_language}...")
+    response = _with_retry(_submit, "create dubbing project")
 
     if response.status_code not in [200, 201]:
         error_msg = response.text
         try:
             error_data = response.json()
             error_msg = error_data.get("detail", {}).get("message", response.text)
-        except:
+        except (ValueError, AttributeError, KeyError, TypeError):
             pass
-        raise Exception(f"ElevenLabs API error: {error_msg}")
+        raise Exception(f"ElevenLabs API error ({response.status_code}): {error_msg}")
 
     result = response.json()
     print(f"[ElevenLabs] Dubbing project created: {result.get('dubbing_id')}")
@@ -119,8 +151,14 @@ def get_dubbing_status(dubbing_id: str, api_key: str) -> dict:
         "xi-api-key": api_key,
     }
 
-    with httpx.Client(timeout=30.0) as client:
-        response = client.get(url, headers=headers)
+    def _poll():
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.get(url, headers=headers)
+        if resp.status_code in _TRANSIENT_STATUS:
+            raise _TransientHTTPError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        return resp
+
+    response = _with_retry(_poll, "dubbing status check")
 
     if response.status_code != 200:
         raise Exception(f"Failed to get dubbing status: {response.text}")
@@ -152,15 +190,23 @@ def download_dubbed_video(
         "xi-api-key": api_key,
     }
 
-    print(f"[ElevenLabs] Downloading dubbed video...")
-    with httpx.Client(timeout=120.0) as client:
-        with client.stream("GET", url, headers=headers) as response:
-            if response.status_code != 200:
-                raise Exception(f"Failed to download dubbed video: {response.text}")
+    def _download():
+        with httpx.Client(timeout=120.0) as client:
+            with client.stream("GET", url, headers=headers) as response:
+                if response.status_code in _TRANSIENT_STATUS:
+                    raise _TransientHTTPError(f"HTTP {response.status_code}")
+                if response.status_code != 200:
+                    # Body must be read before .text is available on a stream.
+                    response.read()
+                    raise Exception(f"Failed to download dubbed video: {response.text}")
 
-            with open(output_path, "wb") as f:
-                for chunk in response.iter_bytes(chunk_size=8192):
-                    f.write(chunk)
+                with open(output_path, "wb") as f:
+                    for chunk in response.iter_bytes(chunk_size=8192):
+                        f.write(chunk)
+        return output_path
+
+    print(f"[ElevenLabs] Downloading dubbed video...")
+    _with_retry(_download, "dubbed video download")
 
     print(f"[ElevenLabs] Dubbed video saved to: {output_path}")
     return output_path

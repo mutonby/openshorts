@@ -70,3 +70,12 @@
     top: 100%;
   }
 }
+/* Fullscreen video must letterbox instead of crop: object-fit from the inline
+   preview (cover) would otherwise cut the clip when the player goes fullscreen. */
+video:fullscreen {
+  object-fit: contain !important;
+}
+
+video:-webkit-full-screen {
+  object-fit: contain !important;
+}

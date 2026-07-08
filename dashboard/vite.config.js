@@ -11,23 +11,23 @@ export default defineConfig({
     ],
     proxy: {
       '/api': {
-        target: 'http://backend:8000',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
       '/videos': {
-        target: 'http://backend:8000',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
       '/thumbnails': {
-        target: 'http://backend:8000',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
       '/gallery': {
-        target: 'http://backend:8000',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
       '/video': {
-        target: 'http://backend:8000',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       }
     }

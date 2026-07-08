@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Upload, Image, Loader2, Send, Check, Download, ArrowRight, ArrowLeft, Sparkles, Video, Type, X, Plus, MessageSquare, FileText, Youtube, AlertCircle, CheckCircle2, Settings } from 'lucide-react';
 import { getApiUrl } from '../config';
 
@@ -32,7 +32,20 @@ function StepIndicator({ currentStep }) {
 
 function DragDropZone({ label, accept, onFile, file, onClear, icon: Icon }) {
   const [isDragging, setIsDragging] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState(null);
   const inputRef = useRef(null);
+
+  // Build the image preview blob URL once per file (not on every render) and
+  // revoke the previous one whenever the file changes or the component unmounts.
+  useEffect(() => {
+    if (!file || !file.type?.startsWith('image/')) {
+      setPreviewUrl(null);
+      return undefined;
+    }
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
 
   const handleDrop = useCallback((e) => {
     e.preventDefault();
@@ -50,8 +63,8 @@ function DragDropZone({ label, accept, onFile, file, onClear, icon: Icon }) {
     return (
       <div className="relative border border-white/10 rounded-xl p-3 bg-white/5">
         <div className="flex items-center gap-3">
-          {file.type?.startsWith('image/') ? (
-            <img src={URL.createObjectURL(file)} className="w-12 h-12 rounded-lg object-cover" alt="" />
+          {file.type?.startsWith('image/') && previewUrl ? (
+            <img src={previewUrl} className="w-12 h-12 rounded-lg object-cover" alt="" />
           ) : (
             <div className="w-12 h-12 rounded-lg bg-white/10 flex items-center justify-center">
               <Icon size={20} className="text-zinc-400" />
@@ -133,6 +146,22 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
   const [isPreprocessing, setIsPreprocessing] = useState(false);
 
   const chatEndRef = useRef(null);
+
+  // Track mount status + the active publish poll so it can never keep running
+  // (or setState) after the component unmounts.
+  const isMountedRef = useRef(true);
+  const publishIntervalRef = useRef(null);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (publishIntervalRef.current) {
+        clearInterval(publishIntervalRef.current);
+        publishIntervalRef.current = null;
+      }
+    };
+  }, []);
 
   const scrollToBottom = () => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -326,7 +355,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(blobUrl);
-    } catch (e) {
+    } catch {
       // Fallback: open in new tab if fetch fails
       window.open(getApiUrl(url), '_blank');
     }
@@ -396,34 +425,47 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
 
       const { publish_id } = await res.json();
 
-      // Poll for status every 2 seconds (upload can take minutes for large videos)
+      // Poll for status every 2 seconds (upload can take minutes for large videos).
+      // Tolerate transient network blips, but stop after 5 consecutive failures,
+      // and bail out immediately if the component unmounts mid-upload.
       await new Promise((resolve, reject) => {
-        const interval = setInterval(async () => {
+        let failures = 0;
+        const stop = () => {
+          if (publishIntervalRef.current) clearInterval(publishIntervalRef.current);
+          publishIntervalRef.current = null;
+        };
+        publishIntervalRef.current = setInterval(async () => {
+          if (!isMountedRef.current) { stop(); resolve(); return; }
           try {
             const statusRes = await fetch(getApiUrl(`/api/thumbnail/publish/status/${publish_id}`));
-            if (!statusRes.ok) { clearInterval(interval); reject(new Error('Status check failed')); return; }
+            if (!isMountedRef.current) { stop(); resolve(); return; }
+            if (!statusRes.ok) {
+              if (++failures >= 5) { stop(); reject(new Error('Status check failed repeatedly')); }
+              return;
+            }
+            failures = 0;
             const statusData = await statusRes.json();
+            if (!isMountedRef.current) { stop(); resolve(); return; }
 
             if (statusData.status === 'done') {
-              clearInterval(interval);
+              stop();
               setPublishResult({ success: true, data: statusData.result });
               resolve();
             } else if (statusData.status === 'failed') {
-              clearInterval(interval);
+              stop();
               reject(new Error(statusData.error || 'Upload failed'));
             }
             // 'uploading' → keep polling
           } catch (e) {
-            clearInterval(interval);
-            reject(e);
+            if (++failures >= 5) { stop(); reject(e); }
           }
         }, 2000);
       });
 
     } catch (e) {
-      setPublishResult({ success: false, error: e.message });
+      if (isMountedRef.current) setPublishResult({ success: false, error: e.message });
     } finally {
-      setIsPublishing(false);
+      if (isMountedRef.current) setIsPublishing(false);
     }
   };
 

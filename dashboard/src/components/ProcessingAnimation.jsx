@@ -225,8 +225,8 @@ const ProcessingAnimation = ({ media, isComplete, syncedTime, isSyncedPlaying, s
       {!isSyncedPlaying && !isComplete && (
           <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/90 to-transparent z-30 flex justify-between items-end border-t border-white/5">
               <div className="font-mono text-[10px] text-primary/80 space-y-1">
-                 <div className="flex items-center gap-2"><Activity size={10} className="animate-bounce" /> > ANALYSIS_THREAD_01: ACTIVE</div>
-                 <div className="flex items-center gap-2"><Radio size={10} /> > AUDIO_TRANSCRIPT: PROCESSING</div>
+                 <div className="flex items-center gap-2"><Activity size={10} className="animate-bounce" /> {'>'} ANALYSIS_THREAD_01: ACTIVE</div>
+                 <div className="flex items-center gap-2"><Radio size={10} /> {'>'} AUDIO_TRANSCRIPT: PROCESSING</div>
               </div>
               <div className="flex gap-1">
                  <div className="w-1 h-3 bg-primary/40 animate-[pulse_0.5s_infinite]"></div>

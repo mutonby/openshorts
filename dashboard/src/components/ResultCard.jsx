@@ -72,7 +72,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                 try {
                     const jsonErr = JSON.parse(errText);
                     throw new Error(jsonErr.detail || errText);
-                } catch (e) {
+                } catch {
                     throw new Error(errText);
                 }
             }
@@ -112,6 +112,11 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                     border_width: options.borderWidth,
                     bg_color: options.bgColor,
                     bg_opacity: options.bgOpacity,
+                    style: options.style,
+                    highlight_color: options.highlightColor,
+                    effect: options.effect,
+                    base_opacity: options.baseOpacity,
+                    uppercase: options.uppercase,
                     input_filename: currentVideoUrl.split('/').pop()
                 })
             });
@@ -294,7 +299,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                 try {
                     const jsonErr = JSON.parse(errText);
                     throw new Error(jsonErr.detail || errText);
-                } catch (e) {
+                } catch {
                     throw new Error(errText);
                 }
             }
@@ -320,7 +325,7 @@ export default function ResultCard({ clip, index, jobId, uploadPostKey, uploadUs
                     ref={videoRef}
                     src={currentVideoUrl}
                     controls
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-contain"
                     playsInline
                     onPlay={() => {
                         const currentTime = videoRef.current ? videoRef.current.currentTime : 0;

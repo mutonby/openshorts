@@ -3,11 +3,11 @@ ultralytics
 torch
 torchvision
 tqdm
-yt-dlp
+yt-dlp[default]
 faster-whisper
 google-genai
 python-dotenv
-mediapipe==0.10.14
+mediapipe>=0.10.14
 boto3
 
 fastapi

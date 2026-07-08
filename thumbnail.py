@@ -6,6 +6,14 @@ from google import genai
 from google.genai import types
 from PIL import Image
 
+# Models overridable per task or globally via GEMINI_MODEL.
+THUMBNAIL_TEXT_MODEL = (
+    os.environ.get("GEMINI_MODEL_THUMBNAIL")
+    or os.environ.get("GEMINI_MODEL")
+    or "gemini-3-flash-preview"
+)
+THUMBNAIL_IMAGE_MODEL = os.environ.get("GEMINI_MODEL_IMAGE", "gemini-3.1-flash-image-preview")
+
 
 def analyze_video_for_titles(api_key, video_path, transcript=None):
     """
@@ -24,12 +32,17 @@ def analyze_video_for_titles(api_key, video_path, transcript=None):
     client = genai.Client(api_key=api_key)
 
     file_upload = client.files.upload(file=video_path)
+    deadline = time.time() + 120
     while True:
         file_info = client.files.get(name=file_upload.name)
-        if file_info.state == "ACTIVE":
+        state = getattr(file_info, "state", file_info)
+        state_name = str(getattr(state, "name", state)).upper()
+        if state_name == "ACTIVE":
             break
-        elif file_info.state == "FAILED":
+        if state_name == "FAILED":
             raise Exception("Video processing failed by Gemini.")
+        if time.time() > deadline:
+            raise TimeoutError("Gemini file processing timed out after 120s.")
         time.sleep(2)
 
     prompt = f"""You are a YouTube title expert who creates viral, click-worthy titles.
@@ -65,7 +78,7 @@ OUTPUT JSON:
 
     print("🤖 [Thumbnail] Asking Gemini for title suggestions...")
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model=THUMBNAIL_TEXT_MODEL,
         contents=[file_upload, prompt],
         config=types.GenerateContentConfig(
             response_mime_type="application/json"
@@ -143,7 +156,7 @@ OUTPUT JSON:
 }}"""
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model=THUMBNAIL_TEXT_MODEL,
         contents=[prompt],
         config=types.GenerateContentConfig(
             response_mime_type="application/json"
@@ -241,7 +254,7 @@ DESIGN REQUIREMENTS:
         print(f"🎨 [Thumbnail] Generating thumbnail {i + 1}/{count}...")
         try:
             response = client.models.generate_content(
-                model="gemini-3.1-flash-image-preview",
+                model=THUMBNAIL_IMAGE_MODEL,
                 contents=prompt_parts,
                 config=types.GenerateContentConfig(
                     response_modalities=["TEXT", "IMAGE"],
@@ -322,7 +335,7 @@ OUTPUT: Return ONLY the description text (no JSON wrapper, no markdown code bloc
 
     print("🤖 [Thumbnail] Generating YouTube description with chapters...")
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model=THUMBNAIL_TEXT_MODEL,
         contents=[prompt],
     )
 
