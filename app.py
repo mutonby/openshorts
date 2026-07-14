@@ -489,9 +489,11 @@ async def run_job(job_id, job_data):
             jobs[job_id]['status'] = 'completed'
             jobs[job_id]['logs'].append("Process finished successfully.")
             
-            # Start S3 upload in background (silent, non-blocking)
-            loop = asyncio.get_event_loop()
-            loop.run_in_executor(None, upload_job_artifacts, output_dir, job_id)
+            # Self-host: silent AWS S3 backup. Cloud mode stores to R2 instead
+            # (see _archive_managed_job), so skip the redundant/paid AWS upload.
+            if not BILLING_ENABLED:
+                loop = asyncio.get_event_loop()
+                loop.run_in_executor(None, upload_job_artifacts, output_dir, job_id)
             
             # Find result JSON
             json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
@@ -524,6 +526,11 @@ async def run_job(job_id, job_data):
     except Exception as e:
         jobs[job_id]['status'] = 'failed'
         jobs[job_id]['logs'].append(f"Execution error: {str(e)}")
+
+@app.get("/health")
+async def health():
+    """Lightweight liveness probe for uptime monitoring / Coolify health checks."""
+    return {"status": "ok"}
 
 @app.get("/api/config")
 async def get_config():

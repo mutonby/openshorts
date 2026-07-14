@@ -11,7 +11,9 @@ services:
     restart: unless-stopped
 
   frontend:
-    build: ./dashboard
+    build:
+      context: ./dashboard
+      target: dev
     container_name: openshorts-frontend
     ports:
       - "5175:5173"
