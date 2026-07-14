@@ -1,0 +1,11 @@
+# Extra dependencies for cloud (paid / managed-keys) mode ONLY.
+# Self-hosters running BYOK do NOT need these — see requirements.txt.
+# Installed on top of requirements.txt when BILLING_ENABLED is used.
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+stripe==11.3.0
+authlib==1.3.2
+itsdangerous==2.2.0
+PyJWT==2.10.1
+email-validator==2.2.0

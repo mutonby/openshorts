@@ -6,6 +6,8 @@ import json
 import shutil
 import glob
 import time
+import math
+import itertools
 import asyncio
 from dotenv import load_dotenv
 from typing import Dict, Optional, List
@@ -32,13 +34,167 @@ MAX_FILE_SIZE_MB = 2048  # 2GB limit
 JOB_RETENTION_SECONDS = 3600  # 1 hour retention
 DISABLE_YOUTUBE_URL = os.environ.get("DISABLE_YOUTUBE_URL", "false").lower() in ("1", "true", "yes")
 
+# ---- Cloud billing (paid / managed-keys) integration --------------------------
+# All paid-mode code lives in the optional `cloud/` package and is imported ONLY
+# when BILLING_ENABLED is set. With the flag off, the app behaves exactly as the
+# self-hosted BYOK app does today (no extra dependencies required).
+BILLING_ENABLED = os.environ.get("BILLING_ENABLED", "").lower() in ("1", "true", "yes")
+
+if BILLING_ENABLED:
+    import cloud
+    from cloud import managed_keys, metering as _metering, config as _cloud_config
+    from cloud.auth import get_current_user_optional
+else:
+    cloud = None
+    managed_keys = None
+    _metering = None
+    _cloud_config = None
+
+    async def get_current_user_optional(request: Request):
+        # No-op dependency in self-host mode: every request is anonymous / BYOK.
+        return None
+
+
+async def _user_from_request(request: Request):
+    """Load the authenticated cloud user (or None). Cheap indexed lookup."""
+    return await get_current_user_optional(request)
+
+
+async def resolve_gemini(request: Request) -> Optional[str]:
+    """Resolve the Gemini API key for a request.
+
+    Cloud (hosted) is PAID-ONLY: there is no BYOK for the core pipeline, so the
+    ``X-Gemini-Key`` header is ignored — an entitled user (active plan or trial)
+    gets the managed server key, everyone else gets ``None`` (→ 402, start trial).
+    Self-host keeps BYOK: header wins, else the env fallback.
+    """
+    if BILLING_ENABLED:
+        user = await _user_from_request(request)
+        if managed_keys.has_active_entitlement(user):
+            return managed_keys.gemini_key()
+        return None
+    header = request.headers.get("X-Gemini-Key")
+    if header:
+        return header
+    return os.environ.get("GEMINI_API_KEY")
+
+
+async def resolve_upload_post(request: Request, body_key: Optional[str] = None):
+    """Resolve the Upload-Post key and the profile to post as.
+
+    Returns ``(api_key, forced_profile_username_or_None)``. Cloud is paid-only:
+    an entitled user gets the managed key + their own forced profile (body key /
+    user_id ignored); a non-entitled user gets ``(None, None)``. Self-host keeps
+    BYOK: header, then body key, then env.
+    """
+    if BILLING_ENABLED:
+        user = await _user_from_request(request)
+        if managed_keys.has_active_entitlement(user):
+            profile = await cloud.social_profiles.ensure_profile(user)
+            return managed_keys.upload_post_key(), profile
+        return None, None
+    header = request.headers.get("X-Upload-Post-Key")
+    key = header or body_key or os.environ.get("UPLOAD_POST_API_KEY")
+    return key, None
+
+
+def gemini_missing_error():
+    """The right 4xx when no Gemini key could be resolved.
+
+    402 for a signed-in-but-not-entitled cloud user (needs a plan); 400 otherwise
+    (BYOK header simply missing).
+    """
+    if BILLING_ENABLED:
+        return HTTPException(status_code=402, detail={
+            "error": "no_plan",
+            "message": "This action needs an active plan. Choose a plan or add your own API key.",
+        })
+    return HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
+
+
+async def reserve_process_minutes(request, url, input_path, job_id):
+    """Meter a managed /api/process request. Returns (user_id, priority, reservation_id).
+
+    BYOK / self-host requests don't consume minutes (priority 2, no reservation).
+    For a managed (entitled, no BYOK header) request this probes the input
+    duration, enforces the per-user concurrent-job limit, and reserves minutes —
+    raising 402 (quota) or 429 (too many jobs) as needed.
+    """
+    if not BILLING_ENABLED or request.headers.get("X-Gemini-Key"):
+        return None, 2, None
+    user = await _user_from_request(request)
+    if not managed_keys.has_active_entitlement(user):
+        return None, 2, None  # shouldn't happen (resolve_gemini would have 402'd)
+
+    priority = _cloud_config.PLAN_PRIORITY.get(user.plan, 1)
+
+    # Per-user simultaneous job cap.
+    limit = _cloud_config.PLAN_JOB_LIMIT.get(user.plan, 2)
+    active = sum(1 for j in jobs.values()
+                 if j.get('user_id') == user.id and j.get('status') in ('queued', 'processing'))
+    if active >= limit:
+        raise HTTPException(status_code=429,
+                            detail="You already have the maximum number of jobs running. Please wait.")
+
+    # Probe input duration (blocking → run in a thread).
+    loop = asyncio.get_event_loop()
+    try:
+        if url:
+            minutes = await loop.run_in_executor(None, _metering.probe_url_minutes, url)
+        else:
+            minutes = await loop.run_in_executor(None, _metering.probe_file_minutes, input_path)
+    except Exception:
+        raise HTTPException(status_code=400,
+                            detail="Could not determine the video duration. Try a different source.")
+    minutes = max(1, math.ceil(minutes))
+
+    try:
+        reservation_id = await _metering.reserve_minutes(user.id, minutes, job_id)
+    except _metering.QuotaExceeded as e:
+        raise HTTPException(status_code=402, detail={
+            "error": "quota_exceeded",
+            "minutes_required": e.required,
+            "minutes_remaining": e.remaining,
+        })
+    return user.id, priority, reservation_id
+
+
+async def reserve_managed_action(request, minutes, job_id, job_type):
+    """Reserve quota for a synchronous managed action (e.g. thumbnail image gen).
+
+    Returns a reservation_id to commit/release around the work, or None for
+    BYOK / self-host. Raises 402 when the user is out of minutes.
+    """
+    if not BILLING_ENABLED:
+        return None
+    user = await _user_from_request(request)
+    if not managed_keys.has_active_entitlement(user):
+        return None  # BYOK header path (self-host) — not metered
+    try:
+        return await _metering.reserve_minutes(user.id, minutes, job_id, job_type)
+    except _metering.QuotaExceeded as e:
+        raise HTTPException(status_code=402, detail={
+            "error": "quota_exceeded",
+            "minutes_required": e.required,
+            "minutes_remaining": e.remaining,
+        })
+
 # Application State
-job_queue = asyncio.Queue()
+# PriorityQueue holds (priority, seq, job_id). Lower priority dispatches first:
+# pro=0, starter/creator=1, BYOK/anonymous/self-host=2. The seq counter keeps
+# FIFO order within a priority and makes the tuples always comparable. With
+# BILLING disabled every job enqueues at priority 2 → plain FIFO as before.
+job_queue = asyncio.PriorityQueue()
+_job_seq = itertools.count()
 jobs: Dict[str, Dict] = {}
 thumbnail_sessions: Dict[str, Dict] = {}
 publish_jobs: Dict[str, Dict] = {}  # {publish_id: {status, result, error}}
 # Semester to limit concurrency to MAX_CONCURRENT_JOBS
 concurrency_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
+
+
+def _enqueue_job(job_id: str, priority: int = 2):
+    job_queue.put_nowait((priority, next(_job_seq), job_id))
 
 def _relocate_root_job_artifacts(job_id: str, job_output_dir: str) -> bool:
     """
@@ -131,9 +287,9 @@ async def process_queue():
     print(f"🚀 Job Queue Worker started with {MAX_CONCURRENT_JOBS} concurrent slots.")
     while True:
         try:
-            # Wait for a job
-            job_id = await job_queue.get()
-            
+            # Wait for a job (priority, seq, job_id) — lowest priority first.
+            _priority, _seq, job_id = await job_queue.get()
+
             # Acquire semaphore slot (waits if max jobs are running)
             await concurrency_semaphore.acquire()
             print(f"🔄 Acquired slot for job: {job_id}")
@@ -154,25 +310,51 @@ async def run_job_wrapper(job_id):
     except Exception as e:
          print(f"❌ Job wrapper error {job_id}: {e}")
     finally:
+        # Settle the minute reservation (managed jobs only): commit on success,
+        # release otherwise so the minutes go back to the user.
+        await _settle_reservation(job_id)
         # Always release semaphore and mark queue task done
         concurrency_semaphore.release()
         job_queue.task_done()
         print(f"✅ Released slot for job: {job_id}")
+
+
+async def _settle_reservation(job_id):
+    if not BILLING_ENABLED:
+        return
+    job = jobs.get(job_id) or {}
+    reservation_id = job.get('reservation_id')
+    if not reservation_id:
+        return
+    try:
+        if job.get('status') == 'completed':
+            await cloud.metering.commit_reservation(reservation_id)
+        else:
+            await cloud.metering.release_reservation(reservation_id)
+    except Exception as e:
+        print(f"⚠️  Reservation settle error for {job_id}: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Start worker and cleanup
     worker_task = asyncio.create_task(process_queue())
     cleanup_task = asyncio.create_task(cleanup_jobs())
+    if BILLING_ENABLED:
+        await cloud.setup_async(app)
     yield
     # Cleanup (optional: cancel worker)
 
 app = FastAPI(lifespan=lifespan)
 
-# Enable CORS for frontend
+# Cloud mode: attach middleware + routers at import time (before the app serves).
+if BILLING_ENABLED:
+    cloud.setup_sync(app)
+
+# Enable CORS for frontend. Cloud mode locks this down to the configured origins;
+# self-host keeps the permissive wildcard it has always used.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cloud.settings.allowed_origins if BILLING_ENABLED else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -311,7 +493,11 @@ async def run_job(job_id, job_data):
 
 @app.get("/api/config")
 async def get_config():
-    return {"youtubeUrlEnabled": not DISABLE_YOUTUBE_URL}
+    return {
+        "youtubeUrlEnabled": not DISABLE_YOUTUBE_URL,
+        "billingEnabled": BILLING_ENABLED,
+        "googleAuthEnabled": bool(BILLING_ENABLED and cloud.settings.google_auth_enabled),
+    }
 
 @app.post("/api/process")
 async def process_endpoint(
@@ -320,9 +506,9 @@ async def process_endpoint(
     url: Optional[str] = Form(None),
     acknowledged: Optional[str] = Form(None)
 ):
-    api_key = request.headers.get("X-Gemini-Key")
+    api_key = await resolve_gemini(request)
     if not api_key:
-        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
+        raise gemini_missing_error()
 
     ack_flag = str(acknowledged).lower() in ("1", "true", "yes")
 
@@ -365,6 +551,7 @@ async def process_endpoint(
     env = os.environ.copy()
     env["GEMINI_API_KEY"] = api_key # Override with key from request
 
+    input_path = None
     if url:
         cmd.extend(["-u", url])
     else:
@@ -390,6 +577,9 @@ async def process_endpoint(
 
     print(f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true")
 
+    # Meter + reserve minutes for managed users (no-op for BYOK / self-host).
+    user_id, priority, reservation_id = await reserve_process_minutes(request, url, input_path, job_id)
+
     # Enqueue Job
     jobs[job_id] = {
         'status': 'queued',
@@ -397,10 +587,12 @@ async def process_endpoint(
         'cmd': cmd,
         'env': env,
         'output_dir': job_output_dir,
-        'attestation': attestation
+        'attestation': attestation,
+        'user_id': user_id,
+        'reservation_id': reservation_id,
     }
 
-    await job_queue.put(job_id)
+    _enqueue_job(job_id, priority)
 
     return {"job_id": job_id, "status": "queued"}
 
@@ -431,13 +623,13 @@ class EditRequest(BaseModel):
 @app.post("/api/edit")
 async def edit_clip(
     req: EditRequest,
-    x_gemini_key: Optional[str] = Header(None, alias="X-Gemini-Key")
+    request: Request,
 ):
-    # Determine API Key
-    final_api_key = req.api_key or x_gemini_key or os.environ.get("GEMINI_API_KEY")
-    
+    # BYOK body key wins; otherwise resolve header / managed / self-host env.
+    final_api_key = req.api_key or await resolve_gemini(request)
+
     if not final_api_key:
-        raise HTTPException(status_code=400, detail="Missing Gemini API Key (Header or Body)")
+        raise gemini_missing_error()
 
     if req.job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -647,13 +839,13 @@ class EffectsGenerateRequest(BaseModel):
 @app.post("/api/effects/generate")
 async def generate_effects_config(
     req: EffectsGenerateRequest,
-    x_gemini_key: Optional[str] = Header(None, alias="X-Gemini-Key")
+    request: Request,
 ):
     """Generate structured EffectsConfig JSON for Remotion rendering via Gemini AI."""
-    final_api_key = x_gemini_key or os.environ.get("GEMINI_API_KEY")
+    final_api_key = await resolve_gemini(request)
 
     if not final_api_key:
-        raise HTTPException(status_code=400, detail="Missing Gemini API Key (Header)")
+        raise gemini_missing_error()
 
     if req.job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1044,8 +1236,8 @@ async def translate_clip(
 class SocialPostRequest(BaseModel):
     job_id: str
     clip_index: int
-    api_key: str
-    user_id: str
+    api_key: Optional[str] = None  # BYOK; ignored for managed users
+    user_id: Optional[str] = None  # BYOK profile; ignored for managed users
     platforms: List[str] # ["tiktok", "instagram", "youtube"]
     # Optional overrides if frontend wants to edit them
     title: Optional[str] = None
@@ -1056,14 +1248,23 @@ class SocialPostRequest(BaseModel):
 import httpx
 
 @app.post("/api/social/post")
-async def post_to_socials(req: SocialPostRequest):
+async def post_to_socials(req: SocialPostRequest, request: Request):
     if req.job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
+    # Resolve the Upload-Post key + profile. For managed users the server key is
+    # used and their own profile is forced (body api_key / user_id are ignored).
+    upload_key, forced_profile = await resolve_upload_post(request, req.api_key)
+    if not upload_key:
+        raise HTTPException(status_code=400, detail="Missing Upload-Post API key")
+    post_user = forced_profile or req.user_id
+    if not post_user:
+        raise HTTPException(status_code=400, detail="Missing Upload-Post user profile")
+
     job = jobs[req.job_id]
     if 'result' not in job or 'clips' not in job['result']:
         raise HTTPException(status_code=400, detail="Job result not available")
-        
+
     try:
         clip = job['result']['clips'][req.clip_index]
         # Video URL is relative /videos/..., we need absolute file path
@@ -1085,12 +1286,12 @@ async def post_to_socials(req: SocialPostRequest):
         # Prepare form data
         url = "https://api.upload-post.com/api/upload"
         headers = {
-            "Authorization": f"Apikey {req.api_key}"
+            "Authorization": f"Apikey {upload_key}"
         }
-        
+
         # Prepare data as dict (httpx handles lists for multiple values)
         data_payload = {
-            "user": req.user_id,
+            "user": post_user,
             "title": final_title,
             "platform[]": req.platforms, # Pass list directly
             "async_upload": "true"  # Enable async upload
@@ -1142,11 +1343,16 @@ async def post_to_socials(req: SocialPostRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/social/user")
-async def get_social_user(api_key: str = Header(..., alias="X-Upload-Post-Key")):
-    """Proxy to fetch user ID from Upload-Post"""
+async def get_social_user(request: Request):
+    """Proxy to fetch user profiles from Upload-Post.
+
+    BYOK: uses the caller's key and returns all profiles on that account.
+    Managed: uses the server key but returns ONLY the caller's own profile.
+    """
+    api_key, forced_profile = await resolve_upload_post(request, None)
     if not api_key:
          raise HTTPException(status_code=400, detail="Missing X-Upload-Post-Key header")
-         
+
     url = "https://api.upload-post.com/api/uploadposts/users"
     print(f"🔍 Fetching User ID from: {url}")
     headers = {"Authorization": f"Apikey {api_key}"}
@@ -1185,10 +1391,14 @@ async def get_social_user(api_key: str = Header(..., alias="X-Upload-Post-Key"))
                                  "connected": connected
                              })
             
+            # Managed users must only ever see their own profile.
+            if forced_profile is not None:
+                profiles_list = [p for p in profiles_list if p.get("username") == forced_profile]
+
             if not profiles_list:
                 # Fallback if no profiles found
                 return {"profiles": [], "error": "No profiles found"}
-                
+
             return {"profiles": profiles_list}
             
             
@@ -1276,9 +1486,9 @@ async def thumbnail_analyze(
     x_gemini_key: Optional[str] = Header(None, alias="X-Gemini-Key")
 ):
     """Analyze a video and suggest viral YouTube titles."""
-    api_key = x_gemini_key
+    api_key = await resolve_gemini(request)
     if not api_key:
-        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
+        raise gemini_missing_error()
 
     pre_transcript = None
 
@@ -1357,12 +1567,12 @@ class ThumbnailTitlesRequest(BaseModel):
 @app.post("/api/thumbnail/titles")
 async def thumbnail_titles(
     req: ThumbnailTitlesRequest,
-    x_gemini_key: Optional[str] = Header(None, alias="X-Gemini-Key")
+    request: Request,
 ):
     """Refine title suggestions or accept a manual title."""
-    api_key = x_gemini_key
+    api_key = await resolve_gemini(request)
     if not api_key:
-        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
+        raise gemini_missing_error()
 
     # Manual title mode - just create a session with the user's title
     if req.title:
@@ -1419,15 +1629,19 @@ async def thumbnail_generate(
     count: int = Form(3),
     face: Optional[UploadFile] = File(None),
     background: Optional[UploadFile] = File(None),
-    x_gemini_key: Optional[str] = Header(None, alias="X-Gemini-Key")
 ):
     """Generate YouTube thumbnails with Gemini image generation."""
-    api_key = x_gemini_key
+    api_key = await resolve_gemini(request)
     if not api_key:
-        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
+        raise gemini_missing_error()
 
     # Clamp count
     count = min(max(1, count), 6)
+
+    # Gemini image generation is the expensive managed call — meter it against the
+    # plan quota (a batch ≈ THUMBNAIL_MINUTES). No-op for BYOK / self-host.
+    thumb_minutes = _cloud_config.THUMBNAIL_MINUTES if BILLING_ENABLED else 0
+    reservation_id = await reserve_managed_action(request, thumb_minutes, session_id, "thumbnail")
 
     # Save optional uploaded images
     face_path = None
@@ -1469,11 +1683,18 @@ async def thumbnail_generate(
         if not thumbnails:
             raise HTTPException(status_code=500, detail="Thumbnail generation failed. Please check your Gemini API key has access to image generation (gemini-3.1-flash-image-preview model).")
 
+        # Success — charge the reserved minutes.
+        if reservation_id:
+            await _metering.commit_reservation(reservation_id)
         return {"thumbnails": thumbnails}
 
     except HTTPException:
+        if reservation_id:
+            await _metering.release_reservation(reservation_id)
         raise
     except Exception as e:
+        if reservation_id:
+            await _metering.release_reservation(reservation_id)
         print(f"❌ Thumbnail Generate Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1485,12 +1706,12 @@ class ThumbnailDescribeRequest(BaseModel):
 @app.post("/api/thumbnail/describe")
 async def thumbnail_describe(
     req: ThumbnailDescribeRequest,
-    x_gemini_key: Optional[str] = Header(None, alias="X-Gemini-Key")
+    request: Request,
 ):
     """Generate a YouTube description with chapters from the transcript."""
-    api_key = x_gemini_key
+    api_key = await resolve_gemini(request)
     if not api_key:
-        raise HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
+        raise gemini_missing_error()
 
     if req.session_id not in thumbnail_sessions:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1520,17 +1741,26 @@ async def thumbnail_describe(
 
 @app.post("/api/thumbnail/publish")
 async def thumbnail_publish(
+    request: Request,
     background_tasks: BackgroundTasks,
     session_id: str = Form(...),
     title: str = Form(...),
     description: str = Form(...),
     thumbnail_url: str = Form(...),
-    api_key: str = Form(...),
-    user_id: str = Form(...),
+    api_key: Optional[str] = Form(None),   # BYOK; ignored for managed users
+    user_id: Optional[str] = Form(None),   # BYOK profile; ignored for managed users
 ):
     """Kick off a background upload to YouTube via Upload-Post and return immediately."""
     if session_id not in thumbnail_sessions:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    # Managed users: server key + forced own profile; body fields ignored.
+    upload_key, forced_profile = await resolve_upload_post(request, api_key)
+    if not upload_key:
+        raise HTTPException(status_code=400, detail="Missing Upload-Post API key")
+    post_user = forced_profile or user_id
+    if not post_user:
+        raise HTTPException(status_code=400, detail="Missing Upload-Post user profile")
 
     session = thumbnail_sessions[session_id]
     video_path = session.get("video_path")
@@ -1555,9 +1785,9 @@ async def thumbnail_publish(
         """Runs in a thread via BackgroundTasks — does the actual multipart upload."""
         try:
             upload_url = "https://api.upload-post.com/api/upload"
-            headers = {"Authorization": f"Apikey {api_key}"}
+            headers = {"Authorization": f"Apikey {upload_key}"}
             data_payload = {
-                "user": user_id,
+                "user": post_user,
                 "platform[]": ["youtube"],
                 "title": title,          # required base field (fallback)
                 "async_upload": "true",
@@ -1670,12 +1900,12 @@ class SaaSAnalyzeRequest(BaseModel):
 @app.post("/api/saasshorts/analyze")
 async def saasshorts_analyze(
     req: SaaSAnalyzeRequest,
-    x_gemini_key: Optional[str] = Header(None, alias="X-Gemini-Key"),
+    request: Request,
 ):
     """Analyze a URL or manual description and generate video scripts."""
-    gemini_key = x_gemini_key or os.environ.get("GEMINI_API_KEY")
+    gemini_key = await resolve_gemini(request)
     if not gemini_key:
-        raise HTTPException(status_code=400, detail="Missing Gemini API Key")
+        raise gemini_missing_error()
 
     if not req.url and not req.description:
         raise HTTPException(status_code=400, detail="Provide a URL or a product description")
@@ -1811,8 +2041,8 @@ async def saasshorts_video_gallery(limit: int = 50):
 
 class SaaSPostRequest(BaseModel):
     job_id: str
-    api_key: str
-    user_id: str
+    api_key: Optional[str] = None  # BYOK; ignored for managed users
+    user_id: Optional[str] = None  # BYOK profile; ignored for managed users
     platforms: List[str]
     title: Optional[str] = None
     description: Optional[str] = None
@@ -1821,10 +2051,17 @@ class SaaSPostRequest(BaseModel):
 
 
 @app.post("/api/saasshorts/post")
-async def saasshorts_post_to_socials(req: SaaSPostRequest):
+async def saasshorts_post_to_socials(req: SaaSPostRequest, request: Request):
     """Post an AI Shorts video to social media via Upload-Post."""
     if req.job_id not in saas_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    upload_key, forced_profile = await resolve_upload_post(request, req.api_key)
+    if not upload_key:
+        raise HTTPException(status_code=400, detail="Missing Upload-Post API key")
+    post_user = forced_profile or req.user_id
+    if not post_user:
+        raise HTTPException(status_code=400, detail="Missing Upload-Post user profile")
 
     job = saas_jobs[req.job_id]
     result = job.get("result")
@@ -1847,10 +2084,10 @@ async def saasshorts_post_to_socials(req: SaaSPostRequest):
             final_description = script.get("full_narration", "Check this out!")
 
         url = "https://api.upload-post.com/api/upload"
-        headers = {"Authorization": f"Apikey {req.api_key}"}
+        headers = {"Authorization": f"Apikey {upload_key}"}
 
         data_payload = {
-            "user": req.user_id,
+            "user": post_user,
             "title": final_title,
             "platform[]": req.platforms,
             "async_upload": "true",

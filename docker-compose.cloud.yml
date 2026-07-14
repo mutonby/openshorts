@@ -1,0 +1,52 @@
+# Cloud (paid / managed-keys) mode override for openshorts.app.
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.cloud.yml up --build
+#
+# The base docker-compose.yml is untouched and keeps working as pure BYOK for
+# self-hosters. This file only adds the Postgres service and the cloud env.
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: openshorts-db
+    environment:
+      - POSTGRES_USER=openshorts
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-openshorts}
+      - POSTGRES_DB=openshorts
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openshorts"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - BILLING_ENABLED=true
+      - DATABASE_URL=postgresql+asyncpg://openshorts:${POSTGRES_PASSWORD:-openshorts}@db:5432/openshorts
+      - JWT_SECRET=${JWT_SECRET}
+      - FRONTEND_URL=${FRONTEND_URL:-https://openshorts.app}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://openshorts.app}
+      # Email (magic link) — Resend
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - EMAIL_FROM=${EMAIL_FROM:-OpenShorts <login@openshorts.app>}
+      # Google OAuth
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      # Stripe (prices are resolved by lookup_key at runtime — no price IDs needed)
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      # Managed provider keys (server-owned)
+      - MANAGED_GEMINI_API_KEY=${MANAGED_GEMINI_API_KEY}
+      - MANAGED_UPLOAD_POST_API_KEY=${MANAGED_UPLOAD_POST_API_KEY}
+      - OPENSHORTS_LOGO_URL=${OPENSHORTS_LOGO_URL:-https://openshorts.app/logo.png}
+      # Residential proxy for YouTube downloads (avoids datacenter-IP bans).
+      # e.g. http://user:pass@gate.dataimpulse.com:823 — leave empty to go direct.
+      - PROXY_URL=${PROXY_URL:-}
+
+volumes:
+  pgdata:

@@ -474,6 +474,13 @@ def download_youtube_video(url, output_dir="."):
         cookies_path = None
         print("⚠️ YOUTUBE_COOKIES env var not found.")
     
+    # Optional residential proxy for YouTube (avoids datacenter-IP bans on hosted
+    # servers). Set PROXY_URL (e.g. http://user:pass@gate.provider.com:port).
+    # When unset (self-host), downloads go direct as before.
+    _proxy = os.environ.get("PROXY_URL", "").strip() or None
+    if _proxy:
+        print("🌐 Using residential proxy for download.")
+
     # Common yt-dlp options to work around YouTube bot detection.
     # extractor_args tries multiple player clients in order; tv_embed / android
     # avoid the OAuth/PO-token checks that block server IPs.
@@ -482,6 +489,7 @@ def download_youtube_video(url, output_dir="."):
         'verbose': True,
         'no_warnings': False,
         'cookiefile': cookies_path if cookies_path else None,
+        'proxy': _proxy,
         'socket_timeout': 30,
         'retries': 10,
         'fragment_retries': 10,
@@ -551,9 +559,17 @@ Technical Details: {str(e)}
         os.remove(expected_file)
         print(f"🗑️  Removed existing file to re-download with H.264 codec")
     
+    # When downloading through a paid proxy, cap at 720p to control bandwidth
+    # cost (a 720p source is plenty for 9:16 clips). Direct downloads keep best.
+    if _proxy:
+        _fmt = ('bestvideo[vcodec^=avc1][height<=720][ext=mp4]+bestaudio[ext=m4a]/'
+                'bestvideo[vcodec^=avc1][height<=720]+bestaudio/best[height<=720][ext=mp4]/best[height<=720]/best')
+    else:
+        _fmt = 'bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/bestvideo[vcodec^=avc1]+bestaudio/best[ext=mp4]/best'
+
     ydl_opts = {
         **_COMMON_YDL_OPTS,
-        'format': 'bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/bestvideo[vcodec^=avc1]+bestaudio/best[ext=mp4]/best',
+        'format': _fmt,
         'outtmpl': output_template,
         'merge_output_format': 'mp4',
         'overwrites': True,

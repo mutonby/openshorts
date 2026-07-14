@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Globe, Sparkles, Download, Copy, Check, ChevronRight, ChevronLeft, Loader2, AlertCircle, Volume2, User, Film, Terminal, ChevronDown, RefreshCw, Zap, Target, TrendingUp, MessageSquare, Eye, Share2, Calendar, Upload } from 'lucide-react';
 import { getApiUrl } from '../config';
+import { apiFetch } from '../lib/api';
 
 const STYLE_OPTIONS = [
   { id: 'ugc', label: 'UGC Natural', desc: 'Authentic, talking to camera' },
@@ -34,7 +35,11 @@ function saveCache(url, analysis, webResearch, scripts) {
   } catch { /* localStorage full */ }
 }
 
-export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uploadPostKey, uploadUserId }) {
+export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uploadPostKey, uploadUserId, managed = false }) {
+  // Managed (hosted plan): Gemini (script) + Upload-Post run server-side via the
+  // bearer token — no BYOK Gemini key needed. fal.ai + ElevenLabs stay BYOK.
+  const geminiHeader = geminiApiKey ? { 'X-Gemini-Key': geminiApiKey } : {};
+  const needsGeminiKey = !geminiApiKey && !managed;
   // Wizard state
   const [step, setStep] = useState(() => {
     const cache = loadCache();
@@ -186,7 +191,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
 
   const handleAnalyze = async () => {
     if (!url.trim() && !description.trim()) return;
-    if (!geminiApiKey) {
+    if (needsGeminiKey) {
       setAnalyzeError('Gemini API key required. Set it in Settings.');
       return;
     }
@@ -195,11 +200,11 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
     setAnalyzeError('');
 
     try {
-      const res = await fetch(getApiUrl('/api/saasshorts/analyze'), {
+      const res = await apiFetch('/api/saasshorts/analyze', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Gemini-Key': geminiApiKey,
+          ...geminiHeader,
         },
         body: JSON.stringify({
           url: url.trim() || undefined,
@@ -274,7 +279,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
         scriptToSend.full_narration = editedNarration;
       }
 
-      const res = await fetch(getApiUrl('/api/saasshorts/generate'), {
+      const res = await apiFetch('/api/saasshorts/generate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -320,7 +325,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
         scriptToSend.full_narration = editedNarration;
       }
 
-      const res = await fetch(getApiUrl('/api/saasshorts/generate'), {
+      const res = await apiFetch('/api/saasshorts/generate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1467,7 +1472,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                                 payload.scheduled_date = new Date(scheduleDate).toISOString();
                                 payload.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
                               }
-                              const res = await fetch(getApiUrl('/api/saasshorts/post'), {
+                              const res = await apiFetch('/api/saasshorts/post', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify(payload),

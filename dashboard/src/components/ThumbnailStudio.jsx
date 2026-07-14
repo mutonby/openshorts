@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { Upload, Image, Loader2, Send, Check, Download, ArrowRight, ArrowLeft, Sparkles, Video, Type, X, Plus, MessageSquare, FileText, Youtube, AlertCircle, CheckCircle2, Settings } from 'lucide-react';
 import { getApiUrl } from '../config';
+import { apiFetch } from '../lib/api';
 
 const STEPS = ['Input', 'Titles', 'Generate', 'Description', 'Publish'];
 
@@ -92,7 +93,11 @@ function DragDropZone({ label, accept, onFile, file, onClear, icon: Icon }) {
   );
 }
 
-export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUserId }) {
+export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUserId, managed = false }) {
+  // Managed (hosted plan): Gemini runs server-side via the bearer token, no BYOK key.
+  // Only send X-Gemini-Key for self-host BYOK. apiFetch attaches the bearer token.
+  const keyHeader = geminiApiKey ? { 'X-Gemini-Key': geminiApiKey } : {};
+  const needsKey = !geminiApiKey && !managed;
   // Step management
   const [step, setStep] = useState(0);
   const [mode, setMode] = useState(null); // 'video' or 'manual'
@@ -165,7 +170,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
 
   // --- Step 1: Analyze Video ---
   const handleAnalyze = async () => {
-    if (!geminiApiKey) return alert('Please set your Gemini API key in Settings first.');
+    if (needsKey) return alert('Please set your Gemini API key in Settings first.');
     setIsAnalyzing(true);
 
     try {
@@ -180,9 +185,9 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
         return alert('Please upload a video file.');
       }
 
-      const res = await fetch(getApiUrl('/api/thumbnail/analyze'), {
+      const res = await apiFetch('/api/thumbnail/analyze', {
         method: 'POST',
-        headers: { 'X-Gemini-Key': geminiApiKey },
+        headers: keyHeader,
         body: formData
       });
 
@@ -223,11 +228,11 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
       // Create session for manual mode
       const newSessionId = sessionId || crypto.randomUUID();
       setSessionId(newSessionId);
-      fetch(getApiUrl('/api/thumbnail/titles'), {
+      apiFetch('/api/thumbnail/titles', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Gemini-Key': geminiApiKey
+          ...keyHeader
         },
         body: JSON.stringify({ title: manualTitle, session_id: newSessionId })
       }).catch(() => { });
@@ -246,11 +251,11 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
     setChatHistory(prev => [...prev, { role: 'user', content: userMsg }]);
 
     try {
-      const res = await fetch(getApiUrl('/api/thumbnail/titles'), {
+      const res = await apiFetch('/api/thumbnail/titles', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Gemini-Key': geminiApiKey
+          ...keyHeader
         },
         body: JSON.stringify({ session_id: sessionId, message: userMsg })
       });
@@ -275,7 +280,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
 
   // --- Step 3: Generate Thumbnails ---
   const handleGenerate = async () => {
-    if (!geminiApiKey) return alert('Please set your Gemini API key in Settings first.');
+    if (needsKey) return alert('Please set your Gemini API key in Settings first.');
     const finalTitle = selectedTitle || manualTitle;
     if (!finalTitle) return alert('Please select or enter a title first.');
 
@@ -291,9 +296,9 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
       if (faceImage) formData.append('face', faceImage);
       if (bgImage) formData.append('background', bgImage);
 
-      const res = await fetch(getApiUrl('/api/thumbnail/generate'), {
+      const res = await apiFetch('/api/thumbnail/generate', {
         method: 'POST',
-        headers: { 'X-Gemini-Key': geminiApiKey },
+        headers: keyHeader,
         body: formData
       });
 
@@ -334,18 +339,18 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
 
   // --- Description Generation ---
   const handleGenerateDescription = async () => {
-    if (!geminiApiKey) return alert('Please set your Gemini API key in Settings first.');
+    if (needsKey) return alert('Please set your Gemini API key in Settings first.');
     const finalTitle = selectedTitle || manualTitle;
     if (!finalTitle) return alert('Please select a title first.');
     if (!sessionId) return alert('No session available.');
 
     setIsDescribing(true);
     try {
-      const res = await fetch(getApiUrl('/api/thumbnail/describe'), {
+      const res = await apiFetch('/api/thumbnail/describe', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Gemini-Key': geminiApiKey
+          ...keyHeader
         },
         body: JSON.stringify({ session_id: sessionId, title: finalTitle })
       });
@@ -366,7 +371,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
 
   // --- Publish to YouTube ---
   const handlePublish = async () => {
-    if (!uploadPostKey || !uploadUserId) return alert('Please configure your Upload-Post API key and user in Settings first.');
+    if (!managed && (!uploadPostKey || !uploadUserId)) return alert('Please configure your Upload-Post API key and user in Settings first.');
     const finalTitle = selectedTitle || manualTitle;
     if (!finalTitle) return alert('No title selected.');
     if (!selectedThumbnail) return alert('Please select a thumbnail first.');
@@ -384,7 +389,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
       formData.append('user_id', uploadUserId);
 
       // Submit the publish job — returns immediately with a publish_id
-      const res = await fetch(getApiUrl('/api/thumbnail/publish'), {
+      const res = await apiFetch('/api/thumbnail/publish', {
         method: 'POST',
         body: formData
       });
@@ -472,8 +477,8 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
 
         <StepIndicator currentStep={step} />
 
-        {/* Gemini API Key Warning */}
-        {!geminiApiKey && (
+        {/* Gemini API Key Warning (self-host BYOK only; managed uses server key) */}
+        {needsKey && (
           <div className="mb-6 p-5 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-start gap-3">
             <AlertCircle size={20} className="text-amber-400 shrink-0 mt-0.5" />
             <div>
@@ -485,7 +490,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
 
         {/* ===== STEP 0: Input Mode Selection ===== */}
         {step === 0 && (
-          <div className={`grid md:grid-cols-2 gap-6 ${!geminiApiKey ? 'opacity-50 pointer-events-none select-none' : ''}`}>
+          <div className={`grid md:grid-cols-2 gap-6 ${needsKey ? 'opacity-50 pointer-events-none select-none' : ''}`}>
             {/* Mode A: Video Analysis */}
             <div className="glass-panel p-6 space-y-4">
               <div className="flex items-center gap-3 mb-2">
@@ -1058,7 +1063,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
               </div>
 
               {/* Publish Button */}
-              {(!uploadPostKey || !uploadUserId) ? (
+              {(!managed && (!uploadPostKey || !uploadUserId)) ? (
                 <div className="glass-panel p-6 space-y-3">
                   <div className="flex items-center gap-2 text-amber-400">
                     <AlertCircle size={16} />

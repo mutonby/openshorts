@@ -1,0 +1,10 @@
+# Local-only override: remap host ports to avoid clashes with other running
+# projects (e.g. another backend on :8000). Not for production.
+# `!override` REPLACES the base ports list instead of appending to it.
+services:
+  backend:
+    ports: !override
+      - "8001:8000"
+  frontend:
+    ports: !override
+      - "5176:5173"
