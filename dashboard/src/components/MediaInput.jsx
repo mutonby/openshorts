@@ -9,7 +9,8 @@ const SUPPORTED_PLATFORMS = [
 
 export default function MediaInput({ onProcess, isProcessing }) {
     const [youtubeUrlEnabled, setYoutubeUrlEnabled] = useState(true);
-    const [mode, setMode] = useState('url'); // 'url' | 'file'
+    // File upload is the primary path; the link is secondary.
+    const [mode, setMode] = useState('file'); // 'file' | 'url'
     const [url, setUrl] = useState('');
     const [file, setFile] = useState(null);
     const [acknowledged, setAcknowledged] = useState(false);
@@ -59,6 +60,16 @@ export default function MediaInput({ onProcess, isProcessing }) {
     return (
         <div className="bg-surface border border-white/5 rounded-2xl p-6 animate-[fadeIn_0.6s_ease-out]">
             <div className="flex gap-4 mb-6 border-b border-white/5 pb-4">
+                <button
+                    onClick={() => setMode('file')}
+                    className={`flex items-center gap-2 pb-2 px-2 transition-all ${mode === 'file'
+                        ? 'text-primary border-b-2 border-primary -mb-[17px]'
+                        : 'text-zinc-400 hover:text-white'
+                        }`}
+                >
+                    <Upload size={18} />
+                    Upload File
+                </button>
                 {youtubeUrlEnabled && (
                     <button
                         onClick={() => setMode('url')}
@@ -71,16 +82,6 @@ export default function MediaInput({ onProcess, isProcessing }) {
                         Video URL
                     </button>
                 )}
-                <button
-                    onClick={() => setMode('file')}
-                    className={`flex items-center gap-2 pb-2 px-2 transition-all ${mode === 'file'
-                        ? 'text-primary border-b-2 border-primary -mb-[17px]'
-                        : 'text-zinc-400 hover:text-white'
-                        }`}
-                >
-                    <Upload size={18} />
-                    Upload File
-                </button>
             </div>
 
             <form onSubmit={handleSubmit}>
