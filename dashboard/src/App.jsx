@@ -360,6 +360,17 @@ function App() {
     }
   };
 
+  // Open the Upload-Post white-label page (which includes the scheduling calendar)
+  // in a new tab, for consulting/managing scheduled posts from the dashboard.
+  const handleOpenCalendar = async () => {
+    try {
+      const { access_url } = await apiJson('/api/social/connect', { method: 'POST' });
+      if (access_url) window.open(access_url, '_blank', 'noopener');
+    } catch (e) {
+      alert('Could not open the calendar. Please try again.');
+    }
+  };
+
   const handleProcess = async (data) => {
     // Hosted: must be signed in AND on an active plan/trial. Self-host: BYOK keys.
     if (billingEnabled) {
@@ -696,9 +707,14 @@ function App() {
                     fully managed — no API keys required. AI Shorts &amp; dubbing use your own fal.ai / ElevenLabs
                     keys (below). Connect your social accounts to publish directly.
                   </p>
-                  <button onClick={handleConnectSocials} className="btn-primary py-2 px-4 text-sm flex items-center gap-2">
-                    <Share2 size={16} /> Connect social accounts
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={handleConnectSocials} className="btn-primary py-2 px-4 text-sm flex items-center gap-2">
+                      <Share2 size={16} /> Connect social accounts
+                    </button>
+                    <button onClick={handleOpenCalendar} className="py-2 px-4 text-sm flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-colors">
+                      <Calendar size={16} /> Content calendar
+                    </button>
+                  </div>
                 </div>
               ) : billingEnabled ? (
                 <div className="glass-panel p-6 mb-2 border-primary/30 ring-1 ring-primary/20">
