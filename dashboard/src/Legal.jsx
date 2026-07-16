@@ -133,8 +133,8 @@ export default function Legal() {
                             status and usage (minutes used). Kept while your account exists.
                         </li>
                         <li>
-                            <strong className="text-white">Generated videos:</strong> the clips you create are stored on
-                            Cloudflare R2 and available in your library <strong className="text-white">while your
+                            <strong className="text-white">Generated videos:</strong> the clips you create are stored in
+                            encrypted cloud storage and available in your library <strong className="text-white">while your
                             subscription is active, plus 7 days after it ends</strong>, then permanently deleted.
                         </li>
                         <li>
@@ -159,16 +159,17 @@ export default function Legal() {
                 </Section>
 
                 <Section title="Subprocessors">
-                    <p>To provide the hosted Service we share the minimum necessary data with:</p>
+                    <p>To provide the hosted Service we share the minimum necessary data with a small number of
+                        trusted service providers, each acting on our behalf:</p>
                     <ul className="list-disc pl-6 space-y-1">
-                        <li><strong className="text-white">Stripe</strong> — payments &amp; subscriptions.</li>
-                        <li><strong className="text-white">Cloudflare (R2)</strong> — storage of your generated videos.</li>
-                        <li><strong className="text-white">Google (Gemini)</strong> — AI analysis, titles and thumbnails.</li>
-                        <li><strong className="text-white">Upload-Post</strong> — publishing to TikTok, Instagram &amp; YouTube (when you connect them).</li>
-                        <li><strong className="text-white">A residential-proxy provider</strong> — retrieving videos you submit by link.</li>
-                        <li><strong className="text-white">Namecheap Private Email</strong> — transactional email (sign-in links, notices).</li>
+                        <li><strong className="text-white">A payments provider</strong> — payments &amp; subscriptions.</li>
+                        <li><strong className="text-white">A cloud infrastructure &amp; storage provider</strong> — hosting and storing your generated videos.</li>
+                        <li><strong className="text-white">An AI provider</strong> — video analysis, titles and thumbnails.</li>
+                        <li><strong className="text-white">A social-publishing provider</strong> — posting to TikTok, Instagram &amp; YouTube (only when you connect them).</li>
+                        <li><strong className="text-white">An email provider</strong> — transactional email (sign-in links, notices).</li>
                     </ul>
-                    <p>Each has its own terms and privacy policy, which apply in addition to this notice.</p>
+                    <p>Each is bound by its own terms and privacy policy. We can identify the specific providers to
+                        you on request where required by law.</p>
                 </Section>
 
                 <Section title="Service is provided as-is">
@@ -176,8 +177,8 @@ export default function Legal() {
                         The Service is provided on a best-effort basis with no warranties of any kind and no guarantee of
                         uptime, accuracy, or fitness for a particular purpose. To the maximum extent permitted by law, our
                         aggregate liability is limited to the amount you paid us in the 3 months before the claim, and we
-                        are not liable for indirect or consequential damages. Some third-party sources (e.g. video
-                        platforms) may change how they work and temporarily affect ingestion.
+                        are not liable for indirect or consequential damages. Availability of specific features may vary
+                        over time and is not guaranteed.
                     </p>
                 </Section>
 
