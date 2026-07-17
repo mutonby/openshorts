@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2 } from 'lucide-react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Music } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import ResultCard from './components/ResultCard';
@@ -175,6 +175,13 @@ function App() {
     return '';
   });
 
+  // Sonilo API State (optional music/SFX bed) - Load encrypted
+  const [soniloKey, setSoniloKey] = useState(() => {
+    const stored = localStorage.getItem('soniloKey_v1');
+    if (stored) return decrypt(stored);
+    return '';
+  });
+
   const [uploadUserId, setUploadUserId] = useState(() => localStorage.getItem('uploadUserId') || '');
   const [userProfiles, setUserProfiles] = useState([]); // List of {username, connected: []}
   const [showKeyModal, setShowKeyModal] = useState(false);
@@ -192,6 +199,7 @@ function App() {
   // Silent-success "saved" states for the settings key inputs (design.md: no alert popups)
   const [elevenLabsSaved, setElevenLabsSaved] = useState(false);
   const [falSaved, setFalSaved] = useState(false);
+  const [soniloSaved, setSoniloSaved] = useState(false);
 
   // Sync state for original video playback
   const [syncedTime, setSyncedTime] = useState(0);
@@ -281,6 +289,12 @@ function App() {
       localStorage.setItem('falKey_v1', encrypt(falKey));
     }
   }, [falKey]);
+
+  useEffect(() => {
+    if (soniloKey) {
+      localStorage.setItem('soniloKey_v1', encrypt(soniloKey));
+    }
+  }, [soniloKey]);
 
   useEffect(() => {
     if ((uploadPostKey || isManaged) && userProfiles.length === 0) {
@@ -887,6 +901,55 @@ function App() {
                   </p>
                 </div>
               </div>
+
+              <div className="card p-4 sm:p-6 mt-8">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-input bg-paper3 flex items-center justify-center shrink-0">
+                      <Music size={16} className="text-brass" />
+                    </div>
+                    <h2 className="text-base font-medium text-ink lowercase">Music &amp; Sound FX (optional)</h2>
+                  </div>
+                  <span className="readout">BYOK</span>
+                </div>
+                <p className="text-xs text-muted mb-6 leading-relaxed">
+                  Add an optional audio bed under a finished clip, ducked under the narration.
+                  The <strong>local file</strong> provider needs no key. To use <strong>Sonilo</strong> — which
+                  watches the cut and returns a bed timed to the picture — bring your own key.
+                  Music is licensed and safe for commercial use (terms apply); sound effects are royalty-free.
+                </p>
+                <div className="space-y-4">
+                  <label className="block text-sm text-muted">Sonilo API Key</label>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="password"
+                      value={soniloKey}
+                      onChange={(e) => setSoniloKey(e.target.value)}
+                      className="input-field"
+                      placeholder="sonilo_..."
+                    />
+                    <button
+                      onClick={() => {
+                        if (soniloKey) {
+                          localStorage.setItem('soniloKey_v1', encrypt(soniloKey));
+                          setSoniloSaved(true);
+                          setTimeout(() => setSoniloSaved(false), 2000);
+                        }
+                      }}
+                      className={soniloSaved ? 'badge-ok px-4' : 'btn-quiet py-2 px-4 text-sm'}
+                    >
+                      {soniloSaved ? <><Check size={12} /> saved</> : 'Save'}
+                    </button>
+                  </div>
+                  <p className="text-xs text-muted leading-relaxed">
+                    Get your API key from the Sonilo dashboard to enable the Sonilo provider.
+                    <br />
+                    <span className="text-muted">
+                      Keys are only stored in your browser. Sent to backend only to process requests, never stored server-side.
+                    </span>
+                  </p>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1160,6 +1223,7 @@ function App() {
                           uploadUserId={uploadUserId}
                           geminiApiKey={apiKey}
                           elevenLabsKey={elevenLabsKey}
+                          soniloKey={soniloKey}
                           isManaged={isManaged}
                           onPlay={(time) => handleClipPlay(time)}
                           onPause={handleClipPause}

@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages } from 'lucide-react';
+import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, Music } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
 import SubtitleModal from './SubtitleModal';
 import HookModal from './HookModal';
 import TranslateModal from './TranslateModal';
+import MusicModal from './MusicModal';
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
 import { renderInBrowser } from '../lib/renderInBrowser';
@@ -23,7 +24,7 @@ function formatDuration(clip) {
     return `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
 }
 
-export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, onPlay, onPause }) {
+export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, soniloKey, isManaged, onPlay, onPause }) {
     const [showModal, setShowModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
     const videoRef = React.useRef(null);
@@ -68,8 +69,10 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
     const [isSubtitling, setIsSubtitling] = useState(false);
     const [isHooking, setIsHooking] = useState(false);
     const [isTranslating, setIsTranslating] = useState(false);
+    const [isAddingMusic, setIsAddingMusic] = useState(false);
     const [showHookModal, setShowHookModal] = useState(false);
     const [showTranslateModal, setShowTranslateModal] = useState(false);
+    const [showMusicModal, setShowMusicModal] = useState(false);
     const [editError, setEditError] = useState(null);
 
     const [clipDuration, setClipDuration] = useState(clip.end && clip.start ? clip.end - clip.start : 30);
@@ -354,6 +357,60 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
         }
     };
 
+    const handleMusic = async (options) => {
+        setIsAddingMusic(true);
+        setEditError(null);
+        try {
+            const headers = { 'Content-Type': 'application/json' };
+            // Sonilo provider is BYOK: the key rides in a header, never persisted server-side.
+            if (options.provider === 'sonilo') {
+                if (!soniloKey) {
+                    throw new Error('Sonilo API Key is missing. Please set it in Settings.');
+                }
+                headers['X-Sonilo-Key'] = soniloKey;
+            }
+
+            const res = await apiFetch('/api/music', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    job_id: jobId,
+                    clip_index: index,
+                    provider: options.provider,
+                    capability: options.capability,
+                    prompt: options.prompt,
+                    local_audio_path: options.localAudioPath,
+                    music_volume: options.musicVolume,
+                    duck: options.duck,
+                    input_filename: currentVideoUrl.split('/').pop(),
+                }),
+            });
+
+            if (!res.ok) {
+                const errText = await res.text();
+                try {
+                    const jsonErr = JSON.parse(errText);
+                    throw new Error(jsonErr.detail || errText);
+                } catch (e) {
+                    if (e.message !== errText) throw e;
+                    throw new Error(errText);
+                }
+            }
+
+            const data = await res.json();
+            if (data.new_video_url) {
+                setCurrentVideoUrl(getApiUrl(data.new_video_url));
+                if (videoRef.current) videoRef.current.load();
+                setShowMusicModal(false);
+            }
+        } catch (e) {
+            setEditError(e.message);
+            setTimeout(() => setEditError(null), 5000);
+        } finally {
+            setIsAddingMusic(false);
+        }
+    };
+
     // Managed (cloud plan/trial) users post with the server-side key — no BYOK needed
     const canPost = isManaged || (uploadPostKey && uploadUserId);
 
@@ -568,6 +625,15 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
                     </button>
 
                     <button
+                        onClick={() => setShowMusicModal(true)}
+                        disabled={isAddingMusic}
+                        className={QUIET_BTN}
+                    >
+                        {isAddingMusic ? <Loader2 size={16} className="animate-spin text-brass shrink-0" /> : <Music size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />}
+                        {isAddingMusic ? 'mixing…' : 'add music'}
+                    </button>
+
+                    <button
                         onClick={() => setShowModal(true)}
                         className="btn-primary py-2 px-2 text-xs"
                     >
@@ -730,6 +796,15 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
                 isProcessing={isTranslating}
                 videoUrl={currentVideoUrl}
                 hasApiKey={!!elevenLabsKey}
+            />
+
+            <MusicModal
+                isOpen={showMusicModal}
+                onClose={() => setShowMusicModal(false)}
+                onApply={handleMusic}
+                isProcessing={isAddingMusic}
+                videoUrl={currentVideoUrl}
+                hasSoniloKey={!!soniloKey}
             />
 
         </div>

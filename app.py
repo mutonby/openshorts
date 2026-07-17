@@ -1405,6 +1405,141 @@ async def translate_clip(
         "new_video_url": f"/videos/{req.job_id}/{output_filename}"
     }
 
+class MusicRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    # Provider-agnostic: which music/SFX backend to use. "local" needs no key
+    # and no network (bring your own audio file); "sonilo" is one API provider.
+    provider: str = "local"
+    # "music" (video_to_music) or "sfx" (video_to_sfx). SFX is a second,
+    # equally-optional capability behind the same provider interface.
+    capability: str = "music"
+    prompt: Optional[str] = None
+    # Local provider only: absolute path to a user-supplied audio file.
+    local_audio_path: Optional[str] = None
+    # Ducking controls (condition 4). music_volume is the 0..1 bed level;
+    # duck sidechains the bed under the narration.
+    music_volume: float = 0.35
+    duck: bool = True
+    input_filename: Optional[str] = None
+
+
+@app.post("/api/music")
+async def add_music(
+    req: MusicRequest,
+    request: Request,
+    x_sonilo_key: Optional[str] = Header(None, alias="X-Sonilo-Key"),
+):
+    """Add an OPT-IN music / sound-effects bed under a clip's narration.
+
+    Off by default: this endpoint is only reached when the user turns the step
+    on for a job in the UI. The Sonilo provider uses the caller-supplied
+    ``X-Sonilo-Key`` header (filled from the browser's encrypted local storage);
+    the key is never stored server-side. The local provider needs no key at all.
+    """
+    from music_providers import build_provider, duck_and_mix, MusicProviderError
+
+    provider_name = (req.provider or "local").strip().lower()
+    capability = (req.capability or "music").strip().lower()
+    if capability not in ("music", "sfx"):
+        raise HTTPException(status_code=400, detail="capability must be 'music' or 'sfx'")
+
+    if provider_name == "sonilo" and not x_sonilo_key:
+        raise HTTPException(status_code=400, detail="Missing X-Sonilo-Key header")
+
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs[req.job_id]
+    await _assert_job_owner(request, job)
+    output_dir = os.path.join(OUTPUT_DIR, req.job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+
+    with open(json_files[0], 'r') as f:
+        data = json.load(f)
+
+    clips = data.get('shorts', [])
+    if req.clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    clip_data = clips[req.clip_index]
+
+    if req.input_filename:
+        filename = os.path.basename(req.input_filename)
+    else:
+        filename = clip_data.get('video_url', '').split('/')[-1]
+        if not filename:
+            base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+            filename = f"{base_name}_clip_{req.clip_index+1}.mp4"
+
+    input_path = os.path.join(output_dir, filename)
+    if not os.path.exists(input_path):
+        raise HTTPException(status_code=404, detail=f"Video file not found: {input_path}")
+
+    base, ext = os.path.splitext(filename)
+    bed_path = os.path.join(output_dir, f"bed_{capability}_{int(time.time())}.m4a")
+    output_filename = f"music_{base}{ext}"
+    output_path = os.path.join(output_dir, output_filename)
+
+    try:
+        provider = build_provider(
+            provider_name,
+            api_key=x_sonilo_key,
+            local_audio_path=req.local_audio_path,
+        )
+
+        def run_music():
+            if capability == "sfx":
+                if not provider.supports_sfx:
+                    raise MusicProviderError(
+                        f"Provider '{provider_name}' does not support SFX")
+                provider.generate_sfx(input_path, bed_path, prompt=req.prompt)
+            else:
+                if not provider.supports_music:
+                    raise MusicProviderError(
+                        f"Provider '{provider_name}' does not support music")
+                provider.generate_music(input_path, bed_path, prompt=req.prompt)
+            duck_and_mix(
+                input_path, bed_path, output_path,
+                music_volume=req.music_volume, duck=req.duck,
+            )
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, run_music)
+    except MusicProviderError as e:
+        print(f"❌ Music Error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"❌ Music Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if os.path.exists(bed_path):
+            try:
+                os.remove(bed_path)
+            except OSError:
+                pass
+
+    if req.clip_index < len(job['result']['clips']):
+        job['result']['clips'][req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
+
+    try:
+        if req.clip_index < len(clips):
+            clips[req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
+            data['shorts'] = clips
+            with open(json_files[0], 'w') as f:
+                json.dump(data, f, indent=4)
+                print(f"✅ Metadata updated with music for clip {req.clip_index}")
+    except Exception as e:
+        print(f"⚠️ Failed to update metadata.json: {e}")
+
+    return {
+        "success": True,
+        "new_video_url": f"/videos/{req.job_id}/{output_filename}"
+    }
+
+
 class SocialPostRequest(BaseModel):
     job_id: str
     clip_index: int
