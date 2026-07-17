@@ -3,6 +3,8 @@ import re
 import subprocess
 import sys
 
+from ffmpeg_utils import video_encode_args, QUALITY
+
 
 _STDIO_CONFIGURED = False
 
@@ -96,41 +98,15 @@ def _normalize_subtitle_word(value):
 
 def transcribe_audio(video_path):
     """
-    Transcribe audio from a video file using faster-whisper.
+    Transcribe audio from a video file via the configured ASR backend.
     Returns transcript in the same format as main.py for compatibility.
     """
-    from faster_whisper import WhisperModel
+    # Lazy import: transcribe_backends imports helpers from this module.
+    from transcribe_backends import transcribe_media
 
     _log(f"🎙️  Transcribing audio from: {video_path}")
-
-    cfg = get_whisper_config()
-    model = WhisperModel(cfg["model_size"], device=cfg["device"], compute_type=cfg["compute_type"])
-
-    segments, info = model.transcribe(video_path, **WHISPER_TRANSCRIBE_PARAMS)
-
-    transcript = {
-        "segments": [],
-        "language": info.language
-    }
-
-    for segment in segments:
-        seg_data = {
-            "start": segment.start,
-            "end": segment.end,
-            "text": segment.text,
-            "words": []
-        }
-        if segment.words:
-            # Keep the leading-space boundary signal, then merge continuation
-            # fragments so compound words stay intact (see merge_continuation_words).
-            raw_words = [
-                {"word": word.word, "start": word.start, "end": word.end}
-                for word in segment.words
-            ]
-            seg_data["words"] = merge_continuation_words(raw_words)
-        transcript["segments"].append(seg_data)
-
-    _log(f"✅ Transcription complete. Language: {info.language}")
+    transcript = transcribe_media(video_path)
+    _log(f"✅ Transcription complete. Language: {transcript['language']}")
     return transcript
 
 
@@ -514,7 +490,7 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
         '-i', video_path,
         '-vf', vf,
         '-c:a', 'copy',
-        '-c:v', 'libx264', '-preset', 'medium', '-crf', '18',
+        *video_encode_args(QUALITY),
         '-movflags', '+faststart',
         output_path
     ]

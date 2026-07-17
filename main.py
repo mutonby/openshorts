@@ -20,6 +20,7 @@ from google.genai import types as genai_types
 
 import gemini_worker
 from clip_selection import build_transcript_windows, snap_clip_to_words
+from ffmpeg_utils import video_encode_args, QUALITY, QUALITY_FAST
 from dotenv import load_dotenv
 import json
 
@@ -596,7 +597,7 @@ def finalize_clip_passthrough(input_video, final_output_video):
     print(f"🎬 Passthrough (native framing): {input_video}")
     cmd = [
         'ffmpeg', '-y', '-i', input_video,
-        '-c:v', 'libx264', '-preset', 'medium', '-crf', '18',
+        *video_encode_args(QUALITY),
         '-c:a', 'aac', '-movflags', '+faststart',
         final_output_video,
     ]
@@ -674,8 +675,8 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     command = [
         'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
         '-s', f'{OUTPUT_WIDTH}x{OUTPUT_HEIGHT}', '-pix_fmt', 'bgr24',
-        '-r', str(fps), '-i', '-', '-c:v', 'libx264',
-        '-preset', 'fast', '-crf', '18', '-an', temp_video_output
+        '-r', str(fps), '-i', '-',
+        *video_encode_args(QUALITY_FAST), '-an', temp_video_output
     ]
 
     ffmpeg_process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -795,60 +796,18 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     return True
 
 def transcribe_video(video_path):
-    print("🎙️  Transcribing video with Faster-Whisper (CPU Optimized)...")
-    from faster_whisper import WhisperModel
+    print("🎙️  Transcribing video...")
+    from transcribe_backends import transcribe_media
 
-    # "small" is noticeably better than "base" on non-English audio (e.g. German
-    # compound words) at a modest speed cost. Overridable via env for tuning.
-    model_size = os.environ.get("WHISPER_MODEL", "small")
-    device = os.environ.get("WHISPER_DEVICE", "cpu")
-    compute = os.environ.get("WHISPER_COMPUTE", "int8")
-    model = WhisperModel(model_size, device=device, compute_type=compute)
+    transcript = transcribe_media(video_path)
 
-    # vad_filter drops silence; condition_on_previous_text off avoids repetition
-    # loops / hallucinations across segments.
-    segments, info = model.transcribe(
-        video_path,
-        word_timestamps=True,
-        beam_size=5,
-        vad_filter=True,
-        condition_on_previous_text=False,
-    )
-    
-    print(f"   Detected language '{info.language}' with probability {info.language_probability:.2f}")
-    
-    # Convert to openai-whisper compatible format
-    transcript_segments = []
-    full_text = ""
-    
-    for segment in segments:
+    print(f"   Detected language '{transcript['language']}', "
+          f"{len(transcript['segments'])} segments")
+    for segment in transcript['segments']:
         # Print progress to keep user informed (and prevent timeouts feeling)
-        print(f"   [{segment.start:.2f}s -> {segment.end:.2f}s] {segment.text}")
-        
-        seg_dict = {
-            'text': segment.text,
-            'start': segment.start,
-            'end': segment.end,
-            'words': []
-        }
-        
-        if segment.words:
-            for word in segment.words:
-                seg_dict['words'].append({
-                    'word': word.word,
-                    'start': word.start,
-                    'end': word.end,
-                    'probability': word.probability
-                })
-        
-        transcript_segments.append(seg_dict)
-        full_text += segment.text + " "
-        
-    return {
-        'text': full_text.strip(),
-        'segments': transcript_segments,
-        'language': info.language
-    }
+        print(f"   [{segment['start']:.2f}s -> {segment['end']:.2f}s] {segment['text']}")
+
+    return transcript
 
 def _run_gemini_stage(client, model_name, prompt, schema):
     """One schema-enforced Gemini call with transient-error backoff.
@@ -1088,7 +1047,7 @@ if __name__ == '__main__':
                     '-ss', str(start), 
                     '-to', str(end), 
                     '-i', input_video,
-                    '-c:v', 'libx264', '-crf', '18', '-preset', 'fast',
+                    *video_encode_args(QUALITY_FAST),
                     '-c:a', 'aac',
                     clip_temp_path
                 ]
