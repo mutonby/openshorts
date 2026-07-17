@@ -164,21 +164,34 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     <p className="eyebrow mb-2">Output format</p>
                     <div className="grid grid-cols-3 gap-2">
                         {[
-                            { value: 'vertical', label: '9:16', hint: 'Shorts / Reels / TikTok' },
-                            { value: 'square', label: '1:1', hint: 'Feed posts' },
-                            { value: 'horizontal', label: '16:9', hint: 'Keep landscape' },
-                        ].map((f) => (
-                            <button
-                                key={f.value}
-                                type="button"
-                                onClick={() => setOutputFormat(f.value)}
-                                title={f.hint}
-                                className={`py-2 rounded-input border text-center transition-colors
-                                    ${outputFormat === f.value ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
-                            >
-                                <span className="block font-mono text-sm">{f.label}</span>
-                            </button>
-                        ))}
+                            { value: 'vertical', label: '9:16', hint: 'Shorts · Reels · TikTok', w: 18, h: 32 },
+                            { value: 'square', label: '1:1', hint: 'Feed posts', w: 28, h: 28 },
+                            { value: 'horizontal', label: '16:9', hint: 'Keep landscape · YouTube', w: 36, h: 20 },
+                        ].map((f) => {
+                            const active = outputFormat === f.value;
+                            return (
+                                <button
+                                    key={f.value}
+                                    type="button"
+                                    onClick={() => setOutputFormat(f.value)}
+                                    className={`py-3 px-2 rounded-input border flex flex-col items-center gap-2 transition-colors
+                                        ${active ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
+                                >
+                                    {/* Aspect-ratio glyph */}
+                                    <span
+                                        className="rounded-[3px] border-2 transition-colors"
+                                        style={{
+                                            width: `${f.w}px`,
+                                            height: `${f.h}px`,
+                                            borderColor: active ? 'var(--color-accent)' : 'var(--color-rule-2)',
+                                            backgroundColor: active ? 'color-mix(in srgb, var(--color-accent) 22%, transparent)' : 'transparent',
+                                        }}
+                                    />
+                                    <span className="block font-mono text-sm leading-none">{f.label}</span>
+                                    <span className="block text-[10px] leading-tight text-center text-muted">{f.hint}</span>
+                                </button>
+                            );
+                        })}
                     </div>
                 </div>
 
