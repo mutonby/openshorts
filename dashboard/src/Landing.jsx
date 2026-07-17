@@ -81,7 +81,7 @@ export default function Landing({ onLaunchApp }) {
     {
       icon: Sparkles,
       title: "AI Viral Moment Detection",
-      description: "Google Gemini 3.0 Flash scores your transcript and scenes to find the 3-15 most engaging moments."
+      description: "Google Gemini 3.0 Flash scores your transcript and scenes to find the 3-15 most engaging moments. Automatic AI clipping, no manual scrubbing."
     },
     {
       icon: Scissors,
@@ -195,7 +195,7 @@ export default function Landing({ onLaunchApp }) {
     },
     {
       question: "Is there a free open source clip generator?",
-      answer: "Yes — OpenShorts is a 100% free, open source clip generator. Unlike paid clip generators like Opus Clip ($15-228/month) or Kapwing ($24-79/month), OpenShorts lets you generate unlimited clips with no watermarks, no usage limits, and no subscription fees. It also includes a free AI YouTube thumbnail generator, free AI YouTube title generator, and free AI YouTube description generator — features that other clip generators charge extra for. You self-host it with Docker on your own machine for full privacy and control."
+      answer: "Yes — OpenShorts is a 100% free, open source clip generator (also known as open source clipping software or an AI video clipper). Unlike paid clip generators like Opus Clip ($15-228/month) or Kapwing ($24-79/month), OpenShorts lets you generate unlimited clips with no watermarks, no usage limits, and no subscription fees. It also includes a free AI YouTube thumbnail generator, free AI YouTube title generator, and free AI YouTube description generator — features that other clip generators charge extra for. You self-host it with Docker on your own machine for full privacy and control."
     },
     {
       question: "What are the system requirements to run OpenShorts?",
@@ -247,11 +247,11 @@ export default function Landing({ onLaunchApp }) {
             <p className="eyebrow mb-6">00 · AI Clip Generator · Cloud or Self-Hosted</p>
 
             <h1 className="hero-h1 mb-6">
-              built to <em>clip</em> what people actually watch.
+              the free open source ai <em>clip generator</em>, built to clip what people actually watch.
             </h1>
 
             <p className="hero-description text-muted max-w-2xl mb-8 leading-relaxed lowercase">
-              the free open source ai clip generator — turn long videos into viral 9:16 shorts. in the cloud, zero setup.
+              turn long videos into viral 9:16 shorts, or generate ugc marketing videos with ai actors. online, in the cloud, zero setup.
             </p>
 
             <div className="flex flex-wrap items-center gap-4 mb-5">
@@ -359,7 +359,6 @@ export default function Landing({ onLaunchApp }) {
                 playsInline
                 preload="metadata"
               />
-              <span className="crop-window" aria-hidden="true" />
             </figure>
             <div className="crop-leader" aria-hidden="true">
               <span className="readout whitespace-nowrap">AI Tracking → 9:16</span>
@@ -450,7 +449,7 @@ export default function Landing({ onLaunchApp }) {
               <p className="eyebrow mb-4">01 · Clips</p>
               <Scissors size={20} className="text-brass mb-4" />
               <h3 className="font-display text-2xl lowercase text-ink mb-2">Clip Generator</h3>
-              <p className="text-muted text-sm leading-relaxed mb-4">Turn long-form videos into viral-ready 9:16 shorts.</p>
+              <p className="text-muted text-sm leading-relaxed mb-4">Open source AI clipping tool: turn long-form videos into viral-ready 9:16 shorts.</p>
               <ul className="space-y-1.5">
                 {['AI viral moment detection', 'Smart face-tracking crop', 'Auto subtitles + AI dubbing in 30+ languages'].map((f, i) => (
                   <li key={i} className="flex items-center gap-2 text-xs text-muted"><Check size={12} className="text-ok shrink-0" />{f}</li>
@@ -487,7 +486,7 @@ export default function Landing({ onLaunchApp }) {
       <section id="features" className="py-20 px-6 border-t border-rule">
         <div className="max-w-6xl mx-auto">
           <SectionHeader eyebrow="05 · Features" title="Free AI Clip Generator + UGC Video Creator">
-            The free open source clip generator & AI UGC video creator.
+            The free open source clip generator & AI UGC video creator. A smart AI video clipper for TikTok, Reels & Shorts.
           </SectionHeader>
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
             {features.map((feature, i) => (
