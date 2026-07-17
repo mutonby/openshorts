@@ -251,7 +251,7 @@ export default function Landing({ onLaunchApp }) {
             </h1>
 
             <p className="hero-description text-muted max-w-2xl mb-8 leading-relaxed lowercase">
-              turn long videos into viral 9:16 clips. in the cloud, zero setup.
+              the free open source ai clip generator — turn long videos into viral 9:16 shorts. in the cloud, zero setup.
             </p>
 
             <div className="flex flex-wrap items-center gap-4 mb-5">
