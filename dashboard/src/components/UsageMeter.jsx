@@ -16,12 +16,12 @@ export default function UsageMeter({ onClick }) {
     <button
       onClick={onClick}
       title="Manage your plan"
-      className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs transition-colors ${low ? 'border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20' : 'border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10'}`}
+      className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-rule2 bg-paper2 hover:bg-paper3 transition-colors"
     >
-      <Zap size={13} className={low ? 'text-amber-400' : 'text-primary'} />
-      <span className="font-medium">{remaining} min</span>
-      <span className="w-12 h-1.5 rounded-full bg-white/10 overflow-hidden hidden sm:inline-block">
-        <span className={`block h-full ${low ? 'bg-amber-400' : 'bg-primary'}`} style={{ width: `${pct}%` }} />
+      <Zap size={14} className={low ? 'text-warn' : 'text-brass'} />
+      <span className={`readout ${low ? 'text-warn' : ''}`}>{remaining} min</span>
+      <span className="w-12 h-1.5 rounded-full bg-paper3 overflow-hidden hidden sm:inline-block">
+        <span className={`block h-full ${low ? 'bg-warn' : 'bg-brass'}`} style={{ width: `${pct}%` }} />
       </span>
     </button>
   );

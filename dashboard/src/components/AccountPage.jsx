@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Loader2, CreditCard, LogOut, Zap, Plus } from 'lucide-react';
+import { Loader2, CreditCard, LogOut, Plus } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiJson } from '../lib/api';
 
@@ -62,76 +62,77 @@ export default function AccountPage() {
     } catch (e) { setBusy(false); alert('Could not start checkout.'); }
   }, []);
 
-  if (!me) return <div className="flex justify-center py-16"><Loader2 className="animate-spin text-primary" /></div>;
+  if (!me) return <div className="flex justify-center py-16"><Loader2 className="animate-spin text-brass" /></div>;
 
   const m = minutes || {};
   const total = (m.plan_allowance || 0) + (m.topup_remaining || 0) + (m.plan_used || 0);
   const usedPct = total > 0 ? Math.min(100, ((m.plan_used || 0) / (m.plan_allowance || 1)) * 100) : 0;
+  const low = total > 0 && (m.remaining || 0) <= total * 0.2;
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-end justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold">Your account</h2>
-          <p className="text-zinc-400 text-sm">{me.user?.email}</p>
+          <p className="eyebrow mb-1.5">ACCOUNT</p>
+          <h2 className="font-display lowercase text-2xl text-ink leading-tight">Your account</h2>
+          <p className="text-muted text-sm mt-1">{me.user?.email}</p>
         </div>
-        <button onClick={logout} className="text-zinc-400 hover:text-white flex items-center gap-2 text-sm">
+        <button onClick={logout} className="btn-quiet shrink-0">
           <LogOut size={16} /> Sign out
         </button>
       </div>
 
       {activating && (
-        <div className="bg-primary/10 border border-primary/30 rounded-xl p-4 text-sm flex items-center gap-2">
-          <Loader2 size={16} className="animate-spin" /> Activating your plan…
+        <div className="card px-4 py-3 text-sm text-ink2 flex items-center gap-2 lowercase">
+          <Loader2 size={16} className="animate-spin text-brass" /> Activating your plan…
         </div>
       )}
 
-      <div className="bg-surface border border-white/10 rounded-2xl p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <span className="text-lg font-semibold capitalize">{plan ? `${plan} plan` : 'No active plan'}</span>
+      <div className="card p-6">
+        <div className="flex items-center justify-between gap-4 mb-4">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-ink font-medium capitalize">{plan ? `${plan} plan` : 'No active plan'}</span>
             {me.status && me.status !== 'active' && (
-              <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400">{me.status}</span>
+              <span className="badge-warn">{me.status}</span>
             )}
             {me.cancel_at_period_end && (
-              <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-zinc-500/20 text-zinc-300">cancels at period end</span>
+              <span className="badge-warn">cancels at period end</span>
             )}
           </div>
-          <button onClick={openPortal} disabled={busy}
-            className="text-sm bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg flex items-center gap-2">
+          <button onClick={openPortal} disabled={busy} className="btn-ghost px-4 py-2 shrink-0">
             <CreditCard size={16} /> Manage billing
           </button>
         </div>
 
         <div className="space-y-2">
           <div className="flex justify-between text-sm">
-            <span className="text-zinc-400">Plan minutes</span>
-            <span>{fmt1(m.plan_used)} / {fmt1(m.plan_allowance)} used</span>
+            <span className="text-muted lowercase">Plan minutes</span>
+            <span className="text-ink2">{fmt1(m.plan_used)} / {fmt1(m.plan_allowance)} used</span>
           </div>
-          <div className="h-2 bg-white/10 rounded-full overflow-hidden">
-            <div className="h-full bg-primary transition-all" style={{ width: `${usedPct}%` }} />
+          <div className="h-1.5 bg-paper3 rounded-full overflow-hidden">
+            <div className={`h-full transition-all ${low ? 'bg-warn' : 'bg-brass'}`} style={{ width: `${usedPct}%` }} />
           </div>
           <div className="flex justify-between text-sm pt-1">
-            <span className="text-zinc-400">Top-up minutes</span>
-            <span>{fmt1(m.topup_remaining)} remaining</span>
+            <span className="text-muted lowercase">Top-up minutes</span>
+            <span className="text-ink2">{fmt1(m.topup_remaining)} remaining</span>
           </div>
-          <div className="flex justify-between text-base font-semibold pt-2 border-t border-white/5">
-            <span>Total remaining</span>
-            <span className="text-primary">{fmt1(m.remaining)} min</span>
+          <div className="flex justify-between text-sm pt-2 border-t border-rule">
+            <span className="text-ink font-medium lowercase">Total remaining</span>
+            <span className="text-brass font-medium">{fmt1(m.remaining)} min</span>
           </div>
         </div>
       </div>
 
       {topups.length > 0 && (
-        <div className="bg-surface border border-white/10 rounded-2xl p-6">
-          <h3 className="font-semibold mb-1 flex items-center gap-2"><Plus size={16} /> Buy more minutes</h3>
-          <p className="text-zinc-400 text-sm mb-4">Top-ups never expire while your plan is active.</p>
+        <div className="card p-6">
+          <h3 className="font-display lowercase text-lg text-ink mb-1 flex items-center gap-2"><Plus size={16} className="text-brass" /> Buy more minutes</h3>
+          <p className="text-muted text-sm mb-4 lowercase">Top-ups never expire while your plan is active.</p>
           <div className="grid grid-cols-2 gap-3">
             {topups.map((t) => (
               <button key={t.price_id} onClick={() => buyTopup(t.price_id)} disabled={busy}
-                className="border border-white/10 hover:border-primary rounded-xl p-4 text-left transition-all">
-                <div className="text-lg font-bold">+{t.minutes} min</div>
-                <div className="text-zinc-400 text-sm">
+                className="border border-rule hover:border-brass rounded-card p-4 text-left transition-colors disabled:opacity-50">
+                <div className="text-ink font-medium">+{t.minutes} min</div>
+                <div className="readout mt-1">
                   {new Intl.NumberFormat('en-US', { style: 'currency', currency: (t.currency || 'usd').toUpperCase(), maximumFractionDigits: 0 }).format((t.amount || 0) / 100)}
                 </div>
               </button>

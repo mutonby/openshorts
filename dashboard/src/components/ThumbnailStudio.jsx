@@ -1,37 +1,14 @@
-import React, { useState, useRef, useCallback } from 'react';
-import { Upload, Image, Loader2, Send, Check, Download, ArrowRight, ArrowLeft, Sparkles, Video, Type, X, Plus, MessageSquare, FileText, Youtube, AlertCircle, CheckCircle2, Settings } from 'lucide-react';
+import { useState, useRef, useCallback } from 'react';
+import { Upload, Image, Loader2, Send, Check, Download, ArrowRight, ArrowLeft, Sparkles, Video, Type, X, Plus, MessageSquare, FileText, Youtube, AlertCircle, Settings } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
+import StepIndicator from './ui/StepIndicator';
+import SegmentedControl from './ui/SegmentedControl';
 
 const STEPS = ['Input', 'Titles', 'Generate', 'Description', 'Publish'];
 
-function StepIndicator({ currentStep }) {
-  return (
-    <div className="flex items-center gap-2 mb-8">
-      {STEPS.map((label, i) => (
-        <React.Fragment key={label}>
-          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${i < currentStep ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
-            i === currentStep ? 'bg-primary/20 text-primary border border-primary/30' :
-              'bg-white/5 text-zinc-500 border border-white/5'
-            }`}>
-            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${i < currentStep ? 'bg-green-500 text-black' :
-              i === currentStep ? 'bg-primary text-black' :
-                'bg-white/10 text-zinc-500'
-              }`}>
-              {i < currentStep ? <Check size={10} /> : i + 1}
-            </span>
-            <span className="hidden sm:inline">{label}</span>
-          </div>
-          {i < STEPS.length - 1 && (
-            <div className={`w-8 h-px ${i < currentStep ? 'bg-green-500/50' : 'bg-white/10'}`} />
-          )}
-        </React.Fragment>
-      ))}
-    </div>
-  );
-}
-
-function DragDropZone({ label, accept, onFile, file, onClear, icon: Icon }) {
+function DragDropZone({ label, accept, onFile, file, onClear, icon }) {
+  const Icon = icon;
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef(null);
 
@@ -49,20 +26,20 @@ function DragDropZone({ label, accept, onFile, file, onClear, icon: Icon }) {
 
   if (file) {
     return (
-      <div className="relative border border-white/10 rounded-xl p-3 bg-white/5">
+      <div className="relative border border-rule2 rounded-card p-3 bg-paper3">
         <div className="flex items-center gap-3">
           {file.type?.startsWith('image/') ? (
-            <img src={URL.createObjectURL(file)} className="w-12 h-12 rounded-lg object-cover" alt="" />
+            <img src={URL.createObjectURL(file)} className="w-12 h-12 rounded-input object-cover" alt="" />
           ) : (
-            <div className="w-12 h-12 rounded-lg bg-white/10 flex items-center justify-center">
-              <Icon size={20} className="text-zinc-400" />
+            <div className="w-12 h-12 rounded-input bg-paper2 border border-rule flex items-center justify-center">
+              <Icon size={18} className="text-muted" />
             </div>
           )}
           <div className="flex-1 min-w-0">
-            <p className="text-sm text-white truncate">{file.name}</p>
-            <p className="text-xs text-zinc-500">{(file.size / 1024 / 1024).toFixed(1)} MB</p>
+            <p className="text-sm text-ink truncate">{file.name}</p>
+            <p className="readout mt-0.5">{(file.size / 1024 / 1024).toFixed(1)} MB</p>
           </div>
-          <button onClick={onClear} className="text-zinc-500 hover:text-white transition-colors">
+          <button onClick={onClear} className="text-muted hover:text-ink transition-colors">
             <X size={16} />
           </button>
         </div>
@@ -76,12 +53,12 @@ function DragDropZone({ label, accept, onFile, file, onClear, icon: Icon }) {
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       onDragLeave={() => setIsDragging(false)}
-      className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${isDragging ? 'border-primary/50 bg-primary/5' : 'border-white/10 hover:border-white/20 bg-white/[0.02]'
+      className={`border-2 border-dashed rounded-card p-6 text-center cursor-pointer transition-colors duration-200 ${isDragging ? 'border-brass bg-paper3' : 'border-rule2 hover:border-brass'
         }`}
     >
-      <Icon size={24} className="mx-auto text-zinc-500 mb-2" />
-      <p className="text-sm text-zinc-400">{label}</p>
-      <p className="text-xs text-zinc-600 mt-1">Drop or click to upload</p>
+      <Icon size={18} className="mx-auto text-muted mb-2" />
+      <p className="text-sm text-ink2 lowercase">{label}</p>
+      <p className="text-xs text-muted mt-1 lowercase">Drop or click to upload</p>
       <input
         ref={inputRef}
         type="file"
@@ -202,7 +179,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
       setRecommended(data.recommended || []);
       setChatHistory([{
         role: 'assistant',
-        content: `Here are 10 viral title suggestions based on your video. Titles marked ⭐ are my top picks. Click one to select it, or tell me how to refine them.`
+        content: `Here are 10 viral title suggestions based on your video. Titles marked TOP PICK are my top picks. Click one to select it, or tell me how to refine them.`
       }]);
       setStep(1);
     } catch (e) {
@@ -331,7 +308,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(blobUrl);
-    } catch (e) {
+    } catch {
       // Fallback: open in new tab if fetch fails
       window.open(getApiUrl(url), '_blank');
     }
@@ -457,33 +434,38 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
   };
 
   return (
-    <div className="h-full overflow-y-auto p-6 md:p-8 animate-[fadeIn_0.3s_ease-out]">
+    <div className="h-full overflow-y-auto p-6 md:p-8 animate-fade">
       <div className="max-w-5xl mx-auto">
         {/* Header */}
-        <div className="flex items-center justify-between mb-2">
-          <h1 className="text-2xl font-bold flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 to-pink-600 flex items-center justify-center">
-              <Image size={20} className="text-white" />
-            </div>
-            YouTube Studio
-          </h1>
+        <div className="flex items-end justify-between mb-2">
+          <div>
+            <p className="eyebrow mb-2">05 · YOUTUBE STUDIO</p>
+            <h1 className="font-display lowercase text-2xl text-ink flex items-center gap-3">
+              <span className="w-10 h-10 rounded-card bg-paper3 flex items-center justify-center">
+                <Image size={18} className="text-brass" />
+              </span>
+              YouTube Studio
+            </h1>
+          </div>
           {step > 0 && (
-            <button onClick={handleReset} className="text-xs text-zinc-500 hover:text-white transition-colors flex items-center gap-1">
+            <button onClick={handleReset} className="text-xs lowercase text-muted hover:text-ink transition-colors flex items-center gap-1">
               <Plus size={12} /> New Project
             </button>
           )}
         </div>
-        <p className="text-sm text-zinc-500 mb-6">Generate viral titles, AI thumbnails, descriptions and publish directly to YouTube</p>
+        <p className="text-sm lowercase text-muted mb-6">Generate viral titles, AI thumbnails, descriptions and publish directly to YouTube</p>
 
-        <StepIndicator currentStep={step} />
+        <div className="mb-8">
+          <StepIndicator steps={STEPS} current={step} />
+        </div>
 
         {/* Gemini API Key Warning (self-host BYOK only; managed uses server key) */}
         {needsKey && (
-          <div className="mb-6 p-5 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-start gap-3">
-            <AlertCircle size={20} className="text-amber-400 shrink-0 mt-0.5" />
+          <div className="mb-6 p-5 bg-warn/10 rounded-card flex items-start gap-3">
+            <AlertCircle size={18} className="text-warn shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-semibold text-amber-300">Gemini API Key Required</p>
-              <p className="text-xs text-amber-400/70 mt-1">YouTube Studio requires a Google Gemini API key to function. Please configure it in the <strong>Settings</strong> tab before using this feature. Gemini's free tier includes 1,500 requests per day.</p>
+              <p className="text-sm font-medium text-warn lowercase">Gemini API Key Required</p>
+              <p className="text-xs text-muted mt-1">YouTube Studio requires a Google Gemini API key to function. Please configure it in the <strong>Settings</strong> tab before using this feature. Gemini's free tier includes 1,500 requests per day.</p>
             </div>
           </div>
         )}
@@ -492,14 +474,14 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
         {step === 0 && (
           <div className={`grid md:grid-cols-2 gap-6 ${needsKey ? 'opacity-50 pointer-events-none select-none' : ''}`}>
             {/* Mode A: Video Analysis */}
-            <div className="glass-panel p-6 space-y-4">
+            <div className="card card-hover p-6 space-y-4">
               <div className="flex items-center gap-3 mb-2">
-                <div className="w-8 h-8 rounded-lg bg-blue-500/20 flex items-center justify-center">
-                  <Video size={16} className="text-blue-400" />
+                <div className="w-8 h-8 rounded-input bg-paper3 flex items-center justify-center">
+                  <Video size={16} className="text-brass" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-white">Analyze Video</h3>
-                  <p className="text-xs text-zinc-500">AI suggests viral titles from your content</p>
+                  <p className="eyebrow">A · ANALYZE VIDEO</p>
+                  <p className="text-xs text-muted mt-0.5">AI suggests viral titles from your content</p>
                 </div>
               </div>
 
@@ -513,13 +495,13 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
               />
 
               {isPreprocessing && (
-                <div className="flex items-center gap-2 text-xs text-blue-400 bg-blue-500/10 border border-blue-500/20 rounded-lg px-3 py-2">
-                  <Loader2 size={12} className="animate-spin" />
+                <div className="flex items-center gap-2 text-xs lowercase text-muted bg-paper3 rounded-input px-3 py-2">
+                  <Loader2 size={12} className="animate-spin text-brass" />
                   Pre-processing video (Whisper transcription starting)...
                 </div>
               )}
               {preprocessSessionId && !isPreprocessing && (
-                <div className="flex items-center gap-2 text-xs text-green-400 bg-green-500/10 border border-green-500/20 rounded-lg px-3 py-2">
+                <div className="flex items-center gap-2 text-xs lowercase text-ok bg-ok/10 rounded-input px-3 py-2">
                   <Check size={12} />
                   Video uploaded — transcription running in background
                 </div>
@@ -528,7 +510,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
               <button
                 onClick={handleAnalyze}
                 disabled={isAnalyzing || !videoFile}
-                className="w-full btn-primary py-3 text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full btn-primary"
               >
                 {isAnalyzing ? (
                   <>
@@ -537,22 +519,22 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                   </>
                 ) : (
                   <>
-                    <Sparkles size={16} />
-                    Analyze & Get Titles
+                    <Sparkles size={16} className="hidden sm:block" />
+                    <span className="whitespace-nowrap">Analyze & Get Titles</span>
                   </>
                 )}
               </button>
             </div>
 
             {/* Mode B: Manual Title */}
-            <div className="glass-panel p-6 space-y-4 flex flex-col">
+            <div className="card card-hover p-6 space-y-4 flex flex-col">
               <div className="flex items-center gap-3 mb-2">
-                <div className="w-8 h-8 rounded-lg bg-purple-500/20 flex items-center justify-center">
-                  <Type size={16} className="text-purple-400" />
+                <div className="w-8 h-8 rounded-input bg-paper3 flex items-center justify-center">
+                  <Type size={16} className="text-brass" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-white">Write Your Own</h3>
-                  <p className="text-xs text-zinc-500">Skip analysis, enter your title directly</p>
+                  <p className="eyebrow">B · WRITE YOUR OWN</p>
+                  <p className="text-xs text-muted mt-0.5">Skip analysis, enter your title directly</p>
                 </div>
               </div>
 
@@ -565,13 +547,13 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                   className="input-field text-sm mb-4"
                   maxLength={70}
                 />
-                <p className="text-xs text-zinc-600 mb-4">{manualTitle.length}/70 characters</p>
+                <p className="readout mb-4">{manualTitle.length} / 70</p>
               </div>
 
               <button
                 onClick={handleManualMode}
                 disabled={!manualTitle.trim()}
-                className="w-full py-3 bg-white/5 hover:bg-white/10 text-white rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors border border-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full btn-ghost disabled:opacity-45 disabled:cursor-not-allowed"
               >
                 <ArrowRight size={16} />
                 Use This Title
@@ -586,8 +568,8 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
             {/* Left: Chat / Controls */}
             <div className="md:col-span-2 flex flex-col gap-4">
               {mode === 'manual' ? (
-                <div className="glass-panel p-6 space-y-4">
-                  <h3 className="text-sm font-semibold text-white">Your Title</h3>
+                <div className="card p-6 space-y-4">
+                  <p className="eyebrow">YOUR TITLE</p>
                   <input
                     type="text"
                     value={manualTitle}
@@ -595,30 +577,30 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                     className="input-field text-sm"
                     maxLength={70}
                   />
-                  <p className="text-xs text-zinc-600">{manualTitle.length}/70 characters</p>
+                  <p className="readout">{manualTitle.length} / 70</p>
                   <button
                     onClick={handleConfirmTitle}
                     disabled={!manualTitle.trim()}
-                    className="w-full btn-primary py-3 text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-50"
+                    className="w-full btn-primary"
                   >
                     <ArrowRight size={16} />
                     Continue to Thumbnails
                   </button>
                 </div>
               ) : (
-                <div className="glass-panel p-4 flex flex-col h-[500px]">
-                  <div className="flex items-center gap-2 mb-3 pb-3 border-b border-white/5">
-                    <MessageSquare size={14} className="text-primary" />
-                    <span className="text-xs font-medium text-zinc-400">Title Refinement Chat</span>
+                <div className="card p-4 flex flex-col h-[500px]">
+                  <div className="flex items-center gap-2 mb-3 pb-3 border-b border-rule">
+                    <MessageSquare size={14} className="text-brass" />
+                    <span className="eyebrow">TITLE REFINEMENT CHAT</span>
                   </div>
 
                   {/* Chat messages */}
                   <div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar mb-3">
                     {chatHistory.map((msg, i) => (
                       <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[90%] px-3 py-2 rounded-xl text-xs ${msg.role === 'user'
-                          ? 'bg-primary/20 text-primary border border-primary/20'
-                          : 'bg-white/5 text-zinc-300 border border-white/5'
+                        <div className={`max-w-[90%] px-3 py-2 rounded-card text-xs ${msg.role === 'user'
+                          ? 'bg-paper3 text-ink2'
+                          : 'border border-rule text-ink2'
                           }`}>
                           {msg.content}
                         </div>
@@ -641,9 +623,9 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                     <button
                       onClick={handleRefine}
                       disabled={isRefining || !chatInput.trim()}
-                      className="btn-primary p-2 rounded-xl disabled:opacity-50"
+                      className="btn-quiet px-3 disabled:opacity-45 disabled:cursor-not-allowed"
                     >
-                      {isRefining ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                      {isRefining ? <Loader2 size={14} className="animate-spin text-brass" /> : <Send size={14} />}
                     </button>
                   </div>
                 </div>
@@ -652,7 +634,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
               {mode !== 'manual' && selectedTitle && (
                 <button
                   onClick={handleConfirmTitle}
-                  className="w-full btn-primary py-3 text-sm font-semibold flex items-center justify-center gap-2"
+                  className="w-full btn-primary"
                 >
                   <ArrowRight size={16} />
                   Use Selected Title
@@ -663,9 +645,9 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
             {/* Right: Title Cards */}
             <div className="md:col-span-3 space-y-3">
               {selectedTitle && (
-                <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-xl flex items-center gap-2 text-sm">
-                  <Check size={14} className="text-green-400 shrink-0" />
-                  <span className="text-green-300 font-medium truncate">Selected: {selectedTitle}</span>
+                <div className="p-3 bg-ok/10 rounded-card flex items-center gap-2 text-sm">
+                  <Check size={14} className="text-ok shrink-0" />
+                  <span className="text-ok font-medium truncate">Selected: {selectedTitle}</span>
                 </div>
               )}
 
@@ -678,17 +660,15 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                       <button
                         key={i}
                         onClick={() => handleSelectTitle(title)}
-                        className={`w-full text-left p-4 rounded-xl border transition-all text-sm ${selectedTitle === title
-                          ? 'bg-primary/10 border-primary/30 text-white'
-                          : rec
-                            ? 'bg-amber-500/5 border-amber-500/20 text-zinc-200 hover:bg-amber-500/10'
-                            : 'bg-white/[0.02] border-white/5 text-zinc-300 hover:bg-white/5 hover:border-white/10'
+                        className={`w-full text-left p-4 rounded-card border transition-colors duration-200 text-sm ${selectedTitle === title
+                          ? 'bg-paper3 border-brass text-ink'
+                          : 'border-rule text-ink2 hover:bg-paper3 hover:border-rule2'
                           }`}
                       >
                         <div className="flex items-start gap-3">
-                          <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5 ${selectedTitle === title ? 'bg-primary text-black' :
-                            rec ? 'bg-amber-400 text-black' :
-                              'bg-white/10 text-zinc-500'
+                          <span className={`w-6 h-6 rounded-full border flex items-center justify-center font-mono text-micro shrink-0 mt-0.5 ${selectedTitle === title ? 'bg-brass border-brass text-brassink' :
+                            rec ? 'border-rule2 text-brass' :
+                              'border-rule text-muted'
                             }`}>
                             {selectedTitle === title ? <Check size={10} /> : rec ? '★' : i + 1}
                           </span>
@@ -696,13 +676,13 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="leading-relaxed">{title}</span>
                               {rec && (
-                                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-400/20 text-amber-400 border border-amber-400/30 shrink-0">
-                                  {recRank === 0 ? '⭐ TOP PICK' : '⭐ 2nd PICK'}
+                                <span className="badge-brass shrink-0">
+                                  {recRank === 0 ? 'TOP PICK' : '2ND PICK'}
                                 </span>
                               )}
                             </div>
                             {rec && (
-                              <p className="text-[11px] text-amber-300/70 mt-1.5 leading-relaxed italic">{rec.reason}</p>
+                              <p className="text-xs text-muted mt-1.5 leading-relaxed">{rec.reason}</p>
                             )}
                           </div>
                         </div>
@@ -713,9 +693,9 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
               )}
 
               {isRefining && (
-                <div className="flex items-center justify-center py-8 text-zinc-500">
-                  <Loader2 size={20} className="animate-spin mr-2" />
-                  <span className="text-sm">Refining titles...</span>
+                <div className="flex items-center justify-center py-8 text-muted">
+                  <Loader2 size={18} className="animate-spin mr-2 text-brass" />
+                  <span className="text-sm lowercase">Refining titles...</span>
                 </div>
               )}
             </div>
@@ -727,22 +707,22 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
           <div className="grid md:grid-cols-5 gap-6">
             {/* Left: Controls */}
             <div className="md:col-span-2 space-y-4">
-              <div className="glass-panel p-6 space-y-4">
-                <h3 className="text-sm font-semibold text-white mb-1">Selected Title</h3>
-                <div className="p-3 bg-primary/10 border border-primary/20 rounded-lg text-sm text-primary">
+              <div className="card p-6 space-y-4">
+                <p className="eyebrow mb-1">TITLE</p>
+                <div className="p-3 bg-paper3 border border-rule rounded-input text-sm text-ink">
                   {selectedTitle || manualTitle}
                 </div>
 
                 <button
                   onClick={() => setStep(1)}
-                  className="text-xs text-zinc-500 hover:text-white transition-colors flex items-center gap-1"
+                  className="text-xs lowercase text-muted hover:text-ink transition-colors flex items-center gap-1"
                 >
                   <ArrowLeft size={12} /> Change title
                 </button>
               </div>
 
-              <div className="glass-panel p-6 space-y-4">
-                <h3 className="text-sm font-semibold text-white">Face Image <span className="text-zinc-600 font-normal">(optional)</span></h3>
+              <div className="card p-6 space-y-4">
+                <p className="eyebrow">FACE IMAGE · OPTIONAL</p>
                 <DragDropZone
                   label="Upload face / person photo"
                   accept="image/*"
@@ -753,8 +733,8 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                 />
               </div>
 
-              <div className="glass-panel p-6 space-y-4">
-                <h3 className="text-sm font-semibold text-white">Background Image <span className="text-zinc-600 font-normal">(optional)</span></h3>
+              <div className="card p-6 space-y-4">
+                <p className="eyebrow">BACKGROUND · OPTIONAL</p>
                 <DragDropZone
                   label="Upload background image"
                   accept="image/*"
@@ -765,8 +745,8 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                 />
               </div>
 
-              <div className="glass-panel p-6 space-y-4">
-                <h3 className="text-sm font-semibold text-white">Extra Instructions <span className="text-zinc-600 font-normal">(optional)</span></h3>
+              <div className="card p-6 space-y-4">
+                <p className="eyebrow">INSTRUCTIONS · OPTIONAL</p>
                 <textarea
                   value={extraPrompt}
                   onChange={(e) => setExtraPrompt(e.target.value)}
@@ -775,28 +755,20 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                 />
               </div>
 
-              <div className="glass-panel p-6 space-y-4">
-                <h3 className="text-sm font-semibold text-white">Number of Thumbnails</h3>
-                <div className="flex gap-2">
-                  {[1, 2, 3, 4].map(n => (
-                    <button
-                      key={n}
-                      onClick={() => setThumbnailCount(n)}
-                      className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${thumbnailCount === n
-                        ? 'bg-primary/20 text-primary border border-primary/30'
-                        : 'bg-white/5 text-zinc-400 border border-white/5 hover:bg-white/10'
-                        }`}
-                    >
-                      {n}
-                    </button>
-                  ))}
-                </div>
+              <div className="card p-6 space-y-4">
+                <p className="eyebrow">COUNT</p>
+                <SegmentedControl
+                  options={[1, 2, 3, 4].map(n => ({ value: n, label: String(n) }))}
+                  value={thumbnailCount}
+                  onChange={setThumbnailCount}
+                  size="sm"
+                />
               </div>
 
               <button
                 onClick={handleGenerate}
                 disabled={isGenerating}
-                className="w-full btn-primary py-4 text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full btn-primary"
               >
                 {isGenerating ? (
                   <>
@@ -817,13 +789,13 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
             <div className="md:col-span-3">
               {generatedThumbnails.length > 0 ? (
                 <div className="space-y-4">
-                  <h3 className="text-sm font-semibold text-zinc-400">Generated Thumbnails — click to select for publishing</h3>
+                  <p className="text-sm lowercase text-muted">Generated Thumbnails — click to select for publishing</p>
                   <div className="grid gap-4">
                     {generatedThumbnails.map((url, i) => (
                       <div
                         key={i}
                         onClick={() => setSelectedThumbnail(url)}
-                        className={`glass-panel overflow-hidden group relative cursor-pointer transition-all ${selectedThumbnail === url ? 'ring-2 ring-primary ring-offset-2 ring-offset-background' : ''
+                        className={`glass-panel overflow-hidden group relative cursor-pointer transition-colors duration-200 ${selectedThumbnail === url ? 'border-2 border-brass' : ''
                           }`}
                       >
                         <img
@@ -834,22 +806,22 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center gap-3 opacity-0 group-hover:opacity-100">
                           <button
                             onClick={(e) => { e.stopPropagation(); handleDownload(url); }}
-                            className="bg-white text-black px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 hover:bg-zinc-200 transition-colors"
+                            className="btn-quiet"
                           >
                             <Download size={14} />
                             Download
                           </button>
                         </div>
                         <div className="p-3 flex items-center justify-between">
-                          <span className="text-xs text-zinc-500 flex items-center gap-2">
+                          <span className="text-xs lowercase text-muted flex items-center gap-2">
                             Thumbnail {i + 1}
                             {selectedThumbnail === url && (
-                              <span className="text-primary flex items-center gap-1"><Check size={10} /> Selected</span>
+                              <span className="text-brass flex items-center gap-1"><Check size={10} /> Selected</span>
                             )}
                           </span>
                           <button
                             onClick={(e) => { e.stopPropagation(); handleDownload(url); }}
-                            className="text-xs text-zinc-400 hover:text-white transition-colors flex items-center gap-1"
+                            className="text-xs lowercase text-muted hover:text-ink transition-colors flex items-center gap-1"
                           >
                             <Download size={12} /> Save
                           </button>
@@ -862,11 +834,11 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                   <button
                     onClick={handleGenerate}
                     disabled={isGenerating}
-                    className="w-full py-3 bg-white/5 hover:bg-white/10 text-zinc-300 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-colors border border-white/10 disabled:opacity-50"
+                    className="w-full btn-ghost"
                   >
                     {isGenerating ? (
                       <>
-                        <Loader2 size={14} className="animate-spin" />
+                        <Loader2 size={14} className="animate-spin text-brass" />
                         Regenerating...
                       </>
                     ) : (
@@ -881,7 +853,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                   {selectedThumbnail && (
                     <button
                       onClick={() => setStep(3)}
-                      className="w-full btn-primary py-4 text-sm font-bold flex items-center justify-center gap-2"
+                      className="w-full btn-primary"
                     >
                       <ArrowRight size={16} />
                       Next: Description
@@ -889,21 +861,21 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                   )}
                 </div>
               ) : isGenerating ? (
-                <div className="h-full flex flex-col items-center justify-center text-zinc-500 space-y-4 min-h-[400px]">
-                  <div className="w-16 h-16 rounded-full border-2 border-zinc-800 border-t-primary animate-spin" />
+                <div className="h-full flex flex-col items-center justify-center text-muted space-y-4 min-h-[400px]">
+                  <div className="w-16 h-16 rounded-full border-2 border-rule2 border-t-brass animate-spin" />
                   <div className="text-center">
-                    <p className="text-sm font-medium text-zinc-400">Generating thumbnails...</p>
-                    <p className="text-xs text-zinc-600 mt-1">This may take a minute per thumbnail</p>
+                    <p className="text-sm lowercase font-medium text-ink2">Generating thumbnails...</p>
+                    <p className="text-xs lowercase text-muted mt-1">This may take a minute per thumbnail</p>
                   </div>
                 </div>
               ) : (
-                <div className="h-full flex flex-col items-center justify-center text-zinc-500 space-y-4 min-h-[400px]">
-                  <div className="w-20 h-20 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center">
-                    <Image size={32} className="text-zinc-600" />
+                <div className="h-full flex flex-col items-center justify-center text-muted space-y-4 min-h-[400px]">
+                  <div className="w-20 h-20 rounded-card bg-paper3 border border-rule flex items-center justify-center">
+                    <Image size={28} className="text-muted" />
                   </div>
                   <div className="text-center">
-                    <p className="text-sm text-zinc-400">Your thumbnails will appear here</p>
-                    <p className="text-xs text-zinc-600 mt-1">Configure options and click Generate</p>
+                    <p className="text-sm lowercase text-ink2">Your thumbnails will appear here</p>
+                    <p className="text-xs lowercase text-muted mt-1">Configure options and click Generate</p>
                   </div>
                 </div>
               )}
@@ -918,7 +890,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
             <div className="md:col-span-2 space-y-4">
               <button
                 onClick={() => setStep(2)}
-                className="text-xs text-zinc-500 hover:text-white transition-colors flex items-center gap-1 mb-2"
+                className="text-xs lowercase text-muted hover:text-ink transition-colors flex items-center gap-1 mb-2"
               >
                 <ArrowLeft size={12} /> Back to Generate
               </button>
@@ -932,15 +904,15 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                     className="w-full aspect-video object-cover"
                   />
                   <div className="p-3">
-                    <span className="text-xs text-green-400 flex items-center gap-1"><Check size={10} /> Selected Thumbnail</span>
+                    <span className="text-xs lowercase text-brass flex items-center gap-1"><Check size={10} /> Selected Thumbnail</span>
                   </div>
                 </div>
               )}
 
               {/* Title */}
               <div className="glass-panel p-6 space-y-3">
-                <h3 className="text-sm font-semibold text-white">Video Title</h3>
-                <div className="p-3 bg-primary/10 border border-primary/20 rounded-lg text-sm text-primary">
+                <p className="eyebrow">TITLE</p>
+                <div className="p-3 bg-paper3 border border-rule rounded-input text-sm text-ink">
                   {selectedTitle || manualTitle}
                 </div>
               </div>
@@ -949,23 +921,23 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
               {mode === 'video' && (
                 <div className="glass-panel p-6 space-y-4">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-                      <Sparkles size={14} className="text-yellow-400" />
-                      AI Description
-                    </h3>
-                    <span className="text-[10px] text-zinc-600">with chapters</span>
+                    <p className="eyebrow flex items-center gap-2">
+                      <Sparkles size={14} className="text-brass" />
+                      AI DESCRIPTION
+                    </p>
+                    <span className="readout">WITH CHAPTERS</span>
                   </div>
-                  <p className="text-xs text-zinc-500">
+                  <p className="text-xs text-muted">
                     Generate a YouTube description with chapter timestamps from your video transcript.
                   </p>
                   <button
                     onClick={handleGenerateDescription}
                     disabled={isDescribing}
-                    className="w-full py-3 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-colors border border-red-500/20 disabled:opacity-50"
+                    className="w-full btn-ghost"
                   >
                     {isDescribing ? (
                       <>
-                        <Loader2 size={14} className="animate-spin" />
+                        <Loader2 size={14} className="animate-spin text-brass" />
                         Generating description...
                       </>
                     ) : (
@@ -982,7 +954,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
               {description && (
                 <button
                   onClick={() => setStep(4)}
-                  className="w-full btn-primary py-4 text-sm font-bold flex items-center justify-center gap-2"
+                  className="w-full btn-primary"
                 >
                   <ArrowRight size={16} />
                   Next: Publish
@@ -994,11 +966,11 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
             <div className="md:col-span-3 space-y-4">
               <div className="glass-panel p-6 space-y-4 h-full flex flex-col">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-                    <FileText size={14} className="text-red-400" />
-                    YouTube Description
-                  </h3>
-                  <span className="text-[10px] text-zinc-600">{description.length}/5000</span>
+                  <p className="eyebrow flex items-center gap-2">
+                    <FileText size={14} className="text-muted" />
+                    YOUTUBE DESCRIPTION
+                  </p>
+                  <span className="readout">{description.length} / 5000</span>
                 </div>
 
                 <textarea
@@ -1013,7 +985,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                 />
 
                 {!description && (
-                  <p className="text-xs text-zinc-600">
+                  <p className="text-xs text-muted">
                     {mode === 'video'
                       ? "AI will generate a compelling description with chapter timestamps from your video's Whisper transcript."
                       : "Write a description for your YouTube video. You can proceed to publish once you have a description."}
@@ -1031,7 +1003,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
             <div className="md:col-span-2 space-y-4">
               <button
                 onClick={() => setStep(3)}
-                className="text-xs text-zinc-500 hover:text-white transition-colors flex items-center gap-1 mb-2"
+                className="text-xs lowercase text-muted hover:text-ink transition-colors flex items-center gap-1 mb-2"
               >
                 <ArrowLeft size={12} /> Back to Description
               </button>
@@ -1045,14 +1017,14 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                     className="w-full aspect-video object-cover"
                   />
                   <div className="p-3">
-                    <span className="text-xs text-green-400 flex items-center gap-1"><Check size={10} /> Selected Thumbnail</span>
+                    <span className="text-xs lowercase text-brass flex items-center gap-1"><Check size={10} /> Selected Thumbnail</span>
                   </div>
                 </div>
               )}
 
               {/* Editable Title */}
               <div className="glass-panel p-6 space-y-3">
-                <h3 className="text-sm font-semibold text-white">Video Title</h3>
+                <p className="eyebrow">TITLE</p>
                 <input
                   type="text"
                   value={selectedTitle || manualTitle}
@@ -1065,16 +1037,16 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
               {/* Publish Button */}
               {(!managed && (!uploadPostKey || !uploadUserId)) ? (
                 <div className="glass-panel p-6 space-y-3">
-                  <div className="flex items-center gap-2 text-amber-400">
+                  <div className="flex items-center gap-2 text-warn">
                     <AlertCircle size={16} />
-                    <span className="text-sm font-medium">Upload-Post Not Configured</span>
+                    <span className="text-sm font-medium lowercase">Upload-Post Not Configured</span>
                   </div>
-                  <p className="text-xs text-zinc-500">
+                  <p className="text-xs text-muted">
                     To publish directly to YouTube, configure your Upload-Post API key and connect a profile in Settings.
                   </p>
                   <button
                     onClick={() => { }}
-                    className="text-xs text-primary hover:underline flex items-center gap-1"
+                    className="text-xs lowercase text-brass hover:underline flex items-center gap-1"
                   >
                     <Settings size={12} /> Go to Settings
                   </button>
@@ -1083,7 +1055,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                 <button
                   onClick={handlePublish}
                   disabled={isPublishing}
-                  className="w-full py-4 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full btn-primary"
                 >
                   {isPublishing ? (
                     <>
@@ -1099,24 +1071,28 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                 </button>
               )}
 
+              {/* Polling status */}
+              {isPublishing && (
+                <div className="readout flex items-center gap-2">
+                  <Loader2 size={12} className="animate-spin text-brass" />
+                  UPLOADING — POLLING STATUS EVERY 2S
+                </div>
+              )}
+
               {/* Publish Result */}
               {publishResult && (
-                <div className={`glass-panel p-4 ${publishResult.success ? 'border-green-500/30' : 'border-red-500/30'}`}>
+                <div className="glass-panel p-4">
                   {publishResult.success ? (
-                    <div className="flex items-center gap-2 text-green-400">
-                      <CheckCircle2 size={16} />
-                      <div>
-                        <p className="text-sm font-medium">Published successfully!</p>
-                        <p className="text-xs text-zinc-500 mt-1">Your video is being uploaded to YouTube asynchronously.</p>
-                      </div>
+                    <div className="space-y-2">
+                      <span className="badge-ok">PUBLISHED</span>
+                      <p className="text-sm lowercase font-medium text-ink">Published successfully!</p>
+                      <p className="text-xs text-muted">Your video is being uploaded to YouTube asynchronously.</p>
                     </div>
                   ) : (
-                    <div className="flex items-center gap-2 text-red-400">
-                      <AlertCircle size={16} />
-                      <div>
-                        <p className="text-sm font-medium">Publish failed</p>
-                        <p className="text-xs text-zinc-500 mt-1">{publishResult.error}</p>
-                      </div>
+                    <div className="space-y-2">
+                      <span className="badge-danger">FAILED</span>
+                      <p className="text-sm lowercase font-medium text-danger">Publish failed</p>
+                      <p className="text-xs text-muted">{publishResult.error}</p>
                     </div>
                   )}
                 </div>
@@ -1127,13 +1103,13 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
             <div className="md:col-span-3 space-y-4">
               <div className="glass-panel p-6 space-y-4 h-full flex flex-col">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-                    <FileText size={14} className="text-red-400" />
-                    YouTube Description
-                  </h3>
+                  <p className="eyebrow flex items-center gap-2">
+                    <FileText size={14} className="text-muted" />
+                    YOUTUBE DESCRIPTION
+                  </p>
                   <button
                     onClick={() => setStep(3)}
-                    className="text-xs text-zinc-400 hover:text-white flex items-center gap-1 transition-colors"
+                    className="text-xs lowercase text-muted hover:text-ink flex items-center gap-1 transition-colors"
                   >
                     <ArrowLeft size={10} /> Edit
                   </button>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, FileVideo, Sparkles, Youtube, Instagram, Share2, LogOut, ChevronDown, Check, Activity, LayoutDashboard, Settings, PlusCircle, History, Menu, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail } from 'lucide-react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2 } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import ResultCard from './components/ResultCard';
@@ -17,6 +17,7 @@ import TrialGate from './components/TrialGate';
 import AdvancedBanner from './components/AdvancedBanner';
 import HistoryTab from './components/HistoryTab';
 import ProfileMenu from './components/ProfileMenu';
+import Modal from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError } from './lib/api';
 
@@ -77,19 +78,19 @@ const UserProfileSelector = ({ profiles, selectedUserId, onSelect }) => {
     <div className="relative z-50">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center justify-between bg-surface border border-white/10 rounded-lg px-3 py-2 text-sm text-zinc-300 hover:bg-white/5 transition-colors min-w-[180px]"
+        className="flex items-center justify-between bg-paper2 border border-rule2 rounded-input px-3 py-2 text-sm text-ink2 hover:bg-paper3 transition-colors min-w-[180px]"
       >
         <span className="flex items-center gap-2">
-          <div className="w-5 h-5 rounded-full bg-gradient-to-br from-primary to-purple-600 flex items-center justify-center text-[10px] font-bold text-white">
+          <div className="w-5 h-5 rounded-full bg-paper3 border border-rule flex items-center justify-center font-mono text-micro text-brass">
             {selectedProfile?.username?.substring(0, 1).toUpperCase() || "U"}
           </div>
-          <span className="font-medium text-white truncate max-w-[100px]">{selectedProfile?.username || "Select User"}</span>
+          <span className="font-medium text-ink truncate max-w-[100px]">{selectedProfile?.username || "Select User"}</span>
         </span>
-        <ChevronDown size={14} className={`text-zinc-500 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        <ChevronDown size={14} className={`text-muted transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
       {isOpen && (
-        <div className="absolute top-full mt-2 right-0 w-64 bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl overflow-hidden">
+        <div className="absolute top-full mt-2 right-0 w-64 card overflow-hidden">
           <div className="max-h-60 overflow-y-auto custom-scrollbar">
             {profiles.map((profile) => (
               <button
@@ -98,31 +99,31 @@ const UserProfileSelector = ({ profiles, selectedUserId, onSelect }) => {
                   onSelect(profile.username);
                   setIsOpen(false);
                 }}
-                className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/5 transition-colors text-left group border-b border-white/5 last:border-0"
+                className="w-full flex items-center justify-between px-4 py-3 hover:bg-paper3 transition-colors text-left group border-b border-rule last:border-0"
               >
                 <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary/20 to-purple-500/20 flex items-center justify-center text-xs font-bold text-white border border-white/10 shrink-0">
+                  <div className="w-8 h-8 rounded-full bg-paper3 flex items-center justify-center font-mono text-micro text-ink border border-rule shrink-0">
                     {profile.username.substring(0, 2).toUpperCase()}
                   </div>
                   <div className="min-w-0">
-                    <div className="text-sm font-medium text-zinc-200 group-hover:text-white transition-colors truncate">
+                    <div className="text-sm font-medium text-ink2 group-hover:text-ink transition-colors truncate">
                       {profile.username}
                     </div>
                     <div className="flex gap-2 mt-0.5">
                       {/* Status indicators */}
-                      <div className={`flex items-center gap-1 text-[10px] ${profile.connected.includes('tiktok') ? 'text-zinc-300' : 'text-zinc-600'}`}>
+                      <div className={`flex items-center gap-1 ${profile.connected.includes('tiktok') ? 'text-ink2' : 'text-muted opacity-40'}`}>
                         <TikTokIcon size={10} />
                       </div>
-                      <div className={`flex items-center gap-1 text-[10px] ${profile.connected.includes('instagram') ? 'text-pink-400' : 'text-zinc-600'}`}>
+                      <div className={`flex items-center gap-1 ${profile.connected.includes('instagram') ? 'text-ink2' : 'text-muted opacity-40'}`}>
                         <Instagram size={10} />
                       </div>
-                      <div className={`flex items-center gap-1 text-[10px] ${profile.connected.includes('youtube') ? 'text-red-400' : 'text-zinc-600'}`}>
+                      <div className={`flex items-center gap-1 ${profile.connected.includes('youtube') ? 'text-ink2' : 'text-muted opacity-40'}`}>
                         <Youtube size={10} />
                       </div>
                     </div>
                   </div>
                 </div>
-                {selectedUserId === profile.username && <Check size={14} className="text-primary shrink-0" />}
+                {selectedUserId === profile.username && <Check size={14} className="text-brass shrink-0" />}
               </button>
             ))}
           </div>
@@ -144,7 +145,7 @@ const pollJob = async (jobId) => {
 
 function App() {
   // Cloud auth/billing session (inert when billing is disabled).
-  const { billingEnabled, isManaged, isSignedIn, signingIn, me, plan, refreshMe } = useAuth();
+  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
   const [showTopUp, setShowTopUp] = useState(false);
   const [showTrialUpgrade, setShowTrialUpgrade] = useState(false);
@@ -187,6 +188,10 @@ function App() {
 
   const [sessionRecovered, setSessionRecovered] = useState(false);
   const [showScheduleWeek, setShowScheduleWeek] = useState(false);
+
+  // Silent-success "saved" states for the settings key inputs (design.md: no alert popups)
+  const [elevenLabsSaved, setElevenLabsSaved] = useState(false);
+  const [falSaved, setFalSaved] = useState(false);
 
   // Sync state for original video playback
   const [syncedTime, setSyncedTime] = useState(0);
@@ -247,6 +252,7 @@ function App() {
     } catch (e) {
       // localStorage full or serialization error - ignore
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId, status, results, activeTab]);
 
   useEffect(() => {
@@ -280,6 +286,7 @@ function App() {
     if ((uploadPostKey || isManaged) && userProfiles.length === 0) {
       fetchUserProfiles({ silent: true });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uploadPostKey, isManaged]);
 
   // For managed users, fetch the durable R2 URLs of the current job's clips so the
@@ -458,160 +465,100 @@ function App() {
 
   // --- UI Components ---
 
-  const Sidebar = () => (
-    <div className="w-20 lg:w-64 bg-surface border-r border-white/5 flex flex-col h-full shrink-0 transition-all duration-300">
-      <div className="p-6 flex items-center gap-3">
-        <div className="w-8 h-8 bg-white/5 rounded-lg flex items-center justify-center shrink-0 overflow-hidden border border-white/5">
-          <img src="/logo-openshorts.png" alt="Logo" className="w-full h-full object-cover" />
-        </div>
-        <span className="font-bold text-lg text-white hidden lg:block tracking-tight">OpenShorts</span>
-      </div>
+  const Sidebar = () => {
+    const navItems = [
+      { id: 'dashboard', ord: '01', icon: LayoutDashboard, label: 'Clip Generator' },
+      { id: 'saasshorts', ord: '02', icon: Sparkles, label: 'AI Shorts', byok: true },
+      { id: 'ai-agent', ord: '03', icon: Bot, label: 'AI Agent', byok: true },
+      { id: 'ugc-gallery', ord: '04', icon: LayoutGrid, label: 'UGC Gallery' },
+      { id: 'thumbnails', ord: '05', icon: Image, label: 'YouTube Studio' },
+      ...(billingEnabled && isSignedIn ? [{ id: 'history', ord: '06', icon: History, label: 'History' }] : []),
+      { id: 'settings', ord: '07', icon: Settings, label: 'Settings' },
+    ];
 
-      <nav className="flex-1 px-4 py-4 space-y-2">
-        <button
-          onClick={() => setActiveTab('dashboard')}
-          className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'dashboard' ? 'bg-primary/10 text-primary' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
-        >
-          <LayoutDashboard size={20} />
-          <span className="font-medium hidden lg:block">Clip Generator</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('saasshorts')}
-          className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'saasshorts' ? 'bg-violet-500/10 text-violet-400' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
-        >
-          <Sparkles size={20} />
-          <span className="font-medium hidden lg:block">AI Shorts</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('ai-agent')}
-          className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'ai-agent' ? 'bg-emerald-500/10 text-emerald-400' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
-        >
-          <Bot size={20} />
-          <span className="font-medium hidden lg:block">AI Agent</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('ugc-gallery')}
-          className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'ugc-gallery' ? 'bg-violet-500/10 text-violet-400' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
-        >
-          <LayoutGrid size={20} />
-          <span className="font-medium hidden lg:block">UGC Gallery</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('thumbnails')}
-          className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'thumbnails' ? 'bg-primary/10 text-primary' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
-        >
-          <Image size={20} />
-          <span className="font-medium hidden lg:block">YouTube Studio</span>
-        </button>
-
-        {billingEnabled && isSignedIn && (
-          <button
-            onClick={() => setActiveTab('history')}
-            className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'history' ? 'bg-primary/10 text-primary' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
-          >
-            <History size={20} />
-            <span className="font-medium hidden lg:block">History</span>
-          </button>
-        )}
-
-        {/* <button
-          onClick={() => setActiveTab('gallery')}
-          className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'gallery' ? 'bg-primary/10 text-primary' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
-        >
-          <LayoutGrid size={20} />
-          <span className="font-medium hidden lg:block">Gallery</span>
-        </button> */}
-
-        <button
-          onClick={() => setActiveTab('settings')}
-          className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors ${activeTab === 'settings' ? 'bg-primary/10 text-primary' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
-        >
-          <Settings size={20} />
-          <span className="font-medium hidden lg:block">Settings</span>
-        </button>
-      </nav>
-
-      <div className="p-4 border-t border-white/5 space-y-2">
-        <a
-          href="#"
-          onClick={(e) => { e.preventDefault(); localStorage.removeItem('openshorts_skip_landing'); window.location.hash = ''; window.location.reload(); }}
-          className="flex items-center gap-2 p-3 bg-white/5 hover:bg-white/10 rounded-xl transition-colors group"
-        >
-          <div className="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center shrink-0">
-            <Globe size={16} />
+    return (
+      <div className="w-20 lg:w-64 bg-paper2 border-r border-rule flex flex-col h-full shrink-0 transition-all duration-300">
+        <a href="#landing" className="p-6 flex items-center gap-3" title="go to landing page">
+          <div className="w-8 h-8 bg-paper3 rounded-input flex items-center justify-center shrink-0 overflow-hidden border border-rule">
+            <img src="/logo-openshorts.png" alt="Logo" className="w-full h-full object-cover" />
           </div>
-          <div className="hidden lg:block overflow-hidden">
-            <p className="text-sm font-bold text-white leading-none mb-0.5">Landing Page</p>
-            <p className="text-[10px] text-zinc-400 group-hover:text-zinc-300 transition-colors truncate">View website</p>
-          </div>
+          <span className="font-display lowercase text-lg text-ink hidden lg:block">openshorts</span>
         </a>
-        <a
-          href="https://github.com/mutonby/openshorts"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-2 p-3 bg-white/5 hover:bg-white/10 rounded-xl transition-colors group"
-        >
-          <div className="w-8 h-8 rounded-full bg-white text-black flex items-center justify-center shrink-0">
-            <svg height="20" viewBox="0 0 16 16" version="1.1" width="20" aria-hidden="true"><path fillRule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
-          </div>
-          <div className="hidden lg:block overflow-hidden">
-            <p className="text-sm font-bold text-white leading-none mb-0.5">Open Source</p>
-            <p className="text-[10px] text-zinc-400 group-hover:text-zinc-300 transition-colors truncate">Free & Community Driven</p>
-          </div>
-        </a>
-        {billingEnabled && (
+
+        <nav className="flex-1 px-4 py-4 space-y-1">
+          {navItems.map((item) => {
+            const NavIcon = item.icon;
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => setActiveTab(item.id)}
+                className={`relative w-full flex items-center gap-3 px-3 py-2.5 rounded-input transition-colors ${isActive ? 'bg-paper3 text-ink' : 'text-muted hover:text-ink2 hover:bg-paper3/50'}`}
+              >
+                {isActive && (
+                  <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 bg-brass rounded-full" aria-hidden="true" />
+                )}
+                <NavIcon size={18} className={`shrink-0 ${isActive ? 'text-brass' : ''}`} />
+                <span className="text-sm lowercase hidden lg:block flex-1 text-left truncate">{item.label}</span>
+                {item.byok && <span className="readout hidden lg:block">BYOK</span>}
+                <span className="readout hidden lg:block">{item.ord}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="p-4 border-t border-rule space-y-1">
           <a
-            href="#/pricing"
-            className="flex items-center gap-2 p-3 bg-white/5 hover:bg-white/10 rounded-xl transition-colors group"
+            href="#landing"
+            className="flex items-center gap-2 px-3 py-1.5 text-xs lowercase text-muted hover:text-ink2 transition-colors"
           >
-            <div className="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center shrink-0">
-              <Sparkles size={16} />
-            </div>
-            <div className="hidden lg:block overflow-hidden">
-              <p className="text-sm font-bold text-white leading-none mb-0.5">Plans &amp; Pricing</p>
-              <p className="text-[10px] text-zinc-400 group-hover:text-zinc-300 transition-colors truncate">View all plans</p>
-            </div>
+            <Globe size={14} className="shrink-0" />
+            <span className="hidden lg:block truncate">landing page</span>
           </a>
-        )}
-        <a
-          href="mailto:info@openshorts.app"
-          className="flex items-center gap-2 p-3 bg-white/5 hover:bg-white/10 rounded-xl transition-colors group"
-        >
-          <div className="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center shrink-0">
-            <Mail size={16} />
-          </div>
-          <div className="hidden lg:block overflow-hidden">
-            <p className="text-sm font-bold text-white leading-none mb-0.5">Support</p>
-            <p className="text-[10px] text-zinc-400 group-hover:text-zinc-300 transition-colors truncate">info@openshorts.app</p>
-          </div>
-        </a>
+          <a
+            href="https://github.com/mutonby/openshorts"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 px-3 py-1.5 text-xs lowercase text-muted hover:text-ink2 transition-colors"
+          >
+            <svg height="14" viewBox="0 0 16 16" version="1.1" width="14" aria-hidden="true" fill="currentColor" className="shrink-0"><path fillRule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
+            <span className="hidden lg:block truncate">open source</span>
+          </a>
+          {billingEnabled && (
+            <a
+              href="#/pricing"
+              className="flex items-center gap-2 px-3 py-1.5 text-xs lowercase text-muted hover:text-ink2 transition-colors"
+            >
+              <Sparkles size={14} className="shrink-0" />
+              <span className="hidden lg:block truncate">plans &amp; pricing</span>
+            </a>
+          )}
+          <a
+            href="mailto:info@openshorts.app"
+            className="flex items-center gap-2 px-3 py-1.5 text-xs lowercase text-muted hover:text-ink2 transition-colors"
+          >
+            <Mail size={14} className="shrink-0" />
+            <span className="hidden lg:block truncate">info@openshorts.app</span>
+          </a>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
-    <div className="flex h-screen bg-background overflow-hidden selection:bg-primary/30">
+    <div className="flex h-screen bg-paper overflow-hidden">
       <Sidebar />
 
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
-        {/* Background Gradients */}
-        <div className="absolute inset-0 overflow-hidden -z-10 pointer-events-none">
-          <div className="absolute -top-[10%] -right-[10%] w-[50%] h-[50%] bg-primary/5 rounded-full blur-[120px]" />
-        </div>
-
         {/* Top Header */}
-        <header className="h-16 border-b border-white/5 bg-background/50 backdrop-blur-md flex items-center justify-between px-6 shrink-0 z-10">
+        <header className="h-14 border-b border-rule bg-paper flex items-center justify-between px-6 shrink-0 z-10">
           <div className="flex items-center gap-4">
             {status !== 'idle' && (
               <button
                 onClick={handleReset}
-                className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors"
+                className="btn-quiet px-3 py-1.5 text-xs"
               >
-                <PlusCircle size={16} />
+                <Plus size={14} />
                 <span className="hidden sm:inline">New Project</span>
               </button>
             )}
@@ -632,13 +579,13 @@ function App() {
             )}
             {billingEnabled && isSignedIn && !isManaged && (
               <button onClick={() => { window.location.hash = '#/pricing'; }}
-                className="text-xs text-primary bg-primary/10 hover:bg-primary/20 px-3 py-1 rounded-full border border-primary/30 transition-colors">
+                className="btn-primary px-4 py-2 text-xs">
                 Start free trial
               </button>
             )}
             {billingEnabled && !isSignedIn && (
               <button onClick={() => setShowLogin(true)}
-                className="text-xs bg-white/10 hover:bg-white/20 px-3 py-1 rounded-full transition-colors">
+                className="btn-ghost px-4 py-2 text-xs">
                 Sign in
               </button>
             )}
@@ -647,15 +594,18 @@ function App() {
             {keysMissing && (
               <button
                 onClick={() => (billingEnabled && !isSignedIn ? setShowLogin(true) : setActiveTab('settings'))}
-                className="text-xs text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 px-3 py-1 rounded-full border border-amber-500/30 transition-colors flex items-center gap-1.5"
+                className="badge-warn hover:brightness-125 transition-all"
                 title="Configure API keys or choose a plan"
               >
                 <AlertTriangle size={12} />
-                {!apiKey && !uploadPostKey
-                  ? 'Gemini & Upload-Post keys missing'
-                  : !apiKey
-                    ? 'Gemini API Key Missing'
-                    : 'Upload-Post API Key Missing'}
+                <span className="hidden sm:inline">
+                  {!apiKey && !uploadPostKey
+                    ? 'Gemini & Upload-Post keys missing'
+                    : !apiKey
+                      ? 'Gemini API Key Missing'
+                      : 'Upload-Post API Key Missing'}
+                </span>
+                <span className="sm:hidden">keys missing</span>
               </button>
             )}
           </div>
@@ -663,12 +613,12 @@ function App() {
 
         {/* Persistent Missing Keys Banner — visible on every screen */}
         {keysMissing && activeTab !== 'settings' && (
-          <div className="mx-6 mt-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-between gap-4 shrink-0 animate-[fadeIn_0.3s_ease-out]">
-            <div className="flex items-center gap-3 text-sm text-amber-200">
-              <KeyRound size={16} className="shrink-0 text-amber-400" />
+          <div className="mx-4 sm:mx-6 mt-3 px-4 py-3 bg-paper2 border border-rule rounded-card flex flex-wrap items-center justify-between gap-3 sm:gap-4 shrink-0 animate-fade">
+            <div className="flex items-center gap-3 text-sm text-ink2">
+              <KeyRound size={16} className="shrink-0 text-warn" />
               <div>
-                <span className="font-semibold">Required API keys missing.</span>{' '}
-                <span className="text-amber-200/80">
+                <span className="font-medium text-ink">Required API keys missing.</span>{' '}
+                <span className="text-muted">
                   {!apiKey && !uploadPostKey
                     ? 'Set your Gemini and Upload-Post API keys to use OpenShorts.'
                     : !apiKey
@@ -679,7 +629,7 @@ function App() {
             </div>
             <button
               onClick={() => setActiveTab('settings')}
-              className="shrink-0 text-xs font-medium px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-black transition-colors"
+              className="btn-quiet px-3 py-1.5 text-xs shrink-0"
             >
               Go to Settings
             </button>
@@ -688,13 +638,13 @@ function App() {
 
         {/* Session Recovery Banner */}
         {sessionRecovered && (
-          <div className="mx-6 mt-2 p-3 bg-primary/10 border border-primary/20 rounded-xl flex items-center justify-between animate-[fadeIn_0.3s_ease-out] shrink-0">
-            <div className="flex items-center gap-2 text-sm text-primary">
-              <RotateCcw size={16} />
+          <div className="mx-6 mt-2 px-4 py-3 bg-paper2 border border-rule rounded-card flex items-center justify-between animate-fade shrink-0">
+            <div className="flex items-center gap-2 text-sm text-ink2">
+              <RotateCcw size={16} className="text-brass" />
               <span className="font-medium">Session recovered</span>
-              <span className="text-zinc-400 text-xs">Your previous work has been restored.</span>
+              <span className="text-muted text-xs">Your previous work has been restored.</span>
             </div>
-            <button onClick={() => setSessionRecovered(false)} className="text-zinc-500 hover:text-white transition-colors">
+            <button onClick={() => setSessionRecovered(false)} className="text-muted hover:text-ink transition-colors">
               <X size={14} />
             </button>
           </div>
@@ -711,43 +661,56 @@ function App() {
 
           {/* View: Settings */}
           {activeTab === 'settings' && (
-            <div className="h-full overflow-y-auto p-8 max-w-2xl mx-auto animate-[fadeIn_0.3s_ease-out]">
-              <div className="flex items-center justify-between mb-8">
-                <h1 className="text-2xl font-bold">Settings</h1>
-                <div className="px-3 py-1 bg-green-500/10 border border-green-500/20 rounded-full text-[10px] text-green-400 font-medium flex items-center gap-2">
-                  <Shield size={12} /> Privacy: keys only live in your browser (sent to backend just to process)
+            <div className="h-full overflow-y-auto p-4 sm:p-8 max-w-2xl mx-auto animate-fade">
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
+                <div>
+                  <p className="eyebrow mb-1.5">07 · SETTINGS</p>
+                  <h1 className="font-display lowercase text-2xl text-ink">Settings</h1>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-muted mt-1">
+                  <Shield size={12} className="text-ok shrink-0" /> Privacy: keys only live in your browser (sent to backend just to process)
                 </div>
               </div>
               {isManaged ? (
-                <div className="glass-panel p-6 mb-2">
+                <div className="card p-6 mb-2">
                   <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-lg font-semibold">Included in your plan</h2>
-                    <span className="text-[10px] bg-green-500/10 border border-green-500/30 px-2 py-0.5 rounded text-green-400 uppercase tracking-wider">Managed</span>
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-input bg-paper3 flex items-center justify-center shrink-0">
+                        <Shield size={16} className="text-brass" />
+                      </div>
+                      <h2 className="text-base font-medium text-ink lowercase">Included in your plan</h2>
+                    </div>
+                    <span className="badge-ok">Managed</span>
                   </div>
-                  <p className="text-xs text-zinc-500 mb-5 leading-relaxed">
+                  <p className="text-xs text-muted mb-5 leading-relaxed">
                     Your plan includes the <strong>Clip Generator</strong> and <strong>YouTube Studio</strong>,
                     fully managed — no API keys required. AI Shorts &amp; dubbing use your own fal.ai / ElevenLabs
                     keys (below). Connect your social accounts to publish directly.
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    <button onClick={handleConnectSocials} className="btn-primary py-2 px-4 text-sm flex items-center gap-2">
+                    <button onClick={handleConnectSocials} className="btn-primary py-2 px-4 text-sm">
                       <Share2 size={16} /> Connect social accounts
                     </button>
-                    <button onClick={handleOpenCalendar} className="py-2 px-4 text-sm flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-colors">
+                    <button onClick={handleOpenCalendar} className="btn-quiet py-2 px-4 text-sm">
                       <Calendar size={16} /> Content calendar
                     </button>
                   </div>
                 </div>
               ) : billingEnabled ? (
-                <div className="glass-panel p-6 mb-2 border-primary/30 ring-1 ring-primary/20">
+                <div className="card p-6 mb-2">
                   <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-lg font-semibold">Start your free trial</h2>
-                    <span className="text-[10px] bg-primary/10 border border-primary/30 px-2 py-0.5 rounded text-primary uppercase tracking-wider">3 days free</span>
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-input bg-paper3 flex items-center justify-center shrink-0">
+                        <Sparkles size={16} className="text-brass" />
+                      </div>
+                      <h2 className="text-base font-medium text-ink lowercase">Start your free trial</h2>
+                    </div>
+                    <span className="badge-brass">3 days free</span>
                   </div>
-                  <p className="text-xs text-zinc-500 mb-5 leading-relaxed">
+                  <p className="text-xs text-muted mb-5 leading-relaxed">
                     Generate shorts with zero setup — no API keys needed. 3 days free, then from $12/mo. Cancel anytime.
                   </p>
-                  <button onClick={() => { window.location.hash = '#/pricing'; }} className="btn-primary py-2 px-4 text-sm flex items-center gap-2">
+                  <button onClick={() => { window.location.hash = '#/pricing'; }} className="btn-primary py-2 px-4 text-sm">
                     <Sparkles size={16} /> See plans & start trial
                   </button>
                 </div>
@@ -755,18 +718,23 @@ function App() {
                 <>
               <KeyInput onKeySet={setApiKey} savedKey={apiKey} />
 
-              <div className={`glass-panel p-6 mt-8 ${!uploadPostKey ? 'border-amber-500/30 ring-1 ring-amber-500/20' : ''}`}>
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold">Social Integration</h2>
-                  <span className="text-[10px] bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded text-amber-400 uppercase tracking-wider">Required</span>
+              <div className="card p-4 sm:p-6 mt-8">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-input bg-paper3 flex items-center justify-center shrink-0">
+                      <Share2 size={16} className="text-brass" />
+                    </div>
+                    <h2 className="text-base font-medium text-ink lowercase">Social Integration</h2>
+                  </div>
+                  <span className="badge-warn">Required</span>
                 </div>
-                <p className="text-xs text-zinc-500 mb-6 leading-relaxed">
+                <p className="text-xs text-muted mb-6 leading-relaxed">
                   Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts via <strong>Upload-Post</strong>.
                   Includes a <strong>free tier</strong> (no credit card required).
                 </p>
                 <div className="space-y-4">
-                  <label className="block text-sm text-zinc-400">Upload-Post API Key</label>
-                  <div className="flex gap-2">
+                  <label className="block text-sm text-muted">Upload-Post API Key</label>
+                  <div className="flex flex-col sm:flex-row gap-2">
                     <input
                       type="password"
                       value={uploadPostKey}
@@ -774,28 +742,28 @@ function App() {
                       className="input-field"
                       placeholder="ey..."
                     />
-                    <button onClick={fetchUserProfiles} className="btn-primary py-2 px-4 text-sm">
+                    <button onClick={fetchUserProfiles} className="btn-quiet py-2 px-4 text-sm">
                       Connect
                     </button>
                   </div>
-                  <p className="text-xs text-zinc-500 leading-relaxed">
+                  <p className="text-xs text-muted leading-relaxed">
                     Connect your Upload-Post account to enable one-click publishing.
                     <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
-                      <a href="https://app.upload-post.com/login" target="_blank" rel="noopener noreferrer" className="p-2 border border-white/5 rounded-lg hover:bg-white/5 transition-colors flex flex-col gap-1">
-                        <span className="text-zinc-400 font-medium">1. Login</span>
-                        <span className="text-[10px] text-zinc-600">Register account</span>
+                      <a href="https://app.upload-post.com/login" target="_blank" rel="noopener noreferrer" className="p-2 border border-rule rounded-input hover:bg-paper3 transition-colors flex flex-col gap-1">
+                        <span className="text-ink2 font-medium">1. Login</span>
+                        <span className="text-xs text-muted">Register account</span>
                       </a>
-                      <a href="https://app.upload-post.com/manage-users" target="_blank" rel="noopener noreferrer" className="p-2 border border-white/5 rounded-lg hover:bg-white/5 transition-colors flex flex-col gap-1">
-                        <span className="text-zinc-400 font-medium">2. Profiles</span>
-                        <span className="text-[10px] text-zinc-600">Create & Connect</span>
+                      <a href="https://app.upload-post.com/manage-users" target="_blank" rel="noopener noreferrer" className="p-2 border border-rule rounded-input hover:bg-paper3 transition-colors flex flex-col gap-1">
+                        <span className="text-ink2 font-medium">2. Profiles</span>
+                        <span className="text-xs text-muted">Create & Connect</span>
                       </a>
-                      <a href="https://app.upload-post.com/api-keys" target="_blank" rel="noopener noreferrer" className="p-2 border border-white/5 rounded-lg hover:bg-white/5 transition-colors flex flex-col gap-1">
-                        <span className="text-zinc-400 font-medium">3. API Key</span>
-                        <span className="text-[10px] text-zinc-600">Generate key</span>
+                      <a href="https://app.upload-post.com/api-keys" target="_blank" rel="noopener noreferrer" className="p-2 border border-rule rounded-input hover:bg-paper3 transition-colors flex flex-col gap-1">
+                        <span className="text-ink2 font-medium">3. API Key</span>
+                        <span className="text-xs text-muted">Generate key</span>
                       </a>
                     </div>
                     <br />
-                    <span className="text-zinc-600 italic">
+                    <span className="text-muted">
                       Keys are only stored in your browser. They are sent to the backend only to process your request, never stored server-side.
                     </span>
                   </p>
@@ -805,18 +773,23 @@ function App() {
                 </>
               )}
 
-              <div className="glass-panel p-6 mt-8">
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold">Video Translation</h2>
-                  <span className="text-[10px] bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded text-amber-400 uppercase tracking-wider">Your own key</span>
+              <div className="card p-4 sm:p-6 mt-8">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-input bg-paper3 flex items-center justify-center shrink-0">
+                      <Globe size={16} className="text-brass" />
+                    </div>
+                    <h2 className="text-base font-medium text-ink lowercase">Video Translation</h2>
+                  </div>
+                  <span className="readout">BYOK</span>
                 </div>
-                <p className="text-xs text-zinc-500 mb-6 leading-relaxed">
+                <p className="text-xs text-muted mb-6 leading-relaxed">
                   For <strong>AI Shorts &amp; dubbing</strong> — bring your own key. Translate your clips to different
                   languages using <strong>ElevenLabs</strong> AI dubbing (billed by ElevenLabs). Not covered by your plan.
                 </p>
                 <div className="space-y-4">
-                  <label className="block text-sm text-zinc-400">ElevenLabs API Key</label>
-                  <div className="flex gap-2">
+                  <label className="block text-sm text-muted">ElevenLabs API Key</label>
+                  <div className="flex flex-col sm:flex-row gap-2">
                     <input
                       type="password"
                       value={elevenLabsKey}
@@ -828,47 +801,53 @@ function App() {
                       onClick={() => {
                         if (elevenLabsKey) {
                           localStorage.setItem('elevenLabsKey_v1', encrypt(elevenLabsKey));
-                          alert('ElevenLabs API Key saved!');
+                          setElevenLabsSaved(true);
+                          setTimeout(() => setElevenLabsSaved(false), 2000);
                         }
                       }}
-                      className="btn-primary py-2 px-4 text-sm"
+                      className={elevenLabsSaved ? 'badge-ok px-4' : 'btn-quiet py-2 px-4 text-sm'}
                     >
-                      Save
+                      {elevenLabsSaved ? <><Check size={12} /> saved</> : 'Save'}
                     </button>
                   </div>
-                  <p className="text-xs text-zinc-500 leading-relaxed">
+                  <p className="text-xs text-muted leading-relaxed">
                     Get your API key from ElevenLabs to enable video translation.
                     <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <a href="https://elevenlabs.io/sign-up" target="_blank" rel="noopener noreferrer" className="p-2 border border-white/5 rounded-lg hover:bg-white/5 transition-colors flex flex-col gap-1">
-                        <span className="text-zinc-400 font-medium">1. Sign Up</span>
-                        <span className="text-[10px] text-zinc-600">Create account</span>
+                      <a href="https://elevenlabs.io/sign-up" target="_blank" rel="noopener noreferrer" className="p-2 border border-rule rounded-input hover:bg-paper3 transition-colors flex flex-col gap-1">
+                        <span className="text-ink2 font-medium">1. Sign Up</span>
+                        <span className="text-xs text-muted">Create account</span>
                       </a>
-                      <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener noreferrer" className="p-2 border border-white/5 rounded-lg hover:bg-white/5 transition-colors flex flex-col gap-1">
-                        <span className="text-zinc-400 font-medium">2. API Key</span>
-                        <span className="text-[10px] text-zinc-600">Generate key</span>
+                      <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener noreferrer" className="p-2 border border-rule rounded-input hover:bg-paper3 transition-colors flex flex-col gap-1">
+                        <span className="text-ink2 font-medium">2. API Key</span>
+                        <span className="text-xs text-muted">Generate key</span>
                       </a>
                     </div>
                     <br />
-                    <span className="text-zinc-600 italic">
+                    <span className="text-muted">
                       Keys are only stored in your browser. They are sent to the backend only to process your request, never stored server-side.
                     </span>
                   </p>
                 </div>
               </div>
 
-              <div className="glass-panel p-6 mt-8">
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold">AI Shorts (UGC Videos)</h2>
-                  <span className="text-[10px] bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded text-amber-400 uppercase tracking-wider">Your own key</span>
+              <div className="card p-4 sm:p-6 mt-8">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-input bg-paper3 flex items-center justify-center shrink-0">
+                      <Sparkles size={16} className="text-brass" />
+                    </div>
+                    <h2 className="text-base font-medium text-ink lowercase">AI Shorts (UGC Videos)</h2>
+                  </div>
+                  <span className="readout">BYOK</span>
                 </div>
-                <p className="text-xs text-zinc-500 mb-6 leading-relaxed">
+                <p className="text-xs text-muted mb-6 leading-relaxed">
                   Generate UGC-style videos with AI actors for any product or business using <strong>fal.ai</strong>.
                   <strong> Not covered by your plan</strong> — bring your own fal.ai + ElevenLabs keys (billed by those
                   providers, ~$0.65-2 per video). Your plan still covers the AI script &amp; orchestration.
                 </p>
                 <div className="space-y-4">
-                  <label className="block text-sm text-zinc-400">fal.ai API Key</label>
-                  <div className="flex gap-2">
+                  <label className="block text-sm text-muted">fal.ai API Key</label>
+                  <div className="flex flex-col sm:flex-row gap-2">
                     <input
                       type="password"
                       value={falKey}
@@ -880,28 +859,29 @@ function App() {
                       onClick={() => {
                         if (falKey) {
                           localStorage.setItem('falKey_v1', encrypt(falKey));
-                          alert('fal.ai API Key saved!');
+                          setFalSaved(true);
+                          setTimeout(() => setFalSaved(false), 2000);
                         }
                       }}
-                      className="btn-primary py-2 px-4 text-sm"
+                      className={falSaved ? 'badge-ok px-4' : 'btn-quiet py-2 px-4 text-sm'}
                     >
-                      Save
+                      {falSaved ? <><Check size={12} /> saved</> : 'Save'}
                     </button>
                   </div>
-                  <p className="text-xs text-zinc-500 leading-relaxed">
+                  <p className="text-xs text-muted leading-relaxed">
                     Get your API key from fal.ai to enable AI actor video generation.
                     <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <a href="https://fal.ai/dashboard/keys" target="_blank" rel="noopener noreferrer" className="p-2 border border-white/5 rounded-lg hover:bg-white/5 transition-colors flex flex-col gap-1">
-                        <span className="text-zinc-400 font-medium">1. Sign Up</span>
-                        <span className="text-[10px] text-zinc-600">Create fal.ai account</span>
+                      <a href="https://fal.ai/dashboard/keys" target="_blank" rel="noopener noreferrer" className="p-2 border border-rule rounded-input hover:bg-paper3 transition-colors flex flex-col gap-1">
+                        <span className="text-ink2 font-medium">1. Sign Up</span>
+                        <span className="text-xs text-muted">Create fal.ai account</span>
                       </a>
-                      <a href="https://fal.ai/dashboard/keys" target="_blank" rel="noopener noreferrer" className="p-2 border border-white/5 rounded-lg hover:bg-white/5 transition-colors flex flex-col gap-1">
-                        <span className="text-zinc-400 font-medium">2. API Key</span>
-                        <span className="text-[10px] text-zinc-600">Generate key</span>
+                      <a href="https://fal.ai/dashboard/keys" target="_blank" rel="noopener noreferrer" className="p-2 border border-rule rounded-input hover:bg-paper3 transition-colors flex flex-col gap-1">
+                        <span className="text-ink2 font-medium">2. API Key</span>
+                        <span className="text-xs text-muted">Generate key</span>
                       </a>
                     </div>
                     <br />
-                    <span className="text-zinc-600 italic">
+                    <span className="text-muted">
                       Keys are only stored in your browser. Sent to backend only to process requests.
                     </span>
                   </p>
@@ -917,28 +897,28 @@ function App() {
 
           {/* View: AI Agent */}
           {activeTab === 'ai-agent' && (
-            <div className="h-full overflow-y-auto custom-scrollbar p-6 md:p-10 animate-[fadeIn_0.3s_ease-out]">
+            <div className="h-full overflow-y-auto custom-scrollbar p-4 sm:p-6 md:p-10 animate-fade">
               <div className="max-w-4xl mx-auto space-y-8">
 
                 {/* Header */}
                 <div className="space-y-3">
-                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-[11px] uppercase tracking-wider text-emerald-400 font-semibold">
-                    <Bot size={12} /> Autonomous Skill
-                  </div>
-                  <h1 className="text-3xl md:text-4xl font-black bg-gradient-to-b from-white to-white/60 bg-clip-text text-transparent">
+                  <p className="eyebrow flex items-center gap-2">
+                    <Bot size={12} /> 03 · AI AGENT · AUTONOMOUS SKILL
+                  </p>
+                  <h1 className="font-display lowercase text-3xl md:text-4xl text-ink">
                     Your Personal Clipping Team
                   </h1>
-                  <p className="text-zinc-400 text-base md:text-lg leading-relaxed max-w-2xl">
+                  <p className="text-muted text-base md:text-lg leading-relaxed max-w-2xl">
                     Drop your videos in a folder and a team of AI clippers picks the viral moments, edits them, and queues them for your approval — like having a 24/7 short-form editing crew on autopilot.
                   </p>
                 </div>
 
                 {/* Mobile-format warning */}
-                <div className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 flex items-start gap-3">
-                  <Smartphone size={20} className="text-amber-400 shrink-0 mt-0.5" />
-                  <div className="text-sm text-amber-100">
-                    <p className="font-semibold text-amber-300 mb-1">Upload videos already in vertical (9:16) mobile format.</p>
-                    <p className="text-amber-100/80 leading-relaxed">
+                <div className="px-4 py-3 rounded-card border border-rule bg-paper2 flex items-start gap-3">
+                  <Smartphone size={18} className="text-warn shrink-0 mt-0.5" />
+                  <div className="text-sm text-ink2">
+                    <p className="font-medium text-ink mb-1">Upload videos already in vertical (9:16) mobile format.</p>
+                    <p className="text-muted leading-relaxed">
                       The agent does not reframe horizontal footage. Make sure every source video is shot or pre-cropped to mobile/portrait format before dropping it into the input folder.
                     </p>
                   </div>
@@ -946,43 +926,43 @@ function App() {
 
                 {/* Workflow */}
                 <div className="grid md:grid-cols-3 gap-4">
-                  <div className="glass-panel p-5 space-y-2">
-                    <div className="w-10 h-10 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
-                      <Upload size={18} />
+                  <div className="card p-5 space-y-2">
+                    <div className="w-10 h-10 rounded-input bg-paper3 flex items-center justify-center">
+                      <Upload size={18} className="text-brass" />
                     </div>
-                    <h3 className="font-semibold text-white">1. Drop your videos</h3>
-                    <p className="text-xs text-zinc-400 leading-relaxed">
+                    <h3 className="font-medium text-ink lowercase">1. Drop your videos</h3>
+                    <p className="text-xs text-muted leading-relaxed">
                       Put your long-form vertical footage in the watched folder. The skill picks one video per run.
                     </p>
                   </div>
 
-                  <div className="glass-panel p-5 space-y-2">
-                    <div className="w-10 h-10 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
-                      <Users size={18} />
+                  <div className="card p-5 space-y-2">
+                    <div className="w-10 h-10 rounded-input bg-paper3 flex items-center justify-center">
+                      <Users size={18} className="text-brass" />
                     </div>
-                    <h3 className="font-semibold text-white">2. AI clippers work</h3>
-                    <p className="text-xs text-zinc-400 leading-relaxed">
+                    <h3 className="font-medium text-ink lowercase">2. AI clippers work</h3>
+                    <p className="text-xs text-muted leading-relaxed">
                       Whisper transcribes, Gemini 3 Flash spots viral beats, FFmpeg cuts each clip and adds a hook overlay.
                     </p>
                   </div>
 
-                  <div className="glass-panel p-5 space-y-2">
-                    <div className="w-10 h-10 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
-                      <CheckCircle2 size={18} />
+                  <div className="card p-5 space-y-2">
+                    <div className="w-10 h-10 rounded-input bg-paper3 flex items-center justify-center">
+                      <CheckCircle2 size={18} className="text-brass" />
                     </div>
-                    <h3 className="font-semibold text-white">3. You validate, it ships</h3>
-                    <p className="text-xs text-zinc-400 leading-relaxed">
+                    <h3 className="font-medium text-ink lowercase">3. You validate, it ships</h3>
+                    <p className="text-xs text-muted leading-relaxed">
                       Approve the candidates you like and the skill auto-publishes them to TikTok, Reels and YouTube Shorts via Upload-Post.
                     </p>
                   </div>
                 </div>
 
                 {/* Repo CTA */}
-                <div className="glass-panel p-6 md:p-8 space-y-5">
+                <div className="card p-6 md:p-8 space-y-5">
                   <div className="flex items-start justify-between gap-4 flex-wrap">
                     <div>
-                      <h2 className="text-xl font-bold text-white mb-1">skill-autoshorts</h2>
-                      <p className="text-sm text-zinc-400">
+                      <h2 className="font-display lowercase text-xl text-ink mb-1">skill-autoshorts</h2>
+                      <p className="text-sm text-muted">
                         The Claude Code skill that powers this workflow. Install it once and trigger it whenever you want a fresh batch of clips.
                       </p>
                     </div>
@@ -990,17 +970,17 @@ function App() {
                       href="https://github.com/mutonby/skill-autoshorts"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="btn-primary py-2 px-4 text-sm flex items-center gap-2 shrink-0"
+                      className="btn-primary py-2 px-4 text-sm shrink-0"
                     >
                       View on GitHub <ExternalLink size={14} />
                     </a>
                   </div>
 
-                  <div className="bg-[#0c0c0e] border border-white/10 rounded-lg p-4 font-mono text-xs text-zinc-300 flex items-center justify-between gap-3">
+                  <div className="bg-paper border border-rule rounded-card p-4 font-mono text-xs text-ink2 flex items-center justify-between gap-3">
                     <span className="truncate">git clone https://github.com/mutonby/skill-autoshorts</span>
                     <button
                       onClick={() => navigator.clipboard.writeText('git clone https://github.com/mutonby/skill-autoshorts')}
-                      className="text-zinc-500 hover:text-white transition-colors shrink-0"
+                      className="text-muted hover:text-ink transition-colors shrink-0"
                       title="Copy"
                     >
                       <Copy size={14} />
@@ -1008,20 +988,20 @@ function App() {
                   </div>
 
                   <div className="grid sm:grid-cols-2 gap-3 text-sm">
-                    <div className="flex items-start gap-2 text-zinc-300">
-                      <Check size={16} className="text-emerald-400 shrink-0 mt-0.5" />
+                    <div className="flex items-start gap-2 text-ink2">
+                      <Check size={16} className="text-brass shrink-0 mt-0.5" />
                       <span>Daily batch — picks one long video per run</span>
                     </div>
-                    <div className="flex items-start gap-2 text-zinc-300">
-                      <Check size={16} className="text-emerald-400 shrink-0 mt-0.5" />
+                    <div className="flex items-start gap-2 text-ink2">
+                      <Check size={16} className="text-brass shrink-0 mt-0.5" />
                       <span>Whisper transcription with word-level timing</span>
                     </div>
-                    <div className="flex items-start gap-2 text-zinc-300">
-                      <Check size={16} className="text-emerald-400 shrink-0 mt-0.5" />
+                    <div className="flex items-start gap-2 text-ink2">
+                      <Check size={16} className="text-brass shrink-0 mt-0.5" />
                       <span>Gemini 3 Flash multimodal moment detection</span>
                     </div>
-                    <div className="flex items-start gap-2 text-zinc-300">
-                      <Check size={16} className="text-emerald-400 shrink-0 mt-0.5" />
+                    <div className="flex items-start gap-2 text-ink2">
+                      <Check size={16} className="text-brass shrink-0 mt-0.5" />
                       <span>Auto-publish to TikTok, Reels & YouTube Shorts</span>
                     </div>
                   </div>
@@ -1033,11 +1013,21 @@ function App() {
 
           {/* View: UGC Gallery */}
           {activeTab === 'ugc-gallery' && (
-            <UGCGallery />
+            <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
+              <div className="max-w-6xl mx-auto p-6 md:p-8">
+                <UGCGallery />
+              </div>
+            </div>
           )}
 
-          {/* View: Thumbnails */}
-          {activeTab === 'history' && <HistoryTab />}
+          {/* View: History */}
+          {activeTab === 'history' && (
+            <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
+              <div className="max-w-6xl mx-auto p-6 md:p-8">
+                <HistoryTab />
+              </div>
+            </div>
+          )}
 
           {activeTab === 'thumbnails' && (
             <ThumbnailStudio geminiApiKey={apiKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} managed={isManaged} />
@@ -1050,43 +1040,46 @@ function App() {
 
           {/* View: Dashboard (Idle) */}
           {activeTab === 'dashboard' && status === 'idle' && (
-            <div className="h-full flex flex-col items-center justify-center p-6 animate-[fadeIn_0.3s_ease-out]">
+            <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
+              <div className="min-h-full flex flex-col items-center justify-center px-4 py-6 sm:p-6">
               <div className="max-w-xl w-full text-center space-y-8">
                 <div className="space-y-4">
-                  <h1 className="text-4xl md:text-5xl font-black bg-gradient-to-b from-white to-white/60 bg-clip-text text-transparent">
+                  <p className="eyebrow">01 · CLIP GENERATOR</p>
+                  <h1 className="font-display lowercase text-4xl md:text-5xl text-ink">
                     Create Viral Shorts
                   </h1>
-                  <p className="text-zinc-400 text-lg">
+                  <p className="text-muted text-lg">
                     Drop your long-form video below to instantly generate viral clips with AI.
                   </p>
                 </div>
 
                 <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} />
 
-                <div className="flex items-center justify-center gap-8 text-zinc-500 text-sm">
+                <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-8 text-muted text-sm">
                   <span className="flex items-center gap-2"><Youtube size={16} /> YouTube</span>
                   <span className="flex items-center gap-2"><Instagram size={16} /> Instagram</span>
                   <span className="flex items-center gap-2"><TikTokIcon size={16} /> TikTok</span>
                 </div>
+              </div>
               </div>
             </div>
           )}
 
           {/* View: Processing / Results (Split View) */}
           {activeTab === 'dashboard' && (status === 'processing' || status === 'complete' || status === 'error') && (
-            <div className="h-full flex flex-col md:flex-row animate-[fadeIn_0.3s_ease-out]">
+            <div className="h-full flex flex-col md:flex-row gap-4 p-4 overflow-y-auto md:overflow-y-hidden custom-scrollbar animate-fade">
 
               {/* Left Panel: Preview & Status */}
-              <div className={`${status === 'complete' ? 'w-full md:w-[30%] lg:w-[25%]' : 'w-full md:w-[55%] lg:w-[60%]'} h-full flex flex-col border-r border-white/5 bg-black/20 p-6 overflow-y-auto custom-scrollbar transition-all duration-700 ease-in-out`}>
+              <div className={`${status === 'complete' ? 'w-full md:w-[30%] lg:w-[25%]' : 'w-full md:w-[55%] lg:w-[60%]'} md:h-full flex flex-col shrink-0 md:shrink card p-4 sm:p-6 overflow-y-auto custom-scrollbar transition-all duration-700 ease-in-out`}>
                 <div className="mb-6 flex items-center justify-between">
-                  <h2 className="text-lg font-semibold flex items-center gap-2">
-                    <Activity className={`text-primary ${status === 'processing' ? 'animate-pulse' : ''}`} size={20} />
+                  <h2 className="text-sm font-medium text-ink lowercase flex items-center gap-2">
+                    <Activity className={`text-brass ${status === 'processing' ? 'animate-pulse' : ''}`} size={18} />
                     Live Analysis
                   </h2>
-                  <span className={`text-xs px-2 py-1 rounded-full border ${status === 'processing' ? 'bg-primary/10 border-primary/20 text-primary' :
-                    status === 'complete' ? 'bg-green-500/10 border-green-500/20 text-green-400' :
-                      'bg-red-500/10 border-red-500/20 text-red-400'
-                    }`}>
+                  <span className={status === 'processing' ? 'badge-brass' :
+                    status === 'complete' ? 'badge-ok' :
+                      'badge-danger'
+                    }>
                     {status.toUpperCase()}
                   </span>
                 </div>
@@ -1103,25 +1096,25 @@ function App() {
                 )}
 
                 {/* Logs Terminal */}
-                <div className={`bg-[#0c0c0e] rounded-xl border border-white/10 overflow-hidden flex flex-col transition-all duration-500 ${status === 'complete' ? 'h-32 min-h-0 opacity-50 hover:opacity-100' : 'flex-1 min-h-[200px]'}`}>
-                  <div className="px-4 py-2 border-b border-white/5 flex items-center justify-between bg-white/5 shrink-0">
-                    <span className="text-xs font-mono text-zinc-400 flex items-center gap-2">
+                <div className={`bg-paper rounded-card border border-rule overflow-hidden flex flex-col transition-all duration-500 ${status === 'complete' ? 'h-32 min-h-0 opacity-50 hover:opacity-100' : 'flex-1 min-h-[200px]'}`}>
+                  <div className="px-4 py-2 border-b border-rule flex items-center justify-between bg-paper2 shrink-0">
+                    <span className="readout flex items-center gap-2">
                       <Terminal size={12} /> System Logs
                     </span>
-                    <button onClick={() => setLogsVisible(!logsVisible)} className="text-zinc-500 hover:text-white transition-colors">
+                    <button onClick={() => setLogsVisible(!logsVisible)} className="text-muted hover:text-ink transition-colors">
                       {logsVisible ? <ChevronDown size={14} /> : <ChevronDown size={14} className="rotate-180" />}
                     </button>
                   </div>
                   {logsVisible && (
-                    <div className="flex-1 p-4 overflow-y-auto font-mono text-xs space-y-1.5 custom-scrollbar text-zinc-400">
+                    <div className="flex-1 p-4 overflow-y-auto font-mono text-xs space-y-1.5 custom-scrollbar text-muted">
                       {logs.map((log, i) => (
-                        <div key={i} className={`flex gap-2 ${log.toLowerCase().includes('error') ? 'text-red-400' : 'text-zinc-400'}`}>
-                          <span className="text-zinc-700 shrink-0">{new Date().toLocaleTimeString()}</span>
+                        <div key={i} className={`flex gap-2 ${log.toLowerCase().includes('error') ? 'text-danger' : 'text-muted'}`}>
+                          <span className="text-muted opacity-50 shrink-0">{new Date().toLocaleTimeString()}</span>
                           <span>{log}</span>
                         </div>
                       ))}
                       {status === 'processing' && (
-                        <div className="animate-pulse text-primary/70">_</div>
+                        <div className="animate-pulse text-brass">_</div>
                       )}
                     </div>
                   )}
@@ -1129,27 +1122,26 @@ function App() {
               </div>
 
               {/* Right Panel: Results Grid */}
-              <div className={`${status === 'complete' ? 'w-full md:w-[70%] lg:w-[75%]' : 'w-full md:w-[45%] lg:w-[40%]'} h-full flex flex-col bg-background p-6 transition-all duration-700 ease-in-out`}>
-                <h2 className="text-lg font-semibold mb-6 flex items-center gap-2 shrink-0">
-                  <Sparkles className="text-yellow-400" size={20} />
+              <div className={`${status === 'complete' ? 'w-full md:w-[70%] lg:w-[75%]' : 'w-full md:w-[45%] lg:w-[40%]'} md:h-full flex flex-col shrink-0 md:shrink card p-4 sm:p-6 transition-all duration-700 ease-in-out`}>
+                <h2 className="font-display lowercase text-xl text-ink mb-6 flex flex-wrap items-center gap-2 shrink-0">
                   Generated Shorts
                   {results?.clips?.length > 0 && (
-                    <span className="text-xs bg-white/10 text-white px-2 py-0.5 rounded-full ml-auto">
+                    <span className="readout bg-paper3 px-2.5 py-1 rounded-full ml-auto">
                       {results.clips.length} Clips
                     </span>
                   )}
                   {results?.cost_analysis && !isManaged && (
-                    <span className="text-xs bg-green-500/10 border border-green-500/20 text-green-400 px-2 py-0.5 rounded-full ml-2" title={`Input: ${results.cost_analysis.input_tokens} | Output: ${results.cost_analysis.output_tokens}`}>
-                      ${results.cost_analysis.total_cost.toFixed(5)}
+                    <span className="readout bg-paper3 px-2.5 py-1 rounded-full ml-2" title={`Input: ${results.cost_analysis.input_tokens} | Output: ${results.cost_analysis.output_tokens}`}>
+                      GEMINI · ${results.cost_analysis.total_cost.toFixed(5)}
                     </span>
                   )}
                   {results?.clips?.length > 1 && status === 'complete' && (
                     <button
                       onClick={() => setShowScheduleWeek(true)}
-                      className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-purple-500/20 to-indigo-500/20 hover:from-purple-500/30 hover:to-indigo-500/30 border border-purple-500/30 text-purple-300 hover:text-purple-200 rounded-full text-xs font-bold transition-all"
+                      className="btn-primary px-4 py-2 text-xs ml-auto"
                     >
                       <Calendar size={14} />
-                      Programar Semana
+                      schedule week
                     </button>
                   )}
                 </h2>
@@ -1176,12 +1168,12 @@ function App() {
                     </div>
                   ) : (
                     status === 'processing' ? (
-                      <div className="h-full flex flex-col items-center justify-center text-zinc-500 space-y-4 opacity-50">
-                        <div className="w-12 h-12 rounded-full border-2 border-zinc-800 border-t-primary animate-spin" />
-                        <p className="text-sm">Waiting for clips...</p>
+                      <div className="h-full flex flex-col items-center justify-center text-muted space-y-4">
+                        <Loader2 size={32} className="animate-spin text-brass" />
+                        <p className="text-sm lowercase">Waiting for clips...</p>
                       </div>
                     ) : status === 'error' ? (
-                      <div className="h-full flex flex-col items-center justify-center text-red-400 space-y-2">
+                      <div className="h-full flex flex-col items-center justify-center text-danger space-y-2">
                         <p>Generation failed.</p>
                       </div>
                     ) : null
@@ -1197,96 +1189,97 @@ function App() {
       </main>
 
       {/* Missing API Key Modal */}
-      {showKeyModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowKeyModal(false)}>
-          <div className="bg-[#18181b] border border-white/10 rounded-2xl p-6 max-w-md w-full mx-4 space-y-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-lg font-bold text-white">
-              {!apiKey && !uploadPostKey
-                ? 'Required API Keys Missing'
-                : !apiKey
-                  ? 'Gemini API Key Required'
-                  : 'Upload-Post API Key Required'}
-            </h2>
-            <p className="text-sm text-zinc-400">
-              OpenShorts needs both a <strong className="text-zinc-200">Gemini</strong> API key and an <strong className="text-zinc-200">Upload-Post</strong> API key. Both have free tiers.
+      <Modal
+        isOpen={showKeyModal}
+        onClose={() => setShowKeyModal(false)}
+        eyebrow="SETUP"
+        title={!apiKey && !uploadPostKey
+          ? 'Required API Keys Missing'
+          : !apiKey
+            ? 'Gemini API Key Required'
+            : 'Upload-Post API Key Required'}
+        footer={
+          <div className="flex gap-3">
+            <button
+              onClick={() => setShowKeyModal(false)}
+              className="btn-ghost flex-1 px-4 py-2 text-sm"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => { setShowKeyModal(false); setActiveTab('settings'); }}
+              className="btn-primary flex-1 px-4 py-2 text-sm"
+            >
+              Go to Settings
+            </button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-muted">
+            OpenShorts needs both a <strong className="text-ink2">Gemini</strong> API key and an <strong className="text-ink2">Upload-Post</strong> API key. Both have free tiers.
+          </p>
+
+          {/* Gemini block */}
+          <div className={`rounded-input p-4 space-y-2 border ${!apiKey ? 'border-rule2' : 'border-rule opacity-70'}`}>
+            <p className="text-xs font-medium text-ink flex items-center gap-2">
+              {apiKey ? <Check size={12} className="text-ok" /> : <AlertTriangle size={12} className="text-warn" />}
+              Gemini API Key {apiKey && <span className="text-ok">— set</span>}
             </p>
+            {!apiKey && (
+              <>
+                <ol className="text-xs text-muted space-y-1 list-decimal list-inside">
+                  <li>Go to <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-brass underline">aistudio.google.com/app/apikey</a></li>
+                  <li>Sign in with your Google account</li>
+                  <li>Click "Create API Key"</li>
+                  <li>Copy the key and paste it below</li>
+                </ol>
+                <input
+                  type="text"
+                  placeholder="Paste your Gemini API key here..."
+                  className="input-field"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && e.target.value.trim()) {
+                      setApiKey(e.target.value.trim());
+                    }
+                  }}
+                />
+              </>
+            )}
+          </div>
 
-            {/* Gemini block */}
-            <div className={`rounded-lg p-4 space-y-2 border ${!apiKey ? 'bg-blue-500/5 border-blue-500/30' : 'bg-white/5 border-white/10 opacity-70'}`}>
-              <p className="text-xs font-semibold text-zinc-200 flex items-center gap-2">
-                {apiKey ? <Check size={12} className="text-green-400" /> : <AlertTriangle size={12} className="text-amber-400" />}
-                Gemini API Key {apiKey && <span className="text-green-400">— set</span>}
-              </p>
-              {!apiKey && (
-                <>
-                  <ol className="text-xs text-zinc-400 space-y-1 list-decimal list-inside">
-                    <li>Go to <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-400 underline">aistudio.google.com/app/apikey</a></li>
-                    <li>Sign in with your Google account</li>
-                    <li>Click "Create API Key"</li>
-                    <li>Copy the key and paste it below</li>
-                  </ol>
-                  <input
-                    type="text"
-                    placeholder="Paste your Gemini API key here..."
-                    className="w-full bg-black/50 border border-white/20 rounded-lg px-4 py-2.5 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && e.target.value.trim()) {
-                        setApiKey(e.target.value.trim());
-                      }
-                    }}
-                  />
-                </>
-              )}
-            </div>
-
-            {/* Upload-Post block */}
-            <div className={`rounded-lg p-4 space-y-2 border ${!uploadPostKey ? 'bg-violet-500/5 border-violet-500/30' : 'bg-white/5 border-white/10 opacity-70'}`}>
-              <p className="text-xs font-semibold text-zinc-200 flex items-center gap-2">
-                {uploadPostKey ? <Check size={12} className="text-green-400" /> : <AlertTriangle size={12} className="text-amber-400" />}
-                Upload-Post API Key {uploadPostKey && <span className="text-green-400">— set</span>}
-              </p>
-              {!uploadPostKey && (
-                <>
-                  <p className="text-xs text-zinc-400">
-                    Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts. Free tier available, no credit card needed.
-                  </p>
-                  <ol className="text-xs text-zinc-400 space-y-1 list-decimal list-inside">
-                    <li>Register at <a href="https://app.upload-post.com/login" target="_blank" rel="noopener noreferrer" className="text-violet-400 underline">app.upload-post.com</a></li>
-                    <li>Connect your TikTok, Instagram, or YouTube accounts</li>
-                    <li>Go to <a href="https://app.upload-post.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-violet-400 underline">API Keys</a> and generate one</li>
-                    <li>Paste it below</li>
-                  </ol>
-                  <input
-                    type="text"
-                    placeholder="Paste your Upload-Post API key here..."
-                    className="w-full bg-black/50 border border-white/20 rounded-lg px-4 py-2.5 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-violet-500"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && e.target.value.trim()) {
-                        setUploadPostKey(e.target.value.trim());
-                      }
-                    }}
-                  />
-                </>
-              )}
-            </div>
-
-            <div className="flex gap-3">
-              <button
-                onClick={() => setShowKeyModal(false)}
-                className="flex-1 text-sm text-zinc-400 py-2 rounded-lg border border-white/10 hover:bg-white/5 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => { setShowKeyModal(false); setActiveTab('settings'); }}
-                className="flex-1 text-sm text-white py-2 rounded-lg bg-blue-600 hover:bg-blue-500 transition-colors font-medium"
-              >
-                Go to Settings
-              </button>
-            </div>
+          {/* Upload-Post block */}
+          <div className={`rounded-input p-4 space-y-2 border ${!uploadPostKey ? 'border-rule2' : 'border-rule opacity-70'}`}>
+            <p className="text-xs font-medium text-ink flex items-center gap-2">
+              {uploadPostKey ? <Check size={12} className="text-ok" /> : <AlertTriangle size={12} className="text-warn" />}
+              Upload-Post API Key {uploadPostKey && <span className="text-ok">— set</span>}
+            </p>
+            {!uploadPostKey && (
+              <>
+                <p className="text-xs text-muted">
+                  Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts. Free tier available, no credit card needed.
+                </p>
+                <ol className="text-xs text-muted space-y-1 list-decimal list-inside">
+                  <li>Register at <a href="https://app.upload-post.com/login" target="_blank" rel="noopener noreferrer" className="text-brass underline">app.upload-post.com</a></li>
+                  <li>Connect your TikTok, Instagram, or YouTube accounts</li>
+                  <li>Go to <a href="https://app.upload-post.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-brass underline">API Keys</a> and generate one</li>
+                  <li>Paste it below</li>
+                </ol>
+                <input
+                  type="text"
+                  placeholder="Paste your Upload-Post API key here..."
+                  className="input-field"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && e.target.value.trim()) {
+                      setUploadPostKey(e.target.value.trim());
+                    }
+                  }}
+                />
+              </>
+            )}
           </div>
         </div>
-      )}
+      </Modal>
 
       <ScheduleWeekModal
         isOpen={showScheduleWeek}

@@ -5,19 +5,19 @@ import App from './App.jsx'
 import Landing from './Landing.jsx'
 import Legal from './Legal.jsx'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
-import PricingSection from './components/PricingSection'
+import PricingPage from './components/PricingPage'
 import AccountPage from './components/AccountPage'
 import LoginModal from './components/LoginModal'
 
 function PageShell({ title, children }) {
   return (
-    <div className="min-h-screen bg-background text-white">
-      <header className="h-16 border-b border-white/5 flex items-center justify-between px-6">
-        <a href="#app" className="font-bold text-lg">OpenShorts</a>
-        <a href="#app" className="text-sm text-zinc-400 hover:text-white">← Back to app</a>
+    <div className="min-h-screen bg-paper text-ink2">
+      <header className="h-16 border-b border-rule bg-paper flex items-center justify-between px-6">
+        <a href="#app" className="font-display lowercase text-lg text-ink">OpenShorts</a>
+        <a href="#app" className="text-sm lowercase text-muted hover:text-ink transition-colors">← Back to app</a>
       </header>
       <main className="p-8">
-        {title && <h1 className="text-3xl font-bold text-center mb-10">{title}</h1>}
+        {title && <h1 className="font-display lowercase text-3xl text-ink text-center mb-10">{title}</h1>}
         {children}
       </main>
     </div>
@@ -27,8 +27,8 @@ function PageShell({ title, children }) {
 function PricingView() {
   const [showLogin, setShowLogin] = useState(false);
   return (
-    <PageShell title="Choose your plan">
-      <PricingSection onRequireLogin={() => setShowLogin(true)} />
+    <PageShell>
+      <PricingPage onRequireLogin={() => setShowLogin(true)} />
       {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}
     </PageShell>
   );
@@ -49,6 +49,8 @@ function Root() {
     if (hash.startsWith('#/account')) return 'account';
     if (hash.startsWith('#/pricing')) return 'pricing';
     if (hash === '#legal') return 'legal';
+    // #landing = explicit landing view (app logo); section anchors keep the landing mounted
+    if (['#landing', '#features', '#how-it-works', '#pricing', '#comparison', '#faq'].includes(hash)) return 'landing';
     if (hash === '#app' || localStorage.getItem('openshorts_skip_landing') === '1') return 'app';
     return 'landing';
   };

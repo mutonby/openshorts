@@ -7,10 +7,22 @@ const SUPPORT_EMAIL = 'info@openshorts.app';
 
 function Section({ title, children }) {
     return (
-        <section className="mb-7">
-            <h2 className="text-lg font-bold text-white mb-2">{title}</h2>
-            <div className="text-zinc-300 leading-relaxed space-y-2 text-sm">{children}</div>
+        <section className="mb-10">
+            <h2 className="font-display lowercase text-xl text-ink mb-3">{title}</h2>
+            <div className="text-ink2 leading-relaxed space-y-3 text-sm">{children}</div>
         </section>
+    );
+}
+
+function A({ href, children, external }) {
+    return (
+        <a
+            className="underline underline-offset-2 hover:text-brass transition-colors"
+            href={href}
+            {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+        >
+            {children}
+        </a>
     );
 }
 
@@ -20,33 +32,30 @@ export default function Legal() {
     };
 
     return (
-        <div className="min-h-screen bg-bg text-white">
-            <header className="border-b border-white/5 sticky top-0 bg-bg/95 backdrop-blur z-10">
-                <div className="max-w-3xl mx-auto px-6 py-4 flex items-center">
-                    <button
-                        onClick={handleBack}
-                        className="text-zinc-400 hover:text-white flex items-center gap-2 text-sm"
-                    >
+        <div className="min-h-screen bg-paper text-ink2">
+            <header className="border-b border-rule sticky top-0 bg-paper z-10">
+                <div className="max-w-[65ch] mx-auto px-6 py-3 flex items-center">
+                    <button onClick={handleBack} className="btn-quiet">
                         <ArrowLeft size={16} /> Back
                     </button>
                 </div>
             </header>
 
-            <main className="max-w-3xl mx-auto px-6 py-12">
-                <h1 className="text-3xl md:text-4xl font-bold mb-2">Terms & Privacy</h1>
-                <p className="text-zinc-500 text-sm mb-10">Last updated: {LAST_UPDATED}</p>
+            <main className="max-w-[65ch] mx-auto px-6 py-12">
+                <h1 className="font-display lowercase text-3xl md:text-4xl text-ink mb-3">Terms & Privacy</h1>
+                <p className="readout mb-12">Last updated: {LAST_UPDATED}</p>
 
                 <Section title="The short version">
                     <p>
                         OpenShorts is an AI clip generator. There are two ways to use it:
                     </p>
-                    <ul className="list-disc pl-6 space-y-1">
+                    <ul className="list-disc pl-6 space-y-2">
                         <li>
-                            <strong className="text-white">Self-hosted (free):</strong> the open-source software, run on
+                            <strong className="text-ink">Self-hosted (free):</strong> the open-source software, run on
                             your own machine with your own API keys. No account, no payment, no data held by us.
                         </li>
                         <li>
-                            <strong className="text-white">Hosted at openshorts.app (paid):</strong> we run everything for
+                            <strong className="text-ink">Hosted at openshorts.app (paid):</strong> we run everything for
                             you. It requires an account and a paid subscription (with a free trial), and we store the
                             videos you generate while your subscription is active.
                         </li>
@@ -64,28 +73,28 @@ export default function Legal() {
 
                 <Section title="Free trial, plans & billing">
                     <p>
-                        Paid plans are <strong className="text-white">Starter ($12/mo · 100 min)</strong>,{' '}
-                        <strong className="text-white">Creator ($29/mo · 300 min)</strong> and{' '}
-                        <strong className="text-white">Pro ($59/mo · 750 min)</strong>, each also available annually (two
+                        Paid plans are <strong className="text-ink">Starter ($12/mo · 100 min)</strong>,{' '}
+                        <strong className="text-ink">Creator ($29/mo · 300 min)</strong> and{' '}
+                        <strong className="text-ink">Pro ($59/mo · 750 min)</strong>, each also available annually (two
                         months free). "Minutes" are minutes of input video processed per billing period; additional
                         minutes can be bought as one-off top-ups.
                     </p>
                     <p>
-                        <strong className="text-white">Free trial:</strong> new subscriptions start with a{' '}
-                        <strong className="text-white">3-day free trial</strong> that includes up to{' '}
-                        <strong className="text-white">20 minutes</strong> of video processing. You provide a payment
-                        method up front but are <strong className="text-white">not charged during the trial</strong>. If
+                        <strong className="text-ink">Free trial:</strong> new subscriptions start with a{' '}
+                        <strong className="text-ink">3-day free trial</strong> that includes up to{' '}
+                        <strong className="text-ink">20 minutes</strong> of video processing. You provide a payment
+                        method up front but are <strong className="text-ink">not charged during the trial</strong>. If
                         you do not cancel before the trial ends, your subscription automatically begins, your full plan
                         minutes unlock, and your payment method is charged the plan price. You can cancel at any time from
                         your account.
                     </p>
                     <p>
-                        <strong className="text-white">Auto-renewal:</strong> subscriptions renew automatically each
+                        <strong className="text-ink">Auto-renewal:</strong> subscriptions renew automatically each
                         period (monthly or yearly) at the then-current price until you cancel. We'll email a reminder
                         before the trial converts to a paid subscription.
                     </p>
                     <p>
-                        Payments are processed by <strong className="text-white">Stripe</strong>. We never see or store
+                        Payments are processed by <strong className="text-ink">Stripe</strong>. We never see or store
                         your full card details. Prices are in USD and exclude any applicable taxes/VAT, which are added
                         at checkout where required.
                     </p>
@@ -97,12 +106,12 @@ export default function Legal() {
                         stays active until the end of the current paid period; we do not charge you again after that.
                     </p>
                     <p>
-                        Except where required by law, payments are <strong className="text-white">non-refundable</strong>{' '}
+                        Except where required by law, payments are <strong className="text-ink">non-refundable</strong>{' '}
                         and we do not prorate partial periods. To avoid being charged for a period you don't want, cancel
                         before it renews (and, for the trial, before it ends).
                     </p>
                     <p>
-                        <strong className="text-white">EU/EEA consumers:</strong> the Service is digital content/services
+                        <strong className="text-ink">EU/EEA consumers:</strong> the Service is digital content/services
                         supplied immediately. By starting to use it (including during the trial) you request immediate
                         performance and acknowledge that you lose the 14-day right of withdrawal once performance has
                         begun, to the extent permitted by law.
@@ -114,7 +123,7 @@ export default function Legal() {
                         Before processing a video you must confirm — via the checkbox in the upload interface — that you
                         own the content or have the rights to process it. By doing so you represent and warrant that:
                     </p>
-                    <ul className="list-disc pl-6 space-y-1">
+                    <ul className="list-disc pl-6 space-y-2">
                         <li>You own all rights to the content, or have a valid license or permission to process it;</li>
                         <li>The content does not infringe any third-party copyright, trademark, privacy, or other right;</li>
                         <li>The content is not unlawful, defamatory, or otherwise prohibited.</li>
@@ -127,31 +136,31 @@ export default function Legal() {
                 </Section>
 
                 <Section title="What we store, and for how long">
-                    <ul className="list-disc pl-6 space-y-1">
+                    <ul className="list-disc pl-6 space-y-2">
                         <li>
-                            <strong className="text-white">Account data:</strong> your email address and your subscription
+                            <strong className="text-ink">Account data:</strong> your email address and your subscription
                             status and usage (minutes used). Kept while your account exists.
                         </li>
                         <li>
-                            <strong className="text-white">Generated videos:</strong> the clips you create are stored in
-                            encrypted cloud storage and available in your library <strong className="text-white">while your
+                            <strong className="text-ink">Generated videos:</strong> the clips you create are stored in
+                            encrypted cloud storage and available in your library <strong className="text-ink">while your
                             subscription is active, plus 7 days after it ends</strong>, then permanently deleted.
                         </li>
                         <li>
-                            <strong className="text-white">Uploaded/source files &amp; working data:</strong> deleted from
+                            <strong className="text-ink">Uploaded/source files &amp; working data:</strong> deleted from
                             our processing servers shortly after the job finishes (typically within 1 hour).
                         </li>
                         <li>
-                            <strong className="text-white">Billing data:</strong> handled by Stripe; we keep a reference
+                            <strong className="text-ink">Billing data:</strong> handled by Stripe; we keep a reference
                             to your Stripe customer/subscription, not your card.
                         </li>
                         <li>
-                            <strong className="text-white">Optional add-on keys (ElevenLabs, fal.ai):</strong> for BYOK
+                            <strong className="text-ink">Optional add-on keys (ElevenLabs, fal.ai):</strong> for BYOK
                             features, stored encrypted in your browser and sent as request headers only when needed —
                             never written to our database.
                         </li>
                         <li>
-                            <strong className="text-white">Server access logs:</strong> retained up to 30 days for
+                            <strong className="text-ink">Server access logs:</strong> retained up to 30 days for
                             debugging and abuse prevention.
                         </li>
                     </ul>
@@ -161,12 +170,12 @@ export default function Legal() {
                 <Section title="Subprocessors">
                     <p>To provide the hosted Service we share the minimum necessary data with a small number of
                         trusted service providers, each acting on our behalf:</p>
-                    <ul className="list-disc pl-6 space-y-1">
-                        <li><strong className="text-white">A payments provider</strong> — payments &amp; subscriptions.</li>
-                        <li><strong className="text-white">A cloud infrastructure &amp; storage provider</strong> — hosting and storing your generated videos.</li>
-                        <li><strong className="text-white">An AI provider</strong> — video analysis, titles and thumbnails.</li>
-                        <li><strong className="text-white">A social-publishing provider</strong> — posting to TikTok, Instagram &amp; YouTube (only when you connect them).</li>
-                        <li><strong className="text-white">An email provider</strong> — transactional email (sign-in links, notices).</li>
+                    <ul className="list-disc pl-6 space-y-2">
+                        <li><strong className="text-ink">A payments provider</strong> — payments &amp; subscriptions.</li>
+                        <li><strong className="text-ink">A cloud infrastructure &amp; storage provider</strong> — hosting and storing your generated videos.</li>
+                        <li><strong className="text-ink">An AI provider</strong> — video analysis, titles and thumbnails.</li>
+                        <li><strong className="text-ink">A social-publishing provider</strong> — posting to TikTok, Instagram &amp; YouTube (only when you connect them).</li>
+                        <li><strong className="text-ink">An email provider</strong> — transactional email (sign-in links, notices).</li>
                     </ul>
                     <p>Each is bound by its own terms and privacy policy. We can identify the specific providers to
                         you on request where required by law.</p>
@@ -187,11 +196,11 @@ export default function Legal() {
                         Under the GDPR / UK GDPR you may access, rectify, erase, restrict, object to, or port your
                         personal data. You can delete your account and its data — including your video library — by
                         emailing{' '}
-                        <a className="text-primary underline" href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>. You may
+                        <A href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</A>. You may
                         also lodge a complaint with your local supervisory authority (in Spain: AEPD,{' '}
-                        <a className="text-primary underline" href="https://www.aepd.es" target="_blank" rel="noopener noreferrer">
+                        <A href="https://www.aepd.es" external>
                             aepd.es
-                        </a>
+                        </A>
                         ).
                     </p>
                 </Section>
@@ -199,7 +208,7 @@ export default function Legal() {
                 <Section title="Copyright takedowns">
                     <p>
                         If you believe content processed through the Service infringes your copyright, email{' '}
-                        <a className="text-primary underline" href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> with:
+                        <A href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</A> with:
                         identification of the work, identification of the allegedly infringing material (enough detail to
                         locate it), your contact information, and a statement that you are authorized to act for the
                         rights holder.
@@ -219,10 +228,10 @@ export default function Legal() {
                         We may update this notice; the "Last updated" date reflects the latest revision. For material
                         changes affecting paid subscribers we'll give reasonable notice. Continued use after a change
                         constitutes acceptance. Questions:{' '}
-                        <a className="text-primary underline" href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> or{' '}
-                        <a className="text-primary underline" href={ISSUES_URL} target="_blank" rel="noopener noreferrer">
+                        <A href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</A> or{' '}
+                        <A href={ISSUES_URL} external>
                             GitHub Issues
-                        </a>
+                        </A>
                         .
                     </p>
                     <p>These terms are governed by the laws of Spain.</p>

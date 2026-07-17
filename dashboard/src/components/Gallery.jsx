@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { LayoutGrid, AlertCircle, Loader2 } from 'lucide-react';
+import { AlertCircle, Loader2 } from 'lucide-react';
 import { getApiUrl } from '../config';
 import GalleryCard from './GalleryCard';
 
@@ -62,29 +62,30 @@ export default function Gallery() {
             { rootMargin: '200px', threshold: 0.1 }
         );
 
-        if (loaderRef.current) {
-            observer.observe(loaderRef.current);
+        const node = loaderRef.current;
+        if (node) {
+            observer.observe(node);
         }
 
         return () => {
-            if (loaderRef.current) {
-                observer.unobserve(loaderRef.current);
+            if (node) {
+                observer.unobserve(node);
             }
         };
     }, [hasMore, loadingMore, loading, offset, fetchClips]);
 
     if (loading) {
         return (
-            <div className="h-full flex flex-col items-center justify-center text-zinc-500 animate-[fadeIn_0.5s_ease-out]">
-                <Loader2 size={32} className="animate-spin mb-4 text-primary" />
-                <p>Loading your viral history...</p>
+            <div className="h-full flex flex-col items-center justify-center text-muted animate-fade">
+                <Loader2 size={32} className="animate-spin mb-4 text-brass" />
+                <p className="lowercase">Loading your viral history...</p>
             </div>
         );
     }
 
     if (error) {
         return (
-            <div className="h-full flex flex-col items-center justify-center text-red-400 p-6">
+            <div className="h-full flex flex-col items-center justify-center text-danger p-6">
                 <AlertCircle size={32} className="mb-4" />
                 <p>Error loading gallery: {error}</p>
                 <button
@@ -93,7 +94,7 @@ export default function Gallery() {
                         setOffset(0);
                         fetchClips(0, false);
                     }}
-                    className="mt-4 px-4 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-sm text-white transition-colors"
+                    className="btn-quiet mt-4"
                 >
                     Retry
                 </button>
@@ -102,25 +103,26 @@ export default function Gallery() {
     }
 
     return (
-        <div className="h-full overflow-y-auto p-6 md:p-8 animate-[fadeIn_0.3s_ease-out]">
-            <div className="flex items-center justify-between mb-8">
-                <h1 className="text-2xl font-bold flex items-center gap-3">
-                    <LayoutGrid className="text-primary" /> Clip Gallery
-                </h1>
-                <span className="text-xs bg-white/10 text-white px-3 py-1 rounded-full border border-white/5">
+        <div className="h-full overflow-y-auto p-6 md:p-8 animate-fade">
+            <div className="flex items-end justify-between mb-8">
+                <div>
+                    <p className="eyebrow mb-1.5">Library</p>
+                    <h1 className="font-display lowercase text-2xl text-ink">Clip Gallery</h1>
+                </div>
+                <span className="readout">
                     {clips.length} {clips.length === 1 ? 'Clip' : 'Clips'}{hasMore ? '+' : ''}
                 </span>
             </div>
 
             {clips.length === 0 ? (
-                <div className="text-center py-20 text-zinc-500">
-                    <p className="text-lg mb-2">No clips found yet.</p>
-                    <p className="text-sm">Process some videos to populate your gallery!</p>
+                <div className="text-center py-20 text-muted">
+                    <p className="text-lg mb-2 lowercase">No clips found yet.</p>
+                    <p className="text-sm lowercase">Process some videos to populate your gallery!</p>
                 </div>
             ) : (
                 <>
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6 pb-10">
-                        {clips.map((clip, i) => (
+                        {clips.map((clip) => (
                             <GalleryCard key={`${clip.job_id}-${clip.index}`} clip={clip} />
                         ))}
                     </div>
@@ -132,9 +134,9 @@ export default function Gallery() {
                             className="flex justify-center py-8"
                         >
                             {loadingMore && (
-                                <div className="flex items-center gap-2 text-zinc-500">
+                                <div className="flex items-center gap-2 text-muted">
                                     <Loader2 size={20} className="animate-spin" />
-                                    <span className="text-sm">Loading more clips...</span>
+                                    <span className="text-sm lowercase">Loading more clips...</span>
                                 </div>
                             )}
                         </div>
@@ -144,4 +146,3 @@ export default function Gallery() {
         </div>
     );
 }
-

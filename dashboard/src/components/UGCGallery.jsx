@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Film, Download, Copy, Check, ExternalLink, Loader2, Play, User } from 'lucide-react';
 import { getApiUrl } from '../config';
+import SegmentedControl from './ui/SegmentedControl';
 
 export default function UGCGallery() {
   const [tab, setTab] = useState('videos');
@@ -32,8 +33,8 @@ export default function UGCGallery() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 size={24} className="animate-spin text-violet-400" />
-        <span className="ml-2 text-zinc-400">Loading gallery...</span>
+        <Loader2 size={24} className="animate-spin text-brass" />
+        <span className="ml-2 text-muted lowercase">Loading gallery...</span>
       </div>
     );
   }
@@ -41,47 +42,41 @@ export default function UGCGallery() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="text-lg font-bold text-zinc-200">UGC Gallery</h2>
-          <p className="text-xs text-zinc-500">{videos.length} videos · {avatars.length} avatars</p>
+          <p className="eyebrow mb-1">04 · UGC GALLERY</p>
+          <h2 className="font-display lowercase text-2xl md:text-3xl text-ink">ugc gallery</h2>
+          <p className="readout mt-2">{videos.length} videos · {avatars.length} avatars</p>
         </div>
         <a
           href={getApiUrl('/gallery')}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1"
+          className="btn-quiet text-xs shrink-0"
         >
-          <ExternalLink size={12} /> Public Gallery
+          <ExternalLink size={13} /> public gallery
         </a>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-white/5 p-1 rounded-lg w-fit">
-        <button
-          onClick={() => setTab('videos')}
-          className={`px-4 py-1.5 rounded-md text-xs font-medium transition-all ${
-            tab === 'videos' ? 'bg-violet-500/20 text-violet-300' : 'text-zinc-400 hover:text-white'
-          }`}
-        >
-          <Film size={12} className="inline mr-1.5" />Videos ({videos.length})
-        </button>
-        <button
-          onClick={() => setTab('avatars')}
-          className={`px-4 py-1.5 rounded-md text-xs font-medium transition-all ${
-            tab === 'avatars' ? 'bg-violet-500/20 text-violet-300' : 'text-zinc-400 hover:text-white'
-          }`}
-        >
-          <User size={12} className="inline mr-1.5" />Avatars ({avatars.length})
-        </button>
+      <div className="max-w-xs">
+        <SegmentedControl
+          size="sm"
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: 'videos', label: `Videos (${videos.length})`, icon: <Film size={14} /> },
+            { value: 'avatars', label: `Avatars (${avatars.length})`, icon: <User size={14} /> },
+          ]}
+        />
       </div>
 
       {/* Videos Tab */}
       {tab === 'videos' && (
         videos.length === 0 ? (
           <div className="text-center py-16">
-            <Film size={40} className="mx-auto text-zinc-700 mb-3" />
-            <p className="text-sm text-zinc-500">No videos yet. Generate one from AI Shorts.</p>
+            <Film size={40} className="mx-auto text-muted opacity-40 mb-3" />
+            <p className="text-sm text-muted lowercase">No videos yet. Generate one from AI Shorts.</p>
           </div>
         ) : (
           <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
@@ -96,11 +91,11 @@ export default function UGCGallery() {
       {tab === 'avatars' && (
         avatars.length === 0 ? (
           <div className="text-center py-16">
-            <User size={40} className="mx-auto text-zinc-700 mb-3" />
-            <p className="text-sm text-zinc-500">No avatars yet. Generate actors from AI Shorts.</p>
+            <User size={40} className="mx-auto text-muted opacity-40 mb-3" />
+            <p className="text-sm text-muted lowercase">No avatars yet. Generate actors from AI Shorts.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3">
+          <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-3">
             {avatars.map((avatar, i) => (
               <AvatarCard key={avatar.key || i} avatar={avatar} copied={copied} onCopy={handleCopy} />
             ))}
@@ -113,31 +108,31 @@ export default function UGCGallery() {
 
 function AvatarCard({ avatar, copied, onCopy }) {
   return (
-    <div className="group rounded-xl overflow-hidden border border-white/10 bg-white/5 hover:border-white/20 transition-all">
+    <div className="group card overflow-hidden transition-colors hover:border-rule2">
       <div className="aspect-[3/4] bg-black">
         <img src={avatar.url} alt="Avatar" className="w-full h-full object-cover" />
       </div>
       <div className="p-2 space-y-1">
         {avatar.description ? (
           <div className="relative pr-4">
-            <p className="text-[9px] text-zinc-400 line-clamp-2">{avatar.description}</p>
+            <p className="text-micro text-muted line-clamp-2">{avatar.description}</p>
             <button
               onClick={() => onCopy(avatar.description, `avatar-${avatar.key}`)}
-              className="absolute top-0 right-0 p-0.5 text-zinc-600 hover:text-zinc-300"
+              className="absolute top-0 right-0 p-0.5 text-muted hover:text-brass transition-colors"
               title="Copy prompt"
             >
-              {copied === `avatar-${avatar.key}` ? <Check size={9} /> : <Copy size={9} />}
+              {copied === `avatar-${avatar.key}` ? <Check size={10} className="text-ok" /> : <Copy size={10} />}
             </button>
           </div>
         ) : (
-          <p className="text-[9px] text-zinc-600 italic">No description</p>
+          <p className="text-micro text-muted opacity-60 lowercase">No description</p>
         )}
         <a
           href={avatar.url}
           download
-          className="block text-center text-[9px] bg-white/5 hover:bg-white/10 text-zinc-400 py-1 rounded-md transition-colors"
+          className="block text-center text-micro lowercase bg-paper3 hover:brightness-110 text-muted hover:text-ink2 py-1 rounded-full transition-all"
         >
-          <Download size={9} className="inline mr-0.5" />Download
+          <Download size={10} className="inline mr-0.5" />Download
         </a>
       </div>
     </div>
@@ -168,7 +163,7 @@ function VideoCard({ video, copied, onCopy }) {
   const hashtags = (video.hashtags || []).join(' ');
 
   return (
-    <div className="group rounded-xl overflow-hidden border border-white/10 bg-white/5 hover:border-white/20 transition-all">
+    <div className="group card overflow-hidden transition-colors hover:border-rule2">
       <div
         className="relative aspect-[9/16] bg-black cursor-pointer"
         onMouseEnter={handleMouseEnter}
@@ -189,28 +184,26 @@ function VideoCard({ video, copied, onCopy }) {
           </div>
         )}
         <div className="absolute top-1.5 right-1.5">
-          <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded-full ${
-            mode === 'lowcost' ? 'bg-green-500 text-black' : 'bg-violet-500 text-white'
-          }`}>
+          <span className={`${mode === 'lowcost' ? 'badge-ok' : 'badge-brass'} bg-black/70`}>
             {mode === 'lowcost' ? 'LOW COST' : 'PREMIUM'}
           </span>
         </div>
       </div>
 
       <div className="p-2 space-y-1">
-        <h3 className="text-[11px] font-semibold text-zinc-200 truncate">{video.title || 'Untitled'}</h3>
-        <p className="text-[9px] text-zinc-500">
+        <h3 className="text-xs font-semibold text-ink truncate">{video.title || 'Untitled'}</h3>
+        <p className="readout">
           {video.duration?.toFixed(0)}s · ${video.cost_estimate?.total?.toFixed(2) || '?'}
         </p>
         {caption && (
           <div className="relative pr-4">
-            <p className="text-[9px] text-zinc-400 line-clamp-2">{caption}</p>
+            <p className="text-micro text-muted line-clamp-2">{caption}</p>
             <button
               onClick={() => onCopy(`${caption}\n${hashtags}`, `caption-${video.video_id}`)}
-              className="absolute top-0 right-0 p-0.5 text-zinc-600 hover:text-zinc-300"
+              className="absolute top-0 right-0 p-0.5 text-muted hover:text-brass transition-colors"
               title="Copy caption"
             >
-              {copied === `caption-${video.video_id}` ? <Check size={9} /> : <Copy size={9} />}
+              {copied === `caption-${video.video_id}` ? <Check size={10} className="text-ok" /> : <Copy size={10} />}
             </button>
           </div>
         )}
@@ -218,17 +211,17 @@ function VideoCard({ video, copied, onCopy }) {
           <a
             href={video.video_url}
             download
-            className="flex-1 text-center text-[9px] bg-white/5 hover:bg-white/10 text-zinc-400 py-1 rounded-md transition-colors"
+            className="flex-1 text-center text-micro lowercase bg-paper3 hover:brightness-110 text-muted hover:text-ink2 py-1 rounded-full transition-all"
           >
-            <Download size={9} className="inline mr-0.5" />Download
+            <Download size={10} className="inline mr-0.5" />Download
           </a>
           <a
             href={getApiUrl(`/video/${video.video_id}`)}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex-1 text-center text-[9px] bg-violet-500/10 hover:bg-violet-500/20 text-violet-400 py-1 rounded-md transition-colors"
+            className="flex-1 text-center text-micro lowercase bg-paper3 hover:brightness-110 text-brass py-1 rounded-full transition-all"
           >
-            <ExternalLink size={9} className="inline mr-0.5" />View
+            <ExternalLink size={10} className="inline mr-0.5" />View
           </a>
         </div>
       </div>

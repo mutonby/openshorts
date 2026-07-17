@@ -1,0 +1,53 @@
+/* Hallmark · genre: atmospheric · theme: lumen (night foundry) · design-system: design.md · designed-as-app
+ * macrostructure: Marquee Hero (marketing) / Workbench (app) / Long Document (content)
+ * nav: N9 edge-aligned · footer: Ft5 statement · enrichment: filament apparatus (landing only)
+ * pre-emit critique: P5 H4 E4 S5 R5 V4
+ */
+
+:root {
+  /* paper */
+  --color-paper: oklch(13% 0.014 265);
+  --color-paper-2: oklch(16.5% 0.015 265);
+  --color-paper-3: oklch(20% 0.016 265);
+
+  /* ink */
+  --color-ink: oklch(96% 0.006 262);
+  --color-ink-2: oklch(86% 0.01 262);
+  --color-muted: oklch(64% 0.012 262);
+
+  /* rules */
+  --color-rule: oklch(96% 0.006 262 / 0.08);
+  --color-rule-2: oklch(96% 0.006 262 / 0.14);
+  --rule-blueprint: oklch(96% 0.006 262 / 0.04);
+
+  /* accents */
+  --color-accent: oklch(76% 0.17 50);
+  --color-accent-ink: oklch(17% 0.03 50);
+  --color-accent-2: oklch(68% 0.16 18);
+  --color-glow: oklch(80% 0.16 50 / 0.42);
+  --color-paper-emit: oklch(76% 0.17 50 / 0.04);
+  --color-focus: oklch(76% 0.17 50);
+
+  /* states */
+  --color-ok: oklch(75% 0.11 150);
+  --color-danger: oklch(66% 0.18 25);
+  --color-warn: oklch(78% 0.14 75);
+
+  /* type */
+  --font-display: "Instrument Serif", ui-serif, Georgia, serif;
+  --font-body: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --text-display: clamp(3rem, 6vw + 1rem, 6rem);
+  --tracking-display: -0.032em;
+  --tracking-micro: 0.10em;
+
+  /* geometry */
+  --radius-card: 10px;
+  --radius-input: 8px;
+
+  /* motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-short: 220ms;
+  --dur-reveal: 600ms;
+  --dur-pulse: 4s;
+}

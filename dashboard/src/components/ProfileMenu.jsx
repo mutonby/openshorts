@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { User, CreditCard, LogOut, Sparkles } from 'lucide-react';
+import { CreditCard, LogOut, Sparkles } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 // Header avatar + dropdown for signed-in cloud users: shows the email and gives
@@ -24,36 +24,36 @@ export default function ProfileMenu() {
       <button
         onClick={() => setOpen((v) => !v)}
         aria-label="Account menu"
-        className="w-8 h-8 rounded-full bg-primary/20 border border-primary/30 text-primary flex items-center justify-center text-sm font-semibold hover:bg-primary/30 transition-colors"
+        className="w-8 h-8 rounded-full bg-paper3 border border-rule hover:border-rule2 text-brass flex items-center justify-center text-sm font-medium transition-colors"
       >
         {initial}
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-2 w-60 z-30 bg-surface border border-white/10 rounded-xl shadow-xl overflow-hidden animate-[fadeIn_0.15s_ease-out]">
-          <div className="px-4 py-3 border-b border-white/5">
-            <p className="text-xs text-zinc-500">Signed in as</p>
-            <p className="text-sm text-white truncate" title={user.email}>{user.email}</p>
+        <div className="card absolute right-0 top-full mt-2 w-56 z-30 shadow-none overflow-hidden animate-fade">
+          <div className="px-4 py-3 border-b border-rule">
+            <p className="eyebrow">Signed in as</p>
+            <p className="text-sm text-ink truncate mt-0.5" title={user.email}>{user.email}</p>
           </div>
           {!isManaged && (
             <button
               onClick={() => { setOpen(false); window.location.hash = '#/pricing'; }}
-              className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-primary hover:bg-white/5 transition-colors"
+              className="w-full flex items-center gap-3 px-4 py-2.5 text-sm lowercase text-brass hover:bg-paper3 transition-colors"
             >
               <Sparkles size={16} /> Start free trial
             </button>
           )}
           <button
             onClick={() => { setOpen(false); window.location.hash = '#/account'; }}
-            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-zinc-200 hover:bg-white/5 transition-colors"
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm lowercase text-ink2 hover:bg-paper3 transition-colors"
           >
-            <CreditCard size={16} /> Account &amp; billing
+            <CreditCard size={16} className="text-muted" /> Account &amp; billing
           </button>
           <button
             onClick={() => { setOpen(false); logout(); }}
-            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-zinc-200 hover:bg-white/5 transition-colors border-t border-white/5"
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm lowercase text-ink2 hover:bg-paper3 transition-colors border-t border-rule"
           >
-            <LogOut size={16} /> Sign out
+            <LogOut size={16} className="text-muted" /> Sign out
           </button>
         </div>
       )}

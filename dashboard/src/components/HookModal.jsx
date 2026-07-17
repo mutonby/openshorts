@@ -1,12 +1,26 @@
 import React, { useState } from 'react';
-import { X, Sparkles, Loader2, Maximize, MoveVertical, Zap } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import RemotionPreview from './RemotionPreview';
+import Modal from './ui/Modal';
+import SegmentedControl from './ui/SegmentedControl';
 
 const ENTRANCE_OPTIONS = [
     { value: 'spring', label: 'Bounce' },
     { value: 'fade', label: 'Fade' },
     { value: 'slide-up', label: 'Slide Up' },
     { value: 'none', label: 'None' },
+];
+
+const POSITION_OPTIONS = [
+    { value: 'top', label: 'top' },
+    { value: 'center', label: 'center' },
+    { value: 'bottom', label: 'bottom' },
+];
+
+const SIZE_OPTIONS = [
+    { value: 'S', label: 'Small' },
+    { value: 'M', label: 'Medium' },
+    { value: 'L', label: 'Large' },
 ];
 
 export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, videoUrl, initialText, durationInSeconds, existingSubtitles }) {
@@ -47,17 +61,10 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
     };
 
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-[fadeIn_0.2s_ease-out]">
-            <div className="bg-[#121214] border border-white/10 p-6 rounded-2xl w-full max-w-4xl shadow-2xl relative flex flex-col md:flex-row gap-6 max-h-[90vh]">
-                <button
-                    onClick={onClose}
-                    className="absolute top-4 right-4 text-zinc-500 hover:text-white z-10"
-                >
-                    <X size={20} />
-                </button>
-
+        <Modal isOpen={isOpen} onClose={onClose} size="lg" eyebrow="EDITOR · HOOK" title="viral hook">
+            <div className="flex flex-col md:flex-row gap-6">
                 {/* Left: Preview */}
-                <div className="flex-1 flex flex-col items-center justify-center bg-black rounded-lg border border-white/5 overflow-hidden relative aspect-[9/16] max-h-[600px]">
+                <div className="flex-1 flex flex-col items-center justify-center bg-black rounded-card border border-rule overflow-hidden relative aspect-[9/16] max-h-[600px]">
                     {useRemotionPreview ? (
                         <RemotionPreview
                             videoUrl={videoUrl}
@@ -91,122 +98,98 @@ export default function HookModal({ isOpen, onClose, onGenerate, isProcessing, v
 
                 {/* Right: Controls */}
                 <div className="w-full md:w-80 flex flex-col">
-                    <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
-                        <Sparkles className="text-yellow-400" /> Viral Hook
-                    </h3>
-
-                    <div className="space-y-6 flex-1 overflow-y-auto custom-scrollbar pr-2">
+                    <div className="space-y-5 flex-1 overflow-y-auto custom-scrollbar pr-1">
                         {/* Text Input */}
                         <div>
-                            <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3 block">Text</label>
+                            <p className="eyebrow mb-2">Text</p>
                             <textarea
                                 value={text}
                                 onChange={(e) => setText(e.target.value)}
                                 rows={4}
-                                className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-white placeholder-zinc-600 focus:outline-none focus:border-yellow-500/50 resize-none font-serif"
+                                className="input-field resize-none font-serif"
+                                style={{ fontFamily: 'Noto Serif, serif' }}
                                 placeholder="Enter text that will stop the scroll..."
                             />
                         </div>
 
                         {/* Position Control */}
                         <div>
-                            <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                                <MoveVertical size={12} /> Position
-                            </label>
-                            <div className="grid grid-cols-3 gap-2">
-                                {['top', 'center', 'bottom'].map((pos) => (
-                                    <button
-                                        key={pos}
-                                        onClick={() => setPosition(pos)}
-                                        className={`py-2 px-1 rounded-lg text-xs font-bold capitalize transition-all border ${position === pos
-                                            ? 'bg-white text-black border-white'
-                                            : 'bg-white/5 text-zinc-400 border-white/5 hover:bg-white/10'
-                                            }`}
-                                    >
-                                        {pos}
-                                    </button>
-                                ))}
-                            </div>
+                            <p className="eyebrow mb-2">Position</p>
+                            <SegmentedControl
+                                options={POSITION_OPTIONS}
+                                value={position}
+                                onChange={setPosition}
+                                size="sm"
+                            />
                         </div>
 
                         {/* Size Control */}
                         <div>
-                            <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                                <Maximize size={12} /> Size
-                            </label>
-                            <div className="grid grid-cols-3 gap-2">
-                                {['S', 'M', 'L'].map((sz) => (
-                                    <button
-                                        key={sz}
-                                        onClick={() => setSize(sz)}
-                                        className={`py-2 px-1 rounded-lg text-xs font-bold transition-all border ${size === sz
-                                            ? 'bg-white text-black border-white'
-                                            : 'bg-white/5 text-zinc-400 border-white/5 hover:bg-white/10'
-                                            }`}
-                                    >
-                                        {sz === 'S' ? 'Small' : sz === 'M' ? 'Medium' : 'Large'}
-                                    </button>
-                                ))}
-                            </div>
+                            <p className="eyebrow mb-2">Size</p>
+                            <SegmentedControl
+                                options={SIZE_OPTIONS}
+                                value={size}
+                                onChange={setSize}
+                                size="sm"
+                            />
                         </div>
 
                         {/* Entrance Animation (new) */}
                         <div>
-                            <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                                <Zap size={12} /> Entrance
-                            </label>
-                            <div className="grid grid-cols-2 gap-2">
-                                {ENTRANCE_OPTIONS.map((opt) => (
-                                    <button
-                                        key={opt.value}
-                                        onClick={() => setEntranceAnimation(opt.value)}
-                                        className={`py-2 px-1 rounded-lg text-xs font-bold transition-all border ${entranceAnimation === opt.value
-                                            ? 'bg-white text-black border-white'
-                                            : 'bg-white/5 text-zinc-400 border-white/5 hover:bg-white/10'
-                                            }`}
-                                    >
-                                        {opt.label}
-                                    </button>
-                                ))}
-                            </div>
+                            <p className="eyebrow mb-2">Entrance</p>
+                            <SegmentedControl
+                                options={ENTRANCE_OPTIONS}
+                                value={entranceAnimation}
+                                onChange={setEntranceAnimation}
+                                columns={2}
+                                size="sm"
+                            />
                         </div>
 
                         {/* Display Duration (new) */}
                         <div>
-                            <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2 block">Duration: {displayDuration}s</label>
+                            <div className="flex items-center justify-between mb-2">
+                                <p className="eyebrow">Duration</p>
+                                <span className="readout">{displayDuration}S</span>
+                            </div>
                             <input
                                 type="range"
                                 min="2"
                                 max="15"
                                 value={displayDuration}
                                 onChange={(e) => setDisplayDuration(parseInt(e.target.value))}
-                                className="w-full accent-yellow-500"
+                                className="w-full accent-[var(--color-accent)]"
                             />
-                            <div className="flex justify-between text-[10px] text-zinc-500">
-                                <span>2s</span>
-                                <span>15s</span>
+                            <div className="flex justify-between">
+                                <span className="readout">2S</span>
+                                <span className="readout">15S</span>
                             </div>
                         </div>
 
-                        <div className="p-3 bg-white/5 rounded-lg border border-white/5 text-[11px] text-zinc-400">
-                            <strong>Tip:</strong> Keep it short and punchy. Using "POV:" or specific questions works best for retention.
+                        <div className="p-3 border border-rule rounded-input text-xs text-muted">
+                            Tip: keep it short and punchy. Using "POV:" or specific questions works best for retention.
                         </div>
                     </div>
 
-                    <button
-                        onClick={() => onGenerate({
-                            text, position, size,
-                            // Remotion data
-                            remotion: hookConfig,
-                        })}
-                        disabled={isProcessing || !text.trim()}
-                        className="w-full py-4 mt-4 bg-gradient-to-r from-yellow-500 to-amber-600 hover:from-yellow-400 hover:to-amber-500 text-black font-bold rounded-xl shadow-lg shadow-amber-500/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-                    >
-                        {isProcessing ? <Loader2 size={20} className="animate-spin" /> : <Sparkles size={20} />}
-                        {isProcessing ? 'Generating...' : 'Add Hook'}
-                    </button>
+                    <div className="flex gap-2 mt-5 shrink-0">
+                        <button onClick={onClose} className="btn-ghost">
+                            cancel
+                        </button>
+                        <button
+                            onClick={() => onGenerate({
+                                text, position, size,
+                                // Remotion data
+                                remotion: hookConfig,
+                            })}
+                            disabled={isProcessing || !text.trim()}
+                            className="btn-primary flex-1"
+                        >
+                            {isProcessing && <Loader2 size={16} className="animate-spin text-brassink" />}
+                            {isProcessing ? 'generating...' : 'add hook'}
+                        </button>
+                    </div>
                 </div>
             </div>
-        </div>
+        </Modal>
     );
 }

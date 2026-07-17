@@ -5,18 +5,18 @@ import { Sparkles, ArrowRight } from 'lucide-react';
 // plan/trial. The tool stays visible below; actions still route to pricing.
 export default function TrialGate({ toolName = 'this' }) {
   return (
-    <div className="mx-6 mt-3 p-3 bg-primary/10 border border-primary/30 rounded-xl flex items-center justify-between gap-4 shrink-0 animate-[fadeIn_0.3s_ease-out]">
+    <div className="card mx-6 mt-3 px-4 py-3 flex items-center justify-between gap-4 shrink-0 animate-fade">
       <div className="flex items-center gap-3 text-sm">
-        <Sparkles size={16} className="shrink-0 text-primary" />
-        <div className="text-primary/90">
-          <span className="font-semibold text-white">Preview mode.</span>{' '}
-          Start your <span className="font-semibold text-white">3-day free trial</span> to generate with {toolName} —
-          no API keys, from $12/mo. <span className="text-zinc-400">Or run it free by self-hosting.</span>
+        <Sparkles size={16} className="shrink-0 text-brass" />
+        <div className="text-ink2 lowercase">
+          <span className="font-medium text-ink">Preview mode.</span>{' '}
+          Start your <span className="font-medium text-ink">3-day free trial</span> to generate with {toolName} —
+          no API keys, from $12/mo. <span className="text-muted">Or run it free by self-hosting.</span>
         </div>
       </div>
       <button
         onClick={() => { window.location.hash = '#/pricing'; }}
-        className="shrink-0 inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-primary hover:bg-blue-600 text-white transition-colors"
+        className="btn-primary shrink-0 text-xs px-4 py-2"
       >
         See plans <ArrowRight size={14} />
       </button>

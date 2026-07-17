@@ -1,24 +1,141 @@
-@import url('https://fonts.googleapis.com/css2?family=Noto+Serif:wght@700&display=swap');
+/* Hallmark · genre: atmospheric · theme: lumen (night foundry) · design-system: design.md · designed-as-app */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif:wght@700&display=swap'); /* hook-overlay font burned into videos — not UI */
+@import './tokens.css';
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   body {
-    @apply bg-background text-white antialiased;
+    @apply bg-paper text-ink2 antialiased;
+    font-family: var(--font-body);
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    background: var(--color-accent);
+    color: var(--color-accent-ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+    transition: none;
   }
 }
 
-.glass-panel {
-  @apply bg-surface/50 backdrop-blur-xl border border-white/10 rounded-2xl shadow-xl;
-}
+@layer components {
+  /* hairline card, lit from within — replaces every glass/surface card */
+  .card,
+  .glass-panel {
+    background:
+      radial-gradient(120% 90% at 50% 0%, var(--color-paper-emit) 0%, transparent 70%),
+      var(--color-paper-2);
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-card);
+  }
 
-.input-field {
-  @apply w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/50 transition-all text-sm placeholder:text-zinc-500;
-}
+  .card-hover {
+    transition: transform var(--dur-short) var(--ease-out),
+                border-color var(--dur-short) var(--ease-out),
+                background-color var(--dur-short) var(--ease-out);
+  }
+  .card-hover:hover {
+    transform: translateY(-4px);
+    border-color: var(--color-rule-2);
+  }
 
-.btn-primary {
-  @apply bg-primary hover:bg-blue-600 text-white px-6 py-3 rounded-xl font-medium transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-primary/20;
+  /* mono UPPERCASE micro label — the only uppercase surface */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: var(--tracking-micro);
+    text-transform: uppercase;
+    color: var(--color-ink);
+    opacity: 0.55;
+  }
+
+  /* mono value chip for machine data: 00:42 · 9:16 · $0.65 */
+  .readout {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: var(--tracking-micro);
+    text-transform: uppercase;
+    color: var(--color-muted);
+  }
+
+  .input-field {
+    @apply w-full text-sm text-ink2;
+    background: var(--color-paper);
+    border: 1px solid var(--color-rule-2);
+    border-radius: var(--radius-input);
+    padding: 0.75rem 1rem;
+    outline: none;
+    transition: border-color var(--dur-short) var(--ease-out);
+  }
+  .input-field::placeholder { color: var(--color-muted); opacity: 0.7; }
+  .input-field:focus { border-color: var(--color-accent); }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 text-sm font-medium lowercase;
+    background: var(--color-accent);
+    color: var(--color-accent-ink);
+    border-radius: 999px;
+    transition: filter var(--dur-short) var(--ease-out), transform var(--dur-short) var(--ease-out);
+  }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-primary:active { transform: translateY(1px); }
+  .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 text-sm font-medium lowercase text-ink;
+    background: transparent;
+    border: 1px solid var(--color-rule-2);
+    border-radius: 999px;
+    transition: border-color var(--dur-short) var(--ease-out), background-color var(--dur-short) var(--ease-out);
+  }
+  .btn-ghost:hover { border-color: var(--color-accent); }
+  .btn-ghost:active { transform: translateY(1px); }
+  .btn-ghost:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .btn-quiet {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 text-sm lowercase text-ink2;
+    background: var(--color-paper-3);
+    border-radius: 999px;
+    transition: filter var(--dur-short) var(--ease-out);
+  }
+  .btn-quiet:hover { filter: brightness(1.15); }
+
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 text-sm lowercase;
+    color: var(--color-danger);
+    border: 1px solid color-mix(in oklab, var(--color-danger) 40%, transparent);
+    border-radius: 999px;
+    transition: background-color var(--dur-short) var(--ease-out);
+  }
+  .btn-danger:hover { background: color-mix(in oklab, var(--color-danger) 12%, transparent); }
+
+  .badge-ok, .badge-warn, .badge-danger, .badge-brass {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: var(--tracking-micro);
+    text-transform: uppercase;
+    border-radius: 999px;
+    padding: 2px 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .badge-ok     { color: var(--color-ok);     background: color-mix(in oklab, var(--color-ok) 12%, transparent); }
+  .badge-warn   { color: var(--color-warn);   background: color-mix(in oklab, var(--color-warn) 12%, transparent); }
+  .badge-danger { color: var(--color-danger); background: color-mix(in oklab, var(--color-danger) 12%, transparent); }
+  .badge-brass  { color: var(--color-accent); background: color-mix(in oklab, var(--color-accent) 12%, transparent); }
+
+  /* narrow phones: tighter pill padding so CTA labels stay on one line */
+  @media (max-width: 379px) {
+    .btn-primary, .btn-ghost { padding-left: 1rem; padding-right: 1rem; }
+  }
 }
 
 /* Custom Scrollbar */
@@ -32,15 +149,20 @@
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-rule-2);
   border-radius: 10px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--color-rule);
 }
 
 /* Custom Animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 @keyframes scan {
   0% {
     top: 0%;
@@ -68,5 +190,18 @@
 
   100% {
     top: 100%;
+  }
+}
+
+@keyframes filament-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.86; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

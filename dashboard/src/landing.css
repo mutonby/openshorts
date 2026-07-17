@@ -1,0 +1,227 @@
+/* Hallmark · genre: atmospheric · macrostructure: Marquee Hero · theme: lumen (night) · design-system: design.md · designed-as-app · nav: N9 · footer: Ft5 · enrichment: filament apparatus */
+
+/* ---- hero: blueprint grid + paper emission (top-right) ---- */
+.hero-blueprint {
+  background-image:
+    radial-gradient(55% 45% at 82% 0%, var(--color-paper-emit) 0%, transparent 70%),
+    linear-gradient(to right, var(--rule-blueprint) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--rule-blueprint) 1px, transparent 1px);
+  background-size: 100% 100%, 48px 48px, 48px 48px;
+}
+
+/* ---- hero headline + coral verb landmark ---- */
+.hero-h1 {
+  font-family: var(--font-display);
+  font-size: clamp(2.75rem, 5vw + 1rem, 5rem);
+  letter-spacing: -0.032em;
+  line-height: 1.05;
+  text-transform: lowercase;
+  color: var(--color-ink);
+}
+.hero-h1 em {
+  font-style: normal;
+  color: var(--color-accent-2);
+  position: relative;
+}
+.hero-h1 em::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0.04em;
+  height: 1px;
+  background: var(--color-accent-2);
+  transform: scaleX(0);
+  transform-origin: left center;
+  animation: verb-underline 320ms var(--ease-out) 900ms forwards;
+}
+@keyframes verb-underline {
+  to { transform: scaleX(1); }
+}
+
+/* ---- apparatus: instrument bezel holding a real 9:16 clip ---- */
+.apparatus {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2rem;
+  margin: 0;
+}
+.apparatus-shell {
+  position: relative;
+  flex: none;
+}
+.apparatus-glow {
+  position: absolute;
+  inset: 0;
+  border-radius: 18px;
+  box-shadow: 0 0 28px 2px var(--color-glow);
+  opacity: 0.4;
+  animation: filament-pulse var(--dur-pulse) var(--ease-out) infinite;
+  pointer-events: none;
+}
+.apparatus-chamber {
+  position: relative;
+  z-index: 1;
+  width: clamp(200px, 20vw, 260px);
+  aspect-ratio: 9 / 16;
+  border: 1px solid var(--color-rule-2);
+  border-radius: 18px;
+  background: color-mix(in oklab, var(--color-paper-2) 72%, var(--color-paper-3));
+  overflow: hidden;
+}
+.apparatus-chamber video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.apparatus-stencil {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+  color: var(--color-ink-2);
+  background: rgb(0 0 0 / 0.7);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.apparatus-callouts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2.5rem;
+}
+.apparatus-callouts li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+.apparatus-leader {
+  flex: none;
+  width: 40px;
+  height: 1px;
+  background: var(--color-rule-2);
+}
+
+/* ---- smart crop: 16:9 source → 9:16 result, real product output ---- */
+.crop-frame {
+  position: relative;
+  margin: 0;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  background: var(--color-paper-2);
+}
+.crop-frame video {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.crop-window {
+  position: absolute;
+  top: 5%;
+  bottom: 5%;
+  left: 50%;
+  transform: translateX(-50%);
+  aspect-ratio: 9 / 16;
+  border: 1px solid var(--color-accent);
+  border-radius: 6px;
+  box-shadow: 0 0 0 200vmax rgb(0 0 0 / 0.22);
+  pointer-events: none;
+}
+.crop-leader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.625rem;
+  flex: none;
+}
+.crop-leader-line {
+  position: relative;
+  width: 56px;
+  height: 1px;
+  background: var(--color-rule-2);
+}
+.crop-leader-line::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  top: -3px;
+  border-left: 5px solid var(--color-rule-2);
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+}
+
+/* ---- meter strip (below the fold) ---- */
+.meter-strip {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+.meter-ticks {
+  flex: 1 1 0%;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  overflow: hidden;
+}
+.meter-tick {
+  flex: none;
+  width: 1px;
+  background: var(--color-accent);
+  opacity: 0.65;
+}
+
+@media (max-width: 767px) {
+  .apparatus { gap: 1.25rem; }
+  .apparatus-chamber { width: 180px; }
+  .apparatus-leader { width: 20px; }
+  .apparatus-callouts { gap: 1.5rem; }
+  .crop-leader-line {
+    width: 1px;
+    height: 32px;
+  }
+  .crop-leader-line::after {
+    right: -3px;
+    top: auto;
+    bottom: -1px;
+    border-left: 3.5px solid transparent;
+    border-right: 3.5px solid transparent;
+    border-top: 5px solid var(--color-rule-2);
+    border-bottom: none;
+  }
+}
+
+/* narrow phones: stack callouts under the chamber so nothing overflows */
+@media (max-width: 519px) {
+  .apparatus { flex-direction: column; gap: 1.25rem; }
+  .apparatus-callouts {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.625rem 1.25rem;
+    max-width: 100%;
+  }
+  .apparatus-callouts li { gap: 0.5rem; }
+  .apparatus-leader { width: 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .apparatus-glow { animation: none; }
+  .hero-h1 em::after { animation: none; transform: scaleX(1); }
+}
