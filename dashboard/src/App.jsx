@@ -185,6 +185,8 @@ function App() {
   // within a clip's subtitle modal via "apply to all").
   const [bulkSub, setBulkSub] = useState({ running: false, current: 0, total: 0, errors: 0 });
   const [downloadingAll, setDownloadingAll] = useState(false);
+  // Pre-flight quality gate: { info: {max_height, min_height, cookies_invalid}, data }
+  const [qualityGate, setQualityGate] = useState(null);
   const [logs, setLogs] = useState([]);
   const [logsVisible, setLogsVisible] = useState(true);
   const [processingMedia, setProcessingMedia] = useState(null);
@@ -481,7 +483,7 @@ function App() {
     }
   };
 
-  const handleProcess = async (data) => {
+  const handleProcess = async (data, forceLowQuality = false) => {
     // Hosted: must be signed in AND on an active plan/trial. Self-host: BYOK keys.
     if (billingEnabled) {
       if (!isSignedIn) { setShowLogin(true); return; }
@@ -494,6 +496,7 @@ function App() {
     setLogs(["Starting process..."]);
     setResults(null);
     setProcessingMedia(data);
+    setQualityGate(null);
 
     try {
       let body;
@@ -503,11 +506,17 @@ function App() {
 
       if (data.type === 'url') {
         headers['Content-Type'] = 'application/json';
-        body = JSON.stringify({ url: data.payload, acknowledged: !!data.acknowledged });
+        body = JSON.stringify({
+          url: data.payload,
+          acknowledged: !!data.acknowledged,
+          output_format: data.outputFormat || 'auto',
+          force_low_quality: forceLowQuality,
+        });
       } else {
         const formData = new FormData();
         formData.append('file', data.payload);
         formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
+        formData.append('output_format', data.outputFormat || 'auto');
         body = formData;
       }
 
@@ -515,6 +524,15 @@ function App() {
 
       if (!res.ok) throw new Error(await res.text());
       const resData = await res.json();
+
+      // Quality gate: the source is below the min resolution — ask before burning
+      // 20 min on it. On confirm we resend with force_low_quality.
+      if (resData.needs_confirmation) {
+        setStatus('idle');
+        setQualityGate({ info: resData.quality_check, data });
+        return;
+      }
+
       setJobId(resData.job_id);
 
     } catch (e) {
@@ -1388,6 +1406,32 @@ function App() {
         uploadUserId={uploadUserId}
         isManaged={isManaged}
       />
+
+      {/* Pre-flight quality gate */}
+      {qualityGate && (
+        <Modal isOpen={true} onClose={() => setQualityGate(null)} size="md" eyebrow="HEADS UP" title="low source quality">
+          <div className="space-y-4">
+            <p className="text-sm text-ink2">
+              YouTube only offers <span className="text-brass font-semibold">{qualityGate.info.max_height}p</span> for this video
+              (below the {qualityGate.info.min_height}p we recommend). Processing anyway will produce lower-quality clips.
+            </p>
+            {qualityGate.info.cookies_invalid && (
+              <p className="text-xs text-muted">
+                Your YouTube cookies look expired — refreshing them (export again from an incognito window) often unlocks HD.
+              </p>
+            )}
+            <div className="flex gap-2 justify-end pt-2">
+              <button onClick={() => setQualityGate(null)} className="btn-ghost">cancel</button>
+              <button
+                onClick={() => { const d = qualityGate.data; setQualityGate(null); handleProcess(d, true); }}
+                className="btn-primary"
+              >
+                process anyway
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
 
       {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}

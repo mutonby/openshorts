@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import uuid
 import subprocess
 import threading
@@ -17,7 +18,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
@@ -35,6 +36,10 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "5"))
 MAX_FILE_SIZE_MB = 2048  # 2GB limit
 JOB_RETENTION_SECONDS = int(os.environ.get("JOB_RETENTION_SECONDS", "3600"))  # job/file retention (issue #46)
+# Pre-flight quality gate: warn before processing a YouTube source below this
+# height (0 disables). Only applies to URLs; uploads are whatever the user gave.
+QUALITY_GATE_MIN_HEIGHT = int(os.environ.get("QUALITY_GATE_MIN_HEIGHT", "720"))
+QUALITY_PROBE_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quality_probe.py")
 DISABLE_YOUTUBE_URL = os.environ.get("DISABLE_YOUTUBE_URL", "false").lower() in ("1", "true", "yes")
 
 # ---- Cloud billing (paid / managed-keys) integration --------------------------
@@ -694,18 +699,38 @@ async def get_config():
         "googleAuthEnabled": bool(BILLING_ENABLED and cloud.settings.google_auth_enabled),
     }
 
+async def _probe_youtube_quality(url: str) -> dict:
+    """Run quality_probe.py in a worker thread; {} on any failure (fail-open)."""
+    def _run():
+        try:
+            proc = subprocess.run(
+                [sys.executable, QUALITY_PROBE_SCRIPT, "--url", url],
+                capture_output=True, timeout=75,
+            )
+            return json.loads(proc.stdout.decode(errors="replace").strip() or "{}")
+        except Exception as e:
+            print(f"⚠️ Quality probe failed ({e}); starting job without gate.")
+            return {}
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _run)
+
+
 @app.post("/api/process")
 async def process_endpoint(
     request: Request,
     file: Optional[UploadFile] = File(None),
     url: Optional[str] = Form(None),
-    acknowledged: Optional[str] = Form(None)
+    acknowledged: Optional[str] = Form(None),
+    output_format: Optional[str] = Form(None),
+    force_low_quality: Optional[str] = Form(None)
 ):
     api_key = await resolve_gemini(request)
     if not api_key:
         raise gemini_missing_error()
 
     ack_flag = str(acknowledged).lower() in ("1", "true", "yes")
+    force_low = str(force_low_quality).lower() in ("1", "true", "yes")
 
     # Handle JSON body manually for URL payload
     content_type = request.headers.get("content-type", "")
@@ -713,6 +738,12 @@ async def process_endpoint(
         body = await request.json()
         url = body.get("url")
         ack_flag = bool(body.get("acknowledged"))
+        force_low = bool(body.get("force_low_quality"))
+        output_format = body.get("output_format")
+
+    # Normalize output format (auto = keep pipeline default).
+    if output_format not in ("vertical", "horizontal", "square"):
+        output_format = "auto"
 
     if not url and not file:
         raise HTTPException(status_code=400, detail="Must provide URL or File")
@@ -722,6 +753,23 @@ async def process_endpoint(
 
     if url and DISABLE_YOUTUBE_URL:
         raise HTTPException(status_code=403, detail="YouTube URL ingest is disabled on this deployment. Please upload a file you own.")
+
+    # Pre-flight quality gate: probe the offered resolution BEFORE starting, so
+    # the user can abort (refresh cookies / update yt-dlp) instead of burning
+    # 20 min on a 360p-only source. Fail-open: any probe error starts normally.
+    if url and not force_low and QUALITY_GATE_MIN_HEIGHT > 0:
+        probe = await _probe_youtube_quality(url)
+        max_height = int(probe.get("max_height") or 0)
+        if 0 < max_height < QUALITY_GATE_MIN_HEIGHT:
+            print(f"⚠️ Quality gate: only {max_height}p available for {url} — asking user first.")
+            return JSONResponse({
+                "needs_confirmation": True,
+                "quality_check": {
+                    "max_height": max_height,
+                    "min_height": QUALITY_GATE_MIN_HEIGHT,
+                    "cookies_invalid": bool(probe.get("cookies_invalid")),
+                },
+            })
 
     # Capture attestation context for legal record (IP + timestamp + UA)
     client_ip = request.client.host if request.client else "unknown"
@@ -772,6 +820,8 @@ async def process_endpoint(
         cmd.extend(["-i", input_path])
 
     cmd.extend(["-o", job_output_dir])
+    if output_format and output_format != "auto":
+        cmd.extend(["--format", output_format])
 
     print(f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true")
 

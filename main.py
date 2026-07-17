@@ -83,22 +83,23 @@ class SmoothedCameraman:
     Only moves if the subject leaves the center safe zone.
     Moves slowly and linearly.
     """
-    def __init__(self, output_width, output_height, video_width, video_height):
+    def __init__(self, output_width, output_height, video_width, video_height, aspect_ratio=ASPECT_RATIO):
         self.output_width = output_width
         self.output_height = output_height
         self.video_width = video_width
         self.video_height = video_height
-        
+        self.aspect_ratio = aspect_ratio
+
         # Initial State
         self.current_center_x = video_width / 2
         self.target_center_x = video_width / 2
-        
+
         # Calculate crop dimensions once
         self.crop_height = video_height
-        self.crop_width = int(self.crop_height * ASPECT_RATIO)
+        self.crop_width = int(self.crop_height * aspect_ratio)
         if self.crop_width > video_width:
              self.crop_width = video_width
-             self.crop_height = int(self.crop_width / ASPECT_RATIO)
+             self.crop_height = int(self.crop_width / aspect_ratio)
              
         # Safe Zone: 20% of the video width
         # As long as the target is within this zone relative to current center, DO NOT MOVE.
@@ -584,17 +585,45 @@ Technical Details: {str(last_err)}
     print(f"✅ Video downloaded in {time.time() - step_start_time:.2f}s: {downloaded_file}")
     return downloaded_file, sanitized_title
 
-def process_video_to_vertical(input_video, final_output_video):
+def finalize_clip_passthrough(input_video, final_output_video):
+    """Keep the clip's native framing (for horizontal/16:9 output): just
+    re-encode with faststart, no reframing/cropping."""
+    if os.path.exists(final_output_video):
+        os.remove(final_output_video)
+    print(f"🎬 Passthrough (native framing): {input_video}")
+    cmd = [
+        'ffmpeg', '-y', '-i', input_video,
+        '-c:v', 'libx264', '-preset', 'medium', '-crf', '18',
+        '-c:a', 'aac', '-movflags', '+faststart',
+        final_output_video,
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
+    print(f"✅ Clip saved to {final_output_video}")
+    return True
+
+
+def render_clip(input_video, final_output_video, output_format="auto"):
+    """Route a cut clip through the right renderer for the chosen output format.
+    vertical/auto -> 9:16 reframe, square -> 1:1 reframe, horizontal -> keep."""
+    if output_format == "horizontal":
+        return finalize_clip_passthrough(input_video, final_output_video)
+    aspect = 1.0 if output_format == "square" else ASPECT_RATIO
+    return process_video_to_vertical(input_video, final_output_video, aspect_ratio=aspect)
+
+
+def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPECT_RATIO):
     """
-    Core logic to convert horizontal video to vertical using scene detection and Active Speaker Tracking (MediaPipe).
+    Core logic to reframe a horizontal video to a target aspect ratio using
+    scene detection and Active Speaker Tracking (MediaPipe).
+    aspect_ratio: width/height of the output (9/16 vertical, 1.0 square).
     """
     script_start_time = time.time()
-    
+
     # Define temporary file paths based on the output name
     base_name = os.path.splitext(final_output_video)[0]
     temp_video_output = f"{base_name}_temp_video.mp4"
     temp_audio_output = f"{base_name}_temp_audio.aac"
-    
+
     # Clean up previous temp files if they exist
     if os.path.exists(temp_video_output): os.remove(temp_video_output)
     if os.path.exists(temp_audio_output): os.remove(temp_audio_output)
@@ -619,12 +648,18 @@ def process_video_to_vertical(input_video, final_output_video):
     original_width, original_height = get_video_resolution(input_video)
     
     OUTPUT_HEIGHT = original_height
-    OUTPUT_WIDTH = int(OUTPUT_HEIGHT * ASPECT_RATIO)
+    OUTPUT_WIDTH = int(OUTPUT_HEIGHT * aspect_ratio)
+    # Never ask for a crop wider than the source; shrink height to fit instead.
+    if OUTPUT_WIDTH > original_width:
+        OUTPUT_WIDTH = original_width
+        OUTPUT_HEIGHT = int(OUTPUT_WIDTH / aspect_ratio)
     if OUTPUT_WIDTH % 2 != 0:
         OUTPUT_WIDTH += 1
+    if OUTPUT_HEIGHT % 2 != 0:
+        OUTPUT_HEIGHT += 1
 
     # Initialize Cameraman
-    cameraman = SmoothedCameraman(OUTPUT_WIDTH, OUTPUT_HEIGHT, original_width, original_height)
+    cameraman = SmoothedCameraman(OUTPUT_WIDTH, OUTPUT_HEIGHT, original_width, original_height, aspect_ratio=aspect_ratio)
     
     # --- New Strategy: Per-Scene Analysis ---
     print("\n   🤖 Step 3: Analyzing Scenes for Strategy (Single vs Group)...")
@@ -759,11 +794,23 @@ def process_video_to_vertical(input_video, final_output_video):
 def transcribe_video(video_path):
     print("🎙️  Transcribing video with Faster-Whisper (CPU Optimized)...")
     from faster_whisper import WhisperModel
-    
-    # Run on CPU with INT8 quantization for speed
-    model = WhisperModel("base", device="cpu", compute_type="int8")
-    
-    segments, info = model.transcribe(video_path, word_timestamps=True)
+
+    # "small" is noticeably better than "base" on non-English audio (e.g. German
+    # compound words) at a modest speed cost. Overridable via env for tuning.
+    model_size = os.environ.get("WHISPER_MODEL", "small")
+    device = os.environ.get("WHISPER_DEVICE", "cpu")
+    compute = os.environ.get("WHISPER_COMPUTE", "int8")
+    model = WhisperModel(model_size, device=device, compute_type=compute)
+
+    # vad_filter drops silence; condition_on_previous_text off avoids repetition
+    # loops / hallucinations across segments.
+    segments, info = model.transcribe(
+        video_path,
+        word_timestamps=True,
+        beam_size=5,
+        vad_filter=True,
+        condition_on_previous_text=False,
+    )
     
     print(f"   Detected language '{info.language}' with probability {info.language_probability:.2f}")
     
@@ -952,8 +999,11 @@ if __name__ == '__main__':
     parser.add_argument('-o', '--output', type=str, help="Output directory or file (if processing whole video).")
     parser.add_argument('--keep-original', action='store_true', help="Keep the downloaded YouTube video.")
     parser.add_argument('--skip-analysis', action='store_true', help="Skip AI analysis and convert the whole video.")
-    
+    parser.add_argument('--format', type=str, default="auto", choices=["auto", "vertical", "horizontal", "square"],
+                        help="Output aspect: vertical/auto (9:16), horizontal (keep 16:9), square (1:1).")
+
     args = parser.parse_args()
+    output_format = args.format
 
     script_start_time = time.time()
     
@@ -1003,7 +1053,7 @@ if __name__ == '__main__':
     if args.skip_analysis:
         print("⏩ Skipping analysis, processing entire video...")
         output_file = args.output if args.output else os.path.join(output_dir, f"{video_title}_vertical.mp4")
-        process_video_to_vertical(input_video, output_file)
+        render_clip(input_video, output_file, output_format)
     else:
         # 3. Transcribe
         transcript = transcribe_video(input_video)
@@ -1021,7 +1071,7 @@ if __name__ == '__main__':
         if not clips_data or 'shorts' not in clips_data:
             print("❌ Failed to identify clips. Converting whole video as fallback.")
             output_file = os.path.join(output_dir, f"{video_title}_vertical.mp4")
-            process_video_to_vertical(input_video, output_file)
+            render_clip(input_video, output_file, output_format)
         else:
             print(f"🔥 Found {len(clips_data['shorts'])} viral clips!")
             
@@ -1058,7 +1108,7 @@ if __name__ == '__main__':
                 subprocess.run(cut_command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                 
                 # Process vertical
-                success = process_video_to_vertical(clip_temp_path, clip_final_path)
+                success = render_clip(clip_temp_path, clip_final_path, output_format)
                 
                 if success:
                     print(f"   ✅ Clip {i+1} ready: {clip_final_path}")

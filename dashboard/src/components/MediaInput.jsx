@@ -14,6 +14,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [url, setUrl] = useState('');
     const [file, setFile] = useState(null);
     const [acknowledged, setAcknowledged] = useState(false);
+    const [outputFormat, setOutputFormat] = useState('vertical'); // vertical | horizontal | square
     const [showInfo, setShowInfo] = useState(false);
     const infoRef = useRef(null);
 
@@ -43,9 +44,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
         e.preventDefault();
         if (!acknowledged) return;
         if (mode === 'url' && url) {
-            onProcess({ type: 'url', payload: url, acknowledged: true });
+            onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat });
         } else if (mode === 'file' && file) {
-            onProcess({ type: 'file', payload: file, acknowledged: true });
+            onProcess({ type: 'file', payload: file, acknowledged: true, outputFormat });
         }
     };
 
@@ -157,6 +158,29 @@ export default function MediaInput({ onProcess, isProcessing }) {
                         )}
                     </div>
                 )}
+
+                {/* Output format selector */}
+                <div className="mt-5">
+                    <p className="eyebrow mb-2">Output format</p>
+                    <div className="grid grid-cols-3 gap-2">
+                        {[
+                            { value: 'vertical', label: '9:16', hint: 'Shorts / Reels / TikTok' },
+                            { value: 'square', label: '1:1', hint: 'Feed posts' },
+                            { value: 'horizontal', label: '16:9', hint: 'Keep landscape' },
+                        ].map((f) => (
+                            <button
+                                key={f.value}
+                                type="button"
+                                onClick={() => setOutputFormat(f.value)}
+                                title={f.hint}
+                                className={`py-2 rounded-input border text-center transition-colors
+                                    ${outputFormat === f.value ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
+                            >
+                                <span className="block font-mono text-sm">{f.label}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
 
                 <label className="flex items-start gap-2 mt-5 text-xs text-muted cursor-pointer select-none">
                     <input
