@@ -17,6 +17,8 @@ import re
 import json
 import time
 import subprocess
+
+from ffmpeg_utils import video_encode_args, DELIVERY
 import httpx
 from urllib.parse import urljoin
 from typing import Optional, List, Dict, Callable
@@ -1018,7 +1020,7 @@ def generate_broll(
         "-vf", zoompan_filter,
         "-t", str(dur_secs),
         "-map", "0:v", "-map", "1:a",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+        *video_encode_args(DELIVERY),
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "128k",
         "-shortest",
@@ -1068,24 +1070,19 @@ def _format_ass_time(seconds: float) -> str:
 
 def transcribe_audio_for_subs(audio_path: str) -> list:
     """
-    Transcribe audio with word-level timestamps using faster-whisper.
+    Transcribe audio with word-level timestamps via the configured ASR backend.
     Returns list of {"word": str, "start": float, "end": float}.
     """
-    from faster_whisper import WhisperModel
+    from transcribe_backends import transcribe_media
 
     print(f"[SaaSShorts] 🎙️ Transcribing audio for subtitles...")
-    model = WhisperModel("base", device="cpu", compute_type="int8")
-    segments, info = model.transcribe(audio_path, word_timestamps=True)
+    transcript = transcribe_media(audio_path)
 
-    words = []
-    for segment in segments:
-        if segment.words:
-            for w in segment.words:
-                words.append({
-                    "word": w.word.strip(),
-                    "start": w.start,
-                    "end": w.end,
-                })
+    words = [
+        {"word": w["word"].strip(), "start": w["start"], "end": w["end"]}
+        for segment in transcript["segments"]
+        for w in segment.get("words", [])
+    ]
 
     print(f"[SaaSShorts] ✅ Transcribed {len(words)} words")
     return words
@@ -1203,7 +1200,7 @@ def composite_video(
             "ffmpeg", "-y",
             "-i", talking_head_path,
             "-vf", sub_filter,
-            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+            *video_encode_args(DELIVERY),
             "-c:a", "aac", "-b:a", "128k",
             output_path,
         ]
@@ -1293,7 +1290,7 @@ def composite_video(
         "-filter_complex", filter_str,
         "-map", "[finalv]",
         "-map", "[outa]",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+        *video_encode_args(DELIVERY),
         "-c:a", "aac", "-b:a", "128k",
         output_path,
     ]

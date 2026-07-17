@@ -6,6 +6,8 @@ import urllib.request
 import uuid
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
+from ffmpeg_utils import video_encode_args, QUALITY
+
 FONT_URL = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSerif/NotoSerif-Bold.ttf"
 FONT_DIR = "fonts"
 FONT_PATH = os.path.join(FONT_DIR, "NotoSerif-Bold.ttf")
@@ -363,7 +365,7 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
             '-filter_complex', f"[0:v][1:v]overlay={overlay_x}:{overlay_y}"
                 + (f":enable='between(t,0,{float(duration)})'" if duration else ""),
             '-c:a', 'copy',
-            '-c:v', 'libx264', '-preset', 'medium', '-crf', '18',
+            *video_encode_args(QUALITY),
             '-movflags', '+faststart',
             output_path
         ]

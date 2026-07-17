@@ -19,6 +19,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 # are only imported when BILLING_ENABLED is set. Harmless/unused in self-host.
 RUN pip install --no-cache-dir -r requirements-billing.txt
 
+# GPU build (--build-arg GPU=1): user-space CUDA libs only — the NVIDIA
+# container runtime injects the driver. cuBLAS 12 + cuDNN 9 for CTranslate2
+# (faster-whisper CUDA), onnx-asr + onnxruntime-gpu for Parakeet. Adds ~2GB,
+# so the default CPU image stays slim.
+ARG GPU=0
+RUN if [ "$GPU" = "1" ]; then \
+      pip install --no-cache-dir \
+        "nvidia-cublas-cu12<13" "nvidia-cudnn-cu12>=9,<10" \
+        onnx-asr onnxruntime-gpu; \
+    fi
+
 # Final stage
 FROM python:3.11-slim
 
@@ -52,6 +63,13 @@ ENV BGUTIL_SCRIPT_PATH=/opt/bgutil-provider/server/build/generate_once.js
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
+
+# GPU runtime wiring — harmless no-ops on CPU builds / hosts without the
+# NVIDIA runtime. LD_LIBRARY_PATH points at the pip-installed CUDA libs
+# (paths simply don't exist in CPU images); DRIVER_CAPABILITIES asks the
+# runtime for compute (CUDA) + video (NVENC) driver libs.
+ENV LD_LIBRARY_PATH=/opt/venv/lib/python3.11/site-packages/nvidia/cublas/lib:/opt/venv/lib/python3.11/site-packages/nvidia/cudnn/lib:/opt/venv/lib/python3.11/site-packages/nvidia/cuda_runtime/lib:/opt/venv/lib/python3.11/site-packages/nvidia/cu13/lib
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
 
 # Latest yt-dlp (nightly — it updates frequently) plus its helper plugin.
 RUN pip install --upgrade --pre --no-cache-dir "yt-dlp[default]" bgutil-ytdlp-pot-provider
