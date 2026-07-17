@@ -42,6 +42,8 @@ DISABLE_YOUTUBE_URL = os.environ.get("DISABLE_YOUTUBE_URL", "false").lower() in 
 # when BILLING_ENABLED is set. With the flag off, the app behaves exactly as the
 # self-hosted BYOK app does today (no extra dependencies required).
 BILLING_ENABLED = os.environ.get("BILLING_ENABLED", "").lower() in ("1", "true", "yes")
+# Force full pipeline logs to the client even under billing (local debugging).
+DEBUG_LOGS = os.environ.get("DEBUG_LOGS", "").lower() in ("1", "true", "yes")
 
 if BILLING_ENABLED:
     import cloud
@@ -539,8 +541,11 @@ def _visible_logs(logs):
     their own instance can debug. Cloud shows only the pipeline's own friendly
     progress lines (emoji-prefixed, plus the worker's start/finish markers) and
     hides the raw yt-dlp / ffmpeg / debug spew from paying users.
+
+    DEBUG_LOGS=true forces the full output even under billing — for local dev
+    where you run in paid mode but still want the raw logs.
     """
-    if not BILLING_ENABLED:
+    if not BILLING_ENABLED or DEBUG_LOGS:
         return logs
     visible = []
     for ln in logs:
