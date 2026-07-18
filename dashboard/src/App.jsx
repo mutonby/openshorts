@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
@@ -216,6 +216,12 @@ function App() {
   const [logsVisible, setLogsVisible] = useState(true);
   const [processingMedia, setProcessingMedia] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, settings
+  // Reopened-project state (paid mode): per-clip {index, server_file, active_layers}
+  // restored from the backend so ResultCards resume editing where they left off.
+  const [projectState, setProjectState] = useState(null);
+  // True when the current job was reopened from the library: its source video
+  // was never persisted, so the session must not fall back to /api/source.
+  const [noSource, setNoSource] = useState(false);
 
   const [sessionRecovered, setSessionRecovered] = useState(false);
   const [showScheduleWeek, setShowScheduleWeek] = useState(false);
@@ -237,6 +243,54 @@ function App() {
 
   const handleClipPause = () => {
     setIsSyncedPlaying(false);
+  };
+
+  // --- Project persistence (paid mode) ---
+  // Debounced sync of each clip's browser-only edit state (Remotion layers +
+  // current server file) to the backend, so a reopened project resumes intact.
+  const clipStateSync = useRef({ jobId: null, pending: {}, timer: null });
+
+  const flushClipState = () => {
+    const s = clipStateSync.current;
+    if (s.timer) { clearTimeout(s.timer); s.timer = null; }
+    const entries = Object.entries(s.pending);
+    if (!s.jobId || entries.length === 0) return;
+    const clips = entries.map(([i, v]) => ({
+      index: Number(i),
+      active_layers: v.activeLayers,
+      server_file: v.serverVideoFile,
+    }));
+    s.pending = {};
+    apiFetch(`/api/projects/${s.jobId}/state`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clips }),
+    }).catch(() => {});
+  };
+
+  const handleClipStateChange = (index, state) => {
+    if (!isManaged || !jobId) return;
+    const s = clipStateSync.current;
+    if (s.jobId !== jobId) { s.pending = {}; s.jobId = jobId; }
+    s.pending[index] = state;
+    if (s.timer) clearTimeout(s.timer);
+    s.timer = setTimeout(flushClipState, 2000);
+  };
+
+  // Reopen an archived project from the History tab: the backend re-downloads
+  // its files from R2 into the server's working dir and returns the full state.
+  const restoreProject = async (projectJobId) => {
+    const data = await apiJson(`/api/projects/${projectJobId}/restore`, { method: 'POST' });
+    flushClipState();
+    setProjectState(data.project_state || null);
+    setNoSource(true);
+    setJobId(data.job_id);
+    setResults(data.result || null);
+    setLogs(['♻️ Project restored from your library.']);
+    setProcessingMedia(null);
+    setQualityGate(null);
+    setStatus('complete');
+    setActiveTab('dashboard');
   };
 
   // Apply one subtitle style to every clip of the job, sequentially.
@@ -321,9 +375,12 @@ function App() {
         setJobId(session.jobId);
         setResults(session.results || null);
         // Restore the source preview. Older sessions (or uploads) saved no
-        // media, so fall back to the backend-served source for this job.
+        // media, so fall back to the backend-served source for this job —
+        // except for reopened projects, whose source was never persisted.
         if (session.processingMedia) setProcessingMedia(session.processingMedia);
-        else setProcessingMedia({ type: 'server', payload: `/api/source/${session.jobId}` });
+        else if (!session.noSource) setProcessingMedia({ type: 'server', payload: `/api/source/${session.jobId}` });
+        if (session.noSource) setNoSource(true);
+        if (session.projectState) setProjectState(session.projectState);
         if (session.activeTab) setActiveTab(session.activeTab);
         // If was processing, resume polling; if complete/error, just show results
         setStatus(session.status === 'processing' ? 'processing' : session.status);
@@ -354,6 +411,8 @@ function App() {
         results,
         processingMedia: persistMedia,
         activeTab,
+        noSource,
+        projectState,
         timestamp: Date.now()
       };
       localStorage.setItem(SESSION_KEY, JSON.stringify(sessionData));
@@ -361,7 +420,7 @@ function App() {
       // localStorage full or serialization error - ignore
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobId, status, results, activeTab]);
+  }, [jobId, status, results, activeTab, noSource, projectState]);
 
   useEffect(() => {
     // Encrypt Gemini Key too for consistency if desired, but user asked specifically about Social integration not saving well.
@@ -522,6 +581,8 @@ function App() {
     setResults(null);
     setProcessingMedia(data);
     setQualityGate(null);
+    setProjectState(null);
+    setNoSource(false);
 
     try {
       let body;
@@ -579,11 +640,16 @@ function App() {
   };
 
   const handleReset = () => {
+    // Flush any pending edit-state sync before dropping the project: the clips
+    // themselves are already archived to R2 as they were edited.
+    flushClipState();
     setStatus('idle');
     setJobId(null);
     setResults(null);
     setLogs([]);
     setProcessingMedia(null);
+    setProjectState(null);
+    setNoSource(false);
     localStorage.removeItem(SESSION_KEY);
   };
 
@@ -1148,7 +1214,7 @@ function App() {
           {activeTab === 'history' && (
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
               <div className="max-w-6xl mx-auto p-6 md:p-8">
-                <HistoryTab />
+                <HistoryTab onReopenProject={restoreProject} />
               </div>
             </div>
           )}
@@ -1289,10 +1355,12 @@ function App() {
                     <div className={`grid gap-4 pb-10 ${status === 'complete' ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'}`}>
                       {results.clips.map((clip, i) => (
                         <ResultCard
-                          key={i}
+                          key={`${jobId}-${i}`}
                           clip={clip}
                           index={i}
                           jobId={jobId}
+                          initialState={projectState?.clips?.find((c) => c.index === i) || null}
+                          onStateChange={handleClipStateChange}
                           durableUrl={durableClips[i]}
                           uploadPostKey={uploadPostKey}
                           uploadUserId={uploadUserId}

@@ -39,6 +39,31 @@ def upload_file(local_path, key, content_type="video/mp4"):
                          ExtraArgs={"ContentType": content_type})
 
 
+def download_file(key, local_path):
+    client().download_file(settings.r2_bucket, key, local_path)
+
+
+def delete_key(key):
+    client().delete_object(Bucket=settings.r2_bucket, Key=key)
+
+
+def list_keys(prefix) -> list:
+    """List every object key under a prefix."""
+    c = client()
+    keys = []
+    token = None
+    while True:
+        kw = {"Bucket": settings.r2_bucket, "Prefix": prefix, "MaxKeys": 1000}
+        if token:
+            kw["ContinuationToken"] = token
+        resp = c.list_objects_v2(**kw)
+        keys.extend(o["Key"] for o in resp.get("Contents", []))
+        if not resp.get("IsTruncated"):
+            break
+        token = resp.get("NextContinuationToken")
+    return keys
+
+
 def presigned_get(key, expires=3600, download_name=None) -> str:
     params = {"Bucket": settings.r2_bucket, "Key": key}
     if download_name:

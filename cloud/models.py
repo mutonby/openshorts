@@ -110,6 +110,28 @@ class UserVideo(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class Project(Base):
+    """One re-openable project per completed job.
+
+    The metadata JSON in R2 (``metadata_r2_key``) is the source of truth for the
+    clips + transcript; ``state`` holds only what lives outside that file: the
+    browser-side Remotion layers and the current server file per clip.
+    ``state`` schema: {"v": 1, "clips": [{"index", "original_file",
+    "server_file", "active_layers"}]}.
+    """
+    __tablename__ = "projects"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
+                     nullable=False, index=True)
+    job_id = Column(Text, unique=True, nullable=False)
+    title = Column(Text, nullable=True)
+    metadata_r2_key = Column(Text, nullable=False)
+    state = Column(JSONB, nullable=True)
+    size_bytes = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class StripeEvent(Base):
     __tablename__ = "stripe_events"
     id = Column(Text, primary_key=True)  # Stripe event.id — dedupe key

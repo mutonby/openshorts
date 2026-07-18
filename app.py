@@ -449,6 +449,27 @@ async def _archive_managed_job(job_id):
         print(f"⚠️  R2 archive error for {job_id}: {e}")
 
 
+def _archive_clip_edit_bg(job_id: str, clip_index: int, filename: str):
+    """Fire-and-forget R2 re-archive of an edited clip (managed jobs only).
+
+    Keeps the user's durable library (history/projects) pointing at the current
+    version of each clip without blocking the edit response."""
+    if not BILLING_ENABLED:
+        return
+    user_id = (jobs.get(job_id) or {}).get('user_id')
+    if not user_id:
+        return
+    output_dir = os.path.join(OUTPUT_DIR, job_id)
+
+    async def _run():
+        try:
+            await cloud.videos.archive_clip_edit(user_id, job_id, clip_index, output_dir, filename)
+        except Exception as e:
+            print(f"⚠️  R2 edit archive error for {job_id}: {e}")
+
+    asyncio.create_task(_run())
+
+
 async def _record_job_alert(job_id):
     if not BILLING_ENABLED:
         return
@@ -940,6 +961,111 @@ async def download_all_clips(job_id: str, request: Request):
     )
 
 
+# --- Project restore (paid mode) --------------------------------------------
+# Re-hydrates an archived project from R2 back into output/{job_id}/ so every
+# edit endpoint works on it again. Restored files land with a fresh mtime, so
+# the retention clock restarts; re-restoring after a purge is cheap.
+_restore_locks: Dict[str, asyncio.Lock] = {}
+
+
+@app.post("/api/projects/{job_id}/restore")
+async def restore_project(job_id: str, request: Request):
+    if not BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
+    from sqlalchemy import select
+    from cloud.auth import get_current_user_required
+    from cloud.models import Project
+    from cloud import database as cloud_db, storage as cloud_storage
+
+    user = await get_current_user_required(request)
+    async with cloud_db.session() as s:
+        proj = (await s.execute(
+            select(Project).where(Project.job_id == job_id)
+        )).scalar_one_or_none()
+    if proj is None or str(proj.user_id) != str(user.id):
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Per-job lock: a double click must not download the project twice.
+    lock = _restore_locks.setdefault(job_id, asyncio.Lock())
+    async with lock:
+        job_dir = os.path.join(OUTPUT_DIR, job_id)
+
+        # Idempotent fast path: everything the project needs is already on disk.
+        needed = {os.path.basename(proj.metadata_r2_key)}
+        for c in (proj.state or {}).get("clips", []):
+            for k in ("original_file", "server_file"):
+                if c.get(k):
+                    needed.add(c[k])
+        if os.path.isdir(job_dir) and all(
+            os.path.exists(os.path.join(job_dir, f)) for f in needed
+        ):
+            os.utime(job_dir, None)  # restart the retention clock
+        else:
+            prefix = cloud_storage.job_key(user.id, job_id, "")
+            keys = await asyncio.to_thread(cloud_storage.list_keys, prefix)
+            if not keys:
+                raise HTTPException(status_code=502,
+                                    detail="Project files are no longer available")
+            # Download into a temp dir first so a partial failure never leaves a
+            # half-restored job dir that the fast path would mistake for complete.
+            tmp_dir = job_dir + ".restoring"
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            os.makedirs(tmp_dir, exist_ok=True)
+            sem = asyncio.Semaphore(3)
+
+            async def _download(key):
+                fname = os.path.basename(key)
+                if not fname:
+                    return
+                async with sem:
+                    await asyncio.to_thread(
+                        cloud_storage.download_file, key, os.path.join(tmp_dir, fname))
+
+            try:
+                await asyncio.gather(*(_download(k) for k in keys))
+            except Exception as e:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                raise HTTPException(status_code=502, detail=f"Restore download failed: {e}")
+            # Owner sidecar keeps the multi-tenant guard after a server restart.
+            with open(os.path.join(tmp_dir, ".owner"), "w") as f:
+                f.write(str(user.id))
+            if os.path.isdir(job_dir):
+                for fname in os.listdir(tmp_dir):
+                    shutil.move(os.path.join(tmp_dir, fname), os.path.join(job_dir, fname))
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                os.utime(job_dir, None)
+            else:
+                os.rename(tmp_dir, job_dir)
+
+        # Register (or refresh) the in-memory job — same shape as
+        # _recover_jobs_from_disk, so every edit endpoint works unchanged.
+        json_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
+        if not json_files:
+            raise HTTPException(status_code=502, detail="Project metadata missing")
+        with open(json_files[0], 'r') as f:
+            data = json.load(f)
+        base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+        clips = data.get('shorts', [])
+        for i, clip in enumerate(clips):
+            if not clip.get('video_url'):
+                clip['video_url'] = f"/videos/{job_id}/{base_name}_clip_{i+1}.mp4"
+        jobs[job_id] = {
+            'status': 'completed',
+            'logs': ["♻️ Project restored from your library."],
+            'output_dir': job_dir,
+            'user_id': str(user.id),
+            'result': {'clips': clips, 'cost_analysis': data.get('cost_analysis')},
+        }
+
+    return {
+        "job_id": job_id,
+        "status": "completed",
+        "result": jobs[job_id]['result'],
+        "project_state": proj.state,
+        "title": proj.title,
+    }
+
+
 from editor import VideoEditor
 from subtitles import generate_srt, generate_ass, burn_subtitles, generate_srt_from_video
 from hooks import add_hook_to_video
@@ -1068,16 +1194,28 @@ async def edit_clip(
         # Run in thread pool
         loop = asyncio.get_event_loop()
         plan = await loop.run_in_executor(None, run_edit)
-        
-        # Update clip URL in the job result? 
-        # Or return new URL and let frontend handle it?
-        # Updating job result allows persistence if page refreshes.
-        
+
         new_video_url = f"/videos/{req.job_id}/{edited_filename}"
 
-        # Start a new "edited" clip entry or just update the current one?
-        # Let's update the current one's video_url but keep backup?
-        # Or return the new URL to the frontend to display.
+        # Persist the new current file like /api/subtitle does: in-memory job
+        # result + metadata.json, so reload/recovery/re-archive see this version.
+        if req.clip_index < len(job['result']['clips']):
+            job['result']['clips'][req.clip_index]['video_url'] = new_video_url
+        try:
+            meta_files = glob.glob(os.path.join(OUTPUT_DIR, req.job_id, "*_metadata.json"))
+            if meta_files:
+                with open(meta_files[0], 'r') as f:
+                    meta = json.load(f)
+                shorts = meta.get('shorts', [])
+                if req.clip_index < len(shorts):
+                    shorts[req.clip_index]['video_url'] = new_video_url
+                    meta['shorts'] = shorts
+                    with open(meta_files[0], 'w') as f:
+                        json.dump(meta, f, indent=4)
+        except Exception as e:
+            print(f"⚠️ Failed to update metadata.json: {e}")
+
+        _archive_clip_edit_bg(req.job_id, req.clip_index, edited_filename)
 
         if reservation_id:
             await _metering.commit_reservation(reservation_id)
@@ -1461,6 +1599,8 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
         print(f"⚠️ Failed to update metadata.json: {e}")
         # Non-critical, but good for persistence
 
+    _archive_clip_edit_bg(req.job_id, req.clip_index, output_filename)
+
     return {
         "success": True,
         "new_video_url": f"/videos/{req.job_id}/{output_filename}"
@@ -1557,6 +1697,8 @@ async def add_hook(req: HookRequest, request: Request):
                 print(f"✅ Metadata updated with hook video for clip {req.clip_index}")
     except Exception as e:
         print(f"⚠️ Failed to update metadata.json: {e}")
+
+    _archive_clip_edit_bg(req.job_id, req.clip_index, output_filename)
 
     return {
         "success": True,
@@ -1655,6 +1797,8 @@ async def translate_clip(
                 print(f"✅ Metadata updated with translated video for clip {req.clip_index}")
     except Exception as e:
         print(f"⚠️ Failed to update metadata.json: {e}")
+
+    _archive_clip_edit_bg(req.job_id, req.clip_index, output_filename)
 
     return {
         "success": True,

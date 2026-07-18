@@ -23,7 +23,7 @@ function formatDuration(clip) {
     return `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
 }
 
-export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress }) {
+export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress, initialState = null, onStateChange }) {
     const [showModal, setShowModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
     const videoRef = React.useRef(null);
@@ -41,7 +41,8 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
     // Latest file that exists ON THE SERVER (blob: previews don't count).
     // All server-side operations must chain from this, so burned-in edits
     // (subtitles, hooks, effects) never get silently dropped.
-    const [serverVideoFile, setServerVideoFile] = useState((clip.video_url || '').split('/').pop());
+    // A reopened project seeds it from the persisted project state.
+    const [serverVideoFile, setServerVideoFile] = useState(initialState?.server_file || (clip.video_url || '').split('/').pop());
     const [videoErrored, setVideoErrored] = useState(false);
 
     // If the local video failed and a durable R2 URL is (now) available, use it.
@@ -101,8 +102,19 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
 
     const [clipDuration, setClipDuration] = useState(clip.end && clip.start ? clip.end - clip.start : 30);
 
-    // Accumulate Remotion layers across operations
-    const [activeLayers, setActiveLayers] = useState({ subtitles: null, hook: null, effects: null });
+    // Accumulate Remotion layers across operations. A reopened project restores
+    // the layers persisted in its project state, so the next edit composes over
+    // them instead of silently dropping previous browser-side work.
+    const [activeLayers, setActiveLayers] = useState(initialState?.active_layers || { subtitles: null, hook: null, effects: null });
+
+    // Report edit state upward (debounced sync to the project record). Skip the
+    // mount run: only user-driven changes are worth persisting.
+    const stateReported = React.useRef(false);
+    useEffect(() => {
+        if (!stateReported.current) { stateReported.current = true; return; }
+        onStateChange?.(index, { activeLayers, serverVideoFile });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeLayers, serverVideoFile]);
 
     // True when the current server file already carries burned-in content.
     // Browser (Remotion) renders compose over the ORIGINAL clip, so using them
