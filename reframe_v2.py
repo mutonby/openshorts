@@ -162,6 +162,7 @@ def render(input_video, final_output_video, aspect_ratio):
 
     print("   🚀 Reframe engine v2 (ffmpeg-native render)")
     scenes, fps = m.detect_scenes(input_video)
+    fps = float(fps)  # PySceneDetect can hand back a Fraction
     orig_w, orig_h = m.get_video_resolution(input_video)
 
     out_h = orig_h

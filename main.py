@@ -5,6 +5,8 @@ import subprocess
 import argparse
 import re
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from scenedetect import open_video, SceneManager
 from scenedetect.detectors import ContentDetector
 from ultralytics import YOLO
@@ -286,6 +288,10 @@ class SpeakerTracker:
 # coords and YOLO boxes are scaled back up. Running them on a ≤640px copy cuts
 # per-frame preprocessing cost hard, which is what dominates CPU-only renders.
 DETECT_MAX_WIDTH = 640
+# The global MediaPipe graph and YOLO model are NOT thread-safe; clips render
+# in parallel, so every inference goes through this lock. Contention is small
+# (a few ms per call) — the ffmpeg renders are where the parallel time goes.
+DETECT_LOCK = threading.Lock()
 # Detect every Nth frame; SmoothedCameraman interpolates between updates.
 DETECT_STRIDE = max(int(os.environ.get("DETECT_STRIDE", "4")), 1)
 # YOLO fallback (no face found) is far heavier than MediaPipe — extra throttle.
@@ -313,7 +319,8 @@ def detect_face_candidates(frame):
     height, width, _ = frame.shape
     small, _scale = _detection_frame(frame)
     rgb_frame = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
-    results = face_detection.process(rgb_frame)
+    with DETECT_LOCK:
+        results = face_detection.process(rgb_frame)
     
     candidates = []
     
@@ -342,7 +349,8 @@ def detect_person_yolo(frame):
     """
     small, scale = _detection_frame(frame)
     # Use the globally loaded model
-    results = model(small, verbose=False, classes=[0]) # class 0 is person
+    with DETECT_LOCK:
+        results = model(small, verbose=False, classes=[0]) # class 0 is person
 
     if not results:
         return None
@@ -1091,40 +1099,51 @@ if __name__ == '__main__':
                 json.dump(clips_data, f, indent=2)
             print(f"   Saved metadata to {metadata_file}")
 
-            # 5. Process each clip
-            for i, clip in enumerate(clips_data['shorts']):
+            # 5. Process clips in parallel: each worker cuts + renders one
+            # clip. Renders are mostly ffmpeg subprocesses (parallelize well);
+            # detector inference is serialized internally via DETECT_LOCK.
+            def _process_one_clip(i, clip):
                 start = clip['start']
                 end = clip['end']
                 print(f"\n🎬 Processing Clip {i+1}: {start}s - {end}s")
                 print(f"   Title: {clip.get('video_title_for_youtube_short', 'No Title')}")
-                
-                # Cut clip
+
                 clip_filename = f"{video_title}_clip_{i+1}.mp4"
                 clip_temp_path = os.path.join(output_dir, f"temp_{clip_filename}")
                 clip_final_path = os.path.join(output_dir, clip_filename)
-                
-                # ffmpeg cut
-                # Using re-encoding for precision as requested by strict seconds
-                cut_command = [
-                    'ffmpeg', '-y', 
-                    '-ss', str(start), 
-                    '-to', str(end), 
-                    '-i', input_video,
-                    *video_encode_args(QUALITY_FAST),
-                    '-c:a', 'aac',
-                    clip_temp_path
-                ]
-                subprocess.run(cut_command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                
-                # Process vertical
-                success = render_clip(clip_temp_path, clip_final_path, output_format)
-                
-                if success:
-                    print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
-                
-                # Clean up temp cut
-                if os.path.exists(clip_temp_path):
-                    os.remove(clip_temp_path)
+
+                try:
+                    # ffmpeg cut — re-encoding for precision on strict seconds
+                    cut_command = [
+                        'ffmpeg', '-y',
+                        '-ss', str(start),
+                        '-to', str(end),
+                        '-i', input_video,
+                        *video_encode_args(QUALITY_FAST),
+                        '-c:a', 'aac',
+                        clip_temp_path
+                    ]
+                    subprocess.run(cut_command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+                    success = render_clip(clip_temp_path, clip_final_path, output_format)
+                    if success:
+                        print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
+                    return success
+                finally:
+                    if os.path.exists(clip_temp_path):
+                        os.remove(clip_temp_path)
+
+            clip_workers = max(int(os.environ.get("CLIP_WORKERS", "3")), 1)
+            shorts = clips_data['shorts']
+            with ThreadPoolExecutor(max_workers=min(clip_workers, len(shorts))) as pool:
+                futures = {pool.submit(_process_one_clip, i, clip): i
+                           for i, clip in enumerate(shorts)}
+                for future in as_completed(futures):
+                    i = futures[future]
+                    try:
+                        future.result()
+                    except Exception as e:
+                        print(f"   ❌ Clip {i+1} failed: {type(e).__name__}: {e}")
 
     # Clean up original if requested
     if args.url and not args.keep_original and os.path.exists(input_video):
