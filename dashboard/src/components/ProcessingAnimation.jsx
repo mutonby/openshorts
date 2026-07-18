@@ -137,7 +137,7 @@ const ProcessingAnimation = ({ media, isComplete, syncedTime, isSyncedPlaying, s
 
       {!isSyncedPlaying && !isComplete && (
           <div className="absolute top-4 right-4 z-30 flex items-center gap-2 px-3 py-1.5 bg-black/70 rounded-full readout">
-            AI_MODEL: GEMINI-2.5-PRO
+            VIRAL_DETECTION: ACTIVE
           </div>
       )}
 

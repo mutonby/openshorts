@@ -44,6 +44,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
     // A reopened project seeds it from the persisted project state.
     const [serverVideoFile, setServerVideoFile] = useState(initialState?.server_file || (clip.video_url || '').split('/').pop());
     const [videoErrored, setVideoErrored] = useState(false);
+    const [resolution, setResolution] = useState(null);
 
     // If the local video failed and a durable R2 URL is (now) available, use it.
     // Handles the race where the video errors before the durable URL has loaded.
@@ -511,8 +512,11 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
                     ref={videoRef}
                     src={currentVideoUrl}
                     controls
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-contain"
                     playsInline
+                    onLoadedMetadata={(e) => {
+                        if (e.target.videoWidth) setResolution(`${e.target.videoWidth}×${e.target.videoHeight}`);
+                    }}
                     onError={() => {
                         // Local /videos/ file gone (e.g. cleaned up after a reload) →
                         // fall back to the durable R2 copy for managed users. If the
@@ -556,6 +560,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
                     </h3>
                     <div className="flex flex-wrap gap-1.5">
                         {durationReadout && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{durationReadout}</span>}
+                        {resolution && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{resolution}</span>}
                         <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">#shorts</span>
                         <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">#viral</span>
                     </div>
