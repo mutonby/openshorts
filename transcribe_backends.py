@@ -22,6 +22,8 @@ TRANSCRIBE_BACKEND env: "whisper" (default) | "parakeet".
 The parakeet path falls back to whisper automatically when the model errors,
 produces no usable words, or the detected language is outside its 25
 supported European languages (e.g. Japanese/Chinese/Arabic uploads).
+GPU whisper in turn falls back to CPU whisper on CUDA errors (VRAM is shared
+with other models on the host, so loads can OOM under load).
 """
 import os
 import subprocess
@@ -87,6 +89,9 @@ class _TranscribeProgress:
 _whisper_model = None
 _whisper_key = None
 _whisper_lock = threading.Lock()
+# Set after a CUDA failure (e.g. VRAM exhausted by other models on the GPU)
+# so every later transcription goes straight to CPU instead of re-failing.
+_whisper_force_cpu = False
 
 
 def _get_whisper_model():
@@ -97,6 +102,9 @@ def _get_whisper_model():
     """
     global _whisper_model, _whisper_key
     cfg = get_whisper_config()
+    if _whisper_force_cpu:
+        cfg["device"] = "cpu"
+        cfg["compute_type"] = "int8"
     key = (cfg["model_size"], cfg["device"], cfg["compute_type"])
     with _whisper_lock:
         if _whisper_model is None or _whisper_key != key:
@@ -106,13 +114,7 @@ def _get_whisper_model():
     return _whisper_model, cfg["device"]
 
 
-def run_whisper_transcription(media_path, **params):
-    """Transcribe and FULLY materialize the segments inside the GPU gate.
-
-    faster-whisper returns a lazy generator — decoding happens while
-    iterating, so the gate must wrap list(segments), not just transcribe().
-    Returns (segments_list, info).
-    """
+def _run_whisper_once(media_path, **params):
     model, device = _get_whisper_model()
     gate = _ASR_GATE if device != "cpu" else _NULL_GATE
     with gate:
@@ -126,6 +128,30 @@ def run_whisper_transcription(media_path, **params):
         # media duration — force the 100% line.
         progress.update(progress.total)
         return materialized, info
+
+
+def run_whisper_transcription(media_path, **params):
+    """Transcribe and FULLY materialize the segments inside the GPU gate.
+
+    faster-whisper returns a lazy generator — decoding happens while
+    iterating, so the gate must wrap list(segments), not just transcribe().
+    Returns (segments_list, info).
+
+    A CUDA failure (model load OOM or mid-decode) retries once on CPU and
+    pins CPU for the rest of the process — the GPU is shared with other
+    models, so a job must degrade instead of dying when VRAM runs out.
+    """
+    global _whisper_model, _whisper_force_cpu
+    try:
+        return _run_whisper_once(media_path, **params)
+    except RuntimeError as e:
+        if _whisper_force_cpu or "cuda" not in str(e).lower():
+            raise
+        print(f"⚠️ [ASR] whisper GPU failed ({e}) — retrying on CPU", flush=True)
+        _whisper_force_cpu = True
+        with _whisper_lock:
+            _whisper_model = None  # drop the GPU model to release its VRAM
+        return _run_whisper_once(media_path, **params)
 
 
 def _transcribe_with_whisper(media_path):
