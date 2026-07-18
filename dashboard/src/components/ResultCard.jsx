@@ -9,7 +9,7 @@ import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
 import { renderInBrowser } from '../lib/renderInBrowser';
 
-const QUIET_BTN = 'group flex items-center justify-center gap-1.5 py-2 px-2 rounded-input border border-rule hover:bg-paper3 text-xs lowercase text-ink2 whitespace-nowrap transition-colors disabled:opacity-45 disabled:cursor-not-allowed';
+const QUIET_BTN = 'group flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-input border border-rule hover:bg-paper3 text-[11px] lowercase text-ink2 whitespace-nowrap transition-colors disabled:opacity-45 disabled:cursor-not-allowed';
 
 const PLATFORM_OPTIONS = [
     { value: 'tiktok', label: 'tiktok', icon: <Video size={16} /> },
@@ -653,7 +653,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
 
                     <button
                         onClick={() => setShowModal(true)}
-                        className="btn-primary py-2 px-2 text-xs rounded-input whitespace-nowrap"
+                        className="btn-primary flex-col gap-1 py-2 px-1 text-[11px] rounded-input whitespace-nowrap"
                     >
                         <Share2 size={16} className="shrink-0" /> post
                     </button>
