@@ -12,6 +12,7 @@ import zipfile
 import math
 import itertools
 import asyncio
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from typing import Dict, Optional, List
 from contextlib import asynccontextmanager
@@ -123,8 +124,61 @@ def gemini_missing_error():
     return HTTPException(status_code=400, detail="Missing X-Gemini-Key header")
 
 
+def _client_ip(request) -> str:
+    """Client IP, honoring the proxy's X-Forwarded-For (Traefik in prod)."""
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+# In-memory abuse counters. Reset on restart by design — the hard monthly
+# quota lives in the metering ledger; these only flatten bursts and casual
+# multi-accounting, so losing them on a deploy is fine.
+_daily_counters = {"date": None, "users": {}, "ips": {}}
+_probe_times: dict = {}  # user_id -> [monotonic timestamps]
+PROBES_PER_HOUR = 15
+
+# Out-of-minutes upsell email: at most one per user per day (a client may
+# retry the same 402 many times).
+_last_quota_email: dict = {}
+_QUOTA_EMAIL_COOLDOWN = 24 * 3600
+
+
+def _maybe_send_quota_email(user):
+    if user is None or user.plan != "free" or not user.email:
+        return
+    now = time.monotonic()
+    last = _last_quota_email.get(str(user.id))
+    if last is not None and now - last < _QUOTA_EMAIL_COOLDOWN:
+        return
+    _last_quota_email[str(user.id)] = now
+    from cloud.emails import send_out_of_minutes_email
+    upgrade_url = f"{_cloud_config.settings.frontend_url}/#/pricing"
+    asyncio.create_task(send_out_of_minutes_email(user.email, upgrade_url))
+
+
+def _daily_bucket(kind: str) -> dict:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if _daily_counters["date"] != today:
+        _daily_counters.update(date=today, users={}, ips={})
+    return _daily_counters[kind]
+
+
+def _check_probe_rate(user_id):
+    now = time.monotonic()
+    times = _probe_times.setdefault(str(user_id), [])
+    times[:] = [t for t in times if now - t < 3600]
+    if len(times) >= PROBES_PER_HOUR:
+        raise HTTPException(status_code=429,
+                            detail="Too many requests this hour. Please slow down.")
+    times.append(now)
+
+
 async def reserve_process_minutes(request, url, input_path, job_id):
-    """Meter a managed /api/process request. Returns (user_id, priority, reservation_id).
+    """Meter a managed /api/process request.
+
+    Returns (user_id, priority, reservation_id, plan).
 
     BYOK / self-host requests don't consume minutes (priority 2, no reservation).
     For a managed (entitled, no BYOK header) request this probes the input
@@ -137,10 +191,10 @@ async def reserve_process_minutes(request, url, input_path, job_id):
     on the operator's key for free. Only skip metering when billing is off.
     """
     if not BILLING_ENABLED:
-        return None, 2, None
+        return None, 2, None, None
     user = await _user_from_request(request)
     if not managed_keys.has_active_entitlement(user):
-        return None, 2, None  # shouldn't happen (resolve_gemini would have 402'd)
+        return None, 2, None, None  # shouldn't happen (resolve_gemini would have 402'd)
 
     priority = _cloud_config.PLAN_PRIORITY.get(user.plan, 1)
 
@@ -151,6 +205,25 @@ async def reserve_process_minutes(request, url, input_path, job_id):
     if active >= limit:
         raise HTTPException(status_code=429,
                             detail="You already have the maximum number of jobs running. Please wait.")
+
+    # Free-plan daily burst caps, checked BEFORE the probe so URL spam never
+    # reaches the proxy. Per-account and per-IP (multi-account abuse).
+    if user.plan == "free":
+        user_counts = _daily_bucket("users")
+        if user_counts.get(str(user.id), 0) >= _cloud_config.FREE_DAILY_JOBS:
+            raise HTTPException(status_code=429, detail={
+                "error": "daily_limit",
+                "message": "Free plan daily limit reached. Come back tomorrow or upgrade for more.",
+            })
+        ip_counts = _daily_bucket("ips")
+        if ip_counts.get(_client_ip(request), 0) >= _cloud_config.FREE_DAILY_JOBS_PER_IP:
+            raise HTTPException(status_code=429, detail={
+                "error": "daily_limit",
+                "message": "Free plan daily limit reached for this network. Come back tomorrow or upgrade.",
+            })
+
+    # Probe rate limit: probing costs a (cheap) proxied metadata call.
+    _check_probe_rate(user.id)
 
     # Probe input duration (blocking → run in a thread).
     loop = asyncio.get_event_loop()
@@ -167,12 +240,22 @@ async def reserve_process_minutes(request, url, input_path, job_id):
     try:
         reservation_id = await _metering.reserve_minutes(user.id, minutes, job_id)
     except _metering.QuotaExceeded as e:
+        _maybe_send_quota_email(user)
         raise HTTPException(status_code=402, detail={
             "error": "quota_exceeded",
             "minutes_required": e.required,
             "minutes_remaining": e.remaining,
         })
-    return user.id, priority, reservation_id
+
+    # Count the job against the free daily caps only once it actually reserved.
+    if user.plan == "free":
+        user_counts = _daily_bucket("users")
+        user_counts[str(user.id)] = user_counts.get(str(user.id), 0) + 1
+        ip_counts = _daily_bucket("ips")
+        ip = _client_ip(request)
+        ip_counts[ip] = ip_counts.get(ip, 0) + 1
+
+    return user.id, priority, reservation_id, user.plan
 
 
 async def reserve_managed_action(request, minutes, job_id, job_type):
@@ -189,6 +272,7 @@ async def reserve_managed_action(request, minutes, job_id, job_type):
     try:
         return await _metering.reserve_minutes(user.id, minutes, job_id, job_type)
     except _metering.QuotaExceeded as e:
+        _maybe_send_quota_email(user)
         raise HTTPException(status_code=402, detail={
             "error": "quota_exceeded",
             "minutes_required": e.required,
@@ -412,6 +496,33 @@ async def process_queue():
             print(f"❌ Queue dispatch error: {e}")
             await asyncio.sleep(1)
 
+# Monthly proxy bandwidth counter (in-memory; an alert threshold, not a bill —
+# losing it on a deploy just means the alert re-arms from 0 mid-month).
+_proxy_month = {"month": None, "bytes": 0, "alerted": False}
+PROXY_ALERT_GB = 100
+
+
+async def _track_proxy_usage(job_id):
+    nbytes = (jobs.get(job_id) or {}).get('proxy_bytes') or 0
+    if not nbytes:
+        return
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    if _proxy_month["month"] != month:
+        _proxy_month.update(month=month, bytes=0, alerted=False)
+    _proxy_month["bytes"] += nbytes
+    gb = _proxy_month["bytes"] / 1e9
+    if gb >= PROXY_ALERT_GB and not _proxy_month["alerted"] and _alerts:
+        _proxy_month["alerted"] = True
+        try:
+            await _alerts.send_admin_alert(
+                "Proxy bandwidth threshold",
+                f"Managed downloads have used {gb:.1f} GB of proxy bandwidth in {month} "
+                f"(threshold {PROXY_ALERT_GB} GB). Review free-plan usage.",
+            )
+        except Exception as e:
+            print(f"⚠️ Proxy alert failed: {e}")
+
+
 async def run_job_wrapper(job_id):
     """Wrapper to run job and release semaphore"""
     try:
@@ -428,6 +539,10 @@ async def run_job_wrapper(job_id):
         await _archive_managed_job(job_id)
         # Operational alerting for managed jobs (proxy out of credits / failures).
         await _record_job_alert(job_id)
+        # Accumulate proxy bandwidth for the monthly cost alert.
+        await _track_proxy_usage(job_id)
+        # Tell the owner their clips are ready (managed jobs, once per job).
+        await _notify_clips_ready(job_id)
         # Always release semaphore and mark queue task done
         concurrency_semaphore.release()
         job_queue.task_done()
@@ -468,6 +583,33 @@ def _archive_clip_edit_bg(job_id: str, clip_index: int, filename: str):
             print(f"⚠️  R2 edit archive error for {job_id}: {e}")
 
     asyncio.create_task(_run())
+
+
+async def _notify_clips_ready(job_id):
+    """Email the owner when their clips finish — processing takes minutes, so
+    this lets them close the tab. Once per job (email_sent flag)."""
+    if not BILLING_ENABLED:
+        return
+    job = jobs.get(job_id) or {}
+    if not job.get('user_id') or job.get('status') != 'completed' or job.get('email_sent'):
+        return
+    clips = (job.get('result') or {}).get('clips') or []
+    if not clips:
+        return
+    job['email_sent'] = True
+    try:
+        from cloud.database import session as cloud_session
+        from cloud.models import User
+        from cloud.emails import send_clips_ready_email
+        async with cloud_session() as s:
+            user = await s.get(User, job['user_id'])
+        if not user or not user.email:
+            return
+        title = clips[0].get('video_title_for_youtube_short') or clips[0].get('title') or "Your video"
+        await send_clips_ready_email(user.email, title, len(clips),
+                                     _cloud_config.settings.frontend_url)
+    except Exception as e:
+        print(f"⚠️  Clips-ready email error for {job_id}: {e}")
 
 
 async def _record_job_alert(job_id):
@@ -601,6 +743,14 @@ def enqueue_output(out, job_id):
         for line in iter(out.readline, b''):
             decoded_line = _scrub_secrets(line.decode('utf-8').strip())
             if decoded_line:
+                # Internal marker from main.py's downloader, not a log line.
+                if decoded_line.startswith("PROXY_BYTES="):
+                    try:
+                        if job_id in jobs:
+                            jobs[job_id]['proxy_bytes'] = int(decoded_line.split("=", 1)[1])
+                    except ValueError:
+                        pass
+                    continue
                 print(f"📝 [Job Output] {decoded_line}")
                 if job_id in jobs:
                     jobs[job_id]['logs'].append(decoded_line)
@@ -859,7 +1009,11 @@ async def process_endpoint(
     print(f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true")
 
     # Meter + reserve minutes for managed users (no-op for BYOK / self-host).
-    user_id, priority, reservation_id = await reserve_process_minutes(request, url, input_path, job_id)
+    user_id, priority, reservation_id, user_plan = await reserve_process_minutes(request, url, input_path, job_id)
+    if user_plan == "free":
+        # Free-plan clips carry a burned-in watermark (applied by the main.py
+        # subprocess after each clip renders).
+        env["WATERMARK"] = "1"
 
     # Enqueue Job
     jobs[job_id] = {
@@ -2249,6 +2403,15 @@ async def thumbnail_generate(
     if not api_key:
         raise gemini_missing_error()
 
+    # Image generation is the one expensive managed Gemini call — paid plans only.
+    if BILLING_ENABLED:
+        user = await _user_from_request(request)
+        if user is not None and user.plan == "free":
+            raise HTTPException(status_code=403, detail={
+                "error": "plan_required",
+                "message": "AI thumbnail generation is available on paid plans.",
+            })
+
     # Clamp count
     count = min(max(1, count), 6)
 
@@ -2944,6 +3107,9 @@ class SaaSGenerateRequest(BaseModel):
     selected_actor_url: Optional[str] = None  # Pre-selected actor image URL
     retry_job_id: Optional[str] = None
     video_mode: str = "lowcost"  # "lowcost" or "premium"
+    # Publishing to the public /gallery is opt-in: generated videos carry the
+    # user's product name, URL and full script.
+    share_to_gallery: bool = False
 
 
 @app.post("/api/saasshorts/generate")
@@ -3066,35 +3232,37 @@ async def saasshorts_generate(
                 }
                 saas_jobs[job_id]["logs"].append("Video generation completed!")
 
-                # Upload to public gallery (non-blocking)
-                try:
-                    gallery_meta = {
-                        "title": req.script.get("title", "Untitled"),
-                        "hook_text": req.script.get("hook_text", ""),
-                        "caption": req.script.get("caption", ""),
-                        "hashtags": req.script.get("hashtags", []),
-                        "full_narration": req.script.get("full_narration", ""),
-                        "actor_description": req.script.get("actor_description", ""),
-                        "style": req.script.get("style", "ugc"),
-                        "language": req.script.get("language", "en"),
-                        "duration": result.get("duration", 0),
-                        "video_mode": req.video_mode,
-                        "product_name": req.script.get("_product_name", ""),
-                        "product_url": req.script.get("_product_url", ""),
-                        "segments": req.script.get("segments", []),
-                        "cost_estimate": result.get("cost_estimate", {}),
-                    }
-                    gallery_result = upload_video_to_gallery(
-                        video_path=result["video_path"],
-                        actor_image_path=result.get("actor_image", ""),
-                        metadata=gallery_meta,
-                        video_id=job_id[:8],
-                    )
-                    if gallery_result:
-                        saas_jobs[job_id]["result"]["gallery_video_id"] = gallery_result["video_id"]
-                        log_msg("📤 Uploaded to public gallery.")
-                except Exception as gallery_err:
-                    log_msg(f"⚠️ Gallery upload skipped: {gallery_err}")
+                # Upload to public gallery — opt-in only: the metadata carries
+                # the user's product name, URL and full script.
+                if req.share_to_gallery:
+                    try:
+                        gallery_meta = {
+                            "title": req.script.get("title", "Untitled"),
+                            "hook_text": req.script.get("hook_text", ""),
+                            "caption": req.script.get("caption", ""),
+                            "hashtags": req.script.get("hashtags", []),
+                            "full_narration": req.script.get("full_narration", ""),
+                            "actor_description": req.script.get("actor_description", ""),
+                            "style": req.script.get("style", "ugc"),
+                            "language": req.script.get("language", "en"),
+                            "duration": result.get("duration", 0),
+                            "video_mode": req.video_mode,
+                            "product_name": req.script.get("_product_name", ""),
+                            "product_url": req.script.get("_product_url", ""),
+                            "segments": req.script.get("segments", []),
+                            "cost_estimate": result.get("cost_estimate", {}),
+                        }
+                        gallery_result = upload_video_to_gallery(
+                            video_path=result["video_path"],
+                            actor_image_path=result.get("actor_image", ""),
+                            metadata=gallery_meta,
+                            video_id=job_id[:8],
+                        )
+                        if gallery_result:
+                            saas_jobs[job_id]["result"]["gallery_video_id"] = gallery_result["video_id"]
+                            log_msg("📤 Uploaded to public gallery.")
+                    except Exception as gallery_err:
+                        log_msg(f"⚠️ Gallery upload skipped: {gallery_err}")
 
         except Exception as e:
             print(f"[SaaSShorts] ❌ Job {job_id} failed: {e}")

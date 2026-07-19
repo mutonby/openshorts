@@ -65,8 +65,9 @@ export function AuthProvider({ children }) {
         }
       }
       const signedInMe = await refreshMe();
-      // New sign-ups (and anyone without an active plan/trial) go straight to
-      // pricing so they can start their free trial; entitled users land in the app.
+      // Google sign-ins are entitled (free plan) and land in the app; only
+      // magic-link-only accounts (no entitlement) are routed to pricing, where
+      // the free card tells them to use Google.
       if (signedInMe?.user && !signedInMe?.entitled) destination = '#/pricing';
     } catch (e) {
       // fall through — user lands signed-out

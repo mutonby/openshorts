@@ -6,7 +6,7 @@ import PricingSection from './PricingSection';
 const FAQS = [
   {
     question: "Is OpenShorts really free? What's the catch?",
-    answer: "There are two ways to use OpenShorts. (1) Self-hosted is 100% free and open source: you run it with Docker on your own machine, bring your own API keys, and there are no watermarks, no usage limits, and no subscription. Google Gemini API (required) powers the AI analysis — its free tier includes 1,500 requests/day. ElevenLabs (optional) enables AI dubbing in 30+ languages. Upload-Post (optional) publishes to YouTube, TikTok, and Instagram. (2) Hosted at openshorts.app is the no-setup option: we run all the AI and compute for you and you don't need any API keys — it's a paid service with a 3-day free trial, then plans from $12/mo for 100 minutes of video. So: free if you self-host, paid if you want us to host it for you. Both are far cheaper than Opus Clip ($15-228/month) or Kapwing ($24-79/month)."
+    answer: "There are two ways to use OpenShorts. (1) Self-hosted is 100% free and open source: you run it with Docker on your own machine, bring your own API keys, and there are no watermarks, no usage limits, and no subscription. Google Gemini API (required) powers the AI analysis — its free tier includes 1,500 requests/day. ElevenLabs (optional) enables AI dubbing in 30+ languages. Upload-Post (optional) publishes to YouTube, TikTok, and Instagram. (2) Hosted at openshorts.app is the no-setup option: we run all the AI and compute for you and you don't need any API keys — it has a free plan (20 minutes of video a month, watermark, no credit card) and paid plans from $12/mo for 100 minutes without watermark. So: free if you self-host, free to try in the cloud, paid if you want more. Both are far cheaper than Opus Clip ($15-228/month) or Kapwing ($24-79/month)."
   },
   {
     question: "How does OpenShorts compare to Opus Clip?",
@@ -61,8 +61,8 @@ const TRUST_CARDS = [
     eyebrow: 'cancel anytime',
     body: (
       <>
-        3-day free trial with up to 20 minutes included; you are not charged during the trial.
-        Billing runs on Stripe — cancel anytime from your account.
+        Start on the free plan — 20 minutes a month, no credit card. Billing for paid
+        plans runs on Stripe — cancel anytime from your account.
       </>
     ),
   },
@@ -123,7 +123,7 @@ export default function PricingPage({ onRequireLogin }) {
           <h1 className="font-display lowercase text-ink tracking-tight text-4xl md:text-6xl leading-[1.02] mb-5">
             start clipping in minutes.
           </h1>
-          <p className="readout">3-day free trial · 20 free minutes · cancel anytime</p>
+          <p className="readout">free plan · 20 min/month · no credit card</p>
         </div>
       </header>
 
@@ -197,11 +197,11 @@ export default function PricingPage({ onRequireLogin }) {
       <section className="px-6 py-24 border-t border-rule">
         <div className="max-w-3xl mx-auto text-center">
           <h2 className="font-display text-4xl md:text-5xl lowercase text-ink tracking-tight mb-10">
-            three free days. twenty free minutes. no charge until you decide.
+            twenty free minutes. every month. no card until you decide.
           </h2>
           <div className="flex flex-wrap items-center justify-center gap-4">
             <button onClick={scrollToPlans} className="btn-primary whitespace-nowrap">
-              start free trial
+              start free
               <ArrowRight size={16} />
             </button>
             <a

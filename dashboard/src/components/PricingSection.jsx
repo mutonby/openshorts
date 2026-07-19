@@ -11,11 +11,12 @@ const PLAN_BLURB = {
   pro: 'For power users & teams',
 };
 const HIGHLIGHT = 'creator';
+const FREE_MINUTES = 20;
 
 const fmt = (amount, currency) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: (currency || 'usd').toUpperCase(), maximumFractionDigits: 0 }).format((amount || 0) / 100);
 
-// 3-tier pricing with monthly/annual toggle. Checkout requires sign-in.
+// Free tier + 3 paid tiers with monthly/annual toggle. Checkout requires sign-in.
 export default function PricingSection({ onRequireLogin }) {
   const { isSignedIn } = useAuth();
   const [plans, setPlans] = useState([]);
@@ -66,7 +67,30 @@ export default function PricingSection({ onRequireLogin }) {
         />
       </div>
 
-      <div className="grid md:grid-cols-3 gap-6">
+      <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* Free tier — no card, Google sign-in only */}
+        <div className="relative card p-6 flex flex-col">
+          <h3 className="font-display lowercase text-xl text-ink">free</h3>
+          <p className="text-muted text-sm mb-4 lowercase">Try it on your own videos</p>
+          <div className="mb-4 flex items-baseline gap-1.5">
+            <span className="font-display text-4xl text-ink tabular-nums">$0</span>
+            <span className="readout">/mo</span>
+          </div>
+          <ul className="space-y-2 text-sm text-ink2 mb-6 flex-1">
+            <li className="flex items-start gap-2"><Check size={16} className="text-ok shrink-0 mt-0.5" /> <span><b>{FREE_MINUTES} min</b> of video / month</span></li>
+            <li className="flex items-start gap-2"><Check size={16} className="text-ok shrink-0 mt-0.5" /> <span>YouTube URL or upload</span></li>
+            <li className="flex items-start gap-2"><Check size={16} className="text-ok shrink-0 mt-0.5" /> <span>No credit card — Google sign-in</span></li>
+            <li className="flex items-start gap-2"><Check size={16} className="text-muted shrink-0 mt-0.5" /> <span className="text-muted">Watermark · clips kept 7 days</span></li>
+          </ul>
+          <button
+            onClick={() => { if (!isSignedIn) { onRequireLogin?.(null); } else { window.location.hash = ''; } }}
+            className="w-full btn-ghost"
+          >
+            Start free
+          </button>
+          <p className="text-center text-xs text-muted mt-2 lowercase">free minutes reset monthly.</p>
+        </div>
+
         {PLAN_ORDER.map((plan) => {
           const entry = byPlan(plan);
           if (!entry) return null;
@@ -98,9 +122,9 @@ export default function PricingSection({ onRequireLogin }) {
                 disabled={busyPrice === entry.price_id}
                 className={`w-full ${highlight ? 'btn-primary' : 'btn-ghost'}`}
               >
-                {busyPrice === entry.price_id ? <Loader2 size={18} className="animate-spin" /> : 'Start 3-day free trial'}
+                {busyPrice === entry.price_id ? <Loader2 size={18} className="animate-spin" /> : `Get ${plan}`}
               </button>
-              <p className="text-center text-xs text-muted mt-2 lowercase">3 days free, then billed monthly. Cancel anytime.</p>
+              <p className="text-center text-xs text-muted mt-2 lowercase">billed {interval === 'month' ? 'monthly' : 'yearly'}. cancel anytime.</p>
             </div>
           );
         })}
@@ -164,7 +188,7 @@ export default function PricingSection({ onRequireLogin }) {
       </div>
 
       <p className="text-center text-muted text-xs mt-6 lowercase">
-        Use it free on your own computer, or skip the setup and use it here — 3 days free, then a plan.
+        Use it free on your own computer, start free right here, or upgrade for more minutes and no watermark.
       </p>
     </div>
   );

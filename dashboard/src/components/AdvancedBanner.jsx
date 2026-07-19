@@ -12,7 +12,7 @@ export default function AdvancedBanner({ needsPlan, onKeys }) {
         <div className="text-ink2 lowercase">
           <span className="font-medium text-ink">Advanced tool.</span>{' '}
           {needsPlan
-            ? <>Start your <span className="font-medium text-ink">3-day free trial</span> to unlock. This tool also uses your own <span className="font-medium text-ink normal-case">fal.ai + ElevenLabs</span> keys (you pay those providers).</>
+            ? <>Sign in with <span className="font-medium text-ink">Google</span> to unlock free. This tool also uses your own <span className="font-medium text-ink normal-case">fal.ai + ElevenLabs</span> keys (you pay those providers).</>
             : <>AI video &amp; voice generation use your own <span className="font-medium text-ink normal-case">fal.ai + ElevenLabs</span> keys — add them in Settings. Script &amp; orchestration are included in your plan.</>}
         </div>
       </div>

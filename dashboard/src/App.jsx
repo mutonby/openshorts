@@ -11,6 +11,7 @@ import UGCGallery from './components/UGCGallery';
 import ScheduleWeekModal from './components/ScheduleWeekModal';
 import UsageMeter from './components/UsageMeter';
 import TopUpModal from './components/TopUpModal';
+import StarBanner from './components/StarBanner';
 import TrialUpgradeModal from './components/TrialUpgradeModal';
 import LoginModal from './components/LoginModal';
 import TrialGate from './components/TrialGate';
@@ -1349,6 +1350,20 @@ function App() {
                     </div>
                   )}
                 </h2>
+
+                {status === 'complete' && results?.clips?.length > 0 && (
+                  <div className="mb-2 space-y-2">
+                    <StarBanner message="Happy with your clips?" />
+                    {plan === 'free' && (
+                      <button
+                        onClick={() => { window.location.hash = '#/pricing'; }}
+                        className="w-full text-left px-3 py-2 rounded-input bg-paper3 border border-rule text-sm text-muted hover:text-ink transition-colors"
+                      >
+                        Free clips carry a watermark and expire in 7 days — <span className="text-brass">upgrade to remove both</span>.
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 <div className="flex-1 overflow-y-auto custom-scrollbar p-1">
                   {results && results.clips && results.clips.length > 0 ? (

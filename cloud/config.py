@@ -27,14 +27,32 @@ PLAN_MINUTES = {
     "pro": 750,
 }
 
-# Free trial length (days) for new subscriptions. Card required; auto-charges at
-# the end.
-TRIAL_DAYS = 3
+# Free plan: monthly allowance for Google-authenticated users with no
+# subscription. No Stripe object exists for it — it is resolved entirely in
+# cloud/metering.py against a synthetic calendar-month period. Setting
+# FREE_PLAN_MINUTES = 0 disables the free plan.
+FREE_PLAN_MINUTES = 20
+# Gate the free allowance behind Google sign-in; magic-link-only accounts are
+# disposable-email fodder and stay unentitled.
+FREE_REQUIRES_GOOGLE = True
+# Max processing jobs per free account per UTC day (abuse bound on GPU/proxy).
+FREE_DAILY_JOBS = 3
+# Same bound per client IP across free accounts. Generous on purpose: much of
+# the audience is behind CGNAT (India/Indonesia share IPs among thousands).
+FREE_DAILY_JOBS_PER_IP = 5
+# Free users' clips expire from R2 after this many days (paid libraries are
+# durable). Also an upgrade lever, mirroring OpusClip's 3-day free exports.
+FREE_CLIP_RETENTION_DAYS = 7
 
-# Minute cap DURING the trial (across all plans). Enough to evaluate the product,
-# but bounds the free managed-compute / proxy exposure per sign-up so a
-# cancel-before-charge account can't burn a full plan's worth of minutes. Once the
-# trial converts to an active subscription the full plan allowance applies.
+# Free trial length (days) for new subscriptions. Trials are retired in favor
+# of the free plan; the checkout only injects trial_period_days when > 0, and
+# existing 'trialing' subscriptions are still honored until they convert or
+# cancel (grandfathering).
+TRIAL_DAYS = 0
+
+# Minute cap DURING the trial (across all plans). Kept for grandfathered
+# 'trialing' subscriptions; removable once no subscription has status
+# 'trialing'.
 TRIAL_MINUTE_CAP = 20
 
 # Gemini IMAGE generation (thumbnails) is the one expensive managed Gemini call
@@ -75,6 +93,7 @@ PLAN_PRIORITY = {
     "pro": 0,
     "creator": 1,
     "starter": 1,
+    "free": 2,
 }
 
 # Max simultaneous managed jobs per user, by plan.
@@ -82,6 +101,7 @@ PLAN_JOB_LIMIT = {
     "pro": 3,
     "creator": 2,
     "starter": 2,
+    "free": 1,
 }
 
 

@@ -106,7 +106,8 @@ async def _active_sub_exists(user_id) -> bool:
     # unpaid / incomplete; those must still block, otherwise the user can spawn a
     # second subscription while the first one keeps dunning (real case: annual
     # trial -> end-trial -> card declined -> past_due, then a fresh monthly sub).
-    # Terminal states (canceled, incomplete_expired) do NOT block.
+    # Terminal states (canceled, incomplete_expired) do NOT block. Free-plan
+    # users have no Subscription row at all, so their upgrade checkout passes.
     return bool(sub and sub.status in (
         "active", "trialing", "past_due", "unpaid", "incomplete", "paused",
     ))
@@ -154,7 +155,8 @@ async def create_checkout(body: CheckoutRequest, request: Request):
             "minutes": str(entry.get("minutes", "")),
         },
     )
-    # Subscriptions start with a card-required free trial that auto-charges.
+    # Dead while TRIAL_DAYS == 0 (trials retired in favor of the free plan);
+    # kept as the documented grandfathering mechanism.
     if mode == "subscription" and TRIAL_DAYS > 0:
         kwargs["subscription_data"] = {"trial_period_days": TRIAL_DAYS}
     session = await asyncio.to_thread(lambda: stripe.checkout.Session.create(**kwargs))
@@ -164,7 +166,9 @@ async def create_checkout(body: CheckoutRequest, request: Request):
 @router.post("/api/billing/end-trial")
 async def end_trial(request: Request):
     """End the free trial immediately: charge the card now and unlock full plan
-    minutes. Used when a trialing user hits the trial minute cap and chooses to
+    minutes. Kept for grandfathered trialing subscriptions — removable once
+    ``SELECT count(*) FROM subscriptions WHERE status='trialing'`` reaches 0.
+    Used when a trialing user hits the trial minute cap and chooses to
     activate their plan right away. The subscription webhook flips status→active
     (and thus the full ``minutes_per_period`` allowance) once Stripe confirms."""
     user = await get_current_user_required(request)
@@ -379,8 +383,9 @@ async def _upsert_subscription(sub_obj: dict, event_created: datetime):
         await send_admin_alert(
             "🔻 Subscription canceled",
             f"A {plan} subscriber just canceled.\n"
-            f"Access continues until {end_dt:%Y-%m-%d}; their videos are then kept "
-            f"{VIDEO_RETENTION_GRACE_DAYS} more days before deletion.",
+            f"Access continues until {end_dt:%Y-%m-%d}. Google-authed users then "
+            f"drop to the free plan (clips expire after 7 days); others keep their "
+            f"videos {VIDEO_RETENTION_GRACE_DAYS} more days before deletion.",
         )
 
 

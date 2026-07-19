@@ -587,6 +587,16 @@ def download_youtube_video(url, output_dir="."):
             },
         }
 
+    # Wire bytes actually pulled through the (paid) proxy, summed across
+    # fragments/streams. Reported to app.py via the PROXY_BYTES= line below.
+    _dl_bytes = {"total": 0}
+
+    def _progress_hook(d):
+        if d.get('status') == 'finished':
+            _dl_bytes["total"] += int(d.get('total_bytes')
+                                      or d.get('total_bytes_estimate')
+                                      or d.get('downloaded_bytes') or 0)
+
     def _attempt(extractor_args, fmt):
         with yt_dlp.YoutubeDL(_base_opts(extractor_args)) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -599,6 +609,7 @@ def download_youtube_video(url, output_dir="."):
             'format': fmt,
             'outtmpl': os.path.join(output_dir, f'{sanitized}.%(ext)s'),
             'merge_output_format': 'mp4', 'overwrites': True,
+            'progress_hooks': [_progress_hook],
         }
         with yt_dlp.YoutubeDL(dl_opts) as ydl:
             ydl.download([url])
@@ -641,6 +652,10 @@ Technical Details: {str(last_err)}
                 downloaded_file = os.path.join(output_dir, f)
                 break
 
+    if _proxy and _dl_bytes["total"]:
+        # Machine-parseable marker consumed by app.py's log reader for the
+        # monthly proxy-bandwidth counter. Not shown to clients (log filter).
+        print(f"PROXY_BYTES={_dl_bytes['total']}")
     print(f"✅ Video downloaded in {time.time() - step_start_time:.2f}s: {downloaded_file}")
     return downloaded_file, sanitized_title
 
@@ -670,6 +685,37 @@ def render_clip(input_video, final_output_video, output_format="auto"):
         return finalize_clip_passthrough(input_video, final_output_video)
     aspect = 1.0 if output_format == "square" else ASPECT_RATIO
     return process_video_to_vertical(input_video, final_output_video, aspect_ratio=aspect)
+
+
+def apply_watermark(video_path):
+    """Burn the OpenShorts watermark into a finished clip (free plan).
+
+    One re-encode pass on the final file so every output format (TRACK,
+    GENERAL, horizontal passthrough) gets the mark, and later subtitle/hook
+    re-encodes keep it — they re-encode the already-marked pixels.
+    """
+    font_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "fonts", "NotoSerif-Bold.ttf")
+    font_arg = f"fontfile={font_path}:" if os.path.exists(font_path) else ""
+    draw = (
+        f"drawtext={font_arg}text=openshorts.app:"
+        "fontcolor=white@0.6:borderw=2:bordercolor=black@0.4:"
+        "fontsize=h/30:x=(w-text_w)/2:y=h-(h/12)"
+    )
+    tmp_path = video_path + ".wm.mp4"
+    cmd = ["ffmpeg", "-y", "-i", video_path, "-vf", draw,
+           *video_encode_args(QUALITY), "-c:a", "copy",
+           "-movflags", "+faststart", tmp_path]
+    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                            timeout=1800)
+    if result.returncode == 0 and os.path.exists(tmp_path):
+        os.replace(tmp_path, video_path)
+        return True
+    err = (result.stderr or b"").decode(errors="ignore")[-300:]
+    print(f"   ⚠️ Watermark pass failed (clip kept unmarked): {err}")
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
+    return False
 
 
 def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPECT_RATIO):
@@ -1141,6 +1187,8 @@ if __name__ == '__main__':
                     subprocess.run(cut_command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
                     success = render_clip(clip_temp_path, clip_final_path, output_format)
+                    if success and os.environ.get("WATERMARK") == "1":
+                        apply_watermark(clip_final_path)
                     if success:
                         print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
                     return success

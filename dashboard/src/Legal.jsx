@@ -55,9 +55,9 @@ export default function Legal() {
                             your own machine with your own API keys. No account, no payment, no data held by us.
                         </li>
                         <li>
-                            <strong className="text-ink">Hosted at openshorts.app (paid):</strong> we run everything for
-                            you. It requires an account and a paid subscription (with a free trial), and we store the
-                            videos you generate while your subscription is active.
+                            <strong className="text-ink">Hosted at openshorts.app:</strong> we run everything for
+                            you. It requires an account and offers a free plan and paid subscriptions; we store the
+                            videos you generate subject to the retention rules below.
                         </li>
                     </ul>
                     <p>By using the hosted Service you agree to the terms below.</p>
@@ -71,7 +71,7 @@ export default function Legal() {
                     </p>
                 </Section>
 
-                <Section title="Free trial, plans & billing">
+                <Section title="Free plan, paid plans & billing">
                     <p>
                         Paid plans are <strong className="text-ink">Starter ($12/mo · 100 min)</strong>,{' '}
                         <strong className="text-ink">Creator ($29/mo · 300 min)</strong> and{' '}
@@ -80,18 +80,21 @@ export default function Legal() {
                         minutes can be bought as one-off top-ups.
                     </p>
                     <p>
-                        <strong className="text-ink">Free trial:</strong> new subscriptions start with a{' '}
-                        <strong className="text-ink">3-day free trial</strong> that includes up to{' '}
-                        <strong className="text-ink">20 minutes</strong> of video processing. You provide a payment
-                        method up front but are <strong className="text-ink">not charged during the trial</strong>. If
-                        you do not cancel before the trial ends, your subscription automatically begins, your full plan
-                        minutes unlock, and your payment method is charged the plan price. You can cancel at any time from
-                        your account.
+                        <strong className="text-ink">Free plan:</strong> accounts signed in with Google get{' '}
+                        <strong className="text-ink">20 minutes</strong> of video processing per calendar month at no
+                        cost and with no payment method required. Free clips carry a watermark and are stored for{' '}
+                        <strong className="text-ink">7 days</strong>, after which they are deleted. Free allowances,
+                        limits and features may change; the free plan may not be available to accounts we reasonably
+                        believe are abusing it (e.g. duplicate accounts).
                     </p>
                     <p>
-                        <strong className="text-ink">Auto-renewal:</strong> subscriptions renew automatically each
-                        period (monthly or yearly) at the then-current price until you cancel. We'll email a reminder
-                        before the trial converts to a paid subscription.
+                        <strong className="text-ink">Auto-renewal:</strong> paid subscriptions renew automatically each
+                        period (monthly or yearly) at the then-current price until you cancel.
+                    </p>
+                    <p>
+                        <strong className="text-ink">Legacy trials:</strong> subscriptions started before the free plan
+                        existed may include a 3-day free trial under the terms shown at their sign-up; those trials
+                        convert or cancel per Stripe's standard flow.
                     </p>
                     <p>
                         Payments are processed by <strong className="text-ink">Stripe</strong>. We never see or store
