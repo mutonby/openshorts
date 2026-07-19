@@ -11,13 +11,6 @@ services:
       - hf-cache:/app/.cache/huggingface
     env_file:
       - .env
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     restart: unless-stopped
 
   frontend:

@@ -87,22 +87,44 @@ The video processing follows this sequence:
 | `write` | Create or overwrite a file (read first if the file exists) |
 | `bash` | Shell commands — git, npm, python, tests, linting, docker |
 
-### Codebase Intelligence
-| Tool | When to Use |
-|------|------------|
-| `codebase_peek` | **FIRST** — quick metadata-only lookup. Find WHERE code lives. Saves ~90% tokens vs `codebase_search`. Use for: discovery, navigation, finding multiple locations. |
-| `codebase_search` | **SECOND** — full code content search by intent/meaning. Use when you need to see the actual implementation after peeking. |
-| `implementation_lookup` | Jump to the authoritative definition of a function, class, or method. Prefers real impl files over tests/fixtures. |
-| `call_graph` | Trace callers or callees of a function. Understand code flow and dependencies. |
-| `find_similar` | Find code semantically similar to a given snippet. Use for: duplicate detection, pattern discovery, refactoring. |
+### Codebase Knowledge Graph (codebase-memory-mcp)
+
+This project uses codebase-memory-mcp to maintain a knowledge graph of the codebase.
+ALWAYS prefer MCP graph tools over grep/glob/file-search for code discovery.
+
+#### Priority Order
+1. `search_graph` — find functions, classes, routes, variables by BM25 / name pattern / semantic query
+2. `trace_path` — trace who calls a function or what it calls (modes: calls / data_flow / cross_service)
+3. `get_code_snippet` — read specific function/class source code with complexity metrics
+4. `query_graph` — run Cypher queries for complex multi-hop patterns
+5. `get_architecture` — high-level project summary (layers, clusters, boundaries, hotspots, packages)
+
+#### When to fall back to grep/glob
+- Searching for string literals, error messages, config values
+- Searching non-code files (Dockerfiles, shell scripts, configs)
+- When MCP tools return insufficient results
+
+#### Quick Reference
+| Tool | What it replaces from `opencode-codebase-index` | Use case |
+|------|------|----------|
+| `search_graph` | `codebase_peek` + `codebase_search` | Find anything: BM25 full-text, regex name patterns, semantic vector search |
+| `search_code` | `codebase_search` (grep) | Graph-augmented grep over indexed files only (mode: compact/full/files) |
+| `get_code_snippet` | `implementation_lookup` | Read function/class/method source + complexity metrics |
+| `trace_path` | `call_graph` | Trace callers/callees with depth control, data flow, cross-service |
+| `query_graph` | `find_similar` | Cypher: `MATCH (f:Function)-[:CALLS]->(g) WHERE f.name = 'main' RETURN g.name` |
+| `get_architecture` | — (new) | Architecture overview: packages, routes, hotspots, layers, Louvain clusters |
+| `index_repository` | `index_codebase` | Index project (mode: full/moderate/fast) |
+| `index_status` | `index_status` | Check node/edge count and ready status |
+| `detect_changes` | `index_health_check` | Map uncommitted changes to affected symbols with risk classification |
+| `manage_adr` | — (new) | Persist architectural decisions across sessions |
 
 ### Codebase Indexing
 | Tool | When to Use |
 |------|------------|
-| `index_codebase` | Run at the start of a session if the codebase has changed. Creates/updates vector embeddings for semantic search. Incremental — re-indexes only changed files. |
-| `index_status` | Check if codebase is indexed, how many chunks exist. |
-| `index_health_check` | Remove stale entries from deleted files. |
-| `index_metrics` | Performance stats for the index (search timings, cache rates). |
+| `index_repository` | Run at the start of a session if the codebase has changed. Creates/updates graph with full/moderate/fast modes. Incremental — re-indexes only changed files. |
+| `index_status` | Check if codebase is indexed, how many nodes/edges exist. |
+| `detect_changes` | Map uncommitted changes to affected symbols with risk classification. |
+| `manage_adr` | Persist architectural decisions across sessions. |
 
 ### Reasoning & Execution
 | Tool | When to Use |
@@ -134,17 +156,17 @@ The video processing follows this sequence:
 ### Narrow-to-Broad Exploration
 Use the pyramid approach — start cheap, go deep only when needed:
 
-1. **`codebase_peek`** — find where code lives (metadata only, fast)
+1. **`search_graph`** — find where code lives (metadata only, fast)
 2. **`glob` / `grep`** — narrow to specific files by name or pattern
 3. **`read`** — examine the actual code in context
-4. **`codebase_search`** — full semantic search for implementation details (expensive, use last)
+4. **`search_code`** — graph-augmented grep for implementation details (expensive, use last)
 
 ### Mandatory Workflow for EVERY Task
 1. **RECALL** → `skill` (recall) scoped to the task at hand (not blanket dump)
-2. **PRE-FLIGHT** → `index_codebase` (always run, fast incremental check)
+2. **PRE-FLIGHT** → `index_repository` (always run, fast incremental check)
 3. **CLARIFY** → `question` if intent is ambiguous; skip if clear
-4. **SCOPE** → `codebase_peek` to find relevant files (metadata only, ~90% token savings vs full search)
-5. **DEEP DIVE** → `read` + `codebase_search` only on files identified in step 4
+4. **SCOPE** → `search_graph` to find relevant files (metadata only, ~90% token savings vs full search)
+5. **DEEP DIVE** → `read` + `search_code` / `get_code_snippet` only on files identified in step 4
 6. **PLAN** → `sequential-thinking_sequentialthinking` for non-trivial problems
 7. **EXECUTE** → file tools + `bash` for code changes
 8. **VERIFY** → run lint, typecheck, and tests
@@ -155,26 +177,32 @@ Use the pyramid approach — start cheap, go deep only when needed:
 - **Steps 3-9 scale with complexity** — simple questions ("what port is the server on?") can abort after step 2; complex features ("implement clip generator reframing") go all the way
 - If unsure, err on the side of going deeper
 
-### When to Use Each Search Tool
+### When to Use Each Search Tool (codebase-memory-mcp)
 ```
 Need to find something by intent/meaning?
-  → codebase_peek (fast, metadata only)
-  → Not enough? codebase_search (full code)
+  → search_graph (BM25 + semantic, metadata fast)
+  → Not enough? search_code (graph-augmented grep, full code)
 
-Need to find a definition?
-  → implementation_lookup
+Need to find a definition/source?
+  → search_graph (find qualified_name) → get_code_snippet
 
 Need to understand callers/dependencies?
-  → call_graph
+  → trace_path (mode: calls / data_flow / cross_service)
 
-Need to find duplicate code?
-  → find_similar
+Need to find similar/duplicate code?
+  → search_graph with semantic_query (array of keywords)
+
+Need complex multi-hop analysis?
+  → query_graph (Cypher)
+
+Need a high-level project overview?
+  → get_architecture (layers, clusters, routes, hotspots)
 
 Need to find files by name/pattern?
   → glob (then grep if needed)
 
 Need to search for a regex in files?
-  → grep
+  → search_code or grep
 ```
 
 ### Parallel Execution
@@ -189,7 +217,7 @@ Need to search for a regex in files?
 ### Memory Rules
 - ALWAYS recall past context before starting a task (`skill` recall)
 - ALWAYS save key decisions after completing significant work (`skill` remember)
-- Use `codebase_peek` to find code by intent before using `grep`/`glob`
+- Use `search_graph` to find code by intent before using `grep`/`glob`
 
 ## Environment Variables
 

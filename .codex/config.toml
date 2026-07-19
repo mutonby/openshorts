@@ -1,0 +1,6 @@
+[mcp_servers.caveman-shrink]
+command = "npx"
+args = [
+    "-y",
+    "caveman-shrink",
+]

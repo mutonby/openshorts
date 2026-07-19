@@ -66,10 +66,28 @@ MULTIPASS_DEFAULT_CONFIG = {
     "hard_max_duration": 70.0,
     "duration_tolerance": 5.0,
     "balance_gap": 0.12,
+    "scout_min_score": 0.7,
     "judge_min_score": 0.7,
     "scout_temp": 0.8,
     "judge_temp": 0.2,
 }
+
+VIRALITY_DIMENSIONS = (
+    "hook_strength",
+    "flow_retention",
+    "engagement_potential",
+    "trend_relevance",
+    "emotional_intensity",
+    "narrative_completeness",
+    "standalone_comprehensibility",
+    "novelty_surprise",
+    "shareability",
+    "comment_potential",
+    "quotability",
+    "platform_fit",
+    "boundary_quality",
+    "context_dependency",
+)
 
 MULTIPASS_CATEGORY_CONFIG = {
     "podcast": {
@@ -465,6 +483,7 @@ def _build_multipass_scout_prompt(
     max_candidates=None,
     window_num=1,
     total_windows=1,
+    global_context="",
 ):
     """Build the candidate-discovery prompt for any category."""
     config = _get_multipass_config(category)
@@ -487,6 +506,10 @@ def _build_multipass_scout_prompt(
 - Duration: {video_duration:.3f}s
 - Window: {window_num}/{total_windows}
 - Maximum candidates across this response: {max_candidates}
+- Window transcript is local; use global context only to judge standalone context, not to invent missing clip evidence.
+
+# GLOBAL_VIDEO_CONTEXT
+{global_context or "No global context available."}
 
 {lane_instructions}
 
@@ -498,9 +521,18 @@ def _build_multipass_scout_prompt(
 - COMPLETE_THOUGHT: sertakan konteks minimum dan akhiri setelah payoff selesai.
 - QUOTE_EVIDENCE: hook_evidence dan payoff_evidence harus berasal dari timestamp transcript.
 - SELF-CONTAINED CHECK: tolak momen yang butuh konteks percakapan sebelumnya.
-- Hindari salam, sponsor, filler, pengulangan, dan acknowledgement kosong.
+- Kandidat harus punya payoff, bukan cuma topik yang baru mulai dibangun.
+- Jika momen mulai sebelum window ini atau payoff selesai setelah window ini dan tidak terlihat di transcript, skip.
+- Hindari salam, sponsor, filler, pengulangan, acknowledgement kosong, dan setup lambat tanpa payoff.
 - SENSOR kata kasar Indonesia pada suggested_hook dengan tanda * di tengah kata.
 - Semua timestamp absolut dan harus berada dalam video.
+
+# SCORING RUBRIC
+- 0.90-1.00: EMAS, stop-scroll kuat, hook cepat, payoff jelas, berdiri sendiri.
+- 0.80-0.89: PERAK, kuat tapi kurang tajam di hook/payoff/ending.
+- 0.70-0.79: fallback layak, hanya output jika benar-benar punya payoff.
+- <0.70: jangan output.
+- scout_score adalah triage recall, bukan final_score. Final ranking dilakukan setelah evidence analysis dan comparative ranking.
 
 # OUTPUT
 Return ONLY valid JSON:
@@ -544,6 +576,10 @@ def _build_duration_hints(category, config, lanes):
 
 def _normalize_content_lane(value, valid_lanes=None):
     lane = _normalize_whitespace(value).upper().replace("-", "_").replace(" ", "_")
+    if valid_lanes is None:
+        valid_lanes = PODCAST_COMEDY_LANES
+    if lane in valid_lanes:
+        return lane
     aliases = {
         "ROASTING": "COMEDY",
         "FUNNY": "COMEDY",
@@ -553,8 +589,6 @@ def _normalize_content_lane(value, valid_lanes=None):
         "PERSONAL": "PERSONAL_STORY",
     }
     lane = aliases.get(lane, lane)
-    if valid_lanes is None:
-        valid_lanes = PODCAST_COMEDY_LANES
     return lane if lane in valid_lanes else ""
 
 
@@ -567,6 +601,76 @@ def _candidate_overlap_ratio(first, second):
         first["end"] - first["start"], second["end"] - second["start"]
     )
     return overlap / min_duration if min_duration > 0 else 0.0
+
+
+def _text_token_set(value):
+    """Return coarse semantic tokens for duplicate candidate detection."""
+    stopwords = {
+        "yang", "dan", "atau", "dengan", "untuk", "dari", "ini", "itu",
+        "the", "and", "for", "from", "that", "this", "with", "into",
+        "hook", "payoff", "evidence", "penonton", "memahami", "momen",
+        "tanpa", "konteks", "lain", "candidate", "kandidat",
+    }
+    tokens = re.findall(r"[\w']+", _normalize_whitespace(value).lower())
+    return {token for token in tokens if len(token) > 3 and token not in stopwords}
+
+
+def _candidate_semantic_overlap(first, second):
+    first_text = " ".join(
+        _normalize_whitespace(first.get(field))
+        for field in ("standalone_summary", "hook_evidence", "payoff_evidence")
+    )
+    second_text = " ".join(
+        _normalize_whitespace(second.get(field))
+        for field in ("standalone_summary", "hook_evidence", "payoff_evidence")
+    )
+    first_tokens = _text_token_set(first_text)
+    second_tokens = _text_token_set(second_text)
+    if len(first_tokens) < 4 or len(second_tokens) < 4:
+        return 0.0
+    return len(first_tokens & second_tokens) / min(len(first_tokens), len(second_tokens))
+
+
+def _build_global_video_context(timestamped_segments, video_duration=None, max_chars=6000):
+    """Build a compact full-video context packet for local LLM windows."""
+    if not timestamped_segments:
+        return "No global transcript context available."
+
+    segments = sorted(timestamped_segments, key=lambda item: _safe_float(item.get("start")))
+    if len(segments) <= 12:
+        sampled = [("FULL", segment) for segment in segments]
+    else:
+        third = max(len(segments) // 3, 1)
+        sampled = []
+        for label, group in (
+            ("OPENING", segments[:third]),
+            ("MIDDLE", segments[third : third * 2]),
+            ("ENDING", segments[third * 2 :]),
+        ):
+            if not group:
+                continue
+            picks = group[:2] + group[-2:]
+            seen_ids = set()
+            for segment in picks:
+                seg_id = segment.get("id", id(segment))
+                if seg_id not in seen_ids:
+                    sampled.append((label, segment))
+                    seen_ids.add(seg_id)
+
+    duration_line = (
+        f"Duration: {video_duration:.3f}s" if video_duration is not None else "Duration: unknown"
+    )
+    lines = [duration_line]
+    for label, segment in sampled:
+        text = _normalize_whitespace(segment.get("text"))
+        if not text:
+            continue
+        lines.append(
+            f"- {label} [{_safe_float(segment.get('start')):.1f}-{_safe_float(segment.get('end')):.1f}s]: {text}"
+        )
+
+    context = "\n".join(lines)
+    return context[:max_chars]
 
 
 def _consolidate_scout_candidates(
@@ -584,6 +688,7 @@ def _consolidate_scout_candidates(
     valid_lanes = _get_lanes_for_category(config.get("_category", "podcast_comedy"))
     hard_min = config.get("hard_min_duration", 15.0)
     hard_max = config.get("hard_max_duration", 70.0)
+    scout_min_score = config.get("scout_min_score", 0.7)
     normalized = []
     for index, raw in enumerate(candidates or []):
         start = _safe_float(raw.get("start"), -1.0)
@@ -592,20 +697,23 @@ def _consolidate_scout_candidates(
         lane = _normalize_content_lane(raw.get("content_lane"), valid_lanes=valid_lanes)
         hook_evidence = _normalize_whitespace(raw.get("hook_evidence"))
         payoff_evidence = _normalize_whitespace(raw.get("payoff_evidence"))
+        standalone_summary = _normalize_whitespace(raw.get("standalone_summary"))
+        score = _safe_float(
+            raw.get("scout_score", raw.get("score", raw.get("confidence"))), 0.0
+        )
         if (
             not lane
             or not hook_evidence
             or not payoff_evidence
+            or not standalone_summary
             or start < 0
             or end > video_duration
             or duration < hard_min
             or duration > hard_max
+            or score < scout_min_score
         ):
             continue
 
-        score = _safe_float(
-            raw.get("scout_score", raw.get("score", raw.get("confidence"))), 0.0
-        )
         setup_start = _safe_float(raw.get("setup_start"), start)
         payoff_start = _safe_float(raw.get("payoff_start"), end)
         payoff_end = _safe_float(raw.get("payoff_end"), end)
@@ -630,9 +738,7 @@ def _consolidate_scout_candidates(
                 "reaction_end": round(reaction_end, 3),
                 "hook_evidence": hook_evidence,
                 "payoff_evidence": payoff_evidence,
-                "standalone_summary": _normalize_whitespace(
-                    raw.get("standalone_summary")
-                ),
+                "standalone_summary": standalone_summary,
                 "suggested_hook": _normalize_hook_text(raw.get("suggested_hook")),
                 "scout_score": max(0.0, min(score, 1.0)),
             }
@@ -645,6 +751,7 @@ def _consolidate_scout_candidates(
     ):
         if any(
             _candidate_overlap_ratio(candidate, kept) > max_overlap
+            or _candidate_semantic_overlap(candidate, kept) >= 0.8
             for kept in deduped
         ):
             continue
@@ -685,7 +792,7 @@ def _attach_candidate_context(
     return contextualized
 
 
-def _build_multipass_judge_prompt(candidates, category="general", max_clips=10):
+def _build_multipass_judge_prompt(candidates, category="general", max_clips=10, global_context=""):
     """Build the judge prompt for any category."""
     config = _get_multipass_config(category)
     candidates_json = json.dumps(candidates, ensure_ascii=False)
@@ -702,6 +809,8 @@ def _build_multipass_judge_prompt(candidates, category="general", max_clips=10):
 {cat_instructions}
 
 # PRIORITAS PENILAIAN
+EVIDENCE-FIRST: transcript evidence -> detected signals -> dimension scores -> calibrated ranking.
+Do not anchor on scout_score; treat scout_score only as recall triage from the previous stage.
 1. Hook dipahami dalam 1-3 detik.
 2. Setup efisien dan payoff kuat.
 3. Clip berdiri sendiri tanpa percakapan sebelumnya.
@@ -710,6 +819,16 @@ def _build_multipass_judge_prompt(candidates, category="general", max_clips=10):
 6. Jangan promosikan lane lemah hanya demi variasi.
 7. Jangan membuat candidate_id baru atau klaim yang tidak ada di context.
 8. SENSOR kata kasar Indonesia pada hook/caption dengan tanda * di tengah kata.
+9. Return fewer than {max_clips} clips jika kandidat tidak cukup kuat; kualitas mengalahkan kuantitas.
+10. Tie-breaker: hook 3 detik lebih kuat > standalone lebih jelas > payoff lebih tuntas > durasi lebih pendek.
+11. Jangan expand start/end kecuali tambahan konteks benar-benar membuat clip lebih mudah dipahami.
+
+# GLOBAL_VIDEO_CONTEXT
+{global_context or "No global context available."}
+
+# DIMENSION RUBRIC
+Score each dimension 0-4 and cite evidence first. context_dependency is inverted: 0 means no dependency, 4 means severe dependency.
+Dimensions: {', '.join(VIRALITY_DIMENSIONS)}
 
 # DURASI
 {lane_duration_lines}
@@ -727,6 +846,31 @@ Return ONLY valid JSON:
     "payoff_score": 0.0,
     "standalone_score": 0.0,
     "ending_score": 0.0,
+    "evidence": {{
+      "hook": ["exact transcript quote + timestamp"],
+      "payoff": ["exact transcript quote + timestamp"],
+      "emotion": [],
+      "comment_trigger": [],
+      "context_needed": []
+    }},
+    "detected_signals": ["fast_hook"],
+    "dimension_scores": {{
+      "hook_strength": 0,
+      "flow_retention": 0,
+      "engagement_potential": 0,
+      "trend_relevance": 0,
+      "emotional_intensity": 0,
+      "narrative_completeness": 0,
+      "standalone_comprehensibility": 0,
+      "novelty_surprise": 0,
+      "shareability": 0,
+      "comment_potential": 0,
+      "quotability": 0,
+      "platform_fit": 0,
+      "boundary_quality": 0,
+      "context_dependency": 0
+    }},
+    "hard_gate_failures": [],
     "reasoning": "alasan dalam Bahasa Indonesia",
     "viral_pattern_type": "EMOTIONAL_PEAK",
     "viral_hook_text": "MAKSIMAL ENAM KATA",
@@ -735,6 +879,61 @@ Return ONLY valid JSON:
 }}
 
 # CANDIDATES_WITH_LOCAL_CONTEXT
+{candidates_json}
+""".strip()
+
+
+def _build_multipass_rank_prompt(candidates, category="general", max_clips=10, global_context=""):
+    """Build the final comparative ranking prompt for analyzed candidates."""
+    compact_candidates = []
+    for candidate in candidates:
+        compact_candidates.append(
+            {
+                "candidate_id": candidate.get("candidate_id"),
+                "content_lane": candidate.get("content_lane"),
+                "start": candidate.get("start"),
+                "end": candidate.get("end"),
+                "hook_evidence": candidate.get("hook_evidence"),
+                "payoff_evidence": candidate.get("payoff_evidence"),
+                "standalone_summary": candidate.get("standalone_summary"),
+                "evidence": candidate.get("evidence", {}),
+                "detected_signals": candidate.get("detected_signals", []),
+                "dimension_scores": candidate.get("dimension_scores", {}),
+                "judge_score": candidate.get("judge_score", candidate.get("confidence")),
+                "reasoning": candidate.get("reasoning"),
+            }
+        )
+    candidates_json = json.dumps(compact_candidates, ensure_ascii=False)
+    role_name = f"MULTIPASS_RANKER_{category.upper()}" if category != "podcast_comedy" else "INDONESIAN_FINAL_RANKER"
+    return f"""
+# ROLE: {role_name}
+You are the final short-form clip ranking judge. Do not re-read the full transcript; compare only the evidence cards below.
+
+# METHOD
+- Run a PAIRWISE tournament over the shortlist.
+- Prefer observable evidence over predicted scores.
+- Rank by standalone virality: hook, retention flow, comment potential, quotability, complete payoff, boundary quality, and low context dependency.
+- Use prior judge_score only as weak supporting signal, never as the deciding factor.
+- Assign final_score 0-100 after ranking is decided, calibrated so 90+ means rare gold, 80-89 strong, 70-79 usable fallback.
+
+# GLOBAL_VIDEO_CONTEXT
+{global_context or "No global context available."}
+
+# OUTPUT
+Return ONLY valid JSON:
+{{
+  "ranked_clips": [{{
+    "candidate_id": "existing-id",
+    "rank": 1,
+    "final_score": 0,
+    "score_confidence": "low|medium|high",
+    "ranking_evidence": "why this beats nearby alternatives",
+    "primary_strength": "best observable strength",
+    "main_risk": "main weakness or context dependency"
+  }}]
+}}
+
+# EVIDENCE_CARDS
 {candidates_json}
 """.strip()
 
@@ -887,6 +1086,55 @@ def _validate_judge_output(
         validated.append(clip)
         seen_ids.add(candidate_id)
     return _rank_balanced_clips(validated, max_clips=max_clips, balance_gap=config.get("balance_gap"), lanes=lanes)
+
+
+def _validate_rank_output(rank_payload, clips, max_clips=10, min_score=0):
+    """Apply final tournament ranking while preserving validated clip metadata."""
+    clip_map = {clip.get("candidate_id"): clip for clip in clips}
+    ranked = []
+    seen_ids = set()
+    for item in (rank_payload or {}).get("ranked_clips", []):
+        candidate_id = _normalize_whitespace(item.get("candidate_id"))
+        clip = clip_map.get(candidate_id)
+        if not clip or candidate_id in seen_ids:
+            continue
+        final_score = _safe_float(item.get("final_score"), clip.get("confidence", 0) * 100)
+        final_score = max(0.0, min(final_score, 100.0))
+        if final_score < min_score:
+            continue
+        updated = dict(clip)
+        updated.update(
+            {
+                "rank": int(_safe_float(item.get("rank"), len(ranked) + 1)),
+                "final_score": int(round(final_score)),
+                "confidence": round(final_score / 100.0, 3),
+                "score": round(final_score / 100.0, 3),
+                "score_confidence": _normalize_whitespace(item.get("score_confidence")),
+                "ranking_evidence": _normalize_whitespace(item.get("ranking_evidence")),
+                "primary_strength": _normalize_whitespace(item.get("primary_strength")),
+                "main_risk": _normalize_whitespace(item.get("main_risk")),
+            }
+        )
+        ranked.append(updated)
+        seen_ids.add(candidate_id)
+
+    if not ranked:
+        fallback = sorted(
+            clips, key=lambda clip: _safe_float(clip.get("confidence")), reverse=True
+        )[:max_clips]
+        for index, clip in enumerate(fallback, start=1):
+            clip.setdefault("rank", index)
+            clip.setdefault("final_score", int(round(_safe_float(clip.get("confidence")) * 100)))
+        return fallback
+
+    ranked.sort(key=lambda clip: (_safe_float(clip.get("rank")), -_safe_float(clip.get("confidence"))))
+    for clip in clips:
+        if clip.get("candidate_id") not in seen_ids and len(ranked) < max_clips:
+            fallback = dict(clip)
+            fallback["rank"] = len(ranked) + 1
+            fallback["final_score"] = int(round(_safe_float(fallback.get("confidence")) * 100))
+            ranked.append(fallback)
+    return ranked[:max_clips]
 
 
 def _get_podcast_prompt(
@@ -2595,6 +2843,7 @@ def snap_clip_to_boundaries(
     clip, words, scene_boundaries, snap_padding=0.3, video_duration=None
 ):
     """Snap clip start/end to nearest clean word boundary or scene boundary."""
+    scene_boundaries = scene_boundaries or []
     if not words:
         return
 
@@ -2855,6 +3104,9 @@ def _run_multipass(
     windows = _chunk_timestamped_segments(
         timestamped_segments, max_chars=max_scout_chars
     )
+    global_context = _build_global_video_context(
+        timestamped_segments, video_duration=video_duration
+    )
     window_label = "window" if len(windows) == 1 else "windows"
     print(
         f"   🎭 Multi-pass ({category}) started: {len(timestamped_segments)} transcript segments, "
@@ -2878,6 +3130,7 @@ def _run_multipass(
             max_candidates=max_candidates,
             window_num=window_index,
             total_windows=len(windows),
+            global_context=global_context,
         )
         payload = analyze_prompt(prompt, scout_temperature) or {}
         window_candidates = payload.get("candidates") or payload.get("shorts") or []
@@ -2930,7 +3183,7 @@ def _run_multipass(
         flush=True,
     )
     judge_prompt = _build_multipass_judge_prompt(
-        contextualized, category=category, max_clips=max_clips
+        contextualized, category=category, max_clips=max_clips, global_context=global_context
     )
     try:
         judge_payload = analyze_prompt(judge_prompt, judge_temperature)
@@ -2947,7 +3200,24 @@ def _run_multipass(
                 f"({_format_lane_counts(judged, lanes=lanes)})",
                 flush=True,
             )
-            return {"content_type": content_type, "shorts": judged}
+            try:
+                print(
+                    f"   🏁 Final ranker started: comparing {len(judged)} analyzed clips",
+                    flush=True,
+                )
+                rank_prompt = _build_multipass_rank_prompt(
+                    judged, category=category, max_clips=max_clips, global_context=global_context
+                )
+                rank_payload = analyze_prompt(rank_prompt, judge_temperature)
+                ranked = _validate_rank_output(rank_payload, judged, max_clips=max_clips)
+                print(
+                    f"   ✅ Final ranker completed: {len(ranked)} clips ranked",
+                    flush=True,
+                )
+                return {"content_type": content_type, "shorts": ranked}
+            except Exception as rank_error:
+                print(f"   ⚠️ Final ranker failed; using judged clips: {rank_error}")
+                return {"content_type": content_type, "shorts": judged}
         print("   ⚠️ Judge returned no valid clips; using scout fallback")
     except Exception as judge_error:
         print(f"   ⚠️ Judge pass failed; using scout fallback: {judge_error}")
@@ -2978,6 +3248,7 @@ def get_viral_clips(
     rag_fallback=True,
 ):
     print(f"🤖  Analyzing with AI (category={category})...")
+    scene_boundaries = scene_boundaries or []
 
     if not transcript_result:
         print("❌ Error: No transcript available. Skipping viral clip analysis.")

@@ -1,9 +1,0 @@
-{
-  "embeddingProvider": "custom",
-  "customProvider": {
-    "baseUrl": "http://localhost:11434/v1",
-    "model": "embeddinggemma:300m-qat-q8_0",
-    "dimensions": 768,
-    "maxTokens": 2048
-  }
-}
