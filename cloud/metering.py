@@ -120,6 +120,42 @@ async def _active_subscription(session, user_id):
     return None
 
 
+def free_plan_eligible(user) -> bool:
+    """True if this ``User`` row qualifies for the free monthly allowance.
+
+    Free minutes are only for Google-authenticated accounts: magic-link-only
+    sign-ins accept disposable-email domains and would make the free plan a
+    multi-account faucet. FREE_PLAN_MINUTES = 0 disables the free plan.
+    """
+    if user is None or config.FREE_PLAN_MINUTES <= 0:
+        return False
+    if config.FREE_REQUIRES_GOOGLE and not user.google_sub:
+        return False
+    return True
+
+
+def free_period_end(now: datetime | None = None) -> datetime:
+    """First instant of the next UTC calendar month.
+
+    Free-plan ledger rows are tagged with this synthetic ``period_end`` so the
+    existing period accounting resets them monthly with no cron, exactly like
+    Stripe periods. A real subscription's ``current_period_end`` is anchored to
+    the checkout instant, so it can only collide with this value if it lands on
+    a month start to the second — accepted as negligible.
+    """
+    now = now or _now()
+    if now.month == 12:
+        return datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+    return datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+
+
+async def is_free_user(session, user_id) -> bool:
+    """Google-authed user currently on the free plan (no active/trialing sub)."""
+    if await _active_subscription(session, user_id):
+        return False
+    return free_plan_eligible(await session.get(User, user_id))
+
+
 async def _plan_used_this_period(session, user_id, period_end) -> Decimal:
     total = (await session.execute(
         select(func.coalesce(func.sum(UsageLedger.minutes_from_plan), 0)).where(and_(
@@ -138,23 +174,43 @@ async def _topups_fifo(session, user_id):
     )).scalars())
 
 
-async def _balance(session, user_id):
-    """Return a dict of the user's current minute balance (read-only)."""
+async def _balance(session, user_id, user=None):
+    """Return a dict of the user's current minute balance (read-only).
+
+    ``user`` may be a pre-fetched ``User`` row to save a lookup; it is only
+    consulted on the subscription-less path (free-plan eligibility).
+    """
     sub = await _active_subscription(session, user_id)
-    plan_allowance = _D(sub.minutes_per_period) if sub else _D(0)
-    # During the trial, cap the allowance so a cancel-before-charge account can't
-    # burn a whole plan's worth of managed minutes. Full allowance once active.
-    if sub and sub.status == "trialing":
-        plan_allowance = min(plan_allowance, _D(config.TRIAL_MINUTE_CAP))
-    period_end = sub.current_period_end if sub else None
-    plan_used = await _plan_used_this_period(session, user_id, period_end) if sub else _D(0)
+    if sub:
+        plan_name = sub.plan
+        plan_allowance = _D(sub.minutes_per_period)
+        # During the trial, cap the allowance so a cancel-before-charge account
+        # can't burn a whole plan's worth of managed minutes. Kept for
+        # grandfathered 'trialing' subscriptions.
+        if sub.status == "trialing":
+            plan_allowance = min(plan_allowance, _D(config.TRIAL_MINUTE_CAP))
+        period_end = sub.current_period_end
+        plan_used = await _plan_used_this_period(session, user_id, period_end)
+    else:
+        if user is None:
+            user = await session.get(User, user_id)
+        if free_plan_eligible(user):
+            plan_name = "free"
+            plan_allowance = _D(config.FREE_PLAN_MINUTES)
+            period_end = free_period_end()
+            plan_used = await _plan_used_this_period(session, user_id, period_end)
+        else:
+            plan_name = None
+            plan_allowance = _D(0)
+            period_end = None
+            plan_used = _D(0)
     plan_remaining = max(_D(0), plan_allowance - plan_used)
 
     topups = await _topups_fifo(session, user_id)
     topup_remaining = sum((_D(t.minutes_total) - _D(t.minutes_consumed) for t in topups), _D(0))
 
     return {
-        "plan": sub.plan if sub else None,
+        "plan": plan_name,
         "plan_allowance": float(plan_allowance),
         "plan_used": float(plan_used),
         "plan_remaining": float(plan_remaining),
@@ -190,11 +246,12 @@ async def reserve_minutes(user_id, minutes: float, job_id: str, job_type: str = 
     minutes = _D(minutes)
     async with database.session() as session:
         async with session.begin():
-            # Serialize all of this user's reservations.
-            await session.execute(
-                select(User.id).where(User.id == user_id).with_for_update()
-            )
-            b = await _balance(session, user_id)
+            # Serialize all of this user's reservations. Selecting the full row
+            # (same lock semantics) lets _balance skip a second User lookup.
+            locked_user = (await session.execute(
+                select(User).where(User.id == user_id).with_for_update()
+            )).scalar_one_or_none()
+            b = await _balance(session, user_id, user=locked_user)
             plan_remaining = b["_plan_remaining_d"]
             remaining_total = _D(b["remaining"])
             if minutes > remaining_total:

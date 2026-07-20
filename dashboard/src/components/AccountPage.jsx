@@ -99,9 +99,15 @@ export default function AccountPage() {
               <span className="badge-warn">cancels at period end</span>
             )}
           </div>
-          <button onClick={openPortal} disabled={busy} className="btn-ghost px-4 py-2 shrink-0">
-            <CreditCard size={16} /> Manage billing
-          </button>
+          {plan === 'free' ? (
+            <button onClick={() => { window.location.hash = '#/pricing'; }} className="btn-primary px-4 py-2 shrink-0 text-xs">
+              Upgrade
+            </button>
+          ) : (
+            <button onClick={openPortal} disabled={busy} className="btn-ghost px-4 py-2 shrink-0">
+              <CreditCard size={16} /> Manage billing
+            </button>
+          )}
         </div>
 
         <div className="space-y-2">

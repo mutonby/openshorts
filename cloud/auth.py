@@ -79,13 +79,15 @@ async def _load_current_user(session, user_id) -> Optional["CurrentUser"]:
         (float(t.minutes_total) - float(t.minutes_consumed) for t in topups), 0.0
     )
     profile = await session.get(UploadPostProfile, user_id)
-    # Entitled to managed keys if they have an active plan OR any top-up credit.
-    entitled = bool(sub is not None or topup_remaining > 0)
+    # Entitled to managed keys with an active plan, any top-up credit, or the
+    # free monthly allowance (Google-authenticated accounts only).
+    free = sub is None and metering.free_plan_eligible(user)
+    entitled = bool(sub is not None or topup_remaining > 0 or free)
     return CurrentUser(
         id=user.id,
         email=user.email,
         entitled=entitled,
-        plan=sub.plan if sub else None,
+        plan=sub.plan if sub else ("free" if free else None),
         upload_post_profile=profile.profile_username if profile else None,
     )
 

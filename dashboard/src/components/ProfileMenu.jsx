@@ -40,7 +40,7 @@ export default function ProfileMenu() {
               onClick={() => { setOpen(false); window.location.hash = '#/pricing'; }}
               className="w-full flex items-center gap-3 px-4 py-2.5 text-sm lowercase text-brass hover:bg-paper3 transition-colors"
             >
-              <Sparkles size={16} /> Start free trial
+              <Sparkles size={16} /> Start free
             </button>
           )}
           <button

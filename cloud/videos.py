@@ -9,8 +9,8 @@ from datetime import timedelta
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select, delete
 
-from .config import settings, VIDEO_RETENTION_GRACE_DAYS
-from . import database, storage
+from .config import settings, VIDEO_RETENTION_GRACE_DAYS, FREE_CLIP_RETENTION_DAYS
+from . import database, storage, metering
 from .models import UserVideo, Subscription, Project
 from .auth import get_current_user_required
 
@@ -260,6 +260,12 @@ async def purge_expired():
             continue
         if last_event_at + timedelta(days=VIDEO_RETENTION_GRACE_DAYS) > now:
             continue
+        # A canceled Google-authed user is now an entitled FREE user, not a
+        # lapsed one — their library follows the free 7-day per-clip expiry
+        # (purge_free_expired) instead of the full wipe.
+        async with database.session() as s:
+            if await metering.is_free_user(s, user_id):
+                continue
         # Any videos or projects left?
         async with database.session() as s:
             has = (await s.execute(
@@ -280,6 +286,53 @@ async def purge_expired():
             print(f"⚠️  Video purge failed for {user_id}: {e}")
 
 
+async def purge_free_expired():
+    """Expire free users' clips/projects after FREE_CLIP_RETENTION_DAYS.
+
+    Paid libraries are durable; the free plan keeps R2 storage bounded (and the
+    limited retention is an upgrade lever). Only rows whose owner is currently
+    on the free plan are touched — a user who upgraded keeps everything.
+    """
+    from datetime import datetime, timezone
+    cutoff = datetime.now(timezone.utc) - timedelta(days=FREE_CLIP_RETENTION_DAYS)
+    async with database.session() as s:
+        old_videos = list((await s.execute(
+            select(UserVideo).where(UserVideo.created_at < cutoff)
+        )).scalars())
+        old_projects = list((await s.execute(
+            select(Project).where(Project.updated_at < cutoff)
+        )).scalars())
+
+    by_user = {}
+    for v in old_videos:
+        by_user.setdefault(v.user_id, {"videos": [], "projects": []})["videos"].append(v)
+    for p in old_projects:
+        by_user.setdefault(p.user_id, {"videos": [], "projects": []})["projects"].append(p)
+
+    for user_id, items in by_user.items():
+        async with database.session() as s:
+            if not await metering.is_free_user(s, user_id):
+                continue
+        try:
+            for v in items["videos"]:
+                await asyncio.to_thread(storage.delete_key, v.r2_key)
+            for p in items["projects"]:
+                if p.metadata_r2_key:
+                    await asyncio.to_thread(storage.delete_key, p.metadata_r2_key)
+            async with database.session() as s:
+                async with s.begin():
+                    if items["videos"]:
+                        await s.execute(delete(UserVideo).where(
+                            UserVideo.id.in_([v.id for v in items["videos"]])))
+                    if items["projects"]:
+                        await s.execute(delete(Project).where(
+                            Project.id.in_([p.id for p in items["projects"]])))
+            n = len(items["videos"]) + len(items["projects"])
+            print(f"🗑️  Free retention: purged {n} expired object(s) for user {user_id}.")
+        except Exception as e:
+            print(f"⚠️  Free retention purge failed for {user_id}: {e}")
+
+
 _SWEEP_INTERVAL = 6 * 3600  # every 6 hours
 
 
@@ -288,6 +341,7 @@ async def _sweeper_loop():
         try:
             await asyncio.sleep(_SWEEP_INTERVAL)
             await purge_expired()
+            await purge_free_expired()
         except asyncio.CancelledError:
             break
         except Exception as e:

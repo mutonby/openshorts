@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Loader2, Zap } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import Modal from './ui/Modal';
+import StarBanner from './StarBanner';
 
 // Opens when a job hits a 402 (quota exceeded). Lets the user buy more minutes.
 export default function TopUpModal({ onClose, required, remaining }) {
@@ -46,6 +47,9 @@ export default function TopUpModal({ onClose, required, remaining }) {
         {topups.length === 0 && <div className="col-span-2 flex justify-center py-4"><Loader2 className="animate-spin text-brass" /></div>}
       </div>
       <p className="text-muted text-xs mt-4 text-center lowercase">Or upgrade your plan for more monthly minutes.</p>
+      <div className="mt-4">
+        <StarBanner message="Not ready to buy?" />
+      </div>
     </Modal>
   );
 }

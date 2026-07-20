@@ -151,7 +151,7 @@ export default function Landing({ onLaunchApp }) {
   const faqs = [
     {
       question: "Is OpenShorts really free? What's the catch?",
-      answer: "There are two ways to use OpenShorts. (1) Self-hosted is 100% free and open source: you run it with Docker on your own machine, bring your own API keys, and there are no watermarks, no usage limits, and no subscription. Google Gemini API (required) powers the AI analysis — its free tier includes 1,500 requests/day. ElevenLabs (optional) enables AI dubbing in 30+ languages. Upload-Post (optional) publishes to YouTube, TikTok, and Instagram. (2) Hosted at openshorts.app is the no-setup option: we run all the AI and compute for you and you don't need any API keys — it's a paid service with a 3-day free trial, then plans from $12/mo for 100 minutes of video. So: free if you self-host, paid if you want us to host it for you. Both are far cheaper than Opus Clip ($15-228/month) or Kapwing ($24-79/month)."
+      answer: "There are two ways to use OpenShorts. (1) Self-hosted is 100% free and open source: you run it with Docker on your own machine, bring your own API keys, and there are no watermarks, no usage limits, and no subscription. Google Gemini API (required) powers the AI analysis — its free tier includes 1,500 requests/day. ElevenLabs (optional) enables AI dubbing in 30+ languages. Upload-Post (optional) publishes to YouTube, TikTok, and Instagram. (2) Hosted at openshorts.app is the no-setup option: we run all the AI and compute for you and you don't need any API keys — it has a free plan (20 minutes of video a month, watermark, no credit card) and paid plans from $12/mo for 100 minutes without watermark. So: free if you self-host, free to try in the cloud, paid if you want more. Both are far cheaper than Opus Clip ($15-228/month) or Kapwing ($24-79/month)."
     },
     {
       question: "What is OpenShorts and how does it work?",
@@ -257,7 +257,7 @@ export default function Landing({ onLaunchApp }) {
             <div className="flex flex-wrap items-center gap-4 mb-5">
               {billingEnabled ? (
                 <a href="#pricing" className="btn-primary whitespace-nowrap">
-                  start free trial
+                  start free
                   <ArrowRight size={16} />
                 </a>
               ) : (
@@ -274,7 +274,7 @@ export default function Landing({ onLaunchApp }) {
             </div>
 
             <p className="text-sm text-muted lowercase">
-              3-day free trial · 20 free minutes · from $12/mo · no watermarks. prefer to run it yourself?{' '}
+              free plan · 20 min/month · no credit card · paid plans from $12/mo without watermark. prefer to run it yourself?{' '}
               <a
                 href="https://github.com/mutonby/openshorts"
                 target="_blank"
@@ -398,7 +398,7 @@ export default function Landing({ onLaunchApp }) {
               </ul>
               {billingEnabled ? (
                 <a href="#pricing" className="btn-primary whitespace-nowrap">
-                  start free trial <ArrowRight size={16} />
+                  start free <ArrowRight size={16} />
                 </a>
               ) : (
                 <button onClick={onLaunchApp} className="btn-primary whitespace-nowrap">
@@ -431,7 +431,7 @@ export default function Landing({ onLaunchApp }) {
         <section id="pricing" className="py-20 px-6 border-t border-rule">
           <div className="max-w-6xl mx-auto">
             <SectionHeader eyebrow="03 · Pricing" title="Simple, transparent pricing">
-              3-day free trial with 20 free minutes. Cancel anytime.
+              Free plan with 20 minutes a month — no credit card. Cancel anytime.
             </SectionHeader>
             <PricingSection onRequireLogin={() => { window.location.hash = '#/pricing'; }} />
           </div>
@@ -698,11 +698,11 @@ export default function Landing({ onLaunchApp }) {
       <section className="py-24 px-6 border-t border-rule">
         <div className="max-w-3xl mx-auto text-center">
           <h2 className="font-display text-4xl md:text-5xl lowercase text-ink tracking-tight mb-5">start creating viral videos today.</h2>
-          <p className="text-muted mb-10 max-w-xl mx-auto leading-relaxed lowercase">3-day free trial · 20 free minutes · no watermarks — or self-host free with docker.</p>
+          <p className="text-muted mb-10 max-w-xl mx-auto leading-relaxed lowercase">free plan · 20 min/month · no credit card — or self-host free with docker.</p>
           <div className="flex flex-wrap items-center justify-center gap-4">
             {billingEnabled ? (
               <a href="#pricing" className="btn-primary whitespace-nowrap">
-                start free trial
+                start free
                 <ArrowRight size={16} />
               </a>
             ) : (

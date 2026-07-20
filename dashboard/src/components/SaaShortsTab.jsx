@@ -4,6 +4,7 @@ import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
 import StepIndicator from './ui/StepIndicator';
 import SegmentedControl from './ui/SegmentedControl';
+import StarBanner from './StarBanner';
 
 const STYLE_OPTIONS = [
   { id: 'ugc', label: 'UGC Natural', desc: 'Authentic, talking to camera' },
@@ -69,6 +70,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   const [selectedScript, setSelectedScript] = useState(0);
 
   // Step 2: Configure
+  const [shareToGallery, setShareToGallery] = useState(false);
   const [voices, setVoices] = useState([]);
   const [selectedVoice, setSelectedVoice] = useState('21m00Tcm4TlvDq8ikWAM');
   const [actorDescription, setActorDescription] = useState('');
@@ -296,6 +298,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
           actor_description: actorDescription || undefined,
           selected_actor_url: selectedActor || undefined,
           video_mode: videoMode,
+          share_to_gallery: shareToGallery,
         }),
       });
 
@@ -342,6 +345,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
           actor_description: actorDescription || undefined,
           retry_job_id: jobId,
           video_mode: videoMode,
+          share_to_gallery: shareToGallery,
         }),
       });
 
@@ -1121,6 +1125,21 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                   Set them in Settings.
                 </div>
               )}
+
+              <label className="flex items-start gap-2 text-sm text-ink cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={shareToGallery}
+                  onChange={(e) => setShareToGallery(e.target.checked)}
+                  className="mt-0.5 accent-brass"
+                />
+                <span>
+                  Share this video in the public gallery
+                  <span className="block text-xs text-muted">
+                    Your video, product name and script will be visible at openshorts.app/gallery
+                  </span>
+                </span>
+              </label>
             </div>
 
             <div className="flex justify-between">
@@ -1256,6 +1275,10 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
               <h2 className="font-display lowercase text-xl text-ink mb-4">
                 Your Short is Ready
               </h2>
+
+              <div className="mb-4">
+                <StarBanner message="Happy with your short?" />
+              </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Video Player */}
