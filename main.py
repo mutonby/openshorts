@@ -691,13 +691,14 @@ def render_clip(input_video, final_output_video, output_format="auto"):
 #
 # Vertical placement is the whole point: the top and bottom strips of a 9:16
 # clip are either black bars or blurred filler (GENERAL layout), so a mark up
-# there is cropped away without touching a single pixel of real footage. At 40%
-# of the height it sits inside the content band — a 16:9 source letterboxed
-# into 9:16 spans roughly 34%-66% — so removing the mark means cutting into the
-# picture. Left-aligned, like OpusClip's.
+# there is cropped away without touching a single pixel of real footage. A 16:9
+# source letterboxed into 9:16 spans roughly 34%-66%, so 0.34 lands the mark
+# right on the top edge of the real picture — high enough to read as "up top",
+# low enough that cropping it means cutting into the footage. Left-aligned,
+# like OpusClip's.
 WATERMARK_WIDTH_RATIO = 0.30
 WATERMARK_MARGIN_RATIO = 0.05
-WATERMARK_Y_RATIO = 0.40
+WATERMARK_Y_RATIO = 0.34
 WATERMARK_OPACITY = 0.85
 
 
