@@ -420,10 +420,10 @@ export default function Landing({ onLaunchApp }) {
               <div className="flex flex-wrap items-center gap-3 mb-3">
                 <Sparkles size={18} className="text-brass" />
                 <h3 className="font-display text-2xl lowercase text-ink">cloud — openshorts.app</h3>
-                <span className="badge-brass">Recommended · 3-Day Trial</span>
+                <span className="badge-brass">Recommended · Free Plan</span>
               </div>
               <ul className="space-y-1.5 mb-6 flex-1">
-                {['Zero setup', 'No API keys — Gemini included', 'Social publishing built in', 'From $12/mo'].map((f, i) => (
+                {['Zero setup', 'No API keys — Gemini included', 'Social publishing built in', '20 free min/month, no card'].map((f, i) => (
                   <li key={i} className="flex items-center gap-2 text-sm text-muted"><Check size={14} className="text-ok shrink-0" />{f}</li>
                 ))}
               </ul>

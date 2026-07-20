@@ -37,6 +37,12 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "5"))
 MAX_FILE_SIZE_MB = 2048  # 2GB limit
 JOB_RETENTION_SECONDS = int(os.environ.get("JOB_RETENTION_SECONDS", "3600"))  # job/file retention (issue #46)
+# Ceiling for the working directory once it lives on a persistent volume: the
+# age-based sweep alone can't stop a burst of long videos from filling the disk.
+# 0 disables the cap.
+OUTPUT_MAX_GB = int(os.environ.get("OUTPUT_MAX_GB", "25"))
+# Same idea for source uploads, which are the biggest single files on disk.
+UPLOADS_MAX_GB = int(os.environ.get("UPLOADS_MAX_GB", "15"))
 # Pre-flight quality gate: warn before processing a YouTube source below this
 # height (0 disables). Only applies to URLs; uploads are whatever the user gave.
 QUALITY_GATE_MIN_HEIGHT = int(os.environ.get("QUALITY_GATE_MIN_HEIGHT", "720"))
@@ -432,6 +438,81 @@ def _recover_jobs_from_disk():
         print(f"♻️  Recovered {recovered} completed job(s) from disk.")
 
 
+def _dir_size(path: str) -> int:
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return total
+
+
+def _enforce_uploads_size_cap():
+    """Delete the oldest source uploads while UPLOAD_DIR is over UPLOADS_MAX_GB.
+
+    Sources are only needed while a job runs (and for the preview afterwards),
+    but they're the biggest files on disk — up to MAX_FILE_SIZE_MB each.
+    """
+    cap = UPLOADS_MAX_GB * 1024 ** 3
+    if cap <= 0:
+        return
+    used = _dir_size(UPLOAD_DIR)
+    if used <= cap:
+        return
+    files = []
+    for name in os.listdir(UPLOAD_DIR):
+        p = os.path.join(UPLOAD_DIR, name)
+        if os.path.isfile(p):
+            try:
+                files.append((os.path.getmtime(p), p, os.path.getsize(p)))
+            except OSError:
+                pass
+    files.sort()
+    print(f"🧹 Uploads at {used / 1024**3:.1f} GB (cap {UPLOADS_MAX_GB} GB) — trimming.")
+    for _mtime, path, size in files:
+        if used <= cap:
+            break
+        try:
+            os.remove(path)
+            used -= size
+            print(f"🧹 Size cap: removed upload {os.path.basename(path)}")
+        except OSError:
+            pass
+
+
+def _enforce_output_size_cap():
+    """Delete the oldest job dirs while OUTPUT_DIR is over OUTPUT_MAX_GB."""
+    cap = OUTPUT_MAX_GB * 1024 ** 3
+    if cap <= 0:
+        return
+    used = _dir_size(OUTPUT_DIR)
+    if used <= cap:
+        return
+    thumbs = os.path.basename(THUMBNAILS_DIR)
+    candidates = []
+    for job_id in os.listdir(OUTPUT_DIR):
+        if job_id == thumbs:
+            continue
+        p = os.path.join(OUTPUT_DIR, job_id)
+        if os.path.isdir(p):
+            try:
+                candidates.append((os.path.getmtime(p), p, job_id))
+            except OSError:
+                pass
+    candidates.sort()  # oldest first
+    print(f"🧹 Output dir at {used / 1024**3:.1f} GB (cap {OUTPUT_MAX_GB} GB) — trimming.")
+    for _mtime, path, job_id in candidates:
+        if used <= cap:
+            break
+        size = _dir_size(path)
+        shutil.rmtree(path, ignore_errors=True)
+        jobs.pop(job_id, None)
+        used -= size
+        print(f"🧹 Size cap: purged {job_id} ({size / 1024**2:.0f} MB)")
+
+
 async def cleanup_jobs():
     """Background task to remove old jobs and files."""
     import time
@@ -444,6 +525,10 @@ async def cleanup_jobs():
             # Simple directory cleanup based on modification time
             # Check OUTPUT_DIR
             for job_id in os.listdir(OUTPUT_DIR):
+                # Not a job: the thumbnails dir backs a StaticFiles mount, so
+                # deleting it would 500 every /thumbnails request until reboot.
+                if job_id == os.path.basename(THUMBNAILS_DIR):
+                    continue
                 job_path = os.path.join(OUTPUT_DIR, job_id)
                 if os.path.isdir(job_path):
                     if now - os.path.getmtime(job_path) > JOB_RETENTION_SECONDS:
@@ -451,6 +536,14 @@ async def cleanup_jobs():
                         shutil.rmtree(job_path, ignore_errors=True)
                         if job_id in jobs:
                             del jobs[job_id]
+
+            # Hard disk cap. The time-based sweep above bounds the *age* of what
+            # we keep, not its size: a burst of long videos can fill the volume
+            # inside one retention window. Drop the oldest jobs until we're back
+            # under the cap — clips are already archived to R2 and get restored
+            # on demand, so this only costs a re-download.
+            _enforce_output_size_cap()
+            _enforce_uploads_size_cap()
 
             # Cleanup SaaSShorts jobs from memory
             try:
