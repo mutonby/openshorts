@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Check, Loader2, Zap, Github, Server } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiJson } from '../lib/api';
+import { track } from '../lib/analytics';
 import SegmentedControl from './ui/SegmentedControl';
 
 const PLAN_ORDER = ['starter', 'creator', 'pro'];
@@ -31,14 +32,22 @@ export default function PricingSection({ onRequireLogin }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const checkout = async (price_id) => {
-    if (!isSignedIn) { onRequireLogin?.(price_id); return; }
-    setBusyPrice(price_id);
+  const checkout = async (entry) => {
+    if (!isSignedIn) { onRequireLogin?.(entry.price_id); return; }
+    setBusyPrice(entry.price_id);
+    track('CheckoutStarted', { props: { plan: entry.plan, interval: entry.interval } });
+    // Stash the price so we can attach real revenue to the Subscribed goal when
+    // the user returns from Stripe (see AccountPage's checkout=success handler).
+    try {
+      localStorage.setItem('os_pending_checkout', JSON.stringify({
+        plan: entry.plan, interval: entry.interval, amount: entry.amount, currency: entry.currency,
+      }));
+    } catch (_) { /* ignore storage errors */ }
     try {
       const { url } = await apiJson('/api/billing/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ price_id }),
+        body: JSON.stringify({ price_id: entry.price_id }),
       });
       window.location.href = url;
     } catch (e) {
@@ -118,7 +127,7 @@ export default function PricingSection({ onRequireLogin }) {
                 {plan === 'pro' && <li className="flex items-start gap-2"><Zap size={16} className="text-brass shrink-0 mt-0.5" /> <span>Priority processing queue</span></li>}
               </ul>
               <button
-                onClick={() => checkout(entry.price_id)}
+                onClick={() => checkout(entry)}
                 disabled={busyPrice === entry.price_id}
                 className={`w-full ${highlight ? 'btn-primary' : 'btn-ghost'}`}
               >

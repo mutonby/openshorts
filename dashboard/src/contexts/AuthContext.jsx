@@ -7,6 +7,7 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { getApiUrl } from '../config';
 import { apiFetch, apiJson, getToken, setToken, clearToken } from '../lib/api';
+import { track } from '../lib/analytics';
 
 const AuthContext = createContext(null);
 export const useAuth = () => useContext(AuthContext);
@@ -65,6 +66,9 @@ export function AuthProvider({ children }) {
         }
       }
       const signedInMe = await refreshMe();
+      // This handler only runs on the auth redirect, so a resolved user here is
+      // a fresh sign-in / sign-up — the top of the conversion funnel.
+      if (signedInMe?.user) track('Signup', { props: { method: kind === 'verify' ? 'magic_link' : 'google' } });
       // Google sign-ins are entitled (free plan) and land in the app; only
       // magic-link-only accounts (no entitlement) are routed to pricing, where
       // the free card tells them to use Google.

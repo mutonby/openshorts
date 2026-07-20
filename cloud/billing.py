@@ -332,6 +332,18 @@ async def _upsert_subscription(sub_obj: dict, event_created: datetime):
             # Order guard: ignore events older than what we've already applied.
             if row and row.last_event_at and event_created < row.last_event_at:
                 return
+            # Cross-subscription guard: the table keeps one row per user, so an
+            # event for a *different* subscription of the same user must not clobber
+            # the row that represents their live plan. This is exactly what happens
+            # when a user has a dangling sub (e.g. a past_due annual that gets
+            # canceled) alongside a live one (a trialing monthly): the canceled
+            # sub's update would otherwise overwrite the good row. Only let another
+            # subscription take over when the stored one is no longer live.
+            if row and row.stripe_subscription_id != sub_obj["id"]:
+                stored_live = row.status in ("active", "trialing", "past_due", "unpaid")
+                incoming_live = sub_obj.get("status") in ("active", "trialing", "past_due")
+                if stored_live and not incoming_live:
+                    return
             start, end = _sub_period(sub_obj)
             now_canceling = bool(sub_obj.get("cancel_at_period_end"))
             # Detect the moment the user hits "cancel" (False -> True).

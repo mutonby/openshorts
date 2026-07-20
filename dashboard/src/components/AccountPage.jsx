@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Loader2, CreditCard, LogOut, Plus } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiJson } from '../lib/api';
+import { track } from '../lib/analytics';
 
 const fmt1 = (n) => Math.round((n || 0) * 10) / 10;
 
@@ -21,12 +22,36 @@ export default function AccountPage() {
     const t = setInterval(async () => {
       tries += 1;
       const data = await refreshMe();
-      if ((data && data.plan) || tries > 15) {
+      // 'free' is the default plan for any signed-in account, so it does NOT
+      // mean the checkout landed — keep polling until the webhook writes the
+      // paid subscription.
+      const paidPlan = data?.plan && data.plan !== 'free';
+      if (paidPlan || tries > 15) {
         clearInterval(t);
         setActivating(false);
+        // Fire the Subscribed conversion goal. A pending-checkout stash (set in
+        // PricingSection) carries the plan price, so we can attach real revenue;
+        // top-ups don't set it, so they never count as a subscription.
+        if (paidPlan) {
+          let pending = null;
+          try { pending = JSON.parse(localStorage.getItem('os_pending_checkout') || 'null'); } catch (_) { /* ignore */ }
+          if (pending) {
+            // This Plausible is Community Edition, which has no revenue goals —
+            // so the price rides along as plain props (value_usd / plan) that CE
+            // can break the goal down by. The exact MRR still lives in Stripe.
+            track('Subscribed', {
+              props: {
+                plan: pending.plan,
+                interval: pending.interval,
+                value_usd: Math.round((pending.amount || 0) / 100),
+              },
+            });
+            try { localStorage.removeItem('os_pending_checkout'); } catch (_) { /* ignore */ }
+          }
+        }
         // First time a plan activates, take the user straight to connect their
         // socials. Guard with a flag so top-up checkouts don't re-trigger it.
-        if (data && data.plan && !localStorage.getItem('os_socials_prompted')) {
+        if (paidPlan && !localStorage.getItem('os_socials_prompted')) {
           localStorage.setItem('os_socials_prompted', '1');
           try {
             const { access_url } = await apiJson('/api/social/connect', { method: 'POST' });

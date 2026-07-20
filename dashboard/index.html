@@ -191,7 +191,20 @@
 
   <!-- Analytics -->
   <script defer data-domain="openshorts.app" src="https://analytics.fotoexamen.com/js/script.js"></script>
-</head>
+  <script>window.plausible = window.plausible || function () { (window.plausible.q = window.plausible.q || []).push(arguments) }</script>
+    <!-- OpenPanel analytics (self-hosted) -->
+    <script>
+      window.op = window.op || function () { var n = []; return new Proxy(function () { arguments.length && n.push([].slice.call(arguments)); }, { get: function (t, r) { return "q" === r ? n : function () { n.push([r].concat([].slice.call(arguments))); }; }, has: function (t, r) { return "q" === r; } }); }();
+      window.op("init", {
+        apiUrl: "https://api.openpanel.fotoexamen.com",
+        clientId: "9b7ab939-bdef-4097-87c4-bb4a2dbe034d",
+        trackScreenViews: true,
+        trackOutgoingLinks: true,
+        trackAttributes: true,
+      });
+    </script>
+    <script src="https://openpanel.dev/op1.js" defer async></script>
+  </head>
 
 <body>
   <div id="root"></div>
