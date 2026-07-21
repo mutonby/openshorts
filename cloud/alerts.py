@@ -40,6 +40,25 @@ def _looks_like_proxy_error(err: str) -> bool:
     return any(k in e for k in _PROXY_HINTS)
 
 
+def _classify_failure(err: str) -> str:
+    """One-word category for the last error, so the alert points the right way."""
+    e = (err or "").lower()
+    if _looks_like_proxy_error(e):
+        return "proxy"
+    if "no_audio" in e or "no audio" in e:
+        return "no audio"
+    if "sign in to confirm" in e or "not a bot" in e or "http error 403" in e \
+            or "http error 429" in e or "video unavailable" in e or "read timed out" in e:
+        return "youtube download"
+    if "whisper" in e or "faster_whisper" in e or "transcrib" in e or "av/container" in e:
+        return "transcription"
+    if "gemini" in e or "google.genai" in e:
+        return "gemini"
+    if "ffmpeg" in e or "reframe" in e:
+        return "ffmpeg/render"
+    return "mixed"
+
+
 def _cooldown_ok(kind: str) -> bool:
     now = time.time()
     if now - _last_alert.get(kind, 0) < _ALERT_COOLDOWN:
@@ -103,13 +122,14 @@ async def record_job_outcome(ok: bool, error_text: str = ""):
         )
         return
 
-    # 2) High failure rate — the download path may be broken.
+    # 2) High failure rate — report it honestly and classify the last error
+    # instead of always blaming the download path (it's often transcription of
+    # a silent upload, a bad video, etc.).
     recent = list(_recent)
     fails = recent.count(False)
     if len(recent) >= _FAIL_WINDOW_MIN and fails >= _FAIL_THRESHOLD and _cooldown_ok("failrate"):
         await send_admin_alert(
-            "⚠️ High download failure rate",
-            f"{fails} of the last {len(recent)} managed jobs failed. The download "
-            "path may be broken. Rebuilding the backend image usually pulls a fix.\n\n"
+            f"⚠️ High job failure rate ({_classify_failure(error_text)})",
+            f"{fails} of the last {len(recent)} managed jobs failed.\n\n"
             f"Last error:\n{error_text[:1200]}",
         )

@@ -332,8 +332,35 @@ def _parakeet_fallback_reason(transcript, duration_hint=None):
 
 # --- public entry point -----------------------------------------------------
 
+class NoAudioError(Exception):
+    """The media has no audio track — nothing to transcribe."""
+
+
+def _has_audio_stream(media_path) -> bool:
+    """True if the file has at least one audio stream (ffprobe)."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=index", "-of", "csv=p=0", media_path],
+            capture_output=True, text=True, timeout=60,
+        )
+        return bool(out.stdout.strip())
+    except Exception:
+        return True  # probe failed — don't block, let the backend try
+
+
 def transcribe_media(media_path):
     """Transcribe with the configured backend, falling back to whisper."""
+    # Silent videos (AI-generated clips, muted screen recordings) have no audio
+    # stream; every ASR backend then crashes deep inside libav with an opaque
+    # "tuple index out of range". Detect it up front and fail with a clear,
+    # actionable reason instead.
+    if not _has_audio_stream(media_path):
+        raise NoAudioError(
+            "This video has no audio track. OpenShorts finds viral moments from "
+            "speech, so it needs a video with audio.")
+
     backend = os.environ.get("TRANSCRIBE_BACKEND", "whisper").strip().lower()
 
     if backend == "parakeet":

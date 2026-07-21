@@ -1168,8 +1168,19 @@ if __name__ == '__main__':
         render_clip(input_video, output_file, output_format)
     else:
         # 3. Transcribe
-        transcript = transcribe_video(input_video)
-        
+        from transcribe_backends import NoAudioError
+        try:
+            transcript = transcribe_video(input_video)
+        except NoAudioError as e:
+            # Clear, user-facing failure (not a Python traceback) so the UI can
+            # tell them exactly what's wrong. Prefixed so app.py surfaces it.
+            import sys
+            msg = f"❌ NO_AUDIO: {e}"
+            print(msg, file=sys.stdout)
+            print(msg, file=sys.stderr)
+            sys.stdout.flush(); sys.stderr.flush()
+            raise SystemExit(msg)
+
         # Get duration
         cap = cv2.VideoCapture(input_video)
         fps = cap.get(cv2.CAP_PROP_FPS)
