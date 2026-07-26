@@ -56,7 +56,7 @@ export default function PlanChoiceModal({ onClose }) {
             <ul className="space-y-1.5 text-sm text-ink2 mb-4 flex-1">
               <li className="flex items-start gap-2"><Check size={15} className="text-ok shrink-0 mt-0.5" /> <span><b>{FREE_MINUTES} min</b> / month</span></li>
               <li className="flex items-start gap-2"><Check size={15} className="text-ok shrink-0 mt-0.5" /> <span>No credit card</span></li>
-              <li className="flex items-start gap-2"><Check size={15} className="text-muted shrink-0 mt-0.5" /> <span className="text-muted">Watermark · clips kept 7 days</span></li>
+              <li className="flex items-start gap-2"><Check size={15} className="text-muted shrink-0 mt-0.5" /> <span className="text-muted">Clips kept 7 days</span></li>
             </ul>
             <button onClick={startFree} className="w-full btn-primary text-sm">
               Start free <ArrowRight size={15} />
@@ -70,7 +70,7 @@ export default function PlanChoiceModal({ onClose }) {
               <h3 className="font-display lowercase text-lg text-ink">paid plans</h3>
               <Zap size={16} className="text-brass" />
             </div>
-            <p className="text-muted text-xs mb-3 lowercase">no watermark · more minutes · durable library</p>
+            <p className="text-muted text-xs mb-3 lowercase">more minutes · durable library</p>
             <div className="space-y-2 flex-1">
               {PLAN_ORDER.map((p) => {
                 const e = byPlan(p);

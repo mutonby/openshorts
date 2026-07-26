@@ -4,7 +4,7 @@ export const REPO_URL = 'https://github.com/mutonby/openshorts';
 
 // Small "star us" ask, placed at high-delight moments (clips just rendered)
 // and at the free-plan ceiling (out-of-minutes modal). No incentive attached.
-export default function StarBanner({ message = 'Enjoying OpenShorts?' }) {
+export default function StarBanner({ message = 'Enjoying TrueLife Clipper?' }) {
   return (
     <a
       href={REPO_URL}

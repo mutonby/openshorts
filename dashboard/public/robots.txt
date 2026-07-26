@@ -1,4 +1,4 @@
-# robots.txt for OpenShorts
+# robots.txt for TrueLife Clipper
 # Allow all search engines and AI bots to crawl the site
 
 User-agent: *
@@ -30,4 +30,4 @@ User-agent: Google-Extended
 Allow: /
 
 # Sitemap
-Sitemap: https://openshorts.app/sitemap.xml
+Sitemap: https://truelifeclipper.app/sitemap.xml

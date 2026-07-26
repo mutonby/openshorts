@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
-from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
+from s3_uploader import list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 
 load_dotenv()
 
@@ -36,11 +36,11 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # Default to 1 if not set, but user can set higher for powerful servers
 MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", "5"))
 MAX_FILE_SIZE_MB = 2048  # 2GB limit
-JOB_RETENTION_SECONDS = int(os.environ.get("JOB_RETENTION_SECONDS", "3600"))  # job/file retention (issue #46)
+JOB_RETENTION_SECONDS = int(os.environ.get("JOB_RETENTION_SECONDS", "0"))  # 0 keeps clips locally
 # Ceiling for the working directory once it lives on a persistent volume: the
 # age-based sweep alone can't stop a burst of long videos from filling the disk.
 # 0 disables the cap.
-OUTPUT_MAX_GB = int(os.environ.get("OUTPUT_MAX_GB", "25"))
+OUTPUT_MAX_GB = int(os.environ.get("OUTPUT_MAX_GB", "0"))
 # Same idea for source uploads, which are the biggest single files on disk.
 UPLOADS_MAX_GB = int(os.environ.get("UPLOADS_MAX_GB", "15"))
 # Pre-flight quality gate: warn before processing a YouTube source below this
@@ -482,7 +482,7 @@ _RESUME_FILE = ".resume.json"
 MAX_RESUME_ATTEMPTS = 2
 
 
-def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, watermark):
+def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id):
     try:
         path = os.path.join(OUTPUT_DIR, job_id, _RESUME_FILE)
         with open(path, "w") as f:
@@ -490,7 +490,7 @@ def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, water
                 "cmd": cmd, "priority": priority,
                 "user_id": None if user_id is None else str(user_id),
                 "reservation_id": reservation_id,
-                "watermark": bool(watermark), "attempts": 0,
+                "attempts": 0,
             }, f)
     except Exception as e:
         print(f"⚠️ Could not write resume manifest for {job_id}: {e}")
@@ -560,10 +560,8 @@ def _resume_interrupted_jobs() -> set:
                 env["GEMINI_API_KEY"] = managed_keys.gemini_key()
             except Exception:
                 pass
-        if m.get("watermark"):
-            env["WATERMARK"] = "1"
-        else:
-            env.pop("WATERMARK", None)
+        # Watermark removed — clips always render clean. Old manifests may
+        # still carry a stale "watermark": true field; we just ignore it.
 
         m["attempts"] = attempts
         try:
@@ -580,7 +578,6 @@ def _resume_interrupted_jobs() -> set:
             'output_dir': job_path,
             'user_id': None if user_id is None else user_id,
             'reservation_id': reservation_id,
-            'watermark': bool(m.get("watermark")),
         }
         if reservation_id:
             keep_reservations.add(str(reservation_id))
@@ -684,7 +681,7 @@ async def cleanup_jobs():
                     continue
                 job_path = os.path.join(OUTPUT_DIR, job_id)
                 if os.path.isdir(job_path):
-                    if now - os.path.getmtime(job_path) > JOB_RETENTION_SECONDS:
+                    if JOB_RETENTION_SECONDS > 0 and now - os.path.getmtime(job_path) > JOB_RETENTION_SECONDS:
                         print(f"🧹 Purging old job: {job_id}")
                         shutil.rmtree(job_path, ignore_errors=True)
                         if job_id in jobs:
@@ -702,7 +699,8 @@ async def cleanup_jobs():
             try:
                 saas_expired = [
                     jid for jid, jdata in list(saas_jobs.items())
-                    if jdata.get("status") in ("completed", "failed")
+                    if JOB_RETENTION_SECONDS > 0
+                    and jdata.get("status") in ("completed", "failed")
                     and jdata.get("output_dir")
                     and os.path.isdir(jdata["output_dir"])
                     and now - os.path.getmtime(jdata["output_dir"]) > JOB_RETENTION_SECONDS
@@ -713,10 +711,11 @@ async def cleanup_jobs():
                 pass
 
             # Cleanup Uploads
+            # ... same JOB_RETENTION_SECONDS > 0 guard from main sweep above
             for filename in os.listdir(UPLOAD_DIR):
                 file_path = os.path.join(UPLOAD_DIR, filename)
                 try:
-                    if now - os.path.getmtime(file_path) > JOB_RETENTION_SECONDS:
+                    if JOB_RETENTION_SECONDS > 0 and now - os.path.getmtime(file_path) > JOB_RETENTION_SECONDS:
                          os.remove(file_path)
                 except Exception: pass
 
@@ -1082,7 +1081,8 @@ async def run_job(job_id, job_data):
     """Executes the subprocess for a specific job."""
     
     cmd = job_data['cmd']
-    env = job_data['env']
+    env = job_data['env'].copy()
+    env.pop("PYTHONPATH", None)  # Don't leak Hermes' interpreter packages into jobs.
     output_dir = job_data['output_dir']
     
     jobs[job_id]['status'] = 'processing'
@@ -1148,12 +1148,7 @@ async def run_job(job_id, job_data):
             jobs[job_id]['status'] = 'completed'
             jobs[job_id]['logs'].append("Process finished successfully.")
             
-            # Self-host: silent AWS S3 backup. Cloud mode stores to R2 instead
-            # (see _archive_managed_job), so skip the redundant/paid AWS upload.
-            if not BILLING_ENABLED:
-                loop = asyncio.get_event_loop()
-                loop.run_in_executor(None, upload_job_artifacts, output_dir, job_id)
-            
+
             # Find result JSON
             json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
             if not json_files:
@@ -1225,7 +1220,9 @@ async def process_endpoint(
     url: Optional[str] = Form(None),
     acknowledged: Optional[str] = Form(None),
     output_format: Optional[str] = Form(None),
-    force_low_quality: Optional[str] = Form(None)
+    force_low_quality: Optional[str] = Form(None),
+    clip_count_mode: Optional[str] = Form(None),
+    manual_clip_count: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key:
@@ -1242,6 +1239,23 @@ async def process_endpoint(
         ack_flag = bool(body.get("acknowledged"))
         force_low = bool(body.get("force_low_quality"))
         output_format = body.get("output_format")
+        clip_count_mode = body.get("clip_count_mode") or "auto"
+        manual_clip_count = body.get("manual_clip_count")
+
+    # Normalize clip selection mode
+    clip_count_mode = (clip_count_mode or "auto").lower()
+    if clip_count_mode not in ("auto", "manual"):
+        clip_count_mode = "auto"
+    if clip_count_mode == "manual":
+        try:
+            mc = int(manual_clip_count) if manual_clip_count is not None else 5
+        except (TypeError, ValueError):
+            mc = 5
+        # Ponytail: 1-15 hard cap — Gemini rarely surfaces more than ~15 usable
+        # viral moments for a single video, and fewer than 1 is nonsense.
+        manual_clip_count = str(max(1, min(15, mc)))
+    else:
+        manual_clip_count = ""
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square"):
@@ -1292,9 +1306,23 @@ async def process_endpoint(
     os.makedirs(job_output_dir, exist_ok=True)
 
     # Prepare Command
-    cmd = ["python", "-u", "main.py"] # -u for unbuffered
+    cmd = [sys.executable, "-u", "main.py"] # -u for unbuffered
     env = os.environ.copy()
     env["GEMINI_API_KEY"] = api_key # Override with key from request
+    # Pass Brutal Truth engine toggles through — default to "1" (on), set "0" to disable.
+    # AUTO_SUBTITLES removed: clips now ship clean (no burned-in titles); the user
+    # adds subtitles themselves. WATERMARK / AGENCY_WATERMARK removed likewise.
+    for bt_flag in ("SILENCE_REMOVAL", "XML_EXPORT", "WEAK_TAIL_TRIM", "KARAOKE_SUBTITLES", "BROLL_ENABLED"):
+        env[bt_flag] = os.environ.get(bt_flag, "1")
+    env["BROLL_DIR"] = os.environ.get("BROLL_DIR", "")
+    # Agency-tier knobs (only flow through if set; otherwise default empty).
+    for ag_flag in ("AGENCY_CLIENT", "AGENCY_HASHTAGS", "AGENCY_CAPTION_PREFIX",
+                    "RENDER_PRESET", "NAMING_TEMPLATE", "BATCH_ID"):
+        env[ag_flag] = os.environ.get(ag_flag, "")
+    # Clip count selection — overrides env defaults when the user picks Manual in the UI.
+    env["CLIP_COUNT_MODE"] = clip_count_mode
+    if manual_clip_count:
+        env["MANUAL_CLIP_COUNT"] = manual_clip_count
 
     input_path = None
     if url:
@@ -1329,10 +1357,8 @@ async def process_endpoint(
 
     # Meter + reserve minutes for managed users (no-op for BYOK / self-host).
     user_id, priority, reservation_id, user_plan = await reserve_process_minutes(request, url, input_path, job_id)
-    if user_plan == "free":
-        # Free-plan clips carry a burned-in watermark (applied by the main.py
-        # subprocess after each clip renders).
-        env["WATERMARK"] = "1"
+    # Default watermark was removed: clips ship clean for all plans, self-host
+    # and managed alike. The user adds any branding themselves in their editor.
 
     # Enqueue Job
     jobs[job_id] = {
@@ -1344,7 +1370,6 @@ async def process_endpoint(
         'attestation': attestation,
         'user_id': user_id,
         'reservation_id': reservation_id,
-        'watermark': env.get("WATERMARK") == "1",
     }
 
     # Persist the owner so recovered jobs keep their multi-tenant guard after a
@@ -1359,8 +1384,7 @@ async def process_endpoint(
 
     # Resume manifest: enough to re-run this job if the container dies mid-flight
     # (a redeploy). No secrets — the env is rebuilt from os.environ on resume.
-    _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id,
-                           watermark=jobs[job_id]['watermark'])
+    _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id)
 
     _enqueue_job(job_id, priority)
 
@@ -1448,7 +1472,7 @@ async def download_all_clips(job_id: str, request: Request):
     return FileResponse(
         zip_path,
         media_type="application/zip",
-        filename=f"openshorts_clips_{job_id[:8]}.zip",
+        filename=f"truelifeclipper_clips_{job_id[:8]}.zip",
         background=BackgroundTask(os.remove, zip_path),
     )
 
@@ -3449,7 +3473,7 @@ async def gallery_html_page():
           </div>
         </a>'''
 
-        ld_items.append(f'{{"@type":"ListItem","position":{i+1},"url":"https://openshorts.app/video/{video_id}","name":"{title}"}}')
+        ld_items.append(f'{{"@type":"ListItem","position":{i+1},"url":"https://truelifeclipper.app/video/{video_id}","name":"{title}"}}')
 
     ld_json = f'{{"@context":"https://schema.org","@type":"CollectionPage","name":"AI UGC Video Gallery","mainEntity":{{"@type":"ItemList","numberOfItems":{len(videos)},"itemListElement":[{",".join(ld_items)}]}}}}'
 
@@ -3457,10 +3481,10 @@ async def gallery_html_page():
 <html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AI UGC Video Gallery | OpenShorts</title>
+<title>AI UGC Video Gallery | TrueLife Clipper</title>
 <meta name="description" content="Browse {len(videos)} AI-generated UGC marketing videos. Create viral TikTok and Instagram Reels for your SaaS product.">
 <meta name="robots" content="index, follow">
-<meta property="og:title" content="AI UGC Video Gallery | OpenShorts">
+<meta property="og:title" content="AI UGC Video Gallery | TrueLife Clipper">
 <meta property="og:type" content="website">
 <meta property="og:description" content="Browse AI-generated UGC marketing videos for SaaS products.">
 <script type="application/ld+json">{ld_json}</script>
@@ -3475,7 +3499,7 @@ h1{{font-size:28px;font-weight:700;padding:40px 20px 0;text-align:center}}
 </style>
 </head>
 <body>
-<nav><strong style="font-size:18px">OpenShorts</strong><a href="/" class="cta">Create Your Video</a></nav>
+<nav><strong style="font-size:18px">TrueLife Clipper</strong><a href="/" class="cta">Create Your Video</a></nav>
 <h1>AI-Generated UGC Videos</h1>
 <p class="subtitle">{len(videos)} videos generated · Low Cost & Premium modes</p>
 <div class="grid">{cards_html}</div>
@@ -3516,7 +3540,7 @@ async def video_html_page(video_id: str):
 <html lang="{language}">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{title} - AI UGC Video | OpenShorts</title>
+<title>{title} - AI UGC Video | TrueLife Clipper</title>
 <meta name="description" content="{caption} {hashtags}">
 <meta property="og:type" content="video.other">
 <meta property="og:title" content="{title}">
@@ -3548,7 +3572,7 @@ h1{{font-size:22px;font-weight:700;margin-bottom:8px}}
 </style>
 </head>
 <body>
-<nav><strong>OpenShorts</strong><a href="/gallery">Gallery</a><span style="color:#3f3f46">›</span><span style="color:#e4e4e7;font-size:14px">{title}</span></nav>
+<nav><strong>TrueLife Clipper</strong><a href="/gallery">Gallery</a><span style="color:#3f3f46">›</span><span style="color:#e4e4e7;font-size:14px">{title}</span></nav>
 <div class="container">
 <div><video src="{video_url}" poster="{actor_url}" controls autoplay playsinline style="aspect-ratio:9/16;object-fit:cover"></video></div>
 <div>

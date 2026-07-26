@@ -12,7 +12,11 @@ from scenedetect.detectors import ContentDetector
 from ultralytics import YOLO
 import torch
 import os
+import sys
 import numpy as np
+
+# Strip PYTHONPATH early to avoid protobuf 6.x leaking into .venv subprocesses
+os.environ.pop("PYTHONPATH", None)
 from tqdm import tqdm
 import yt_dlp
 import mediapipe as mp
@@ -22,10 +26,10 @@ from google.genai import types as genai_types
 
 import gemini_worker
 from clip_selection import build_transcript_windows, snap_clip_to_words
-from ffmpeg_utils import (video_encode_args, audio_encode_args, QUALITY,
-                          QUALITY_FAST, METADATA_SCRUB)
+from ffmpeg_utils import video_encode_args, QUALITY, QUALITY_FAST, METADATA_SCRUB
 from dotenv import load_dotenv
 import json
+import brutal_truth  # Brutal Truth engine: score filter, cold-open, XML export
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='google.protobuf')
@@ -83,12 +87,6 @@ model = YOLO('yolov8n.pt')
 mp_face_detection = mp.solutions.face_detection
 face_detection = mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
 
-# Consecutive detections a large target move must survive before the camera
-# follows it (see SmoothedCameraman.update_target). Env-overridable so the
-# damping can be dialled back without a deploy; 1 restores the old behaviour.
-JUMP_CONFIRM_FRAMES = max(int(os.environ.get("JUMP_CONFIRM_FRAMES", "3")), 1)
-
-
 class SmoothedCameraman:
     """
     Handles smooth camera movement.
@@ -117,53 +115,31 @@ class SmoothedCameraman:
         # Safe Zone: 20% of the video width
         # As long as the target is within this zone relative to current center, DO NOT MOVE.
         self.safe_zone_radius = self.crop_width * 0.25
-
-        # A target that teleports further than the safe zone in one detection is
-        # far more often a detector error — a second face, a false positive, a
-        # box snapping to a different body part — than a person who actually
-        # moved that far. Committing to it immediately is what made the camera
-        # swing: measured on real user footage, 22% of target updates jumped
-        # more than the entire safe zone. So a big move has to REPEAT this many
-        # times before the camera follows it; a wrong reading disappears on the
-        # next detection and never moves the frame.
-        #
-        # The cost is latency on a genuinely fast move: at DETECT_STRIDE=4 and
-        # 30fps, three confirmations is ~0.4s. That reads as an operator being
-        # unhurried, which is the look we want, and it is far cheaper than the
-        # whip-panning it replaces.
-        #
-        # Measured over 262s of TRACK footage from two real user videos
-        # (26-jul-2026), confirm=1 -> 3: in-scene reversals 0.41/s -> 0.13/s
-        # (-69%), camera travel 91px/s -> 60px/s (-34%). Per scene, 54 of 84 get
-        # calmer and 23 are unchanged — but 7 get BUSIER, up to 59 -> 108px/s,
-        # because committing later can leave the camera further to travel. Net
-        # strongly positive, not universally so.
-        self.jump_confirm_frames = JUMP_CONFIRM_FRAMES
-        self._pending_target = None
-        self._pending_count = 0
+        self.jump_confirm_frames = 3
+        self._pending_jump_center = None
+        self._pending_jump_count = 0
 
     def update_target(self, face_box):
-        """Update the target centre from a detection, ignoring lone big jumps."""
+        """Update target center; require confirmation for large detector jumps."""
         if not face_box:
             return
         x, y, w, h = face_box
-        new_center = x + w / 2
-
-        if abs(new_center - self.target_center_x) > self.safe_zone_radius:
-            # Same big move as last time? Count it. Otherwise start counting
-            # afresh — two contradictory outliers must not confirm each other.
-            if (self._pending_target is not None
-                    and abs(new_center - self._pending_target) <= self.safe_zone_radius):
-                self._pending_count += 1
+        proposed = x + w / 2
+        jump = abs(proposed - self.target_center_x)
+        if jump > self.crop_width * 0.6:
+            if self._pending_jump_center == proposed:
+                self._pending_jump_count += 1
             else:
-                self._pending_target = new_center
-                self._pending_count = 1
-            if self._pending_count < self.jump_confirm_frames:
-                return  # not convinced yet — hold the frame
-
-        self._pending_target = None
-        self._pending_count = 0
-        self.target_center_x = new_center
+                self._pending_jump_center = proposed
+                self._pending_jump_count = 1
+            if self._pending_jump_count < self.jump_confirm_frames:
+                return
+            self._pending_jump_center = None
+            self._pending_jump_count = 0
+        else:
+            self._pending_jump_center = None
+            self._pending_jump_count = 0
+        self.target_center_x = proposed
     
     def get_crop_box(self, force_snap=False):
         """
@@ -317,24 +293,14 @@ class SpeakerTracker:
                 self.locked_counter += 1
                 return best_candidate['box']
             
-            # New person. The cooldown must hold whether or not the current
-            # speaker happens to be detected in THIS frame.
-            #
-            # It used to fall through and switch when the active speaker was
-            # missing from the candidate list — a blink, a head turn or one
-            # motion-blurred frame was enough. That is precisely when the
-            # cooldown is needed, so it only ever fired when it wasn't: 3 of 7
-            # target switches measured on a 12s clip (25-jul-2026) jumped the
-            # cooldown this way, and every jump drags the camera across frame.
-            #
-            # Returning None holds instead: the caller only calls
-            # update_target() on a truthy box, so the camera keeps its current
-            # target and finishes whatever move it was making. The hold is
-            # bounded by the cooldown itself — once it expires, a speaker who
-            # really did leave the shot is switched away from normally.
+            # New person
             if frame_number - self.last_switch_frame < self.switch_cooldown:
                 old_cand = next((c for c in current_candidates if c['id'] == self.active_speaker_id), None)
-                return old_cand['box'] if old_cand else None
+                if old_cand:
+                    return old_cand['box']
+                # Active speaker is temporarily missing: hold the camera rather
+                # than switching to a different face during the cooldown.
+                return None
 
             self.active_speaker_id = target_id
             self.last_switch_frame = frame_number
@@ -436,57 +402,35 @@ def detect_person_yolo(frame):
 
 def create_general_frame(frame, output_width, output_height):
     """
-    Creates a 'General Shot' frame: 
-    - Background: Blurred zoom of original
-    - Foreground: Original video scaled to fit width, centered vertically.
+    Full-frame 9:16 crop for GENERAL scenes — center-crop to target aspect,
+    no blurred background bars.
     """
     orig_h, orig_w = frame.shape[:2]
-    
-    # 1. Background (Fill Height)
-    # Crop center to aspect ratio
-    bg_scale = output_height / orig_h
-    bg_w = int(orig_w * bg_scale)
-    bg_resized = cv2.resize(frame, (bg_w, output_height), interpolation=cv2.INTER_LINEAR)
+    # Center-crop to target aspect ratio
+    target_ratio = output_width / output_height
+    src_ratio = orig_w / orig_h
+    if src_ratio > target_ratio:
+        # Source is wider — crop width
+        crop_w = int(orig_h * target_ratio)
+        x_start = (orig_w - crop_w) // 2
+        cropped = frame[:, x_start:x_start+crop_w]
+    else:
+        # Source is taller — crop height
+        crop_h = int(orig_w / target_ratio)
+        y_start = (orig_h - crop_h) // 2
+        cropped = frame[y_start:y_start+crop_h, :]
 
-    # Crop center of background
-    start_x = (bg_w - output_width) // 2
-    if start_x < 0: start_x = 0
-    background = bg_resized[:, start_x:start_x+output_width]
-    if background.shape[1] != output_width:
-        background = cv2.resize(background, (output_width, output_height), interpolation=cv2.INTER_LINEAR)
-
-    # Blur background: blur at quarter resolution and scale back up — visually
-    # identical for a defocused backdrop, an order of magnitude cheaper than a
-    # 51px Gaussian at full size.
-    small_bg = cv2.resize(background, (max(output_width // 4, 2), max(output_height // 4, 2)),
-                          interpolation=cv2.INTER_AREA)
-    small_bg = cv2.GaussianBlur(small_bg, (13, 13), 0)
-    background = cv2.resize(small_bg, (output_width, output_height),
-                            interpolation=cv2.INTER_LINEAR)
-
-    # 2. Foreground (Fit Width)
-    scale = output_width / orig_w
-    fg_h = int(orig_h * scale)
-    foreground = cv2.resize(frame, (output_width, fg_h), interpolation=cv2.INTER_LINEAR)
-    
-    # 3. Overlay
-    y_offset = (output_height - fg_h) // 2
-    
-    # Clone background to avoid modifying it
-    final_frame = background.copy()
-    final_frame[y_offset:y_offset+fg_h, :] = foreground
-    
+    final_frame = cv2.resize(cropped, (output_width, output_height), interpolation=cv2.INTER_LINEAR)
     return final_frame
 
-# NOTE: a "route text-heavy scenes to GENERAL" rule was tried here and removed
-# on 26-jul-2026. The problem it targets is real — a screencast that happens to
-# contain one face gets cropped to the face and its headlines come out cut
-# mid-word — but edge density is the wrong signal for it. Measured: a
-# constructed talking-head-beside-a-chart scored 0.012 while the SAME shot
-# without the panels scored 0.029, because a flat panel of text has far fewer
-# edges than ordinary scene detail. Canny measures visual busyness, not text.
-# A real fix needs an actual text detector (MSER/EAST) validated against clips
-# that contain the failure mode; this corpus has almost none.
+def create_split_frame(frame, output_width, output_height):
+    """Top/bottom split fallback for multi-speaker scenes."""
+    half_height = max(2, output_height // 2)
+    top = cv2.resize(frame[:frame.shape[0] // 2],
+                     (output_width, half_height), interpolation=cv2.INTER_LINEAR)
+    bottom = cv2.resize(frame[frame.shape[0] // 2:],
+                        (output_width, half_height), interpolation=cv2.INTER_LINEAR)
+    return np.vstack((top, bottom))
 
 
 def analyze_scenes_strategy(video_path, scenes):
@@ -533,11 +477,13 @@ def analyze_scenes_strategy(video_path, scenes):
             avg_faces = sum(face_counts) / len(face_counts)
 
         # Strategy:
-        # 0 faces -> GENERAL (Landscape/B-roll)
+        # 0 faces -> GENERAL (landscape/B-roll)
         # 1 face -> TRACK
-        # > 1.2 faces -> GENERAL (Group)
-
-        if avg_faces > 1.2 or avg_faces < 0.5:
+        # > 1.2 faces -> optional top/bottom split; center crop otherwise.
+        if avg_faces > 1.2:
+            split_enabled = os.environ.get("MULTI_SPEAKER_SPLIT", "1") == "1"
+            strategies.append('SPLIT' if split_enabled else 'GENERAL')
+        elif avg_faces < 0.5:
             strategies.append('GENERAL')
         else:
             strategies.append('TRACK')
@@ -571,29 +517,21 @@ def get_video_resolution(video_path):
     return width, height
 
 
-# Byte budget for the sanitized video title used as the stem of every derived
-# file. Filesystems cap a name in BYTES (255 on ext4), not characters, and the
-# pipeline decorates this stem: "_clip_10.mp4" (12), "subtitled_<ts>_" (21),
-# "temp_hook_<hex8>_" (19), "autosubs_<ts>_" + ".ass" (24). Budgeting 120 bytes
-# leaves room for all of them stacked and still lands well under the limit.
-#
-# The old cap was 100 CHARACTERS, which is 300 bytes of Bengali or Arabic — over
-# the limit before any decoration. It surfaced as OSError 36 killing the hook
-# endpoint in prod on 26-jul-2026.
-MAX_TITLE_BYTES = 120
+MAX_TITLE_BYTES = 180
 
 
 def truncate_bytes(text, max_bytes):
-    """Trim ``text`` to a byte budget without splitting a multi-byte character."""
-    encoded = text.encode("utf-8")
-    if len(encoded) <= max_bytes:
+    """Trim UTF-8 text without splitting a multibyte character."""
+    text = str(text or "")
+    raw = text.encode("utf-8")
+    if len(raw) <= max_bytes:
         return text
-    return encoded[:max_bytes].decode("utf-8", "ignore")
+    return raw[:max(0, int(max_bytes))].decode("utf-8", "ignore")
 
 
 def sanitize_filename(filename):
-    """Remove invalid characters from filename and bound it for the filesystem."""
-    filename = re.sub(r'[<>:"/\\|?*#]', '', filename)
+    """Remove unsafe characters and enforce a filesystem byte budget."""
+    filename = re.sub(r'[<>:"/\\|?*#]', '', str(filename or ''))
     filename = filename.replace(' ', '_')
     return truncate_bytes(filename, MAX_TITLE_BYTES)
 
@@ -654,21 +592,12 @@ def download_youtube_video(url, output_dir="."):
         }
     }
 
-    # Cap at 720p ONLY when the bytes actually go through the paid proxy — that
-    # cap exists to control bandwidth cost, and the direct attempt has none.
-    #
-    # This is per-attempt on purpose. Deciding it once from `_proxy` capped the
-    # DIRECT attempt too, so with DIRECT_FIRST=1 (which serves most downloads)
-    # every YouTube source arrived at 720p and, since the reframe inherits the
-    # source height, 80% of delivered clips came out 406x720 (audited 25-jul-2026).
-    def _hd_fmt_for(proxy):
-        if proxy:
-            return ('bestvideo[vcodec^=avc1][height<=720][ext=mp4]+bestaudio[ext=m4a]/'
-                    'bestvideo[vcodec^=avc1][height<=720]+bestaudio/'
-                    'best[height<=720][ext=mp4]/best[height<=720]/best')
-        return ('bestvideo[vcodec^=avc1][height<=1080][ext=mp4]+bestaudio[ext=m4a]/'
-                'bestvideo[vcodec^=avc1][height<=1080]+bestaudio/'
-                'best[height<=1080][ext=mp4]/best[ext=mp4]/best')
+    # Cap at 720p when using a paid proxy (bandwidth cost); direct keeps best.
+    if _proxy:
+        hd_fmt = ('bestvideo[vcodec^=avc1][height<=720][ext=mp4]+bestaudio[ext=m4a]/'
+                  'bestvideo[vcodec^=avc1][height<=720]+bestaudio/best[height<=720][ext=mp4]/best[height<=720]/best')
+    else:
+        hd_fmt = 'bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/bestvideo[vcodec^=avc1]+bestaudio/best[ext=mp4]/best'
     fallback_fmt = 'best[ext=mp4]/best'
 
     def _base_opts(extractor_args, proxy):
@@ -722,8 +651,8 @@ def download_youtube_video(url, output_dir="."):
                      and _proxy and hd_args and cookies_path)
 
     attempts = (
-        ([('HD-direct', hd_args, _hd_fmt_for(None), None)] if _direct_first else [])
-        + ([('HD', hd_args, _hd_fmt_for(_proxy), _proxy)] if hd_args else [])
+        ([('HD-direct', hd_args, hd_fmt, None)] if _direct_first else [])
+        + ([('HD', hd_args, hd_fmt, _proxy)] if hd_args else [])
         + [('fallback', fallback_args, fallback_fmt, _proxy)]
     )
 
@@ -803,66 +732,6 @@ def finalize_clip_passthrough(input_video, final_output_video):
     return True
 
 
-def auto_caption_clip(clip_path, transcript, clip_start, clip_end):
-    """Burn the default caption style onto a finished clip.
-
-    Captions are mandatory for short-form to land, but they were opt-in behind a
-    modal and only 9% of delivered clips ever got them (prod audit, 25-jul-2026).
-    So every clip now ships captioned by default.
-
-    The captioned file is written ALONGSIDE the clip as
-    ``subtitled_<ts>_<clip>.mp4`` — the same convention /api/subtitle uses — so
-    the untouched original stays on disk and re-styling from the modal replaces
-    the captions instead of burning a second layer over them.
-
-    Returns the captioned path, or None when captions were skipped (silent
-    video, no words in range, AUTO_CAPTIONS=0, or any failure — a caption
-    problem must never cost the user the clip they already paid for).
-    """
-    if os.environ.get("AUTO_CAPTIONS", "1").strip() == "0":
-        return None
-    if not transcript or not transcript.get('segments'):
-        return None  # silent video: nothing to caption
-    try:
-        import subtitles as _subs
-        style = _subs.AUTO_CAPTION_STYLE
-        output_dir = os.path.dirname(clip_path)
-        stem = os.path.basename(clip_path)
-        generation_id = int(time.time())
-        # The output name MUST stay exactly "subtitled_<ts>_<clip filename>":
-        # the modal's walk-back and _canonical_clip_file both reconstruct the
-        # clean original from it, so trimming the stem here would orphan the
-        # pair. Length is bounded upstream instead, by MAX_TITLE_BYTES at
-        # download time. A legacy clip whose name predates that budget can still
-        # overflow — that raises OSError 36, which the except below turns into
-        # "ship the clip uncaptioned" rather than a broken filename.
-        ass_path = os.path.join(output_dir, f"autosubs_{generation_id}_{stem}.ass")
-        out_path = os.path.join(output_dir, f"subtitled_{generation_id}_{stem}")
-
-        if not _subs.generate_ass(
-                transcript, clip_start, clip_end, ass_path,
-                max_chars=style["max_chars"], max_duration=style["max_duration"],
-                alignment=style["alignment"], fontsize=style["font_size"],
-                font_name=style["font_name"], font_color=style["font_color"],
-                border_color=style["border_color"], border_width=style["border_width"],
-                highlight_color=style["highlight_color"], effect=style["effect"],
-                base_opacity=style["base_opacity"], uppercase=style["uppercase"]):
-            print("   ℹ️ No words in range — clip ships without captions.")
-            return None
-
-        _subs.burn_subtitles(
-            clip_path, ass_path, out_path,
-            alignment=style["alignment"], fontsize=style["font_size"],
-            font_name=style["font_name"], font_color=style["font_color"],
-            border_color=style["border_color"], border_width=style["border_width"])
-        print(f"   💬 Captions burned: {os.path.basename(out_path)}")
-        return out_path
-    except Exception as e:
-        print(f"   ⚠️ Auto-captions failed ({type(e).__name__}: {e}) — "
-              f"delivering the clip without them.")
-        return None
-
-
 def render_clip(input_video, final_output_video, output_format="auto"):
     """Route a cut clip through the right renderer for the chosen output format.
     vertical/auto -> 9:16 reframe, square -> 1:1 reframe, horizontal -> keep."""
@@ -870,71 +739,6 @@ def render_clip(input_video, final_output_video, output_format="auto"):
         return finalize_clip_passthrough(input_video, final_output_video)
     aspect = 1.0 if output_format == "square" else ASPECT_RATIO
     return process_video_to_vertical(input_video, final_output_video, aspect_ratio=aspect)
-
-
-# Watermark geometry, as fractions of the clip width/height.
-#
-# Vertical placement is the whole point: the top and bottom strips of a 9:16
-# clip are either black bars or blurred filler (GENERAL layout), so a mark up
-# there is cropped away without touching a single pixel of real footage. At 40%
-# of the height it sits inside the content band — a 16:9 source letterboxed
-# into 9:16 spans roughly 34%-66% — so removing the mark means cutting into the
-# picture. Left-aligned, like OpusClip's.
-WATERMARK_WIDTH_RATIO = 0.30
-WATERMARK_MARGIN_RATIO = 0.05
-WATERMARK_Y_RATIO = 0.40
-WATERMARK_OPACITY = 0.85
-
-
-def apply_watermark(video_path):
-    """Burn the OpenShorts watermark into a finished clip (free plan).
-
-    One re-encode pass on the final file so every output format (TRACK,
-    GENERAL, horizontal passthrough) gets the mark, and later subtitle/hook
-    re-encodes keep it — they re-encode the already-marked pixels.
-    """
-    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "assets", "watermark.png")
-    if not os.path.exists(logo_path):
-        print(f"   ⚠️ Watermark asset missing ({logo_path}); clip kept unmarked.")
-        return False
-
-    # Scale the lockup from the clip's real width: overlay can't read the other
-    # input's size, and computing it here avoids the deprecated scale2ref.
-    try:
-        probe = subprocess.check_output(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", video_path],
-            stderr=subprocess.STDOUT, timeout=60,
-        ).decode().strip().split("x")
-        vw, vh = int(probe[0]), int(probe[1])
-    except Exception as e:
-        print(f"   ⚠️ Could not probe clip for watermark ({e}); clip kept unmarked.")
-        return False
-
-    wm_w = max(80, int(vw * WATERMARK_WIDTH_RATIO))
-    x = int(vw * WATERMARK_MARGIN_RATIO)
-    y = int(vh * WATERMARK_Y_RATIO)
-    filt = (
-        f"[1:v]scale={wm_w}:-1,format=rgba,"
-        f"colorchannelmixer=aa={WATERMARK_OPACITY}[wm];"
-        f"[0:v][wm]overlay=x={x}:y={y}"
-    )
-    tmp_path = video_path + ".wm.mp4"
-    cmd = ["ffmpeg", "-y", "-i", video_path, "-i", logo_path,
-           "-filter_complex", filt,
-           *video_encode_args(QUALITY), "-c:a", "copy", *METADATA_SCRUB,
-           "-movflags", "+faststart", tmp_path]
-    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                            timeout=1800)
-    if result.returncode == 0 and os.path.exists(tmp_path):
-        os.replace(tmp_path, video_path)
-        return True
-    err = (result.stderr or b"").decode(errors="ignore")[-300:]
-    print(f"   ⚠️ Watermark pass failed (clip kept unmarked): {err}")
-    if os.path.exists(tmp_path):
-        os.remove(tmp_path)
-    return False
 
 
 def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPECT_RATIO):
@@ -986,12 +790,16 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     print("\n   🧠 Step 2: Preparing Active Tracking...")
     original_width, original_height = get_video_resolution(input_video)
     
-    # Same delivery floor as the v2 engine — a fallback render is still the clip
-    # the user posts, so it must not ship sub-HD. The frame loop below already
-    # resizes every cropped frame to these dims, so nothing else changes.
-    from reframe_v2 import delivery_size
-    OUTPUT_WIDTH, OUTPUT_HEIGHT = delivery_size(original_width, original_height,
-                                                aspect_ratio)
+    OUTPUT_HEIGHT = original_height
+    OUTPUT_WIDTH = int(OUTPUT_HEIGHT * aspect_ratio)
+    # Never ask for a crop wider than the source; shrink height to fit instead.
+    if OUTPUT_WIDTH > original_width:
+        OUTPUT_WIDTH = original_width
+        OUTPUT_HEIGHT = int(OUTPUT_WIDTH / aspect_ratio)
+    if OUTPUT_WIDTH % 2 != 0:
+        OUTPUT_WIDTH += 1
+    if OUTPUT_HEIGHT % 2 != 0:
+        OUTPUT_HEIGHT += 1
 
     # Initialize Cameraman
     cameraman = SmoothedCameraman(OUTPUT_WIDTH, OUTPUT_HEIGHT, original_width, original_height, aspect_ratio=aspect_ratio)
@@ -1047,13 +855,18 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
             
             # Apply Strategy
             if current_strategy == 'GENERAL':
-                # "Plano General" -> Blur Background + Fit Width
+                # "Plano General" -> full-frame crop
                 output_frame = create_general_frame(frame, OUTPUT_WIDTH, OUTPUT_HEIGHT)
-                
+
                 # Reset cameraman/tracker so they don't drift while inactive
                 cameraman.current_center_x = original_width / 2
                 cameraman.target_center_x = original_width / 2
-                
+                speaker_tracker.known_faces = []
+            elif current_strategy == 'SPLIT':
+                output_frame = create_split_frame(frame, OUTPUT_WIDTH, OUTPUT_HEIGHT)
+                cameraman.current_center_x = original_width / 2
+                cameraman.target_center_x = original_width / 2
+                speaker_tracker.known_faces = []
             else:
                 # "Single Speaker" -> Track & Crop
 
@@ -1120,14 +933,21 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     if os.path.exists(temp_audio_output):
         merge_command = [
             'ffmpeg', '-y', '-i', temp_video_output, '-i', temp_audio_output,
-            '-c:v', 'copy', '-c:a', 'copy', *METADATA_SCRUB,
+            '-map', '0:v:0', '-map', '1:a:0',
+            '-vf', 'setpts=PTS-STARTPTS', '-af', 'asetpts=PTS-STARTPTS',
+            *video_encode_args(QUALITY_FAST),
+            '-c:a', 'aac', '-b:a', '192k', '-fps_mode', 'cfr',
+            '-shortest', *METADATA_SCRUB, '-avoid_negative_ts', 'make_zero',
             '-movflags', '+faststart', final_output_video
         ]
     else:
          merge_command = [
             'ffmpeg', '-y', '-i', temp_video_output,
-            '-c:v', 'copy', *METADATA_SCRUB,
-            '-movflags', '+faststart', final_output_video
+            '-map', '0:v:0', '-vf', 'setpts=PTS-STARTPTS',
+            *video_encode_args(QUALITY_FAST),
+            '-fps_mode', 'cfr', *METADATA_SCRUB,
+            '-avoid_negative_ts', 'make_zero', '-movflags', '+faststart',
+            final_output_video
         ]
         
     try:
@@ -1169,9 +989,6 @@ def _run_gemini_stage(client, model_name, prompt, schema):
     for attempt in range(1, max_attempts + 1):
         try:
             response = client.models.generate_content(model=model_name, contents=prompt, config=config)
-            # Policy blocks are deterministic — retrying only burns quota and
-            # time, and the user deserves the real reason instead of a generic
-            # "empty response" (prod 23-jul: PROHIBITED_CONTENT on every try).
             gemini_worker.raise_if_blocked(response)
             # Parsing lives inside the retry loop on purpose: Gemini sometimes
             # returns 200 with an empty body, which raises here rather than at
@@ -1184,8 +1001,6 @@ def _run_gemini_stage(client, model_name, prompt, schema):
                 parsed = gemini_worker._parse_json_response_text(
                     gemini_worker._get_response_text(response))
             return parsed, gemini_worker._calculate_cost_analysis(response, model_name)
-        except gemini_worker.GeminiBlockedError:
-            raise  # deterministic policy block — never retry
         except Exception as e:
             msg = str(e)
             transient = any(tok in msg for tok in (
@@ -1215,7 +1030,7 @@ def get_viral_clips(transcript_result, video_duration):
         return None
 
     client = genai.Client(api_key=api_key)
-    model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
+    model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3-flash-preview'
     language = str(transcript_result.get('language') or 'unknown')
     print(f"\U0001f916  Model: {model_name} | language: {language}")
 
@@ -1288,11 +1103,6 @@ def get_viral_clips(transcript_result, video_duration):
         if cost_analysis:
             result["cost_analysis"] = cost_analysis
         return result
-    except gemini_worker.GeminiBlockedError as e:
-        # Content-policy rejection: propagate so the job fails with the real
-        # reason instead of a generic "no clips found".
-        print(f"🚫 {e}")
-        raise
     except Exception as e:
         print(f"❌ Gemini Error: {e}")
         return None
@@ -1308,7 +1118,7 @@ def get_visual_clips(video_path, video_duration, language="en"):
         print("❌ Error: GEMINI_API_KEY not found.")
         return None
     client = genai.Client(api_key=api_key)
-    model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
+    model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3-flash-preview'
     print(f"🎥  Model: {model_name} | uploading {os.path.basename(video_path)}…")
 
     file_upload = None
@@ -1336,7 +1146,6 @@ def get_visual_clips(video_path, video_duration, language="en"):
         )
         response = client.models.generate_content(
             model=model_name, contents=[file_upload, prompt], config=config)
-        gemini_worker.raise_if_blocked(response)
         parsed = json.loads(response.text)
         shorts = parsed.get("shorts") or []
         # Clamp to the real duration; drop anything degenerate.
@@ -1357,9 +1166,6 @@ def get_visual_clips(video_path, video_duration, language="en"):
         if cost:
             result["cost_analysis"] = cost
         return result
-    except gemini_worker.GeminiBlockedError as e:
-        print(f"🚫 {e}")
-        raise
     except Exception as e:
         print(f"❌ Gemini vision error: {e}")
         return None
@@ -1465,67 +1271,191 @@ if __name__ == '__main__':
             # (app.py:1087) after burning GPU on a render nobody could see.
             raise RuntimeError(
                 "Clip detection failed — Gemini did not return usable clips for this video.")
-        else:
-            print(f"🔥 Found {len(clips_data['shorts'])} clips!")
 
-            # Save metadata. Silent videos have no transcript → no subtitles,
-            # which is correct (there's no speech to caption).
-            clips_data['transcript'] = transcript or {"language": "none", "segments": []}
-            metadata_file = os.path.join(output_dir, f"{video_title}_metadata.json")
-            with open(metadata_file, 'w') as f:
-                json.dump(clips_data, f, indent=2)
-            print(f"   Saved metadata to {metadata_file}")
+        shorts = clips_data['shorts']
 
-            # 5. Process clips in parallel: each worker cuts + renders one
-            # clip. Renders are mostly ffmpeg subprocesses (parallelize well);
-            # detector inference is serialized internally via DETECT_LOCK.
-            def _process_one_clip(i, clip):
-                start = clip['start']
-                end = clip['end']
-                print(f"\n🎬 Processing Clip {i+1}: {start}s - {end}s")
-                print(f"   Title: {clip.get('video_title_for_youtube_short', 'No Title')}")
+        # Gemini timestamps are untrusted. Normalize before scoring/rendering:
+        # pad speech context, clamp to source, sort, and merge overlaps so the
+        # same source frames can never enter the render queue twice.
+        shorts = brutal_truth.normalize_intervals(
+            shorts, source_duration=duration, min_duration=15.0,
+            pre_roll=0.2, post_roll=0.3)
+        if not shorts:
+            raise RuntimeError("Clip detection returned no valid non-overlapping intervals.")
 
-                clip_filename = f"{video_title}_clip_{i+1}.mp4"
-                clip_temp_path = os.path.join(output_dir, f"temp_{clip_filename}")
-                clip_final_path = os.path.join(output_dir, clip_filename)
+        # Compute topic terms once and pass the transcript-aware score into the
+        # threshold filter. Previously filter_by_score rescored without the
+        # transcript, so the threshold ignored hook/pacing/topic evidence.
+        top_terms = brutal_truth.top_terms_from_transcript(transcript) if transcript else None
 
-                try:
-                    # ffmpeg cut — re-encoding for precision on strict seconds
-                    cut_command = [
-                        'ffmpeg', '-y',
-                        '-ss', str(start),
-                        '-to', str(end),
-                        '-i', input_video,
-                        *video_encode_args(QUALITY_FAST),
-                        *audio_encode_args(),
-                        clip_temp_path
-                    ]
-                    subprocess.run(cut_command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        # --- Score threshold filter ---
+        # ponytail: auto-count mode just raises threshold; no separate logic needed.
+        score_threshold = int(os.environ.get("VIRALITY_THRESHOLD", "85"))
+        clip_mode = os.environ.get("CLIP_COUNT_MODE", "auto")
+        if clip_mode == "manual":
+            max_count = int(os.environ.get("MANUAL_CLIP_COUNT", "5"))
+            shorts = brutal_truth.cap_count(shorts, max_count)
+        else:  # auto
+            shorts = brutal_truth.filter_by_score(
+                shorts, score_threshold, transcript=transcript, top_terms=top_terms)
 
-                    success = render_clip(clip_temp_path, clip_final_path, output_format)
-                    if success and os.environ.get("WATERMARK") == "1":
-                        apply_watermark(clip_final_path)
-                    if success:
-                        # Captions last, so they sit on top of the watermark and
-                        # the canonical file stays clean for re-styling.
-                        auto_caption_clip(clip_final_path, transcript, start, end)
-                        print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
-                    return success
-                finally:
-                    if os.path.exists(clip_temp_path):
-                        os.remove(clip_temp_path)
+        clips_data['shorts'] = shorts
+        prints_hot = "🔥"
+        print(f"{prints_hot} Selected {len(shorts)} clips (threshold={score_threshold}, mode={clip_mode})!")
 
-            clip_workers = max(int(os.environ.get("CLIP_WORKERS", "3")), 1)
-            shorts = clips_data['shorts']
-            with ThreadPoolExecutor(max_workers=min(clip_workers, len(shorts))) as pool:
-                futures = {pool.submit(_process_one_clip, i, clip): i
-                           for i, clip in enumerate(shorts)}
-                for future in as_completed(futures):
-                    i = futures[future]
+        # --- White-label metadata for agency mode ---
+        # ponytail: cheap per-clip mutation; consumer (XML export, metadata.json) reads same dict.
+        agency_client = os.environ.get("AGENCY_CLIENT", "")
+        if agency_client:
+            brand_tags_str = os.environ.get("AGENCY_HASHTAGS", "")
+            brand_tags = [t.strip() for t in brand_tags_str.split(",") if t.strip()]
+            caption_prefix = os.environ.get("AGENCY_CAPTION_PREFIX", "")
+            for s in shorts:
+                brutal_truth.whitelabel_clip_metadata(
+                    s, agency_client, brand_tags, caption_prefix)
+
+        # --- Enriched metadata: composite score (Gemini + hook + duration + pacing + topic)
+        brutal_truth.enrich_metadata(shorts, transcript=transcript, top_terms=top_terms)
+
+        # Save metadata. Silent videos have no transcript → no subtitles,
+        # which is correct (there's no speech to caption).
+        clips_data['transcript'] = transcript or {"language": "none", "segments": []}
+        metadata_file = os.path.join(output_dir, f"{video_title}_metadata.json")
+        with open(metadata_file, 'w') as f:
+            json.dump(clips_data, f, indent=2)
+        print(f"   Saved metadata to {metadata_file}")
+
+        # --- XML timeline export (FCP/Premiere compatible) ---
+        # ponytail: minimal FCP XML — one sequence per clip,No transitions.
+        if os.environ.get("XML_EXPORT", "1") != "0":
+            try:
+                xml_path = brutal_truth.export_xml_timeline(shorts, video_title, output_dir, duration)
+                print(f"   📼 XML timeline exported: {xml_path}")
+            except Exception as xml_err:
+                print(f"   ⚠️ XML export failed: {xml_err}")
+
+        # 5. Process clips in parallel: each worker cuts + renders one
+        # clip. Renders are mostly ffmpeg subprocesses (parallelize well);
+        # detector inference is serialized internally via DETECT_LOCK.
+        def _process_one_clip(i, clip):
+            start = clip['start']
+            end = clip['end']
+            print(f"\n🎬 Processing Clip {i+1}: {start}s - {end}s")
+            print(f"   Title: {clip.get('video_title_for_youtube_short', 'No Title')}")
+
+            clip_filename = f"{video_title}_clip_{i+1}.mp4"
+            clip_temp_path = os.path.join(output_dir, f"temp_{clip_filename}")
+            clip_final_path = os.path.join(output_dir, clip_filename)
+
+            try:
+                # Accurate decode/re-encode cut with fresh PTS/DTS. Stream-copy
+                # cuts were the source of keyframe timestamp corruption and
+                # later looping/desync at boundaries.
+                if not brutal_truth.extract_clean_segment(
+                        input_video, start, end, clip_temp_path):
+                    print(f"   ❌ Clip {i+1} failed: clean cut failed")
+                    return False
+
+                # --- Silence/filler removal via ffmpeg silencedetect ---
+                # ponytail: skip if disabled; runs a quick probe pass then re-cuts.
+                if os.environ.get("SILENCE_REMOVAL", "1") == "1" and transcript:
+                    if brutal_truth.remove_silence(clip_temp_path):
+                        print(f"   ✂️ Silence removed from clip {i+1}")
+
+                # --- Weak-tail trim: cut any dead trailing air that tanks completion rate ---
+                if os.environ.get("WEAK_TAIL_TRIM", "1") == "1" and transcript:
+                    if brutal_truth.trim_weak_tail(clip_temp_path, start, end, transcript):
+                        print(f"   📉 Trimmed weak tail from clip {i+1}")
+
+                # Cold-open duplication is disabled: selecting a hook from
+                # inside this same interval and prepending it repeats footage.
+                # Use concat_clean_segments only with disjoint source ranges.
+
+                broll_insertions = []
+                broll_dir = os.environ.get("BROLL_DIR", "")
+                if (transcript and broll_dir
+                        and os.environ.get("BROLL_ENABLED", "1") == "1"):
                     try:
-                        future.result()
-                    except Exception as e:
-                        print(f"   ❌ Clip {i+1} failed: {type(e).__name__}: {e}")
+                        broll_scenes, broll_fps = detect_scenes(clip_temp_path)
+                        scene_ranges = [
+                            (scene_start.get_seconds(), scene_end.get_seconds())
+                            for scene_start, scene_end in broll_scenes
+                        ]
+                        # The clip temp timeline starts at zero; transcript words
+                        # still use source-video absolute time, so localize them.
+                        local_transcript = {"segments": []}
+                        for segment in transcript.get("segments", []):
+                            local_words = []
+                            for word in segment.get("words", []) or []:
+                                local_words.append({
+                                    **word,
+                                    "start": max(0.0, word.get("start", 0) - start),
+                                    "end": max(0.0, word.get("end", 0) - start),
+                                })
+                            local_transcript["segments"].append({"words": local_words})
+                        broll_insertions = brutal_truth.find_static_broll_insertions(
+                            scene_ranges, local_transcript,
+                            min_static_seconds=4.0, insert_duration=2.0)
+                    except Exception as broll_err:
+                        print(f"   ⚠️ B-roll analysis skipped for clip {i+1}: {broll_err}")
+
+                success = render_clip(clip_temp_path, clip_final_path, output_format)
+
+                if success and broll_insertions:
+                    try:
+                        if brutal_truth.overlay_broll(
+                                clip_final_path, clip_final_path,
+                                broll_insertions, broll_dir):
+                            print(f"   🎞️ B-roll pattern interrupt applied to clip {i+1}")
+                    except Exception as broll_err:
+                        print(f"   ⚠️ B-roll overlay skipped for clip {i+1}: {broll_err}")
+
+                # Optional word-level karaoke captions. This is a separate final
+                # encode with PTS reset in burn_subtitles(); disable with
+                # KARAOKE_SUBTITLES=0 when clean manual captions are preferred.
+                if (success and transcript
+                        and os.environ.get("KARAOKE_SUBTITLES", "1") == "1"):
+                    try:
+                        from subtitles import generate_ass, burn_subtitles
+                        ass_path = os.path.join(output_dir, f"karaoke_{i+1}.ass")
+                        if generate_ass(
+                                transcript, start, end, ass_path,
+                                max_chars=28, max_duration=2.0,
+                                alignment="bottom", fontsize=42,
+                                font_name="Arial", font_color="#FFFFFF",
+                                highlight_color="#FFD700", border_width=3,
+                                effect="pop", base_opacity=0.5):
+                            captioned_path = os.path.join(
+                                output_dir, f"captioned_{clip_filename}")
+                            burn_subtitles(
+                                clip_final_path, ass_path, captioned_path,
+                                alignment="bottom", fontsize=42)
+                            os.replace(captioned_path, clip_final_path)
+                            print(f"   🟡 Karaoke captions burned into clip {i+1}")
+                    except Exception as caption_err:
+                        print(f"   ⚠️ Karaoke caption pass failed for clip {i+1}: {caption_err}")
+
+                # No watermark is ever applied. Branding remains the user's job.
+
+                if success:
+                    print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
+                return success
+            finally:
+                if os.path.exists(clip_temp_path):
+                    os.remove(clip_temp_path)
+
+        clip_workers = max(int(os.environ.get("CLIP_WORKERS", "3")), 1)
+        with ThreadPoolExecutor(max_workers=min(clip_workers, len(shorts))) as pool:
+            futures = {pool.submit(_process_one_clip, i, clip): i
+                       for i, clip in enumerate(shorts)}
+            for future in as_completed(futures):
+                i = futures[future]
+                try:
+                    success = future.result()
+                    if not success:
+                        print(f"   ❌ Clip {i+1} failed: render returned False")
+                except Exception as e:
+                    print(f"   ❌ Clip {i+1} failed: {type(e).__name__}: {e}")
 
     # Clean up original if requested
     if args.url and not args.keep_original and os.path.exists(input_video):

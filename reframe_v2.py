@@ -8,8 +8,9 @@ and pipes raw frames back into ffmpeg. v2 splits that into:
      the resulting camera trajectory (crop x per frame) is equivalent.
   2. RENDER — one ffmpeg process per scene doing decode -> dynamic crop
      (sendcmd) -> scale -> encode natively (TRACK scenes), or the blurred
-     background filtergraph (GENERAL scenes); segments are then concatenated
-     with stream copy and the audio mapped straight from the source clip.
+     and the blurred background filtergraph (GENERAL layout); scenes are then
+     joined through an FFmpeg concat filter with fresh PTS/DTS and audio mapped
+     from the already-cut source clip.
 
 No raw-frame piping, no second full-res decode, one less intermediate encode.
 Callers must treat any exception as "fall back to the v1 loop".
@@ -26,36 +27,7 @@ from ffmpeg_utils import video_encode_args, QUALITY_FAST, METADATA_SCRUB
 ANALYSIS_MAX_WIDTH = 640
 
 
-# Short-form platforms (TikTok / Reels / Shorts) expect a 1080-wide vertical
-# upload; anything smaller is treated as low quality and re-encoded from the
-# already-soft source. The crop region is whatever the source height allows, so
-# a 720p input yields a 406x720 crop — we scale that up to the delivery floor
-# rather than shipping sub-HD. Sources that already exceed it are left alone
-# (never downscale quality the user supplied).
-DELIVERY_MIN_WIDTH = 1080
-
-
 # --- pure helpers (CI-testable) --------------------------------------------
-
-def delivery_size(orig_w, orig_h, aspect_ratio):
-    """Output (width, height) for a reframe of this source.
-
-    Picks the largest crop the source allows, then upscales to
-    ``DELIVERY_MIN_WIDTH`` if that crop is narrower. Both dimensions come back
-    even (x264/NVENC reject odd ones).
-    """
-    out_h = orig_h
-    out_w = int(out_h * aspect_ratio)
-    if out_w > orig_w:
-        out_w = orig_w
-        out_h = int(out_w / aspect_ratio)
-
-    if out_w < DELIVERY_MIN_WIDTH:
-        out_w = DELIVERY_MIN_WIDTH
-        out_h = int(round(out_w / aspect_ratio))
-
-    return out_w + (out_w % 2), out_h + (out_h % 2)
-
 
 def dedupe_sendcmd_lines(xs, fps, target="crop@c"):
     """sendcmd lines setting crop x per frame, deduped to change-points.
@@ -91,40 +63,27 @@ def concat_list_content(segment_paths):
     return "".join(f"file '{p}'\n" for p in segment_paths)
 
 
-# How much of the frame height the real content should fill in GENERAL layout.
-#
-# Fitting a 16:9 source to the full output width leaves it 608px tall in a
-# 1920px frame — the content is 32% of the screen and 68% is blurred filler.
-# That reads as a thumbnail floating in soup, and it is what a GENERAL scene
-# looked like in real delivered clips (audited 26-jul-2026).
-#
-# Scaling the content up and letting the sides overflow trades width for
-# presence, and the trade has to stay conservative: GENERAL is chosen for group
-# shots and landscapes, exactly the material where cropping the sides cuts
-# someone out of frame. At 0.42 a 16:9 source keeps ~76% of its width while
-# going from 32% to 42% of the frame height. 0.55 was tried and rejected — it
-# reaches 55% height but throws away 42% of the width.
-#
-# GENERAL_CONTENT_HEIGHT_RATIO=0.32 restores the old full-width behaviour.
-GENERAL_CONTENT_HEIGHT_RATIO = float(
-    os.environ.get("GENERAL_CONTENT_HEIGHT_RATIO", "0.42"))
-
-
 def general_filtergraph(out_w, out_h):
-    """Blurred-background 'general shot' layout: bg fills the frame (centre-
-    cropped, blurred), fg is scaled to a readable share of the height and
-    centred, overflowing the sides rather than floating small in the middle."""
-    fg_h = int(out_h * GENERAL_CONTENT_HEIGHT_RATIO)
-    fg_h += fg_h % 2
+    """Full-frame crop for 'general' scenes too — no blurred bars.
+
+    Previous version split the frame and overlaid 16:9 on blurred bg, producing
+    a horizontal video inside a vertical frame. Now all scenes get cropped to
+    9:16 with center tracking, matching TRACK behavior.
+    """
     return (
-        f"[0:v]split=2[bga][fga];"
-        f"[bga]scale=-2:{out_h},crop=w=min(iw\\,{out_w}):h={out_h},"
-        f"scale={out_w}:{out_h},gblur=sigma=12[bg];"
-        # Scale by HEIGHT, then trim any overflow to the output width. crop
-        # centres by default, and min() makes it a no-op when the scaled source
-        # is already narrower than the frame (portrait/square sources).
-        f"[fga]scale=-2:{fg_h},crop=w=min(iw\\,{out_w}):h=ih[fg];"
-        f"[bg][fg]overlay=x=(W-w)/2:y=(H-h)/2,setsar=1[v]"
+        f"[0:v]scale=-2:{out_h},crop=w=min(iw\\,{out_w}):h={out_h},"
+        f"scale={out_w}:{out_h},setsar=1[v]"
+    )
+
+
+def split_filtergraph(out_w, out_h):
+    """Top/bottom split layout for multi-speaker scenes."""
+    half_h = out_h // 2
+    return (
+        f"[0:v]split=2[top_src][bottom_src];"
+        f"[top_src]crop=iw:ih/2:0:0,scale={out_w}:{half_h},setsar=1[top];"
+        f"[bottom_src]crop=iw:ih/2:0:ih/2,scale={out_w}:{half_h},setsar=1[bottom];"
+        f"[top][bottom]vstack=inputs=2[v]"
     )
 
 
@@ -170,7 +129,7 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
             strategy = (scene_strategies[current_scene_index]
                         if current_scene_index < len(scene_strategies) else 'TRACK')
 
-            if strategy == 'GENERAL':
+            if strategy in ('GENERAL', 'SPLIT'):
                 cameraman.current_center_x = orig_w / 2
                 cameraman.target_center_x = orig_w / 2
                 xs.append(None)
@@ -218,7 +177,15 @@ def render(input_video, final_output_video, aspect_ratio):
     fps = float(fps)  # PySceneDetect can hand back a Fraction
     orig_w, orig_h = m.get_video_resolution(input_video)
 
-    out_w, out_h = delivery_size(orig_w, orig_h, aspect_ratio)
+    out_h = orig_h
+    out_w = int(out_h * aspect_ratio)
+    if out_w > orig_w:
+        out_w = orig_w
+        out_h = int(out_w / aspect_ratio)
+    if out_w % 2:
+        out_w += 1
+    if out_h % 2:
+        out_h += 1
 
     if not scenes:
         import cv2
@@ -231,10 +198,6 @@ def render(input_video, final_output_video, aspect_ratio):
     scene_boundaries = [(s.get_frames(), e.get_frames()) for s, e in scenes]
     strategies = m.analyze_scenes_strategy(input_video, scenes)
 
-    # The crop geometry comes from the SOURCE dims only — SmoothedCameraman
-    # derives crop_width/crop_height from video_width/video_height and never
-    # reads the output pair. So out_w/out_h being the (possibly upscaled)
-    # delivery size doesn't move the camera; only the final scale= uses it.
     cameraman = m.SmoothedCameraman(out_w, out_h, orig_w, orig_h, aspect_ratio=aspect_ratio)
     tracker = m.SpeakerTracker(cooldown_frames=30)
 
@@ -258,6 +221,8 @@ def render(input_video, final_output_video, aspect_ratio):
 
             if strategy == 'GENERAL':
                 graph = general_filtergraph(out_w, out_h)
+            elif strategy == 'SPLIT':
+                graph = split_filtergraph(out_w, out_h)
             else:
                 seg_xs = [x if x is not None else 0 for x in xs[start_f:end_f]]
                 cmd_path = os.path.join(workdir, f"cmd_{idx:03d}.txt")
@@ -277,24 +242,54 @@ def render(input_video, final_output_video, aspect_ratio):
             ])
             segments.append(seg_path)
 
-        list_path = os.path.join(workdir, "concat.txt")
-        with open(list_path, "w") as f:
-            f.write(concat_list_content(segments))
+        # Rejoin video scenes with the concat FILTER, not the concat demuxer.
+        # Every scene is reset to zero; audio is taken from the already-cut
+        # input clip and reset separately. This keeps A/V length and PTS aligned.
+        concat_inputs = []
+        concat_filters = []
+        video_labels = []
+        for idx, segment in enumerate(segments):
+            concat_inputs.extend(["-i", segment])
+            concat_filters.append(
+                f"[{idx}:v:0]setpts=PTS-STARTPTS[v{idx}]"
+            )
+            video_labels.append(f"[v{idx}]")
 
-        # Concat video segments (stream copy) + audio straight from the clip.
-        _run([
-            "ffmpeg", "-y", "-loglevel", "error",
-            "-f", "concat", "-safe", "0", "-i", list_path,
-            "-i", input_video,
-            "-map", "0:v:0", "-map", "1:a:0?",
-            "-c:v", "copy", "-c:a", "copy", *METADATA_SCRUB,
-            # +faststart moves the moov atom to the front so the browser <video>
-            # can start playing before the whole file downloads. Without it the
-            # in-app preview spins forever (download still works) — the moov
-            # lands at the end of a plain concat.
-            "-movflags", "+faststart",
-            final_output_video,
+        video_concat = "".join(video_labels)
+        concat_filters.append(
+            f"{video_concat}concat=n={len(segments)}:v=1:a=0[v]"
+        )
+        audio_probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=index", "-of", "csv=p=0", input_video],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        )
+        has_audio = bool(audio_probe.stdout.strip())
+        audio_input_idx = len(segments)
+        if has_audio:
+            concat_inputs.extend(["-i", input_video])
+            concat_filters.append(
+                f"[{audio_input_idx}:a:0]asetpts=PTS-STARTPTS[a]"
+            )
+
+        final_cmd = [
+            "ffmpeg", "-y", "-loglevel", "error", *concat_inputs,
+            "-filter_complex", ";".join(concat_filters),
+            "-map", "[v]",
+        ]
+        if has_audio:
+            final_cmd.extend(["-map", "[a]"])
+        final_cmd.extend([
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+            "-fps_mode", "cfr",
         ])
+        if has_audio:
+            final_cmd.extend(["-c:a", "aac", "-b:a", "192k", "-shortest"])
+        final_cmd.extend([
+            *METADATA_SCRUB, "-avoid_negative_ts", "make_zero",
+            "-movflags", "+faststart", final_output_video,
+        ])
+        _run(final_cmd)
     finally:
         import shutil
         shutil.rmtree(workdir, ignore_errors=True)

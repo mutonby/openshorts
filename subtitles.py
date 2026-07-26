@@ -525,14 +525,20 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
     else:
         vf = (f"subtitles='{safe_srt_path}':fontsdir='{safe_fonts_dir}'"
               f":charenc=UTF-8:force_style='{style_string}'")
+    # Subtitle rendering is another full video pass. Reset both streams so the
+    # caption pass cannot carry stale timestamps into the final MP4.
+    vf = f"setpts=PTS-STARTPTS,{vf}"
 
     cmd = [
         'ffmpeg', '-y',
         '-i', video_path,
         '-vf', vf,
-        '-c:a', 'copy',
+        '-af', 'asetpts=PTS-STARTPTS',
+        '-c:a', 'aac',
         *video_encode_args(QUALITY),
         *METADATA_SCRUB,
+        '-fps_mode', 'cfr',
+        '-avoid_negative_ts', 'make_zero',
         '-movflags', '+faststart',
         output_path
     ]

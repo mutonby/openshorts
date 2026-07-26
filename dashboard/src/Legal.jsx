@@ -3,7 +3,7 @@ import { ArrowLeft } from 'lucide-react';
 
 const LAST_UPDATED = '2026-07-15';
 const ISSUES_URL = 'https://github.com/mutonby/openshorts/issues';
-const SUPPORT_EMAIL = 'info@openshorts.app';
+const SUPPORT_EMAIL = 'hello@truelifeclipper.app';
 
 function Section({ title, children }) {
     return (
@@ -47,7 +47,7 @@ export default function Legal() {
 
                 <Section title="The short version">
                     <p>
-                        OpenShorts is an AI clip generator. There are two ways to use it:
+                        TrueLife Clipper is an AI clip generator. There are two ways to use it:
                     </p>
                     <ul className="list-disc pl-6 space-y-2">
                         <li>
@@ -55,7 +55,7 @@ export default function Legal() {
                             your own machine with your own API keys. No account, no payment, no data held by us.
                         </li>
                         <li>
-                            <strong className="text-ink">Hosted at openshorts.app:</strong> we run everything for
+                            <strong className="text-ink">Hosted at truelifeclipper.app:</strong> we run everything for
                             you. It requires an account and offers a free plan and paid subscriptions; we store the
                             videos you generate subject to the retention rules below.
                         </li>
@@ -82,7 +82,7 @@ export default function Legal() {
                     <p>
                         <strong className="text-ink">Free plan:</strong> accounts signed in with Google get{' '}
                         <strong className="text-ink">20 minutes</strong> of video processing per calendar month at no
-                        cost and with no payment method required. Free clips carry a watermark and are stored for{' '}
+                        cost and with no payment method required. Free hosted clips are stored for{' '}
                         <strong className="text-ink">7 days</strong>, after which they are deleted. Free allowances,
                         limits and features may change; the free plan may not be available to accounts we reasonably
                         believe are abusing it (e.g. duplicate accounts).
@@ -133,7 +133,7 @@ export default function Legal() {
                     </ul>
                     <p>
                         If you submit content you do not have rights to, that is your responsibility. You agree to
-                        indemnify OpenShorts and its contributors against any third-party claim arising from content you
+                        indemnify TrueLife Clipper and its contributors against any third-party claim arising from content you
                         submitted. We may suspend or terminate accounts that abuse the Service or infringe others' rights.
                     </p>
                 </Section>
@@ -220,8 +220,8 @@ export default function Legal() {
 
                 <Section title="Self-hosted instances">
                     <p>
-                        OpenShorts is open source and may be self-hosted. This notice applies to the hosted version we
-                        operate at openshorts.app. Self-hosted instances are run by their administrators, whose data
+                        TrueLife Clipper is open source and may be self-hosted. This notice applies to the hosted version we
+                        operate at truelifeclipper.app. Self-hosted instances are run by their administrators, whose data
                         handling and policies are their own responsibility, not ours.
                     </p>
                 </Section>

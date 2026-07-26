@@ -1,13 +1,10 @@
 from reframe_v2 import (
-    DELIVERY_MIN_WIDTH,
     concat_list_content,
     dedupe_sendcmd_lines,
-    delivery_size,
     general_filtergraph,
     scene_frame_ranges,
+    split_filtergraph,
 )
-
-VERTICAL = 9 / 16
 
 
 def test_sendcmd_lines_dedupe_to_change_points():
@@ -44,84 +41,17 @@ def test_concat_list_format():
     assert content == "file '/tmp/a/seg_000.mp4'\nfile '/tmp/a/seg_001.mp4'\n"
 
 
-class TestDeliverySize:
-    """A 720p source must not produce a 406x720 clip (prod audit, 25-jul-2026)."""
-
-    def test_720p_source_is_upscaled_to_the_delivery_floor(self):
-        assert delivery_size(1280, 720, VERTICAL) == (1080, 1920)
-
-    def test_1080p_source_lands_on_the_floor_exactly(self):
-        assert delivery_size(1920, 1080, VERTICAL) == (1080, 1920)
-
-    def test_tiny_source_still_reaches_the_floor(self):
-        # 360x640 sources were shipping as-is; platforms treat that as junk.
-        assert delivery_size(640, 360, VERTICAL) == (1080, 1920)
-
-    def test_high_res_source_is_never_downscaled(self):
-        # 4K source: the native crop is already well past the floor, so keep it.
-        assert delivery_size(3840, 2160, VERTICAL) == (1216, 2160)
-
-    def test_already_vertical_source_keeps_its_full_height(self):
-        assert delivery_size(1080, 1920, VERTICAL) == (1080, 1920)
-
-    def test_square_output_uses_the_same_floor(self):
-        assert delivery_size(1280, 720, 1.0) == (1080, 1080)
-
-    def test_dimensions_are_always_even(self):
-        for w, h in [(1280, 720), (1920, 1080), (854, 480), (3840, 2160), (641, 361)]:
-            out_w, out_h = delivery_size(w, h, VERTICAL)
-            assert out_w % 2 == 0 and out_h % 2 == 0, (w, h)
-
-    def test_never_returns_below_the_floor(self):
-        for w, h in [(320, 180), (640, 360), (1280, 720), (1920, 1080)]:
-            assert delivery_size(w, h, VERTICAL)[0] >= DELIVERY_MIN_WIDTH
-
-    def test_aspect_ratio_is_preserved(self):
-        for w, h in [(1280, 720), (640, 360), (3840, 2160)]:
-            out_w, out_h = delivery_size(w, h, VERTICAL)
-            assert abs(out_w / out_h - VERTICAL) < 0.01, (w, h)
-
-
 def test_general_filtergraph_targets_output_geometry():
-    graph = general_filtergraph(1080, 1920)
-    assert "gblur" in graph
-    assert "overlay=x=(W-w)/2:y=(H-h)/2" in graph
+    graph = general_filtergraph(608, 1080)
+    # Full-frame crop, no blurred bars — same crop/scale as TRACK scenes.
+    assert "gblur" not in graph
+    assert "overlay" not in graph
+    assert "scale=608:1080" in graph
+    assert "setsar=1" in graph
 
 
-class TestGeneralLayout:
-    """GENERAL used to leave the content at 32% of the frame, floating in blur."""
-
-    def test_content_is_scaled_by_height_not_width(self):
-        from reframe_v2 import GENERAL_CONTENT_HEIGHT_RATIO
-        graph = general_filtergraph(1080, 1920)
-        expected = int(1920 * GENERAL_CONTENT_HEIGHT_RATIO)
-        expected += expected % 2
-        assert f"scale=-2:{expected}" in graph
-
-    def test_content_height_is_even(self):
-        # Odd dimensions are rejected by the encoder. Read the FOREGROUND
-        # scale — the background line also contains a scale=-2: term.
-        for out_h in (1920, 1080, 1078, 976):
-            graph = general_filtergraph(1080, out_h)
-            fg = graph.split("[fga]scale=-2:")[1]
-            h = int(fg.split(",")[0])
-            assert h % 2 == 0, (out_h, h)
-
-    def test_overflow_is_trimmed_never_padded(self):
-        # min() keeps it a no-op for sources narrower than the frame.
-        graph = general_filtergraph(1080, 1920)
-        assert "crop=w=min(iw\\,1080):h=ih" in graph
-
-    def test_content_fills_more_than_the_old_full_width_fit(self):
-        # A 16:9 source fitted to full width was 9/16 of it — 0.5625 * 1080
-        # = 608px, i.e. 32% of a 1920 frame. The new layout must beat that.
-        from reframe_v2 import GENERAL_CONTENT_HEIGHT_RATIO
-        old_ratio = (1080 * 9 / 16) / 1920
-        assert GENERAL_CONTENT_HEIGHT_RATIO > old_ratio
-
-    def test_keeps_most_of_the_source_width(self):
-        # GENERAL is for groups and landscapes: cropping the sides too hard
-        # cuts people out of frame, which is the whole thing it exists to avoid.
-        from reframe_v2 import GENERAL_CONTENT_HEIGHT_RATIO
-        scaled_w = 1920 * GENERAL_CONTENT_HEIGHT_RATIO * (16 / 9)
-        assert 1080 / scaled_w > 0.70, "keeps less than 70% of the source width"
+def test_split_filtergraph_has_two_stacked_views():
+    graph = split_filtergraph(608, 1080)
+    assert "split=2" in graph
+    assert "vstack=inputs=2" in graph
+    assert "scale=608:540" in graph
