@@ -89,7 +89,7 @@ export default function PricingSection({ onRequireLogin }) {
             <li className="flex items-start gap-2"><Check size={16} className="text-ok shrink-0 mt-0.5" /> <span><b>{FREE_MINUTES} min</b> of video / month</span></li>
             <li className="flex items-start gap-2"><Check size={16} className="text-ok shrink-0 mt-0.5" /> <span>YouTube URL or upload</span></li>
             <li className="flex items-start gap-2"><Check size={16} className="text-ok shrink-0 mt-0.5" /> <span>No credit card — Google sign-in</span></li>
-            <li className="flex items-start gap-2"><Check size={16} className="text-muted shrink-0 mt-0.5" /> <span className="text-muted">Watermark · clips kept 7 days</span></li>
+            <li className="flex items-start gap-2"><Check size={16} className="text-muted shrink-0 mt-0.5" /> <span className="text-muted">Clips kept 7 days</span></li>
           </ul>
           <button
             onClick={() => { if (!isSignedIn) { onRequireLogin?.(null); } else { window.location.hash = ''; } }}
@@ -180,7 +180,7 @@ export default function PricingSection({ onRequireLogin }) {
                 <span className="badge-ok">$0</span>
               </h3>
               <p className="text-muted text-sm mt-1 max-w-xl leading-relaxed">
-                OpenShorts is open source. Run it on your own machine with Docker and use it <b className="text-ink2">completely free</b> —
+                TrueLife Clipper is open source. Run it on your own machine with Docker and use it <b className="text-ink2">completely free</b> —
                 you just bring your own API keys and your own hardware. The plans above are for the
                 <b className="text-ink2"> hosted version on this site</b>: zero setup, no keys, we run everything for you.
               </p>
@@ -197,7 +197,7 @@ export default function PricingSection({ onRequireLogin }) {
       </div>
 
       <p className="text-center text-muted text-xs mt-6 lowercase">
-        Use it free on your own computer, start free right here, or upgrade for more minutes and no watermark.
+        Use it free on your own computer, start free right here, or upgrade for more minutes.
       </p>
     </div>
   );

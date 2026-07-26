@@ -358,7 +358,7 @@ def transcribe_media(media_path):
     # actionable reason instead.
     if not _has_audio_stream(media_path):
         raise NoAudioError(
-            "This video has no audio track. OpenShorts finds viral moments from "
+            "This video has no audio track. TrueLife Clipper finds viral moments from "
             "speech, so it needs a video with audio.")
 
     backend = os.environ.get("TRANSCRIBE_BACKEND", "whisper").strip().lower()

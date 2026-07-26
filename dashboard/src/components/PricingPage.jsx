@@ -5,28 +5,28 @@ import PricingSection from './PricingSection';
 // Billing / value questions reused verbatim from Landing.jsx faqs
 const FAQS = [
   {
-    question: "Is OpenShorts really free? What's the catch?",
-    answer: "There are two ways to use OpenShorts. (1) Self-hosted is 100% free and open source: you run it with Docker on your own machine, bring your own API keys, and there are no watermarks, no usage limits, and no subscription. Google Gemini API (required) powers the AI analysis — its free tier includes 1,500 requests/day. ElevenLabs (optional) enables AI dubbing in 30+ languages. Upload-Post (optional) publishes to YouTube, TikTok, and Instagram. (2) Hosted at openshorts.app is the no-setup option: we run all the AI and compute for you and you don't need any API keys — it has a free plan (20 minutes of video a month, watermark, no credit card) and paid plans from $12/mo for 100 minutes without watermark. So: free if you self-host, free to try in the cloud, paid if you want more. Both are far cheaper than Opus Clip ($15-228/month) or Kapwing ($24-79/month)."
+    question: "Is TrueLife Clipper really free? What's the catch?",
+    answer: "There are two ways to use TrueLife Clipper. (1) Self-hosted is 100% free and open source: you run it with Docker on your own machine, bring your own API keys, and there are no watermarks, no usage limits, and no subscription. Google Gemini API (required) powers the AI analysis — its free tier includes 1,500 requests/day. ElevenLabs (optional) enables AI dubbing in 30+ languages. Upload-Post (optional) publishes to YouTube, TikTok, and Instagram. (2) Hosted at truelifeclipper.app is the no-setup option: we run all the AI and compute for you and you don't need any API keys — it has a free plan (20 minutes of video a month, no credit card) and paid plans from $12/mo for 100 minutes. So: free if you self-host, free to try in the cloud, paid if you want more. Both are far cheaper than Opus Clip ($15-228/month) or Kapwing ($24-79/month).",
   },
   {
-    question: "How does OpenShorts compare to Opus Clip?",
-    answer: "OpenShorts is a free, self-hosted alternative to Opus Clip. Both offer AI viral moment detection and smart vertical cropping. Key differences: OpenShorts is completely free vs Opus Clip's $15-228/month pricing. OpenShorts runs on your infrastructure (full data privacy) vs cloud-only. OpenShorts uses Google Gemini 3.0 Flash for AI analysis vs Opus Clip's proprietary model. OpenShorts adds AI voice dubbing in 30+ languages, AI-generated video effects, and hook text overlays. The trade-off is that OpenShorts requires Docker self-hosting, while Opus Clip is a ready-to-use cloud service."
+    question: "How does TrueLife Clipper compare to Opus Clip?",
+    answer: "TrueLife Clipper is a free, self-hosted alternative to Opus Clip. Both offer AI viral moment detection and smart vertical cropping. Key differences: TrueLife Clipper is completely free vs Opus Clip's $15-228/month pricing. TrueLife Clipper runs on your infrastructure (full data privacy) vs cloud-only. TrueLife Clipper uses Google Gemini 3.0 Flash for AI analysis vs Opus Clip's proprietary model. TrueLife Clipper adds AI voice dubbing in 30+ languages, AI-generated video effects, and hook text overlays. The trade-off is that TrueLife Clipper requires Docker self-hosting, while Opus Clip is a ready-to-use cloud service."
   },
   {
-    question: "Can OpenShorts generate YouTube thumbnails and titles for free?",
-    answer: "Yes. OpenShorts includes a free AI YouTube thumbnail generator, a free AI YouTube title generator, and a free AI YouTube description generator — all powered by Google Gemini 3.0 Flash. Upload your video and the AI suggests 10 viral title options with an interactive refinement chat. Then it generates multiple thumbnail designs using AI image generation — upload a face photo and background image for personalized results. The studio also auto-generates YouTube descriptions with chapter timestamps and lets you publish directly to YouTube. Everything is 100% free with the Gemini free tier."
+    question: "Can TrueLife Clipper generate YouTube thumbnails and titles for free?",
+    answer: "Yes. TrueLife Clipper includes a free AI YouTube thumbnail generator, a free AI YouTube title generator, and a free AI YouTube description generator — all powered by Google Gemini 3.0 Flash. Upload your video and the AI suggests 10 viral title options with an interactive refinement chat. Then it generates multiple thumbnail designs using AI image generation — upload a face photo and background image for personalized results. The studio also auto-generates YouTube descriptions with chapter timestamps and lets you publish directly to YouTube. Everything is 100% free with the Gemini free tier."
   },
   {
     question: "Is there a free open source clip generator?",
-    answer: "Yes — OpenShorts is a 100% free, open source clip generator. Unlike paid clip generators like Opus Clip ($15-228/month) or Kapwing ($24-79/month), OpenShorts lets you generate unlimited clips with no watermarks, no usage limits, and no subscription fees. It also includes a free AI YouTube thumbnail generator, free AI YouTube title generator, and free AI YouTube description generator — features that other clip generators charge extra for. You self-host it with Docker on your own machine for full privacy and control."
+    answer: "Yes — TrueLife Clipper is a 100% free, open source clip generator. Unlike paid clip generators like Opus Clip ($15-228/month) or Kapwing ($24-79/month), TrueLife Clipper lets you generate unlimited clips with no watermarks, no usage limits, and no subscription fees. It also includes a free AI YouTube thumbnail generator, free AI YouTube title generator, and free AI YouTube description generator — features that other clip generators charge extra for. You self-host it with Docker on your own machine for full privacy and control."
   },
   {
     question: "How much does it cost to generate an AI UGC video?",
-    answer: "OpenShorts itself is free, but the AI Shorts feature uses external APIs (fal.ai for video generation, ElevenLabs for voiceover) that charge per use. Low Cost mode costs approximately $0.65 per video (Flux image $0.05 + ElevenLabs voice $0.10 + Hailuo img2video $0.19 + VEED Lipsync $0.20 + b-roll $0.10). Premium mode costs approximately $2.00 per video using Kling Avatar v2 for higher quality. Both modes are significantly cheaper than hiring UGC creators ($50-500 per video) or using platforms like HeyGen ($24-180/month)."
+    answer: "TrueLife Clipper itself is free, but the AI Shorts feature uses external APIs (fal.ai for video generation, ElevenLabs for voiceover) that charge per use. Low Cost mode costs approximately $0.65 per video (Flux image $0.05 + ElevenLabs voice $0.10 + Hailuo img2video $0.19 + VEED Lipsync $0.20 + b-roll $0.10). Premium mode costs approximately $2.00 per video using Kling Avatar v2 for higher quality. Both modes are significantly cheaper than hiring UGC creators ($50-500 per video) or using platforms like HeyGen ($24-180/month)."
   },
   {
-    question: "What are the system requirements to run OpenShorts?",
-    answer: "OpenShorts runs on any system with Docker installed. The recommended setup is 8GB+ RAM and a modern multi-core CPU. GPU acceleration (NVIDIA CUDA) is optional but speeds up video processing significantly. The Docker Compose setup handles all dependencies automatically — Python 3.11, FFmpeg, YOLOv8, MediaPipe, faster-whisper, and the React dashboard. It works on Linux, macOS, and Windows (via WSL2/Docker Desktop)."
+    question: "What are the system requirements to run TrueLife Clipper?",
+    answer: "TrueLife Clipper runs on any system with Docker installed. The recommended setup is 8GB+ RAM and a modern multi-core CPU. GPU acceleration (NVIDIA CUDA) is optional but speeds up video processing significantly. The Docker Compose setup handles all dependencies automatically — Python 3.11, FFmpeg, YOLOv8, MediaPipe, faster-whisper, and the React dashboard. It works on Linux, macOS, and Windows (via WSL2/Docker Desktop)."
   }
 ];
 
@@ -49,10 +49,10 @@ const TRUST_CARDS = [
     ),
   },
   {
-    eyebrow: 'no watermarks · no per-clip credits',
+    eyebrow: 'no per-clip credits',
     body: (
       <>
-        Clips export clean — no watermarks. Plans meter minutes of input video per billing
+        Plans meter minutes of input video per billing
         period, never per-clip credits.
       </>
     ),

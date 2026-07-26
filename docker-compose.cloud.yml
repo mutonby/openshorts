@@ -1,4 +1,4 @@
-# Cloud (paid / managed-keys) mode override for openshorts.app.
+# Cloud (paid / managed-keys) mode override for truelifeclipper.app.
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.cloud.yml up --build
 #
@@ -9,14 +9,14 @@ services:
     image: postgres:16-alpine
     container_name: openshorts-db
     environment:
-      - POSTGRES_USER=openshorts
+      - POSTGRES_USER=truelifeclipper
       # Fail the deploy loudly if unset, rather than silently using a weak default.
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set for cloud mode}
-      - POSTGRES_DB=openshorts
+      - POSTGRES_DB=truelifeclipper
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U openshorts"]
+      test: ["CMD-SHELL", "pg_isready -U truelifeclipper"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -30,8 +30,8 @@ services:
       - BILLING_ENABLED=true
       - DATABASE_URL=postgresql+asyncpg://openshorts:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set for cloud mode}@db:5432/openshorts
       - JWT_SECRET=${JWT_SECRET}
-      - FRONTEND_URL=${FRONTEND_URL:-https://openshorts.app}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://openshorts.app}
+      - FRONTEND_URL=${FRONTEND_URL:-https://truelifeclipper.app}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://truelifeclipper.app}
       # Email (magic link + admin alerts) is via SMTP and read from the mounted
       # .env (SMTP_HOST/PORT/USER/PASSWORD, EMAIL_FROM, ADMIN_EMAIL). It's kept
       # out of this list on purpose so the SMTP password's $/* aren't mangled by
@@ -45,7 +45,7 @@ services:
       # Managed provider keys (server-owned)
       - MANAGED_GEMINI_API_KEY=${MANAGED_GEMINI_API_KEY}
       - MANAGED_UPLOAD_POST_API_KEY=${MANAGED_UPLOAD_POST_API_KEY}
-      - OPENSHORTS_LOGO_URL=${OPENSHORTS_LOGO_URL:-https://openshorts.app/logo.png}
+      - OPENSHORTS_LOGO_URL=${OPENSHORTS_LOGO_URL:-https://truelifeclipper.app/logo.png}
       # Optional HTTP proxy for downloads. Leave empty to go direct.
       - PROXY_URL=${PROXY_URL:-}
 

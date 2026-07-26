@@ -25,7 +25,7 @@ import { apiFetch, apiJson, QuotaError } from './lib/api';
 
 // Enhanced "Encryption" using XOR + Base64 with a Salt
 // This is better than plain Base64 but still client-side.
-const SECRET_KEY = import.meta.env.VITE_ENCRYPTION_KEY || "OpenShorts-Static-Salt-Change-Me";
+const SECRET_KEY = import.meta.env.VITE_ENCRYPTION_KEY || "TrueLifeClipper-Static-Salt-Change-Me";
 const ENCRYPTION_PREFIX = "ENC:";
 
 const encrypt = (text) => {
@@ -352,7 +352,7 @@ function App() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `openshorts_clips_${(jobId || '').slice(0, 8)}.zip`;
+      a.download = `truelifeclipper_clips_${(jobId || '').slice(0, 8)}.zip`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -536,9 +536,8 @@ function App() {
     }
   };
 
-  // Hosted is paid-only (no BYOK core). Self-host uses BYOK keys.
-  // `keysMissing` now means "self-host BYOK keys missing" — it never fires on hosted.
-  const keysMissing = !billingEnabled && (!apiKey || !uploadPostKey);
+  // Hosted is paid-only (no BYOK core). Self-hosted clip generation only needs Gemini.
+  const keysMissing = !billingEnabled && !apiKey;
   const needsPlan = billingEnabled && !isManaged;   // hosted, signed-out or no active plan/trial
 
   // Fresh sign-up: show the welcome plan-choice popup once (AuthContext set the
@@ -614,12 +613,16 @@ function App() {
           acknowledged: !!data.acknowledged,
           output_format: data.outputFormat || 'auto',
           force_low_quality: forceLowQuality,
+          clip_count_mode: data.clipCountMode || 'auto',
+          manual_clip_count: data.manualClipCount || null,
         });
       } else {
         const formData = new FormData();
         formData.append('file', data.payload);
         formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
         formData.append('output_format', data.outputFormat || 'auto');
+        formData.append('clip_count_mode', data.clipCountMode || 'auto');
+        if (data.manualClipCount) formData.append('manual_clip_count', String(data.manualClipCount));
         body = formData;
       }
 
@@ -689,7 +692,7 @@ function App() {
           <div className="w-8 h-8 bg-paper3 rounded-input flex items-center justify-center shrink-0 overflow-hidden border border-rule">
             <img src="/logo-openshorts.png" alt="Logo" className="w-full h-full object-cover" />
           </div>
-          <span className="font-display lowercase text-lg text-ink hidden lg:block">openshorts</span>
+          <span className="font-display lowercase text-lg text-ink hidden lg:block">truelifeclipper</span>
         </a>
 
         <nav className="flex-1 px-4 py-4 space-y-1">
@@ -741,11 +744,11 @@ function App() {
             </a>
           )}
           <a
-            href="mailto:info@openshorts.app"
+            href="mailto:hello@truelifeclipper.app"
             className="flex items-center gap-2 px-3 py-1.5 text-xs lowercase text-muted hover:text-ink2 transition-colors"
           >
             <Mail size={14} className="shrink-0" />
-            <span className="hidden lg:block truncate">info@openshorts.app</span>
+            <span className="hidden lg:block truncate">hello@truelifeclipper.app</span>
           </a>
         </div>
       </div>
@@ -780,14 +783,9 @@ function App() {
               />
             )}
 
-            {/* Cloud: minutes meter + account/sign-in. For free users the meter
-                opens the upgrade modal — otherwise the only path to a plan is
-                failing against the quota wall. */}
+            {/* Cloud: minutes meter + account/sign-in */}
             {billingEnabled && isManaged && (
-              <UsageMeter onClick={() => {
-                if (plan === 'free') { setTopUpInfo({ context: 'upsell' }); setShowTopUp(true); }
-                else { window.location.hash = '#/account'; }
-              }} />
+              <UsageMeter onClick={() => { window.location.hash = '#/account'; }} />
             )}
             {billingEnabled && isSignedIn && !isManaged && (
               <button onClick={() => setShowPlanChoice(true)}
@@ -811,11 +809,7 @@ function App() {
               >
                 <AlertTriangle size={12} />
                 <span className="hidden sm:inline">
-                  {!apiKey && !uploadPostKey
-                    ? 'Gemini & Upload-Post keys missing'
-                    : !apiKey
-                      ? 'Gemini API Key Missing'
-                      : 'Upload-Post API Key Missing'}
+                  Gemini API Key Missing
                 </span>
                 <span className="sm:hidden">keys missing</span>
               </button>
@@ -831,11 +825,7 @@ function App() {
               <div>
                 <span className="font-medium text-ink">Required API keys missing.</span>{' '}
                 <span className="text-muted">
-                  {!apiKey && !uploadPostKey
-                    ? 'Set your Gemini and Upload-Post API keys to use OpenShorts.'
-                    : !apiKey
-                      ? 'Set your Gemini API key to use OpenShorts.'
-                      : 'Set your Upload-Post API key to use OpenShorts.'}
+                  Set your Gemini API key to use TrueLife Clipper.
                 </span>
               </div>
             </div>
@@ -938,10 +928,10 @@ function App() {
                     </div>
                     <h2 className="text-base font-medium text-ink lowercase">Social Integration</h2>
                   </div>
-                  <span className="badge-warn">Required</span>
+                  <span className="readout">Optional</span>
                 </div>
                 <p className="text-xs text-muted mb-6 leading-relaxed">
-                  Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts via <strong>Upload-Post</strong>.
+                  Optional: publish selected clips to TikTok, Instagram Reels, and YouTube Shorts via <strong>Upload-Post</strong>.
                   Includes a <strong>free tier</strong> (no credit card required).
                 </p>
                 <div className="space-y-4">
@@ -1381,19 +1371,15 @@ function App() {
 
                 {status === 'complete' && results?.clips?.length > 0 && (
                   <div className="mb-2 space-y-2">
-                    {/* Peak-moment upsell: they just SAW their clips — sell while
-                        they're proud of the result, before asking for stars. */}
+                    <StarBanner message="Happy with your clips?" />
                     {plan === 'free' && (
                       <button
-                        onClick={() => { setTopUpInfo({ context: 'upsell' }); setShowTopUp(true); }}
-                        className="w-full text-left px-3 py-2.5 rounded-input bg-paper3 border border-brass/40 hover:border-brass text-sm transition-colors"
+                        onClick={() => { window.location.hash = '#/pricing'; }}
+                        className="w-full text-left px-3 py-2 rounded-input bg-paper3 border border-rule text-sm text-muted hover:text-ink transition-colors"
                       >
-                        <span className="text-ink">Like these clips?</span>{' '}
-                        <span className="text-muted">They carry a watermark and delete in 7 days.</span>{' '}
-                        <span className="text-brass font-medium">Keep them forever →</span>
+                        Free clips stay on your machine and stay unlimited. <span className="text-brass">upgrade</span> for more processed minutes.
                       </button>
                     )}
-                    <StarBanner message="Happy with your clips?" />
                   </div>
                 )}
 
@@ -1451,11 +1437,7 @@ function App() {
         isOpen={showKeyModal}
         onClose={() => setShowKeyModal(false)}
         eyebrow="SETUP"
-        title={!apiKey && !uploadPostKey
-          ? 'Required API Keys Missing'
-          : !apiKey
-            ? 'Gemini API Key Required'
-            : 'Upload-Post API Key Required'}
+        title="Gemini API Key Required"
         footer={
           <div className="flex gap-3">
             <button
@@ -1475,7 +1457,7 @@ function App() {
       >
         <div className="space-y-4">
           <p className="text-sm text-muted">
-            OpenShorts needs both a <strong className="text-ink2">Gemini</strong> API key and an <strong className="text-ink2">Upload-Post</strong> API key. Both have free tiers.
+            TrueLife Clipper needs a <strong className="text-ink2">Gemini</strong> API key to generate clips. Generated clips stay in your local <code>output</code> folder.
           </p>
 
           {/* Gemini block */}
@@ -1506,36 +1488,7 @@ function App() {
             )}
           </div>
 
-          {/* Upload-Post block */}
-          <div className={`rounded-input p-4 space-y-2 border ${!uploadPostKey ? 'border-rule2' : 'border-rule opacity-70'}`}>
-            <p className="text-xs font-medium text-ink flex items-center gap-2">
-              {uploadPostKey ? <Check size={12} className="text-ok" /> : <AlertTriangle size={12} className="text-warn" />}
-              Upload-Post API Key {uploadPostKey && <span className="text-ok">— set</span>}
-            </p>
-            {!uploadPostKey && (
-              <>
-                <p className="text-xs text-muted">
-                  Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts. Free tier available, no credit card needed.
-                </p>
-                <ol className="text-xs text-muted space-y-1 list-decimal list-inside">
-                  <li>Register at <a href="https://app.upload-post.com/login" target="_blank" rel="noopener noreferrer" className="text-brass underline">app.upload-post.com</a></li>
-                  <li>Connect your TikTok, Instagram, or YouTube accounts</li>
-                  <li>Go to <a href="https://app.upload-post.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-brass underline">API Keys</a> and generate one</li>
-                  <li>Paste it below</li>
-                </ol>
-                <input
-                  type="text"
-                  placeholder="Paste your Upload-Post API key here..."
-                  className="input-field"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && e.target.value.trim()) {
-                      setUploadPostKey(e.target.value.trim());
-                    }
-                  }}
-                />
-              </>
-            )}
-          </div>
+
         </div>
       </Modal>
 
@@ -1583,7 +1536,6 @@ function App() {
           onClose={() => setShowTopUp(false)}
           required={topUpInfo.required}
           remaining={topUpInfo.remaining}
-          context={topUpInfo.context || 'wall'}
         />
       )}
       {showTrialUpgrade && (

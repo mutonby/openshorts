@@ -1,4 +1,4 @@
-# Design — OpenShorts
+# Design — TrueLife Clipper
 
 A locked design system for this app (dashboard + landing). Every page redesign
 reads this file before emitting code. Do not regenerate per page — extend or

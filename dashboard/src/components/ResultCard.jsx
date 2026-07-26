@@ -7,7 +7,6 @@ import HookModal from './HookModal';
 import TranslateModal from './TranslateModal';
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
-import WatermarkModal, { watermarkNoticeDismissed } from './WatermarkModal';
 import { useAuth } from '../contexts/AuthContext';
 import { renderInBrowser } from '../lib/renderInBrowser';
 
@@ -29,7 +28,6 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
     const [showModal, setShowModal] = useState(false);
     const [showDescModal, setShowDescModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
-    const [showWatermarkModal, setShowWatermarkModal] = useState(false);
     const { plan } = useAuth();
     const videoRef = React.useRef(null);
     // Pristine base clip (no burned subtitles/hook), stable regardless of how
@@ -754,12 +752,6 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
                     <button
                         onClick={(e) => {
                             e.preventDefault();
-                            // Free clips are watermarked — surface the upsell once
-                            // before the first download, then get out of the way.
-                            if (plan === 'free' && !watermarkNoticeDismissed()) {
-                                setShowWatermarkModal(true);
-                                return;
-                            }
                             downloadClip();
                         }}
                         className={QUIET_BTN}
@@ -962,13 +954,6 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
                 videoUrl={currentVideoUrl}
                 hasApiKey={!!elevenLabsKey}
             />
-
-            {showWatermarkModal && (
-                <WatermarkModal
-                    onClose={() => setShowWatermarkModal(false)}
-                    onContinue={downloadClip}
-                />
-            )}
 
         </div>
     );

@@ -12,8 +12,8 @@ export default defineConfig({
   plugins: [react()],
   server: {
     allowedHosts: [
-      'openshorts.app',
-      'www.openshorts.app'
+      'truelifeclipper.app',
+      'www.truelifeclipper.app'
     ],
     proxy: {
       '/api': { target: backend, changeOrigin: true },

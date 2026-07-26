@@ -15,6 +15,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [file, setFile] = useState(null);
     const [acknowledged, setAcknowledged] = useState(false);
     const [outputFormat, setOutputFormat] = useState('vertical'); // vertical | horizontal | square
+    const [clipMode, setClipMode] = useState('auto'); // 'auto' | 'manual'
+    const [clipCount, setClipCount] = useState(5); // 1-15, used when mode='manual'
     const [showInfo, setShowInfo] = useState(false);
     const infoRef = useRef(null);
 
@@ -58,10 +60,14 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const handleSubmit = (e) => {
         e.preventDefault();
         if (!acknowledged) return;
+        const opts = {
+            clipCountMode: clipMode,
+            manualClipCount: clipMode === 'manual' ? clipCount : null,
+        };
         if (mode === 'url' && url) {
-            onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat });
+            onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat, ...opts });
         } else if (mode === 'file' && file) {
-            onProcess({ type: 'file', payload: file, acknowledged: true, outputFormat });
+            onProcess({ type: 'file', payload: file, acknowledged: true, outputFormat, ...opts });
         }
     };
 
@@ -208,6 +214,46 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             );
                         })}
                     </div>
+                </div>
+
+                {/* Clip count selector */}
+                <div className="mt-5">
+                    <p className="eyebrow mb-2">Clip selection</p>
+                    <div className="grid grid-cols-2 gap-2">
+                        <button
+                            type="button"
+                            onClick={() => setClipMode('auto')}
+                            className={`py-3 px-3 rounded-input border text-left transition-colors
+                                ${clipMode === 'auto' ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
+                        >
+                            <span className="block font-mono text-sm leading-none">Auto</span>
+                            <span className="block text-[10px] leading-tight text-muted mt-1">AI picks the strongest</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setClipMode('manual')}
+                            className={`py-3 px-3 rounded-input border text-left transition-colors
+                                ${clipMode === 'manual' ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
+                        >
+                            <span className="block font-mono text-sm leading-none">Manual</span>
+                            <span className="block text-[10px] leading-tight text-muted mt-1">You set the count</span>
+                        </button>
+                    </div>
+                    {clipMode === 'manual' && (
+                        <div className="mt-3 flex items-center gap-3">
+                            <input
+                                type="range"
+                                min={1}
+                                max={15}
+                                step={1}
+                                value={clipCount}
+                                onChange={(e) => setClipCount(parseInt(e.target.value, 10) || 5)}
+                                className="flex-1 accent-[var(--color-accent)]"
+                                aria-label="Number of clips"
+                            />
+                            <span className="font-mono text-sm text-ink2 tabular-nums w-8 text-right">{clipCount}</span>
+                        </div>
+                    )}
                 </div>
 
                 <label className="flex items-start gap-2 mt-5 text-xs text-muted cursor-pointer select-none">
