@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2 } from 'lucide-react';
+import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
 import SubtitleModal from './SubtitleModal';
@@ -25,7 +25,7 @@ function formatDuration(clip) {
     return `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
 }
 
-export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress, initialState = null, onStateChange, connectedPlatforms = null, onConnectSocials }) {
+export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress, initialState = null, onStateChange, connectedPlatforms = null, onConnectSocials, onEditClip = null }) {
     const [showModal, setShowModal] = useState(false);
     const [showDescModal, setShowDescModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
@@ -709,6 +709,16 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
 
                 {/* Actions Footer */}
                 <div className="grid grid-cols-2 gap-2 mt-auto pt-4 border-t border-rule">
+                    {onEditClip && (
+                        <button
+                            onClick={() => onEditClip(index)}
+                            className={QUIET_BTN}
+                        >
+                            <Scissors size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />
+                            edit clip
+                        </button>
+                    )}
+
                     <button
                         onClick={handleAutoEdit}
                         disabled={isEditing}
@@ -762,7 +772,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
                             }
                             downloadClip();
                         }}
-                        className={QUIET_BTN}
+                        className={`${QUIET_BTN}${onEditClip ? ' col-span-2' : ''}`}
                     >
                         <Download size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" /> download
                     </button>

@@ -9,6 +9,7 @@ import ThumbnailStudio from './components/ThumbnailStudio';
 import SaaShortsTab from './components/SaaShortsTab';
 import UGCGallery from './components/UGCGallery';
 import ScheduleWeekModal from './components/ScheduleWeekModal';
+import ClipEditor from './components/ClipEditor';
 import UsageMeter from './components/UsageMeter';
 import TopUpModal from './components/TopUpModal';
 import StarBanner from './components/StarBanner';
@@ -228,6 +229,8 @@ function App() {
 
   const [sessionRecovered, setSessionRecovered] = useState(false);
   const [showScheduleWeek, setShowScheduleWeek] = useState(false);
+  // Clip editor overlay: index of the clip being edited, or null.
+  const [editingClip, setEditingClip] = useState(null);
 
   // Silent-success "saved" states for the settings key inputs (design.md: no alert popups)
   const [elevenLabsSaved, setElevenLabsSaved] = useState(false);
@@ -278,6 +281,35 @@ function App() {
     s.pending[index] = state;
     if (s.timer) clearTimeout(s.timer);
     s.timer = setTimeout(flushClipState, 2000);
+  };
+
+  // A recut replaced the clip's server file with a fresh render (burned layers
+  // reset), so update the results, the reopened-project state and the synced
+  // per-clip edit state, and let the ResultCard remount from the new file.
+  const handleClipRerendered = (index, data) => {
+    const newFile = (data.new_video_url || '').split('/').pop();
+    setResults((prev) => {
+      if (!prev?.clips?.[index]) return prev;
+      const clips = prev.clips.slice();
+      clips[index] = {
+        ...clips[index],
+        video_url: data.new_video_url,
+        start: data.start,
+        end: data.end,
+        recipe: data.recipe,
+      };
+      return { ...prev, clips };
+    });
+    setProjectState((prev) => {
+      if (!prev?.clips) return prev;
+      return {
+        ...prev,
+        clips: prev.clips.map((c) => (c.index === index
+          ? { ...c, server_file: newFile, active_layers: null }
+          : c)),
+      };
+    });
+    handleClipStateChange(index, { activeLayers: null, serverVideoFile: newFile });
   };
 
   // Reopen an archived project from the History tab: the backend re-downloads
@@ -1402,10 +1434,11 @@ function App() {
                     <div className={`grid gap-4 pb-10 ${status === 'complete' ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'}`}>
                       {results.clips.map((clip, i) => (
                         <ResultCard
-                          key={`${jobId}-${i}`}
+                          key={`${jobId}-${i}-${clip.video_url || ''}`}
                           clip={clip}
                           index={i}
                           jobId={jobId}
+                          onEditClip={(index) => setEditingClip(index)}
                           initialState={projectState?.clips?.find((c) => c.index === i) || null}
                           onStateChange={handleClipStateChange}
                           durableUrl={durableClips[i]}
@@ -1576,6 +1609,15 @@ function App() {
       )}
 
 
+      {editingClip !== null && results?.clips?.[editingClip] && (
+        <ClipEditor
+          jobId={jobId}
+          clipIndex={editingClip}
+          clipTitle={results.clips[editingClip].video_title_for_youtube_short || ''}
+          onClose={() => setEditingClip(null)}
+          onRerendered={handleClipRerendered}
+        />
+      )}
       {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}
       {showPlanChoice && <PlanChoiceModal onClose={() => setShowPlanChoice(false)} />}
       {showTopUp && (

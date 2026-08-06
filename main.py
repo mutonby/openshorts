@@ -1505,6 +1505,12 @@ if __name__ == '__main__':
             # Save metadata. Silent videos have no transcript → no subtitles,
             # which is correct (there's no speech to caption).
             clips_data['transcript'] = transcript or {"language": "none", "segments": []}
+            # The clip editor's re-render path needs to find the source video
+            # again and reproduce the render settings, so record both. The
+            # basename is enough — the file sits in the job dir (URL jobs with
+            # --keep-original) or in uploads/ (upload jobs).
+            clips_data['source_video'] = os.path.basename(input_video)
+            clips_data['output_format'] = output_format
             metadata_file = os.path.join(output_dir, f"{video_title}_metadata.json")
             with open(metadata_file, 'w') as f:
                 json.dump(clips_data, f, indent=2)
