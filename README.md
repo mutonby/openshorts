@@ -1,5 +1,7 @@
 # OpenShorts.app
 
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.mutonby%2Fopenshorts.svg)](https://mcptoplist.com/server/io.github.mutonby%2Fopenshorts)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Open Source](https://badges.frapsoft.com/os/v1/open-source.svg?v=103)](https://opensource.org/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
