@@ -194,7 +194,7 @@ Self-hosting OpenShorts is free. You provide the machine and you only pay for th
 
 ### 1. Clone
 ```bash
-git clone https://github.com/your-username/OpenShorts.git
+git clone https://github.com/mutonby/openshorts.git
 cd OpenShorts
 ```
 
