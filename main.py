@@ -22,6 +22,7 @@ from google import genai
 from google.genai import types as genai_types
 
 import gemini_worker
+import ai_gateway
 import layout_picker
 from clip_selection import build_transcript_windows, clip_count_targets, snap_clip_to_words
 from ffmpeg_utils import (video_encode_args, audio_encode_args, QUALITY,
@@ -890,71 +891,6 @@ def render_clip(input_video, final_output_video, output_format="auto"):
     return process_video_to_vertical(input_video, final_output_video, aspect_ratio=aspect)
 
 
-# Watermark geometry, as fractions of the clip width/height.
-#
-# Vertical placement is the whole point: the top and bottom strips of a 9:16
-# clip are either black bars or blurred filler (GENERAL layout), so a mark up
-# there is cropped away without touching a single pixel of real footage. At 40%
-# of the height it sits inside the content band — a 16:9 source letterboxed
-# into 9:16 spans roughly 34%-66% — so removing the mark means cutting into the
-# picture. Left-aligned, like OpusClip's.
-WATERMARK_WIDTH_RATIO = 0.30
-WATERMARK_MARGIN_RATIO = 0.05
-WATERMARK_Y_RATIO = 0.40
-WATERMARK_OPACITY = 0.85
-
-
-def apply_watermark(video_path):
-    """Burn the OpenShorts watermark into a finished clip (free plan).
-
-    One re-encode pass on the final file so every output format (TRACK,
-    GENERAL, horizontal passthrough) gets the mark, and later subtitle/hook
-    re-encodes keep it — they re-encode the already-marked pixels.
-    """
-    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "assets", "watermark.png")
-    if not os.path.exists(logo_path):
-        print(f"   ⚠️ Watermark asset missing ({logo_path}); clip kept unmarked.")
-        return False
-
-    # Scale the lockup from the clip's real width: overlay can't read the other
-    # input's size, and computing it here avoids the deprecated scale2ref.
-    try:
-        probe = subprocess.check_output(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", video_path],
-            stderr=subprocess.STDOUT, timeout=60,
-        ).decode().strip().split("x")
-        vw, vh = int(probe[0]), int(probe[1])
-    except Exception as e:
-        print(f"   ⚠️ Could not probe clip for watermark ({e}); clip kept unmarked.")
-        return False
-
-    wm_w = max(80, int(vw * WATERMARK_WIDTH_RATIO))
-    x = int(vw * WATERMARK_MARGIN_RATIO)
-    y = int(vh * WATERMARK_Y_RATIO)
-    filt = (
-        f"[1:v]scale={wm_w}:-1,format=rgba,"
-        f"colorchannelmixer=aa={WATERMARK_OPACITY}[wm];"
-        f"[0:v][wm]overlay=x={x}:y={y}"
-    )
-    tmp_path = video_path + ".wm.mp4"
-    cmd = ["ffmpeg", "-y", "-i", video_path, "-i", logo_path,
-           "-filter_complex", filt,
-           *video_encode_args(QUALITY), "-c:a", "copy", *METADATA_SCRUB,
-           "-movflags", "+faststart", tmp_path]
-    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                            timeout=1800)
-    if result.returncode == 0 and os.path.exists(tmp_path):
-        os.replace(tmp_path, video_path)
-        return True
-    err = (result.stderr or b"").decode(errors="ignore")[-300:]
-    print(f"   ⚠️ Watermark pass failed (clip kept unmarked): {err}")
-    if os.path.exists(tmp_path):
-        os.remove(tmp_path)
-    return False
-
-
 def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPECT_RATIO):
     """
     Core logic to reframe a horizontal video to a target aspect ratio using
@@ -1218,6 +1154,35 @@ def _run_gemini_stage(client, model_name, prompt, schema):
             time.sleep(wait)
 
 
+_AI_SYSTEM_PROMPT = (
+    "You are a senior short-form video strategist and editor. "
+    "Always answer with valid JSON only — no markdown fences, no commentary."
+)
+
+
+def _run_ai_stage(prompt, schema, temperature=0.2):
+    """One AI stage call with transient-error backoff and provider fallback.
+
+    Zero-budget gateway first (any configured free provider — OpenRouter,
+    DeepSeek, GLM, Qwen, Kimi, Groq, Gemini free tier...). The legacy Gemini
+    SDK path remains only for deployments that set GEMINI_API_KEY and no other
+    provider key. Returns (parsed_dict, cost_analysis).
+    """
+    if ai_gateway.is_configured():
+        parsed, result = ai_gateway.complete_json(
+            system=_AI_SYSTEM_PROMPT, user=prompt, temperature=temperature)
+        return parsed, result.usage_dict()
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "No AI provider configured. Set OPENROUTER_API_KEY, GEMINI_API_KEY, "
+            "GROQ_API_KEY, DEEPSEEK_API_KEY, ZHIPU_API_KEY, DASHSCOPE_API_KEY or "
+            "MOONSHOT_API_KEY in your .env — all have free tiers (see .env.example).")
+    client = genai.Client(api_key=api_key)
+    model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
+    return _run_gemini_stage(client, model_name, prompt, schema)
+
+
 def get_viral_clips(transcript_result, video_duration):
     """Two-pass clip selection: score transcript windows, then detail the best.
 
@@ -1225,17 +1190,17 @@ def get_viral_clips(transcript_result, video_duration):
     transcript clusters picks near the start), and the cheap scoring pass keeps
     the expensive detail reasoning focused on the shortlist. Cuts are snapped to
     word boundaries so clips don't start/end mid-word.
+
+    Runs on the zero-budget AI gateway (free OpenRouter/Chinese providers with
+    automatic fallback), with the legacy Gemini SDK path as a fallback.
     """
-    print("\U0001f916  Analyzing with Gemini (2-pass: score → detail)...")
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        print("❌ Error: GEMINI_API_KEY not found in environment variables.")
+    print("\U0001f916  Analyzing with free AI (2-pass: score → detail)...")
+    if not ai_gateway.is_configured() and not os.getenv("GEMINI_API_KEY"):
+        print("❌ Error: no AI provider configured in environment variables.")
         return None
 
-    client = genai.Client(api_key=api_key)
-    model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
     language = str(transcript_result.get('language') or 'unknown')
-    print(f"\U0001f916  Model: {model_name} | language: {language}")
+    print(f"\U0001f916  Language: {language}")
 
     # Full word list — ground truth for snapping cut points.
     words = []
@@ -1257,7 +1222,7 @@ def get_viral_clips(transcript_result, video_duration):
             prompt = gemini_worker.SCORE_PROMPT_TEMPLATE.format(
                 video_duration=video_duration, language=language,
                 windows_json=json.dumps(payload, ensure_ascii=False))
-            parsed, cost = _run_gemini_stage(client, model_name, prompt, gemini_worker.ScoreResponse)
+            parsed, cost = _run_ai_stage(prompt, gemini_worker.ScoreResponse, temperature=0.1)
             if cost:
                 costs.append(cost)
             scored.extend(parsed.get("windows") or [])
@@ -1279,7 +1244,7 @@ def get_viral_clips(transcript_result, video_duration):
             video_duration=video_duration, language=language,
             min_clips=min_clips, max_clips=max_clips,
             windows_json=json.dumps(payload, ensure_ascii=False))
-        detail, cost = _run_gemini_stage(client, model_name, prompt, gemini_worker.DetailResponse)
+        detail, cost = _run_ai_stage(prompt, gemini_worker.DetailResponse, temperature=0.7)
         if cost:
             costs.append(cost)
 
@@ -1289,16 +1254,19 @@ def get_viral_clips(transcript_result, video_duration):
             ns, ne = snap_clip_to_words(s.get("start", 0), s.get("end", 0), words, video_duration)
             s["start"], s["end"] = ns, ne
 
-        # Aggregate cost across both passes.
+        # Aggregate cost across both passes (free tiers: $0.00).
         cost_analysis = None
         if costs:
             cost_analysis = {
                 "input_tokens": sum(c.get("input_tokens", 0) for c in costs),
                 "output_tokens": sum(c.get("output_tokens", 0) for c in costs),
                 "total_cost": sum(c.get("total_cost", 0) for c in costs),
-                "model": model_name,
+                "model": "free-ai-chain",
+                "providers": sorted({c.get("provider") for c in costs if c.get("provider")}),
             }
-            print(f"\U0001f4b0 Total cost ({model_name}, 2-pass, {len(costs)} calls): ${cost_analysis['total_cost']:.6f}")
+            print(f"\U0001f4b0 Usage (2-pass, {len(costs)} calls): "
+                  f"{cost_analysis['input_tokens']} in / {cost_analysis['output_tokens']} out tokens, "
+                  f"served by {', '.join(cost_analysis['providers']) or 'unknown'} — $0.00")
 
         if not shorts:
             print("⚠️ 2-pass returned no clips.")
@@ -1314,15 +1282,57 @@ def get_viral_clips(transcript_result, video_duration):
         print(f"🚫 {e}")
         raise
     except Exception as e:
-        print(f"❌ Gemini Error: {e}")
+        print(f"❌ AI Error: {e}")
         return None
 
 
 def get_visual_clips(video_path, video_duration, language="en"):
-    """Clip a SILENT video by vision: Gemini watches the footage and picks the
+    """Clip a SILENT video by vision: sample frames and let the AI pick the
     most engaging visual moments (no transcript). Returns the same
-    {"shorts", "cost_analysis"} shape as get_viral_clips, or None."""
-    print("🎥  Silent video — analyzing with Gemini vision (no transcript)...")
+    {"shorts", "cost_analysis"} shape as get_viral_clips, or None.
+
+    Uses the zero-budget gateway (vision models get evenly-spaced stills —
+    the technique layout_picker.py validated). Falls back to the legacy Gemini
+    video-upload path when only a Gemini SDK key is configured.
+    """
+    print("🎥  Silent video — analyzing with AI vision (no transcript)...")
+
+    if ai_gateway.is_configured():
+        frames = ai_gateway.extract_frames(video_path, n=12, width=1024)
+        if not frames:
+            print("   ⚠️ Could not sample frames — vision analysis skipped.")
+            return None
+        try:
+            prompt = gemini_worker.VISUAL_PROMPT_TEMPLATE.format(
+                video_duration=video_duration, language=language)
+            parsed, result = ai_gateway.complete_json(
+                system=_AI_SYSTEM_PROMPT, user=prompt, temperature=0.2,
+                images=frames, kind="vision")
+            shorts = parsed.get("shorts") or []
+            # Clamp to the real duration; drop anything degenerate.
+            clean = []
+            for s in shorts:
+                s["start"] = max(0.0, float(s.get("start", 0)))
+                s["end"] = min(float(video_duration), float(s.get("end", 0)))
+                if s["end"] - s["start"] >= 1.0:
+                    clean.append(s)
+            if not clean:
+                print("⚠️ Vision pass returned no usable clips.")
+                return None
+            cost = result.usage_dict()
+            if cost:
+                print(f"💰 Vision usage: {cost['input_tokens']} in / "
+                      f"{cost['output_tokens']} out tokens ($0.00)")
+            result_out = {"shorts": clean}
+            if cost:
+                result_out["cost_analysis"] = cost
+            return result_out
+        except Exception as e:
+            print(f"❌ AI vision error: {e}")
+            return None
+
+    # Legacy path: real Gemini key, no other provider configured.
+    print("🎥  Uploading video to Gemini vision…")
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         print("❌ Error: GEMINI_API_KEY not found.")
@@ -1537,11 +1547,9 @@ if __name__ == '__main__':
                     subprocess.run(cut_command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
                     success = render_clip(clip_temp_path, clip_final_path, output_format)
-                    if success and os.environ.get("WATERMARK") == "1":
-                        apply_watermark(clip_final_path)
                     if success:
-                        # Captions last, so they sit on top of the watermark and
-                        # the canonical file stays clean for re-styling.
+                        # Captions last, so they sit on top of the clean frame
+                        # and the canonical file stays clean for re-styling.
                         auto_caption_clip(clip_final_path, transcript, start, end)
                         print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
                     return success

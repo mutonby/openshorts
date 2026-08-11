@@ -134,6 +134,8 @@ export function AuthProvider({ children }) {
   const value = {
     billingEnabled: config.billingEnabled,
     googleAuthEnabled: config.googleAuthEnabled,
+    aiConfigured: !!config.aiConfigured,
+    aiProviders: config.aiProviders || [],
     loading,
     signingIn,
     user: me?.user || null,

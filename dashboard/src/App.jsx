@@ -172,7 +172,7 @@ const pollJob = async (jobId) => {
 
 function App() {
   // Cloud auth/billing session (inert when billing is disabled).
-  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe } = useAuth();
+  const { billingEnabled, aiConfigured, isManaged, isSignedIn, me, plan, refreshMe } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
   const [showTopUp, setShowTopUp] = useState(false);
   const [showPlanChoice, setShowPlanChoice] = useState(false);
@@ -536,9 +536,11 @@ function App() {
     }
   };
 
-  // Hosted is paid-only (no BYOK core). Self-host uses BYOK keys.
-  // `keysMissing` now means "self-host BYOK keys missing" — it never fires on hosted.
-  const keysMissing = !billingEnabled && (!apiKey || !uploadPostKey);
+  // Zero-budget edition: when the backend has free AI providers configured
+  // (OpenRouter/DeepSeek/GLM/Qwen/Kimi/Groq/Gemini free tier), no client-side
+  // key is required at all — the gateway resolves providers server-side.
+  const aiKeysMissing = !billingEnabled && !aiConfigured && !apiKey;
+  const keysMissing = aiKeysMissing;
   const needsPlan = billingEnabled && !isManaged;   // hosted, signed-out or no active plan/trial
 
   // Fresh sign-up: show the welcome plan-choice popup once (AuthContext set the
@@ -629,7 +631,7 @@ function App() {
       const resData = await res.json();
 
       // Quality gate: the source is below the min resolution — ask before burning
-      // 20 min on it. On confirm we resend with force_low_quality.
+      // a long job on it. On confirm we resend with force_low_quality.
       if (resData.needs_confirmation) {
         setStatus('idle');
         setQualityGate({ info: resData.quality_check, data });
@@ -805,18 +807,12 @@ function App() {
 
             {keysMissing && (
               <button
-                onClick={() => (billingEnabled && !isSignedIn ? setShowLogin(true) : setActiveTab('settings'))}
+                onClick={() => setActiveTab('settings')}
                 className="badge-warn hover:brightness-125 transition-all"
-                title="Configure API keys or choose a plan"
+                title="Configure a free AI provider key"
               >
                 <AlertTriangle size={12} />
-                <span className="hidden sm:inline">
-                  {!apiKey && !uploadPostKey
-                    ? 'Gemini & Upload-Post keys missing'
-                    : !apiKey
-                      ? 'Gemini API Key Missing'
-                      : 'Upload-Post API Key Missing'}
-                </span>
+                <span className="hidden sm:inline">No AI provider configured</span>
                 <span className="sm:hidden">keys missing</span>
               </button>
             )}
@@ -829,13 +825,11 @@ function App() {
             <div className="flex items-center gap-3 text-sm text-ink2">
               <KeyRound size={16} className="shrink-0 text-warn" />
               <div>
-                <span className="font-medium text-ink">Required API keys missing.</span>{' '}
+                <span className="font-medium text-ink">No AI provider configured on the server.</span>{' '}
                 <span className="text-muted">
-                  {!apiKey && !uploadPostKey
-                    ? 'Set your Gemini and Upload-Post API keys to use OpenShorts.'
-                    : !apiKey
-                      ? 'Set your Gemini API key to use OpenShorts.'
-                      : 'Set your Upload-Post API key to use OpenShorts.'}
+                  Add one free key to your server's .env — OpenRouter, Gemini, Groq,
+                  DeepSeek, GLM, Qwen or Kimi (see .env.example) — and no client
+                  key is ever needed.
                 </span>
               </div>
             </div>
@@ -920,7 +914,7 @@ function App() {
                     <span className="badge-ok">Free plan available</span>
                   </div>
                   <p className="text-xs text-muted mb-5 leading-relaxed">
-                    Generate shorts with zero setup — no API keys needed. Start free with 20 min/month, or go paid from $12/mo. Cancel anytime.
+                    Generate shorts with zero setup — no API keys needed. Free forever, no watermark, no limits.
                   </p>
                   <button onClick={() => setShowPlanChoice(true)} className="btn-primary py-2 px-4 text-sm">
                     <Sparkles size={16} /> Choose a plan
@@ -928,6 +922,23 @@ function App() {
                 </div>
               ) : (
                 <>
+              {aiConfigured && (
+                <div className="card p-4 sm:p-6 mb-6 border-ok/40">
+                  <div className="flex items-center gap-3 mb-2">
+                    <div className="w-9 h-9 rounded-input bg-paper3 flex items-center justify-center shrink-0">
+                      <Sparkles size={16} className="text-ok" />
+                    </div>
+                    <h2 className="text-base font-medium text-ink lowercase">Free AI providers active — zero budget</h2>
+                    <span className="badge-ok">No key needed</span>
+                  </div>
+                  <p className="text-xs text-muted leading-relaxed">
+                    This server runs on free AI providers. Nothing to configure here —
+                    no watermark, no limits, no plans. The key field below is optional
+                    and only needed if you want to override the server's providers
+                    with your own Gemini key.
+                  </p>
+                </div>
+              )}
               <KeyInput onKeySet={setApiKey} savedKey={apiKey} />
 
               <div className="card p-4 sm:p-6 mt-8">
@@ -1381,18 +1392,6 @@ function App() {
 
                 {status === 'complete' && results?.clips?.length > 0 && (
                   <div className="mb-2 space-y-2">
-                    {/* Peak-moment upsell: they just SAW their clips — sell while
-                        they're proud of the result, before asking for stars. */}
-                    {plan === 'free' && (
-                      <button
-                        onClick={() => { setTopUpInfo({ context: 'upsell' }); setShowTopUp(true); }}
-                        className="w-full text-left px-3 py-2.5 rounded-input bg-paper3 border border-brass/40 hover:border-brass text-sm transition-colors"
-                      >
-                        <span className="text-ink">Like these clips?</span>{' '}
-                        <span className="text-muted">They carry a watermark and delete in 7 days.</span>{' '}
-                        <span className="text-brass font-medium">Keep them forever →</span>
-                      </button>
-                    )}
                     <StarBanner message="Happy with your clips?" />
                   </div>
                 )}

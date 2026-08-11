@@ -1,27 +1,29 @@
-# OpenShorts.app
+# OpenShorts+ — Zero-Budget Edition
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/MIT)
 [![Open Source](https://badges.frapsoft.com/os/v1/open-source.svg?v=103)](https://opensource.org/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
-[![GitHub stars](https://img.shields.io/github/stars/mutonby/openshorts?style=social)](https://github.com/mutonby/openshorts)
-[![Last Commit](https://img.shields.io/github/last-commit/mutonby/openshorts)](https://github.com/mutonby/openshorts/commits/main)
 
-**Open source AI video platform** with 3 tools in one: **Clip Generator**, **AI Shorts (UGC videos with AI actors)**, and **YouTube Studio**.
+**Free forever AI video platform** with 3 tools in one: **Clip Generator**, **AI Shorts (UGC videos with AI actors)**, and **YouTube Studio** — rebuilt with a **zero-budget motto**: the whole AI pipeline runs on free providers.
 
-**Two ways to run it, same software either way:**
+**No paywall. No watermark. No limits. No plans. $0 budget.**
 
-|  | Self-hosted (this repo) | Hosted on [openshorts.app](https://www.openshorts.app/) |
-|---|---|---|
-| **Price** | Free forever, MIT | Free plan, paid from $12/mo |
-| **Speed** | 5 to 8 min per 8-min video on CPU | About 50s on our NVIDIA GPU |
-| **API keys** | Bring your own Gemini, ElevenLabs, fal.ai | Gemini included, nothing to set up |
-| **Watermark / limits** | None, ever | Watermark and 20 min/mo on the free plan, neither on paid |
-| **Setup** | Docker, 8GB+ RAM, model downloads | Sign in and paste a link |
-| **MCP / API for agents** | Same `/mcp` endpoint, but only while your machine is on | Always-on endpoint at [mcp.openshorts.app](https://www.openshorts.app/mcp), API keys in one click |
-| **Your data** | Your server | Ours |
+| | OpenShorts+ (this repo) |
+|---|---|
+| **Price** | Free forever, MIT — no paid plans at all |
+| **AI providers** | Free by default: OpenRouter `:free` models (DeepSeek, Qwen, GLM, Kimi, Gemma, gpt-oss...), Gemini free tier, Groq, Zhipu GLM, Alibaba Qwen, Moonshot Kimi — automatic fallback between them |
+| **Video length** | Unlimited — cut any long video freely |
+| **Watermark** | Never |
+| **Voiceover** | Free Microsoft Edge TTS (ElevenLabs optional, BYOK) |
+| **AI Shorts actors** | Free image generation / local portraits + free Ken Burns motion (fal.ai optional, BYOK) |
+| **Setup** | Docker, 8GB+ RAM, model downloads — or free hosting (Vercel + Render) |
+| **Your data** | Your server |
 
-Self-hosting is genuinely free and always will be. It costs you a machine, your own API keys and the time to keep it running. The hosted plans exist to cover that hardware and those keys, not to unlock features.
+> This is a rebuild of [mutonby/openshorts](https://github.com/mutonby/openshorts)
+> that removes the hosted paywall (20 min/month quota, watermark, $12/mo plans)
+> and swaps the paid Gemini/ElevenLabs/fal.ai calls for free, multi-provider
+> routing through `ai_gateway.py`. Deploy for $0: [DEPLOYMENT.md](DEPLOYMENT.md).
 
 https://github.com/user-attachments/assets/b45fa983-16b4-48b5-ac5b-a267836b9ad9
 
@@ -46,7 +48,8 @@ Generate marketing videos with AI actors for **any product or business**. No cam
 
 ![AI Shorts Setup](screenshots/ai-shorts.png)
 
-- **Two cost modes**: Low Cost (~$0.65/video) and Premium (~$2/video)
+- **Zero-budget mode**: free Edge TTS voiceover + free Ken Burns motion — no paid APIs needed
+- **Upgraded modes** (optional, BYOK): Low Cost (~$0.65/video) and Premium (~$2/video) with fal.ai lip-sync
 - Works for any business: SaaS, restaurants, e-commerce, coaching, local businesses
 - AI-generated actors with lip-sync, voiceover, b-roll, and TikTok-style subtitles
 - Choose from a shared avatar gallery or upload your own photo
@@ -77,19 +80,19 @@ All generated videos and avatars are saved to a public gallery with SEO pages fo
 ## Key Features
 
 ### Clip Generator
-- **Viral Moment Detection**: Google Gemini 3.0 Flash analyzes transcripts and scene boundaries to detect 3-15 high-potential moments
+- **Viral Moment Detection**: free multi-provider AI (OpenRouter `:free` models / Gemini free tier / Groq / DeepSeek / GLM / Qwen / Kimi, with automatic fallback) analyzes transcripts and scene boundaries to detect 3-15 high-potential moments
 - **Smart 9:16 Cropping**: Dual-mode AI reframing — TRACK mode (MediaPipe + YOLOv8 face tracking) and GENERAL mode (blurred background)
 - **Auto Subtitles**: faster-whisper with word-level timestamps, styled and burned into clips
-- **AI Voice Dubbing**: ElevenLabs integration for 30+ languages with voice cloning
+- **AI Voice Dubbing**: ElevenLabs integration (BYOK) for 30+ languages — or free Edge TTS voiceovers
 - **Hook Text Overlays**: AI-generated attention-grabbing text overlays
 - **AI Video Effects**: Gemini-generated FFmpeg filters for professional effects
 
 ### AI Shorts Pipeline
 1. **Analyze**: Scrape website URL + web research, or generate from manual description
 2. **Script**: AI writes viral scripts (hook - problem - solution - CTA format)
-3. **Actor**: Generate AI actors with Flux 2 Pro or select from shared gallery
-4. **Voice**: ElevenLabs TTS voiceover (English/Spanish, male/female)
-5. **Video**: Talking head generation (Hailuo 2.3 Fast img2video + VEED Lipsync)
+3. **Actor**: Generate AI actors (fal.ai Flux — or free image generation / local portraits)
+4. **Voice**: ElevenLabs TTS (English/Spanish) — or free Microsoft Edge TTS
+5. **Video**: Talking head generation (Hailuo + VEED via fal.ai — or free Ken Burns motion)
 6. **B-roll**: AI-generated visuals with Ken Burns effect
 7. **Composite**: FFmpeg final assembly with subtitles and hook overlays
 8. **Publish**: Direct posting to TikTok, Instagram Reels, YouTube Shorts via Upload-Post
@@ -143,10 +146,10 @@ Videos generated with OpenShorts AI Shorts — no camera, no studio, no actors:
 
 | Feature | OpenShorts | Opus Clip | CapCut | Vizard | Klap | Descript |
 |---------|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Price** | **Free self-hosted**<br>from $12/mo hosted | $15-29/mo | $8/mo | $15-20/mo | $23-63/mo | $24-65/mo |
+| **Price** | **Free forever** | $15-29/mo | $8/mo | $15-20/mo | $23-63/mo | $24-65/mo |
 | **Self-hosted** | **Yes** | No | No | No | No | No |
 | **Open source** | **Yes** | No | No | No | No | No |
-| **Watermark** | **Never self-hosted**<br>free plan only when hosted | Free tier | Some | Free tier | Free tier | Free tier |
+| **Watermark** | **Never** | Free tier | Some | Free tier | Free tier | Free tier |
 | **Upload limits** | **None self-hosted**<br>by plan when hosted | 10-30GB | Credit-based | 60min-10hr | 10-100 vids/mo | 60min-40hr |
 | **AI clip detection** | Yes | Yes | Yes | Yes | Yes | Yes |
 | **Smart 9:16 reframing** | Yes | Yes | Yes | Yes | Yes | No |
@@ -176,7 +179,7 @@ Self-hosting OpenShorts is free. You provide the machine and you only pay for th
 
 **Bottom line:** You can clip videos for practically free with Gemini, and publish 10 videos/month to all social networks at zero cost with Upload-Post.
 
-**Don't want to run any of that?** [openshorts.app](https://www.openshorts.app/) is the same software on our hardware: our NVIDIA GPU clips an 8-minute video in about 50 seconds instead of the 5 to 8 minutes it takes on a typical CPU, the Gemini key is included, and auto-publishing is already wired up. Free plan is 20 minutes a month with a watermark and no credit card; paid plans start at $12/mo for 100 minutes without watermark.
+**Zero-budget hosting:** the AI pipeline needs no paid keys at all. Set any free provider key in `.env` (`OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `ZHIPU_API_KEY`, `DASHSCOPE_API_KEY`, `MOONSHOT_API_KEY`) and the gateway routes across everything you configured with automatic fallback. Deploy the dashboard to Vercel and the backend to Render/Fly/Railway — see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ---
 
@@ -198,10 +201,12 @@ git clone https://github.com/your-username/OpenShorts.git
 cd OpenShorts
 ```
 
-### 2. Configure (optional)
+### 2. Configure (optional — free AI keys)
 ```bash
 cp .env.example .env
-# Edit .env with your AWS keys for S3 backup
+# Set at least ONE free AI key (OpenRouter, Gemini, Groq, DeepSeek, GLM,
+# Qwen or Kimi — see .env.example). The gateway falls back across all of them.
+# AWS keys are only for S3 clip backup (optional).
 ```
 
 ### 3. Launch
@@ -212,7 +217,7 @@ docker compose up --build
 ### 4. Open Dashboard
 Navigate to **`http://localhost:5175`**
 
-1. Go to **Settings** and enter your API keys (Gemini, fal.ai, ElevenLabs, Upload-Post)
+1. If the server has no free AI provider configured, go to **Settings** and add a key; otherwise everything just works — no watermark, no limits
 2. **Clip Generator**: Upload a long-form video to generate viral shorts
 3. **AI Shorts**: Describe your product or paste a URL to generate UGC marketing videos
 4. **YouTube Studio**: Generate thumbnails, titles, and descriptions for YouTube
@@ -226,15 +231,15 @@ Navigate to **`http://localhost:5175`**
 1. **Ingest** — Local video upload (or self-hosted URL ingest via yt-dlp)
 2. **Transcribe** — faster-whisper with word-level timestamps
 3. **Detect** — PySceneDetect for scene boundaries
-4. **Analyze** — Gemini identifies 3-15 viral moments (15-60s each)
+4. **Analyze** — free multi-provider AI identifies 3-15 viral moments (15-60s each)
 5. **Extract** — FFmpeg precise clip cutting
 6. **Reframe** — AI vertical cropping with subject tracking
 7. **Effects** — Subtitles, hooks, AI video effects
 8. **Publish** — S3 backup + Upload-Post social distribution
 
 ### AI Shorts
-1. **Analyze** — Website scraping + Gemini web research (or manual description)
-2. **Script** — Gemini generates viral scripts with segments
+1. **Analyze** — Website scraping + free AI web research (or manual description)
+2. **Script** — free AI generates viral scripts with segments
 3. **Actor** — Flux 2 Pro portrait generation (or gallery/upload)
 4. **Voice** — ElevenLabs TTS voiceover
 5. **Video** — Hailuo 2.3 Fast img2video + VEED Lipsync (Low Cost) or Kling Avatar v2 (Premium)

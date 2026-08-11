@@ -15,10 +15,13 @@ export default defineConfig({
   // llms.txt. See vite-plugin-seo.js.
   plugins: [react(), seo()],
   server: {
-    allowedHosts: [
-      'openshorts.app',
-      'www.openshorts.app'
-    ],
+    // Dev-only host allowlist. Set VITE_ALLOWED_HOSTS=* to accept any host
+    // (e.g. preview environments), or a comma-separated list for custom domains.
+    allowedHosts: process.env.VITE_ALLOWED_HOSTS === '*'
+      ? true
+      : (process.env.VITE_ALLOWED_HOSTS
+        ? process.env.VITE_ALLOWED_HOSTS.split(',')
+        : ['openshorts.app', 'www.openshorts.app']),
     proxy: {
       '/api': { target: backend, changeOrigin: true },
       '/videos': { target: backend, changeOrigin: true },

@@ -3,13 +3,16 @@ SaaSShorts: AI-powered UGC video generator for SaaS products.
 
 Generates viral TikTok/Instagram Reels content from a SaaS URL.
 Pipeline:
-  1. Scrape & analyze SaaS website (Gemini)
+  1. Scrape & analyze SaaS website (free AI gateway)
   2. Generate video scripts (hook → problem → solution → CTA)
-  3. Generate AI actor portrait (Flux Pro via fal.ai)
-  4. Generate voiceover (ElevenLabs TTS)
-  5. Generate talking head video (Kling Avatar v2 via fal.ai)
-  6. Generate b-roll clips (Kling v2.6 via fal.ai)
+  3. Generate AI actor portrait (fal.ai Flux — or free image model / local)
+  4. Generate voiceover (ElevenLabs — or free Microsoft Edge TTS)
+  5. Generate talking head video (fal.ai Kling — or free Ken Burns motion)
+  6. Generate b-roll clips (fal.ai — or free image + Ken Burns)
   7. Composite final video with subtitles (FFmpeg)
+
+Every paid service is optional: with no keys at all the whole pipeline runs on
+free providers (zero budget).
 """
 
 import os
@@ -18,6 +21,7 @@ import json
 import time
 import subprocess
 
+import ai_gateway
 from ffmpeg_utils import video_encode_args, DELIVERY
 import httpx
 from urllib.parse import urljoin
@@ -48,60 +52,91 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL_SAAS") or os.environ.get("GEMINI_MOD
 
 def research_saas_online(url: str, gemini_key: str) -> dict:
     """
-    Use Gemini with Google Search grounding to deeply research a SaaS product
-    across the internet: reviews, Reddit threads, Twitter, competitor comparisons,
-    pricing complaints, user testimonials, etc.
+    Research a SaaS product across the web.
+
+    Zero-budget gateway mode: the free model reasons over the product's own
+    website (scraped) plus its knowledge of the market/reviews/competitors.
+    Legacy mode (real GEMINI_API_KEY, no other provider): Gemini with Google
+    Search grounding as before.
     """
-    from google import genai
-    from google.genai import types
-
-    print(f"[SaaSShorts] 🔍 Researching {url} across the web (Google Search grounding)...")
-
-    client = genai.Client(api_key=gemini_key)
+    print(f"[SaaSShorts] 🔍 Researching {url}...")
 
     # Extract domain name for search queries
     domain = url.replace("https://", "").replace("http://", "").split("/")[0]
 
-    prompt = f"""You are a world-class SaaS market researcher. Research this product thoroughly using Google Search.
+    website_snippet = ""
+    if ai_gateway.is_configured():
+        try:
+            scraped = scrape_website(url)
+            website_snippet = (
+                f"\n=== PRODUCT WEBSITE (scraped, ground truth) ===\n"
+                f"Title: {scraped.get('title', '')}\n"
+                f"Meta: {scraped.get('meta_description', '')}\n"
+                f"Content:\n{scraped.get('main_content', '')[:5000]}"
+            )
+        except Exception as e:
+            print(f"[SaaSShorts]   ⚠️ Scrape failed ({e}); researching from knowledge only.")
+
+    prompt = f"""You are a world-class SaaS market researcher. Research this product thoroughly.
 
 Product URL: {url}
 Domain: {domain}
+{website_snippet}
 
-SEARCH AND INVESTIGATE:
-1. What does this SaaS product do? (search their website, Product Hunt, G2, Capterra)
-2. What are REAL user reviews saying? (G2, Capterra, TrustPilot, Reddit, Twitter/X)
-3. What are the most common complaints and pain points users mention?
-4. Who are their main competitors and how do they compare?
-5. What is their pricing and do users think it's worth it?
-6. What is their target market and ideal customer profile?
-7. Are there any viral posts, memes, or discussions about this product?
-8. What content creators or influencers have talked about them?
+INVESTIGATE:
+1. What does this SaaS product do?
+2. What are the most common user complaints and pain points?
+3. Who are their main competitors and how do they compare?
+4. What is their pricing and do users think it's worth it?
+5. Who is their target market and ideal customer profile?
+6. What viral angles or content exist about this product?
 
 Return a comprehensive JSON research report:
 {{
     "product_name": "...",
     "website_url": "{url}",
-    "what_it_does": "Detailed description of the product based on web research",
+    "what_it_does": "Detailed description of the product",
     "target_market": "Who this product is for",
-    "pricing_info": "Pricing details found online (plans, costs, free tier)",
+    "pricing_info": "Pricing details (plans, costs, free tier)",
     "user_sentiment": "overall positive/mixed/negative",
     "real_reviews": [
-        {{"source": "G2/Reddit/Twitter/etc", "quote": "actual user quote or paraphrase", "sentiment": "positive/negative/neutral"}},
+        {{"source": "G2/Reddit/Twitter/etc", "quote": "user quote or paraphrase", "sentiment": "positive/negative/neutral"}},
         ...
     ],
-    "common_complaints": ["complaint 1 from real users", "complaint 2", ...],
+    "common_complaints": ["complaint 1", "complaint 2", ...],
     "common_praise": ["what users love 1", "what users love 2", ...],
     "competitors": [
         {{"name": "competitor", "comparison": "how they compare"}}
     ],
-    "viral_potential": ["angle 1 based on real discussions", "angle 2", ...],
-    "key_differentiators": ["what makes them unique based on research"],
+    "viral_potential": ["angle 1", "angle 2", ...],
+    "key_differentiators": ["what makes them unique"],
     "content_angles_from_web": ["angles found from existing content about this product"],
     "sources_found": ["list of URLs where information was found"]
 }}
 
-Be thorough. Use REAL data from your search results, not made-up information."""
+Be thorough and concrete. Base everything on the scraped website and your real
+knowledge of this product and its market — do not invent specific fake quotes;
+paraphrase plausibly and label the source type."""
 
+    if ai_gateway.is_configured():
+        print("[SaaSShorts] 🔍 Researching via free AI gateway...")
+        try:
+            research, _usage = ai_gateway.complete_json(
+                system="You are a world-class SaaS market researcher. "
+                       "Return strict JSON only — no markdown, no commentary.",
+                user=prompt, temperature=0.4)
+        except ai_gateway.AIGatewayError as e:
+            print(f"[SaaSShorts] ⚠️ Free research failed ({e}) — using website data.")
+            research = {"raw_research": "", "product_name": domain}
+        research["grounding_sources"] = []
+        print(f"[SaaSShorts] ✅ Web research complete ({len(research.get('real_reviews', []))} reviews)")
+        return research
+
+    from google import genai
+    from google.genai import types
+    print(f"[SaaSShorts] 🔍 Researching {url} across the web (Google Search grounding)...")
+
+    client = genai.Client(api_key=gemini_key)
     response = client.models.generate_content(
         model=GEMINI_MODEL,
         contents=[prompt],
@@ -261,14 +296,9 @@ def scrape_website(url: str) -> dict:
 def analyze_saas(scraped_data: dict, gemini_key: str, web_research: dict = None) -> dict:
     """
     Deep analysis of a SaaS product combining website scraping + web research.
-    Uses Gemini 3 Flash for synthesis.
+    Runs on the free AI gateway by default; Gemini SDK path as a fallback.
     """
-    from google import genai
-    from google.genai import types
-
     print(f"[SaaSShorts] 🧠 Analyzing {scraped_data['url']} (with web research)...")
-
-    client = genai.Client(api_key=gemini_key)
 
     # Build web research context
     research_context = ""
@@ -354,6 +384,22 @@ Return a JSON object:
 IMPORTANT: Use REAL pain points from user reviews when available. Real frustrations make the best UGC content.
 Include 5-8 pain points, 4-6 emotional hooks, and 4+ viral angles."""
 
+    if ai_gateway.is_configured():
+        try:
+            analysis, _usage = ai_gateway.complete_json(
+                system="You are an expert SaaS marketing analyst and UGC content "
+                       "strategist. Return strict JSON only — no markdown.",
+                user=prompt, temperature=0.5)
+        except ai_gateway.AIGatewayError as e:
+            raise Exception(f"Free AI SaaS analysis failed: {e}")
+        if web_research and web_research.get("grounding_sources"):
+            analysis["_web_sources"] = web_research["grounding_sources"]
+        print(f"[SaaSShorts] ✅ Analysis: {analysis.get('product_name', '?')} ({len(analysis.get('pain_points', []))} pain points)")
+        return analysis
+
+    from google import genai
+    from google.genai import types
+    client = genai.Client(api_key=gemini_key)
     response = client.models.generate_content(
         model=GEMINI_MODEL,
         contents=[prompt],
@@ -395,14 +441,9 @@ def generate_scripts(
     language: str = "en",
     actor_gender: str = "female",
 ) -> list:
-    """Generate video scripts based on SaaS analysis."""
-    from google import genai
-    from google.genai import types
-
+    """Generate video scripts based on SaaS analysis (free AI gateway)."""
     lang_name = "Spanish" if language == "es" else "English"
     print(f"[SaaSShorts] 📝 Generating {num_scripts} scripts ({style}, {lang_name})...")
-
-    client = genai.Client(api_key=gemini_key)
 
     style_guide = {
         "ugc": "Natural, authentic UGC style. Person talking to camera like sharing a discovery with a friend. Casual, genuine.",
@@ -536,6 +577,23 @@ RULES:
 - Example female: "a 26 year old attractive european woman, light brown wavy hair, wearing a white tank top, natural minimal makeup, friendly face"
 - Example male: "a 29 year old european man, short dark hair, light stubble, wearing a navy t-shirt, smart casual look" """
 
+    if ai_gateway.is_configured():
+        try:
+            scripts, _usage = ai_gateway.complete_json(
+                system="You are a viral short-form video scriptwriter for "
+                       "TikTok/Instagram Reels. Return strict JSON only — "
+                       "no markdown, no commentary.",
+                user=prompt, temperature=0.8, max_tokens=8000)
+        except ai_gateway.AIGatewayError as e:
+            raise Exception(f"Free AI script generation failed: {e}")
+        if not isinstance(scripts, list):
+            raise Exception("Script generation did not return a JSON array")
+        print(f"[SaaSShorts] ✅ Generated {len(scripts)} scripts (free AI)")
+        return scripts
+
+    from google import genai
+    from google.genai import types
+    client = genai.Client(api_key=gemini_key)
     response = client.models.generate_content(
         model=GEMINI_MODEL,
         contents=[prompt],
@@ -692,12 +750,78 @@ def _fal_upload_file(file_path: str, fal_key: str) -> str:
     return file_url
 
 
+def _local_portrait(description: str, output_path: str) -> str:
+    """Zero-cost local portrait: warm gradient + abstract person silhouette.
+
+    Used when no image-generation provider is available, so the AI-Shorts
+    pipeline still produces a usable actor at $0.00.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+    W, H = 1024, 1536
+    img = Image.new("RGB", (W, H))
+    draw = ImageDraw.Draw(img)
+    for y in range(H):
+        r = int(240 - 150 * y / H)
+        g = int(190 - 100 * y / H)
+        b = int(120 - 50 * y / H)
+        draw.line([(0, y), (W, y)], fill=(r, g, b))
+    # shoulders / torso
+    draw.rounded_rectangle([W * 0.14, H * 0.55, W * 0.86, H * 1.2],
+                           radius=120, fill=(70, 66, 92))
+    # head
+    draw.ellipse([W * 0.33, H * 0.16, W * 0.67, H * 0.52], fill=(224, 170, 135))
+    # hair hint
+    draw.ellipse([W * 0.33, H * 0.14, W * 0.67, H * 0.34], fill=(60, 45, 40))
+    # label
+    try:
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 44)
+    except Exception:
+        font = ImageFont.load_default()
+    label = (description or "Your AI actor").split(",")[0].strip().upper()[:42]
+    bbox = draw.textbbox((0, 0), label, font=font)
+    tx = (W - (bbox[2] - bbox[0])) // 2
+    ty = int(H * 0.90)
+    draw.text((tx, ty), label, fill=(255, 255, 255),
+              stroke_width=4, stroke_fill=(0, 0, 0), font=font)
+    img.save(output_path, "PNG")
+    return output_path
+
+
+def _local_scene(prompt: str, output_path: str) -> str:
+    """Zero-cost local b-roll frame: dark gradient + keyword text."""
+    from PIL import Image, ImageDraw, ImageFont
+    W, H = 1024, 1536
+    img = Image.new("RGB", (W, H))
+    draw = ImageDraw.Draw(img)
+    for y in range(H):
+        r = int(30 + 50 * y / H)
+        g = int(40 + 60 * y / H)
+        b = int(80 + 120 * y / H)
+        draw.line([(0, y), (W, y)], fill=(r, g, b))
+    try:
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 52)
+    except Exception:
+        font = ImageFont.load_default()
+    words = " ".join((prompt or "b-roll").split()[:5]).upper()
+    bbox = draw.textbbox((0, 0), words, font=font)
+    draw.text(((W - (bbox[2] - bbox[0])) // 2, H // 2 - 60), words,
+              fill=(255, 255, 255), stroke_width=5, stroke_fill=(0, 0, 0),
+              font=font)
+    img.save(output_path, "PNG")
+    return output_path
+
+
 def generate_actor_images(
     description: str, fal_key: str, output_dir: str, title_slug: str, num_options: int = 3,
     product_description: str = None,
 ) -> List[str]:
-    """Generate multiple hyper-realistic actor portrait options using Flux 2 Pro."""
-    print(f"[SaaSShorts] 🎨 Generating {num_options} actor image options (Flux 2 Pro)...")
+    """Generate multiple actor portrait options.
+
+    With a fal.ai key: hyper-realistic Flux 2 Pro. Without one: the free image
+    provider via the AI gateway, or a local stylized portrait (zero budget).
+    """
+    import random
+    img_num = random.randint(1000, 9999)
 
     # Clean description: strip scene/actions, keep only physical appearance
     clean_desc = description
@@ -707,9 +831,6 @@ def generate_actor_images(
             if idx > 10:
                 clean_desc = clean_desc[:idx].rstrip(" ,.")
 
-    import random
-    img_num = random.randint(1000, 9999)
-
     if product_description:
         prompt = f"""IMG_{img_num}.jpg Raw candid selfie of {clean_desc}, casually holding {product_description}, showing it to the camera with a natural smile. Product clearly visible in hand. Casual and real, not an ad. Low quality front camera, soft room lighting. Reddit selfie."""
     else:
@@ -717,6 +838,20 @@ def generate_actor_images(
 
     print(f"[SaaSShorts]   Prompt: {prompt[:120]}...{' (with product)' if product_description else ''}")
 
+    if not fal_key:
+        print(f"[SaaSShorts] 🎨 No fal.ai key — free actor images "
+              f"(gateway image model or local fallback)...")
+        paths = []
+        for i in range(num_options):
+            img_path = os.path.join(output_dir, f"{title_slug}_actor_option_{i}.png")
+            got = ai_gateway.generate_image(prompt, img_path, size="1024x1536")
+            if not got:
+                _local_portrait(clean_desc, img_path)
+            paths.append(img_path)
+            print(f"[SaaSShorts] ✅ Actor option {i+1}: {img_path}")
+        return sorted(paths)
+
+    print(f"[SaaSShorts] 🎨 Generating {num_options} actor image options (Flux 2 Pro)...")
     paths = []
     # Flux 2 Pro — #1 for photorealistic faces
     def _gen_one(i):
@@ -750,18 +885,6 @@ def generate_actor_images(
 
     return sorted(paths)
 
-    paths = []
-    for i, img in enumerate(result.get("images", [])):
-        img_path = os.path.join(output_dir, f"{title_slug}_actor_option_{i}.png")
-        with httpx.Client(timeout=60.0) as client:
-            img_resp = client.get(img["url"])
-            with open(img_path, "wb") as f:
-                f.write(img_resp.content)
-        paths.append(img_path)
-        print(f"[SaaSShorts] ✅ Actor option {i+1}: {img_path}")
-
-    return paths
-
 
 def generate_actor_image(
     description: str, fal_key: str, output_path: str
@@ -776,13 +899,44 @@ def generate_actor_image(
     return output_path
 
 
+def _edge_tts_voiceover(text: str, output_path: str, voice_id: str = "") -> str:
+    """Free Microsoft Edge neural TTS (no API key, no cost, 100+ voices)."""
+    import asyncio
+    import edge_tts
+
+    configured = os.environ.get("EDGE_TTS_VOICE", "").strip()
+    if configured:
+        voice = configured
+    elif voice_id and "-" in voice_id:
+        voice = voice_id  # already an edge-tts voice name
+    else:
+        voice = "en-US-JennyNeural"
+
+    print(f"[SaaSShorts] 🎙️ Edge TTS voiceover ({len(text)} chars, {voice})...")
+
+    async def _run():
+        communicate = edge_tts.Communicate(text, voice)
+        await communicate.save(output_path)
+
+    asyncio.run(_run())
+    print(f"[SaaSShorts] ✅ Voiceover (free Edge TTS): {output_path}")
+    return output_path
+
+
 def generate_voiceover(
     text: str,
     elevenlabs_key: str,
     output_path: str,
     voice_id: str = "21m00Tcm4TlvDq8ikWAM",
 ) -> str:
-    """Generate voiceover audio using ElevenLabs TTS."""
+    """Generate voiceover audio.
+
+    With an ElevenLabs key: ElevenLabs TTS. Without one: free Microsoft Edge
+    neural TTS (zero budget).
+    """
+    if not elevenlabs_key:
+        return _edge_tts_voiceover(text, output_path, voice_id)
+
     print(f"[SaaSShorts] 🎙️ Generating voiceover ({len(text)} chars)...")
 
     url = f"{ELEVENLABS_API_BASE}/text-to-speech/{voice_id}"
@@ -843,13 +997,57 @@ def get_elevenlabs_voices(elevenlabs_key: str) -> list:
 # Phase 3: Video Generation
 # ═══════════════════════════════════════════════════════════════════════
 
+def _ken_burns_video(image_path: str, audio_path: str, output_path: str) -> str:
+    """Free 'talking head': slow cinematic Ken Burns motion over the actor
+    image, synced to the voiceover track. Zero API cost."""
+    print(f"[SaaSShorts] 🗣️ Free Ken Burns talking-head motion...")
+    try:
+        dur_secs = _get_media_duration(audio_path)
+    except Exception:
+        dur_secs = 20.0
+    dur_secs = max(3.0, float(dur_secs))
+    fps = 30
+    total_frames = int(dur_secs * fps)
+    zoompan_filter = (
+        f"scale=2160:3840,"
+        f"zoompan=z='1+0.10*on/{total_frames}':"
+        f"x='iw/2-(iw/zoom/2)':"
+        f"y='ih/2-(ih/zoom/2)-10*on/{total_frames}':"
+        f"d={total_frames}:s=1080x1920:fps={fps},"
+        f"setsar=1"
+    )
+    cmd = [
+        "ffmpeg", "-y",
+        "-loop", "1", "-i", image_path,
+        "-i", audio_path,
+        "-vf", zoompan_filter,
+        "-t", f"{dur_secs:.3f}",
+        "-map", "0:v", "-map", "1:a",
+        *video_encode_args(DELIVERY),
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "128k",
+        "-shortest",
+        output_path,
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+    print(f"[SaaSShorts] ✅ Talking head (Ken Burns): {output_path}")
+    return output_path
+
+
 def generate_talking_head(
     image_path: str,
     audio_path: str,
     fal_key: str,
     output_path: str,
 ) -> str:
-    """Generate talking head video using Kling Avatar v2 Standard on fal.ai."""
+    """Generate talking head video.
+
+    With a fal.ai key: Kling Avatar v2 on fal.ai. Without one: free Ken Burns
+    motion over the actor image (zero budget).
+    """
+    if not fal_key:
+        return _ken_burns_video(image_path, audio_path, output_path)
+
     print(f"[SaaSShorts] 🗣️ Generating talking head (Kling Avatar v2)...")
 
     # Upload image and audio to fal.ai CDN
@@ -892,8 +1090,12 @@ def generate_talking_head_lowcost(
 ) -> str:
     """
     Low-cost talking head: Hailuo 2.3 Fast img2video → VEED Lipsync.
-    ~$0.39 vs ~$1.69 for Kling Avatar v2.
+    ~$0.39 vs ~$1.69 for Kling Avatar v2. With no fal.ai key: free Ken Burns
+    motion (zero budget).
     """
+    if not fal_key:
+        return _ken_burns_video(image_path, audio_path, output_path)
+
     print(f"[SaaSShorts] 🗣️ Generating talking head (Low Cost: Hailuo + VEED Lipsync)...")
 
     # Step 1: Generate 6s video from image using MiniMax Hailuo 2.3 Fast ($0.19)
@@ -978,28 +1180,37 @@ def generate_broll(
     dur_secs = int(duration)
     img_path = output_path.replace(".mp4", "_img.png")
 
-    # Step 1: Generate a high-quality still image with Flux 2 Pro
-    result = _fal_run(
-        "fal-ai/flux-2-pro",
-        {
-            "prompt": f"{prompt}. Cinematic, shallow depth of field, professional photography.",
-            "image_size": "portrait_4_3",
-            "safety_tolerance": 5,
-        },
-        fal_key,
-        timeout=300,
-    )
+    # Step 1: Generate a still image — Flux 2 Pro via fal.ai, or the free
+    # gateway image model / local fallback when no fal.ai key is set.
+    if not fal_key:
+        print(f"[SaaSShorts] 🎬 Free b-roll image (gateway model or local)...")
+        got = ai_gateway.generate_image(
+            f"{prompt}. Cinematic, shallow depth of field, professional photography.",
+            img_path, size="1024x1536")
+        if not got:
+            _local_scene(prompt, img_path)
+    else:
+        result = _fal_run(
+            "fal-ai/flux-2-pro",
+            {
+                "prompt": f"{prompt}. Cinematic, shallow depth of field, professional photography.",
+                "image_size": "portrait_4_3",
+                "safety_tolerance": 5,
+            },
+            fal_key,
+            timeout=300,
+        )
 
-    # Flux 2 Pro returns images in "images" or "output" key
-    images = result.get("images") or result.get("output", [])
-    if not images:
-        raise Exception(f"No images in b-roll result: {list(result.keys())}")
-    img_url = images[0]["url"] if isinstance(images[0], dict) else images[0]
+        # Flux 2 Pro returns images in "images" or "output" key
+        images = result.get("images") or result.get("output", [])
+        if not images:
+            raise Exception(f"No images in b-roll result: {list(result.keys())}")
+        img_url = images[0]["url"] if isinstance(images[0], dict) else images[0]
 
-    with httpx.Client(timeout=60.0) as client:
-        img_resp = client.get(img_url)
-        with open(img_path, "wb") as f:
-            f.write(img_resp.content)
+        with httpx.Client(timeout=60.0) as client:
+            img_resp = client.get(img_url)
+            with open(img_path, "wb") as f:
+                f.write(img_resp.content)
 
     # Step 2: Ken Burns effect — slow zoom in with slight pan
     fps = 30

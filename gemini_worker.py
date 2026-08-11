@@ -484,7 +484,7 @@ def _config_for_strategy(strategy: str, mode: str, model_name: str) -> genai_typ
 def main() -> int:
     _configure_stdio()
 
-    parser = argparse.ArgumentParser(description="Run a single Gemini request for clip scoring/detailing.")
+    parser = argparse.ArgumentParser(description="Run a single AI request for clip scoring/detailing.")
     parser.add_argument("--mode", choices=["score", "detail"], required=True)
     parser.add_argument("--input", dest="input_path", required=True)
     parser.add_argument("--output", dest="output_path", required=True)
@@ -492,16 +492,10 @@ def main() -> int:
     parser.add_argument("--model", default="gemini-2.5-flash")
     args = parser.parse_args()
 
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise SystemExit("Missing GEMINI_API_KEY.")
-
     with open(args.input_path, "r", encoding="utf-8") as f:
         payload = json.load(f)
 
     model_name = args.model
-    client = genai.Client(api_key=api_key)
-    config = _config_for_strategy(args.strategy, args.mode, model_name)
     language = str(payload.get("language") or "unknown")
 
     template = SCORE_PROMPT_TEMPLATE if args.mode == "score" else DETAIL_PROMPT_TEMPLATE
@@ -516,6 +510,39 @@ def main() -> int:
         # placeholder for one anyway.
         fmt["min_clips"], fmt["max_clips"] = clip_count_targets(len(payload.get("windows") or []))
     prompt = template.format(**fmt)
+
+    # Zero-budget gateway first (free providers, automatic fallback); the
+    # Gemini SDK path stays for deployments with a real GEMINI_API_KEY.
+    import ai_gateway
+
+    if ai_gateway.is_configured():
+        _log(f"🤖 Free-AI worker request: mode={args.mode} model_chain={model_name} items={len(payload.get('windows', []))}")
+        try:
+            parsed, result = ai_gateway.complete_json(
+                system="You are a precise video-analysis assistant. "
+                       "Always answer with valid JSON only.",
+                user=prompt,
+                temperature=0.7 if args.mode == "detail" else 0.1,
+            )
+        except ai_gateway.AIGatewayError as e:
+            raise SystemExit(f"AI gateway error: {e}")
+        result_obj = {
+            "mode": args.mode,
+            "payload": parsed,
+            "cost_analysis": result.usage_dict(),
+            "raw_text": result.text,
+        }
+        with open(args.output_path, "w", encoding="utf-8") as f:
+            json.dump(result_obj, f, indent=2, ensure_ascii=False)
+        _log(f"✅ Free-AI worker success: mode={args.mode} provider={result.provider}")
+        return 0
+
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise SystemExit("Missing GEMINI_API_KEY (or set OPENROUTER_API_KEY / any free provider key).")
+
+    client = genai.Client(api_key=api_key)
+    config = _config_for_strategy(args.strategy, args.mode, model_name)
 
     _log(f"🤖 Gemini worker request: mode={args.mode} strategy={args.strategy} model={model_name} items={len(payload.get('windows', []))}")
     response = client.models.generate_content(

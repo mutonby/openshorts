@@ -3,9 +3,9 @@ import json
 import re
 import subprocess
 import time
-from typing import List
-from google import genai
-from google.genai import types
+from typing import List, Optional
+
+import ai_gateway
 from pydantic import BaseModel
 
 from edit_builder import build_filter_string
@@ -24,31 +24,53 @@ class EditPlan(BaseModel):
     edits: List[EditDecision]
 
 
+_EDITOR_SYSTEM = (
+    "You are a viral short-form video editor. You return strict JSON only — "
+    "no markdown, no commentary."
+)
+
+
 class VideoEditor:
-    def __init__(self, api_key):
-        self.client = genai.Client(api_key=api_key)
+    def __init__(self, api_key=None):
+        # Zero-budget gateway by default; the legacy Gemini SDK client is only
+        # created lazily when a real GEMINI_API_KEY exists and no other free
+        # provider is configured.
+        self.api_key = api_key
+        self._legacy_client = None
         self.model_name = (
             os.environ.get("GEMINI_MODEL_EDITOR")
             or os.environ.get("GEMINI_MODEL")
             or "gemini-3.1-flash-lite"
         )
 
+    @property
+    def client(self):
+        """Lazy legacy Gemini client (BYOK deployments only)."""
+        if self._legacy_client is None:
+            from google import genai
+            from google.genai import types as _types  # noqa: F401
+            self._legacy_client = genai.Client(api_key=self.api_key)
+        return self._legacy_client
+
     def upload_video(self, video_path):
-        """Uploads video to Gemini File API."""
-        print(f"📤 Uploading {video_path} to Gemini...")
-        
-        # Ensure we are passing a path that exists
+        """Returns a video context for the AI stages.
+
+        Zero-budget mode: the path itself (frames are sampled downstream by
+        the gateway — no multi-GB upload, no provider file API). Legacy Gemini
+        mode: uploads to the Gemini File API as before.
+        """
         if not os.path.exists(video_path):
             raise FileNotFoundError(f"Video file not found: {video_path}")
-            
-        # Using 'file' keyword instead of 'path'
+        if ai_gateway.is_configured():
+            print(f"📤 Analyzing {video_path} via free-AI frame sampling...")
+            return video_path
+
+        print(f"📤 Uploading {video_path} to Gemini...")
         try:
             file_upload = self.client.files.upload(file=video_path)
         except Exception as e:
             print(f"❌ Gemini Upload Error: {e}")
             raise e
-        
-        # Wait for processing
         print("⏳ Waiting for video processing by Gemini...")
         deadline = time.time() + 120
         while True:
@@ -64,8 +86,14 @@ class VideoEditor:
                 raise TimeoutError("Gemini file processing timed out after 120s.")
             time.sleep(2)
 
+    def _vision_context(self, video_file_obj):
+        """(images, is_path): sampled frames when we have a local path."""
+        if isinstance(video_file_obj, str) and os.path.exists(video_file_obj):
+            return ai_gateway.extract_frames(video_file_obj, n=12, width=1024), True
+        return None, False
+
     def get_ffmpeg_filter(self, video_file_obj, duration, fps=30, width=None, height=None, transcript=None, has_captions=False):
-        """Asks Gemini for an edit decision list, then builds the FFmpeg filter
+        """Asks the AI for an edit decision list, then builds the FFmpeg filter
         deterministically (edit_builder) so syntax and zoom limits are always safe."""
         if width is None or height is None:
             # Keep prompt usable even if caller didn't pass dimensions.
@@ -82,7 +110,7 @@ class VideoEditor:
             )
 
         prompt = f"""
-        You are a viral short-form video editor (TikTok / Reels / Shorts). You receive a video and its transcript.
+        You are a viral short-form video editor (TikTok / Reels / Shorts). You receive sampled frames of a video and its transcript.
         Decide WHERE a small set of tasteful, high-impact effects belongs. You do NOT write FFmpeg —
         you return an edit decision list, and a deterministic renderer applies it safely.
 
@@ -111,19 +139,43 @@ class VideoEditor:
         If no effects genuinely improve the video, return {{"edits": []}}.
         """
 
+        frames, is_path = self._vision_context(video_file_obj)
+        if ai_gateway.is_configured():
+            print("🤖 Asking free AI for an edit decision list...")
+            try:
+                parsed, _result = ai_gateway.complete_json(
+                    system=_EDITOR_SYSTEM, user=prompt, temperature=0.2,
+                    images=frames or None, kind="vision")
+            except ai_gateway.AIGatewayError as e:
+                print(f"❌ AI edit planning failed: {e}")
+                return None
+            raw_edits = parsed.get("edits")
+            if not isinstance(raw_edits, list):
+                raw_edits = []
+            raw_edits = [e for e in raw_edits if isinstance(e, dict)]
+            if raw_edits is None:
+                return None
+            filter_string, applied = build_filter_string(
+                raw_edits, duration=duration, fps=fps, width=width, height=height,
+                has_captions=has_captions,
+            )
+            if not filter_string:
+                print("ℹ️ AI suggested no (valid) edits — keeping the clip untouched.")
+                return {"filter_string": None, "edits": []}
+            print(f"🎯 Applying {len(applied)} edits: " + ", ".join(f"{e['type']}@{e['start']:.1f}s" for e in applied))
+            return {"filter_string": filter_string, "edits": applied}
+
+        # Legacy Gemini path
+        from google.genai import types as genai_types
         print("🤖 Asking Gemini for an edit decision list...")
-        # Low media resolution: Gemini samples at 1 FPS and normalizes frames to
-        # fixed token sizes, so "low" (~70 tokens/frame) cuts video-input cost
-        # without hurting motion/scene understanding. Fall back to defaults if
-        # the SDK or model rejects the option.
         try:
-            config = types.GenerateContentConfig(
+            config = genai_types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=EditPlan,
-                media_resolution=types.MediaResolution.MEDIA_RESOLUTION_LOW,
+                media_resolution=genai_types.MediaResolution.MEDIA_RESOLUTION_LOW,
             )
         except Exception:
-            config = types.GenerateContentConfig(
+            config = genai_types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=EditPlan,
             )
@@ -140,7 +192,7 @@ class VideoEditor:
             response = self.client.models.generate_content(
                 model=self.model_name,
                 contents=[video_file_obj, prompt],
-                config=types.GenerateContentConfig(
+                config=genai_types.GenerateContentConfig(
                     response_mime_type="application/json",
                     response_schema=EditPlan,
                 ),
@@ -217,11 +269,24 @@ class VideoEditor:
         }}
         """
 
+        frames, _is_path = self._vision_context(video_file_obj)
+        if ai_gateway.is_configured():
+            print("🤖 Asking free AI for Remotion effects config...")
+            try:
+                parsed, _result = ai_gateway.complete_json(
+                    system=_EDITOR_SYSTEM, user=prompt, temperature=0.2,
+                    images=frames or None, kind="vision")
+                return parsed
+            except ai_gateway.AIGatewayError as e:
+                print(f"❌ Failed to generate effects config: {e}")
+                return None
+
+        from google.genai import types as genai_types
         print("🤖 Asking Gemini for Remotion effects config...")
         response = self.client.models.generate_content(
             model=self.model_name,
             contents=[video_file_obj, prompt],
-            config=types.GenerateContentConfig(
+            config=genai_types.GenerateContentConfig(
                 response_mime_type="application/json"
             )
         )
@@ -363,10 +428,8 @@ class VideoEditor:
         return False, stderr_text[-1500:]
 
     def _repair_filter(self, filter_string, error_text, width, height):
-        """One self-repair round-trip: show Gemini the FFmpeg error and ask for
+        """One self-repair round-trip: show the AI the FFmpeg error and ask for
         a corrected filter string. Returns the new string or None."""
-        if not self.client:
-            return None
         prompt = f"""
         The following FFmpeg -vf filter string you generated fails to run.
 
@@ -383,10 +446,17 @@ class VideoEditor:
         Output JSON only: {{"filter_string": "..."}}
         """
         try:
+            if ai_gateway.is_configured():
+                parsed, _result = ai_gateway.complete_json(
+                    system=_EDITOR_SYSTEM, user=prompt, temperature=0.0,
+                    kind="text")
+                repaired = parsed.get("filter_string")
+                return repaired if isinstance(repaired, str) and repaired.strip() else None
+            from google.genai import types as genai_types
             response = self.client.models.generate_content(
                 model=self.model_name,
                 contents=prompt,
-                config=types.GenerateContentConfig(response_mime_type="application/json"),
+                config=genai_types.GenerateContentConfig(response_mime_type="application/json"),
             )
             text = (response.text or "").strip()
             start_idx = text.find('{')

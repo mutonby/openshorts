@@ -2,18 +2,25 @@ import os
 import uuid
 import time
 import json
-from google import genai
-from google.genai import types
 
-# Text/analysis model (title, description, tags). The image model below stays
-# on gemini-3.1-flash-image-preview — flash-lite cannot generate images.
+import ai_gateway
+from PIL import Image, ImageDraw, ImageFont
+
+# Text/analysis model (title, description, tags). The gateway chain handles
+# model choice; legacy Gemini SDK (GEMINI_API_KEY) is used for image
+# generation only.
 TEXT_MODEL = os.environ.get("GEMINI_MODEL_THUMBNAIL") or os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite"
-from PIL import Image
+
+
+_THUMB_SYSTEM = (
+    "You are a YouTube title / SEO expert. Return strict JSON only — "
+    "no markdown, no commentary."
+)
 
 
 def analyze_video_for_titles(api_key, video_path, transcript=None):
     """
-    Transcribes a video and uses Gemini to suggest viral YouTube titles.
+    Transcribes a video and uses the AI to suggest viral YouTube titles.
     If transcript is provided, skips Whisper transcription.
     Returns: { "titles": [...], "transcript_summary": "...", "language": "...", "segments": [...], "video_duration": ... }
     """
@@ -24,24 +31,19 @@ def analyze_video_for_titles(api_key, video_path, transcript=None):
     else:
         print("🎬 [Thumbnail] Using pre-computed transcript (Whisper already done)...")
 
-    print("📤 [Thumbnail] Uploading video to Gemini...")
-    client = genai.Client(api_key=api_key)
-
-    file_upload = client.files.upload(file=video_path)
-    while True:
-        file_info = client.files.get(name=file_upload.name)
-        if file_info.state == "ACTIVE":
-            break
-        elif file_info.state == "FAILED":
-            raise Exception("Video processing failed by Gemini.")
-        time.sleep(2)
+    segments = transcript.get("segments", [])
+    video_duration = segments[-1]["end"] if segments else 0
+    transcript_text = (
+        transcript.get("text")
+        or " ".join(str(s.get("text") or "") for s in segments)
+    ).strip()
 
     prompt = f"""You are a YouTube title expert who creates viral, click-worthy titles.
 
 Analyze this video and its transcript, then suggest 10 YouTube titles that would maximize CTR (click-through rate).
 
 TRANSCRIPT:
-{transcript['text']}
+{transcript_text}
 
 RULES:
 - Titles must be under 70 characters
@@ -67,6 +69,41 @@ OUTPUT JSON:
     ]
 }}"""
 
+    if ai_gateway.is_configured():
+        print("🤖 [Thumbnail] Asking free AI for title suggestions...")
+        try:
+            result, _usage = ai_gateway.complete_json(
+                system=_THUMB_SYSTEM, user=prompt, temperature=0.7)
+            result["transcript_summary"] = result.get("transcript_summary", "")
+            result["language"] = result.get("language", transcript["language"])
+            result["segments"] = segments
+            result["video_duration"] = video_duration
+            return result
+        except ai_gateway.AIGatewayError as e:
+            print(f"❌ [Thumbnail] Title analysis failed: {e}")
+            return {
+                "titles": ["Could not generate titles - please try again"],
+                "transcript_summary": transcript_text[:500],
+                "language": transcript["language"],
+                "segments": segments,
+                "video_duration": video_duration
+            }
+
+    # Legacy Gemini path (BYOK deployments with a real GEMINI_API_KEY).
+    from google import genai
+    from google.genai import types
+    print("📤 [Thumbnail] Uploading video to Gemini...")
+    client = genai.Client(api_key=api_key)
+
+    file_upload = client.files.upload(file=video_path)
+    while True:
+        file_info = client.files.get(name=file_upload.name)
+        if file_info.state == "ACTIVE":
+            break
+        elif file_info.state == "FAILED":
+            raise Exception("Video processing failed by Gemini.")
+        time.sleep(2)
+
     print("🤖 [Thumbnail] Asking Gemini for title suggestions...")
     response = client.models.generate_content(
         model=TEXT_MODEL,
@@ -75,10 +112,6 @@ OUTPUT JSON:
             response_mime_type="application/json"
         )
     )
-
-    # Extract segments and duration from transcript for later use
-    segments = transcript.get("segments", [])
-    video_duration = segments[-1]["end"] if segments else 0
 
     try:
         text = response.text.strip()
@@ -105,7 +138,7 @@ OUTPUT JSON:
         print(f"❌ [Thumbnail] Failed to parse titles JSON: {response.text}")
         return {
             "titles": ["Could not generate titles - please try again"],
-            "transcript_summary": transcript["text"][:500],
+            "transcript_summary": transcript_text[:500],
             "language": transcript["language"],
             "segments": segments,
             "video_duration": video_duration
@@ -116,8 +149,6 @@ def refine_titles(api_key, context, user_message, conversation_history=None):
     """
     Takes video context + user feedback and returns refined title suggestions.
     """
-    client = genai.Client(api_key=api_key)
-
     history_text = ""
     if conversation_history:
         for msg in conversation_history:
@@ -146,6 +177,18 @@ OUTPUT JSON:
     "titles": ["title1", "title2", ...]
 }}"""
 
+    if ai_gateway.is_configured():
+        try:
+            result, _usage = ai_gateway.complete_json(
+                system=_THUMB_SYSTEM, user=prompt, temperature=0.7)
+            return result
+        except ai_gateway.AIGatewayError as e:
+            print(f"❌ [Thumbnail] Title refinement failed: {e}")
+            return {"titles": ["Could not refine titles - please try again"]}
+
+    from google import genai
+    from google.genai import types
+    client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
         model=TEXT_MODEL,
         contents=[prompt],
@@ -175,29 +218,80 @@ OUTPUT JSON:
         return {"titles": ["Could not refine titles - please try again"]}
 
 
+def _local_thumbnail(title, output_path, face_image_path=None):
+    """Zero-cost PIL fallback: bold typographic thumbnail on a vibrant gradient.
+
+    Used only when no image-generation provider is configured/working, so the
+    YouTube Studio feature still delivers something useful at $0.00.
+    """
+    W, H = 1280, 720
+    img = Image.new("RGB", (W, H))
+    draw = ImageDraw.Draw(img)
+    for y in range(H):
+        r = int(20 + 120 * y / H)
+        g = int(30 + 40 * y / H)
+        b = int(90 + 165 * y / H)
+        draw.line([(0, y), (W, y)], fill=(r, g, b))
+
+    if face_image_path and os.path.exists(face_image_path):
+        try:
+            face = Image.open(face_image_path).convert("RGB")
+            face.thumbnail((480, 480))
+            face = face.resize((480, 480))
+            img.paste(face, (W - 560, H // 2 - 240))
+        except Exception:
+            pass
+
+    text = (title or "WATCH THIS")[:60]
+    font = None
+    for name in ("DejaVuSans-Bold.ttf", "Arial Bold.ttf", "Arial.ttf"):
+        try:
+            font = ImageFont.truetype(name, 72)
+            break
+        except Exception:
+            continue
+    if font is None:
+        font = ImageFont.load_default()
+
+    lines = []
+    words = text.split()
+    current = ""
+    for w in words:
+        candidate = (current + " " + w).strip()
+        if draw.textlength(candidate, font=font) > W - 160 or len(current.split()) >= 4:
+            lines.append(current)
+            current = w
+        else:
+            current = candidate
+    lines.append(current)
+
+    y = H // 2 - 60 * len(lines) // 2
+    for line in lines[:3]:
+        draw.text((80, y), line.upper(), fill=(255, 255, 255),
+                  stroke_width=6, stroke_fill=(0, 0, 0), font=font)
+        y += 110
+
+    img.save(output_path, "JPEG", quality=88)
+    return output_path
+
+
 def generate_thumbnail(api_key, title, session_id, face_image_path=None, bg_image_path=None, extra_prompt="", count=3, video_context=""):
     """
-    Generates YouTube thumbnails using Gemini image generation.
+    Generates YouTube thumbnails. Uses the free image provider when available
+    (OpenRouter image model / Gemini image generation), and falls back to a
+    local typographic thumbnail at zero cost.
     Returns list of saved image paths (relative URLs).
     """
-    client = genai.Client(api_key=api_key)
-
     output_dir = os.path.join("output", "thumbnails", session_id)
     os.makedirs(output_dir, exist_ok=True)
 
     prompt_parts = []
-
-    # Add face image if provided
     if face_image_path and os.path.exists(face_image_path):
-        face_img = Image.open(face_image_path)
-        prompt_parts.append(face_img)
+        prompt_parts.append(Image.open(face_image_path))
 
-    # Add background image if provided
     if bg_image_path and os.path.exists(bg_image_path):
-        bg_img = Image.open(bg_image_path)
-        prompt_parts.append(bg_img)
+        prompt_parts.append(Image.open(bg_image_path))
 
-    # Build video context block
     context_block = ""
     if video_context:
         context_block = f"""
@@ -205,7 +299,6 @@ VIDEO CONTEXT (use this to understand the video and design a relevant thumbnail)
 {video_context}
 """
 
-    # Build extra instructions block (high priority)
     extra_block = ""
     if extra_prompt:
         extra_block = f"""
@@ -237,39 +330,69 @@ DESIGN REQUIREMENTS:
     if bg_image_path and os.path.exists(bg_image_path):
         text_prompt += "\n- Use the provided background image as the base/backdrop"
 
-    prompt_parts.append(text_prompt)
-
     thumbnails = []
     last_error = None
+
+    gemini_key = ai_gateway.gemini_image_key()
     for i in range(count):
         print(f"🎨 [Thumbnail] Generating thumbnail {i + 1}/{count}...")
-        try:
-            response = client.models.generate_content(
-                model="gemini-3.1-flash-image-preview",
-                contents=prompt_parts,
-                config=types.GenerateContentConfig(
-                    response_modalities=["TEXT", "IMAGE"],
-                    image_config=types.ImageConfig(
-                        aspect_ratio="16:9",
-                        image_size="2K"
+        filename = f"thumb_{i + 1}.jpg"
+        filepath = os.path.join(output_dir, filename)
+
+        # 1) Gemini image generation (legacy BYOK with a real Gemini key).
+        if gemini_key:
+            try:
+                from google import genai
+                from google.genai import types
+                client = genai.Client(api_key=gemini_key)
+                contents = prompt_parts + [text_prompt]
+                response = client.models.generate_content(
+                    model="gemini-3.1-flash-image-preview",
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        response_modalities=["TEXT", "IMAGE"],
+                        image_config=types.ImageConfig(
+                            aspect_ratio="16:9",
+                            image_size="2K"
+                        )
                     )
                 )
-            )
+                for part in response.parts:
+                    if part.text is not None:
+                        print(f"📝 [Thumbnail] Gemini text: {part.text}")
+                    elif image := part.as_image():
+                        image.save(filepath)
+                        thumbnails.append(f"/thumbnails/{session_id}/{filename}")
+                        print(f"✅ [Thumbnail] Saved: {filepath}")
+                        break
+                else:
+                    raise RuntimeError("Gemini returned no image part")
+                continue
+            except Exception as e:
+                last_error = str(e)
+                print(f"❌ [Thumbnail] Gemini generation {i + 1} failed: {e}")
 
-            for part in response.parts:
-                if part.text is not None:
-                    print(f"📝 [Thumbnail] Gemini text: {part.text}")
-                elif image := part.as_image():
-                    filename = f"thumb_{i + 1}.jpg"
-                    filepath = os.path.join(output_dir, filename)
-                    image.save(filepath)
-                    thumbnails.append(f"/thumbnails/{session_id}/{filename}")
-                    print(f"✅ [Thumbnail] Saved: {filepath}")
-                    break
-
+        # 2) Free image model via the gateway (OpenRouter & co.).
+        try:
+            got = ai_gateway.generate_image(
+                text_prompt, filepath, size="1792x1024")
+            if got:
+                thumbnails.append(f"/thumbnails/{session_id}/{filename}")
+                print(f"✅ [Thumbnail] Saved (free AI): {filepath}")
+                continue
+            last_error = "image provider returned nothing"
         except Exception as e:
             last_error = str(e)
-            print(f"❌ [Thumbnail] Generation {i + 1} failed: {e}")
+            print(f"❌ [Thumbnail] Free-AI generation {i + 1} failed: {e}")
+
+        # 3) Zero-cost local fallback.
+        try:
+            _local_thumbnail(title, filepath, face_image_path)
+            thumbnails.append(f"/thumbnails/{session_id}/{filename}")
+            print(f"🖼️ [Thumbnail] Local fallback saved: {filepath}")
+        except Exception as e:
+            last_error = str(e)
+            print(f"❌ [Thumbnail] Local fallback {i + 1} failed: {e}")
 
     if not thumbnails and last_error:
         raise RuntimeError(f"All thumbnail generations failed. Last error: {last_error}")
@@ -279,12 +402,9 @@ DESIGN REQUIREMENTS:
 
 def generate_youtube_description(api_key, title, transcript_segments, language, video_duration):
     """
-    Uses Gemini to generate a YouTube description with chapter markers from transcript segments.
+    Uses the AI to generate a YouTube description with chapter markers from transcript segments.
     Returns: { "description": "full description text with chapters" }
     """
-    client = genai.Client(api_key=api_key)
-
-    # Format segments for the prompt
     formatted_segments = []
     for seg in transcript_segments:
         start = seg.get("start", 0)
@@ -295,7 +415,6 @@ def generate_youtube_description(api_key, title, transcript_segments, language, 
 
     segments_text = "\n".join(formatted_segments)
 
-    # Format total duration
     dur_mins = int(video_duration // 60)
     dur_secs = int(video_duration % 60)
     duration_str = f"{dur_mins}:{dur_secs:02d}"
@@ -325,12 +444,24 @@ REQUIREMENTS:
 OUTPUT: Return ONLY the description text (no JSON wrapper, no markdown code blocks). The description should be ready to paste directly into YouTube."""
 
     print("🤖 [Thumbnail] Generating YouTube description with chapters...")
-    response = client.models.generate_content(
-        model=TEXT_MODEL,
-        contents=[prompt],
-    )
+    if ai_gateway.is_configured():
+        try:
+            result = ai_gateway.complete(
+                system="You are a YouTube SEO expert. Answer with plain text only.",
+                user=prompt, temperature=0.7)
+            description = result.text
+        except ai_gateway.AIGatewayError as e:
+            print(f"❌ [Thumbnail] Description generation failed: {e}")
+            return {"description": "Could not generate description - please try again."}
+    else:
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=TEXT_MODEL,
+            contents=[prompt],
+        )
+        description = response.text.strip()
 
-    description = response.text.strip()
     # Clean up any accidental markdown wrappers
     if description.startswith("```"):
         lines = description.split("\n")

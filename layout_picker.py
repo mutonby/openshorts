@@ -44,6 +44,8 @@ by hand wins: this only ever ADDS, so an explicit choice is never overridden.
 import json
 import os
 
+import ai_gateway
+
 # AUTO_LAYOUT=1 decides and applies. AUTO_LAYOUT=shadow decides, logs, and
 # applies NOTHING: the render is byte-for-byte what it would have been.
 #
@@ -136,17 +138,13 @@ def pick(video_path, video_duration):
     """
     if not ENABLED:
         return "none"
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
+    if not ai_gateway.is_configured() and not os.getenv("GEMINI_API_KEY"):
         return "none"
 
-    model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
     print("🎛️  Choosing a layout for this video…")
     try:
         # Inside the try on purpose: the contract above is that this never
         # raises, and an unimportable SDK is just one more reason to fall back.
-        from google import genai
-        from google.genai import types as genai_types
         import gemini_worker
 
         frames = sample_frames(video_path)
@@ -154,18 +152,31 @@ def pick(video_path, video_duration):
             print("   ⚠️ No readable frames — keeping the default layout.")
             return "none"
 
-        client = genai.Client(api_key=api_key)
-        parts = [genai_types.Part.from_bytes(data=b, mime_type="image/jpeg")
-                 for b in frames]
-        response = client.models.generate_content(
-            model=model_name,
-            contents=parts + [gemini_worker.LAYOUT_CHOICE_PROMPT],
-            config=genai_types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=gemini_worker.LayoutChoice,
-            ))
-        gemini_worker.raise_if_blocked(response)
-        answer = json.loads(response.text) or {}
+        if ai_gateway.is_configured():
+            # Zero-budget gateway: free vision model over the same stills.
+            parsed, _result = ai_gateway.complete_json(
+                system="You are a video layout expert. Return strict JSON only — "
+                       "no markdown, no commentary.",
+                user=gemini_worker.LAYOUT_CHOICE_PROMPT,
+                temperature=0.0, images=frames, kind="vision")
+            answer = parsed or {}
+        else:
+            from google import genai
+            from google.genai import types as genai_types
+            api_key = os.getenv("GEMINI_API_KEY")
+            model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
+            client = genai.Client(api_key=api_key)
+            parts = [genai_types.Part.from_bytes(data=b, mime_type="image/jpeg")
+                     for b in frames]
+            response = client.models.generate_content(
+                model=model_name,
+                contents=parts + [gemini_worker.LAYOUT_CHOICE_PROMPT],
+                config=genai_types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=gemini_worker.LayoutChoice,
+                ))
+            gemini_worker.raise_if_blocked(response)
+            answer = json.loads(response.text) or {}
     except Exception as e:
         print(f"   ⚠️ Layout choice failed ({e}) — keeping the default layout.")
         return "none"

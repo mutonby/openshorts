@@ -7,14 +7,22 @@ tqdm==4.67.3
 yt-dlp
 faster-whisper==1.2.1
 py3langid==0.3.0
-google-genai==1.75.0
 python-dotenv==1.2.2
 mediapipe==0.10.14
 boto3==1.43.4
 
+# Zero-budget AI gateway: talks to OpenAI-compatible endpoints (OpenRouter,
+# DeepSeek, GLM, Qwen, Kimi, Groq, Gemini free tier...). google-genai is only
+# used as an optional fallback / for BYOK Gemini image generation.
+google-genai==1.75.0
+httpx==0.28.1
+
 fastapi==0.136.1
 uvicorn==0.46.0
 python-multipart==0.0.27
-httpx==0.28.1
 Pillow==12.2.0
 beautifulsoup4==4.14.3
+
+# Free Microsoft Edge neural TTS — replaces paid ElevenLabs for AI Shorts
+# voiceovers when no ElevenLabs key is set.
+edge-tts

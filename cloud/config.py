@@ -18,20 +18,20 @@ def is_enabled() -> bool:
 
 
 # --- Plan catalog -----------------------------------------------------------
-# minutes granted per billing period, keyed by internal plan name. This is the
-# AUTHORITATIVE quota source (not Stripe price metadata, which a dashboard edit
-# could change). Plan name is resolved from the Stripe price; minutes from here.
+# OpenShorts+ is the ZERO-BUDGET edition: the billing package is compiled out
+# (app.py forces BILLING_ENABLED = False). These values exist only so the cloud
+# package stays importable/unit-testable; if someone ever re-enables billing,
+# the plans are effectively unlimited rather than a paywall.
 PLAN_MINUTES = {
-    "starter": 100,
-    "creator": 300,
-    "pro": 750,
+    "starter": 1_000_000,
+    "creator": 1_000_000,
+    "pro": 1_000_000,
 }
 
-# Free plan: monthly allowance for Google-authenticated users with no
-# subscription. No Stripe object exists for it — it is resolved entirely in
-# cloud/metering.py against a synthetic calendar-month period. Setting
-# FREE_PLAN_MINUTES = 0 disables the free plan.
-FREE_PLAN_MINUTES = 20
+# Free plan: effectively unlimited in the zero-budget edition. No Stripe object
+# exists for it — it is resolved entirely in cloud/metering.py against a
+# synthetic calendar-month period. Setting FREE_PLAN_MINUTES = 0 disables it.
+FREE_PLAN_MINUTES = 1_000_000
 # Free is open to Google accounts AND permanent email accounts; disposable /
 # temp-mail domains are blocked at sign-up (cloud/email_policy) and aliases are
 # normalized, so the plan isn't a multi-account faucet.

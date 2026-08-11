@@ -168,7 +168,7 @@ export default function Landing({ onLaunchApp }) {
   const faqs = [
     {
       question: "Is OpenShorts really free? What's the catch?",
-      answer: "There is no catch, but there are two different things on offer. (1) Self-hosted is 100% free and open source: you run it with Docker on your own machine, bring your own API keys, and there are no watermarks, no usage limits and no subscription. What it costs you is hardware and time. On a typical CPU an 8-minute video takes 5 to 8 minutes to process, and you need your own Google Gemini key (required, free tier is 1,500 requests/day), plus ElevenLabs for dubbing and fal.ai for AI Shorts if you want those. (2) Hosted at openshorts.app is the same software with the running costs covered: our NVIDIA GPU clips that same 8-minute video in about 50 seconds, the Gemini key is included so there is nothing to create or paste, auto-posting to TikTok, Instagram and YouTube is already wired up, and your clips are stored and re-openable from any browser. It has a free plan (20 minutes a month, watermark, no credit card) and paid plans from $12/mo for 100 minutes without watermark. So: free if you are happy to run it yourself, paid if you would rather it just ran fast. Both are far cheaper than Opus Clip ($15-228/month) or Kapwing ($24-79/month)."
+      answer: "There is no catch: OpenShorts+ is the zero-budget edition, and it really is 100% free forever. No watermark, no usage limits, no monthly-minute quota, no credit card, no paid plans at all. The whole AI pipeline runs on free providers — OpenRouter's :free models (DeepSeek, Qwen, GLM, Kimi, Gemma, gpt-oss...), plus free tiers from Groq, Google AI Studio, DeepSeek, Zhipu GLM, Alibaba Qwen and Moonshot — with automatic fallback between them, so one provider running out of quota never stops you. Voiceovers use free Microsoft Edge TTS, and AI Shorts falls back to free Ken Burns motion instead of paid talking-head APIs. What it costs you is the machine: on a typical CPU an 8-minute video takes 5 to 8 minutes to process. Deploy it on free hosting (Vercel for the dashboard, Render/Fly/Railway for the backend) and even the machine is free. It is far cheaper than Opus Clip ($15-228/month) or Kapwing ($24-79/month) — because it's $0."
     },
     {
       question: "What is OpenShorts and how does it work?",
@@ -298,13 +298,12 @@ export default function Landing({ onLaunchApp }) {
               </div>
             </form>
 
-            {/* Trust line right under the CTA: the objection this removes
-                (a card) is the whole point of the free plan. */}
+            {/* Trust line right under the CTA: zero budget, zero catch. */}
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mb-5 text-sm">
               <span className="badge-ok whitespace-nowrap">
-                <Check size={12} /> no credit card required
+                <Check size={12} /> 100% free — no credit card
               </span>
-              <span className="text-muted lowercase">20 free min every month</span>
+              <span className="text-muted lowercase">no watermark · no limits · free AI models</span>
               <button
                 onClick={onLaunchApp}
                 className="text-ink2 lowercase underline underline-offset-4 decoration-rule hover:text-ink hover:decoration-brass transition-colors"
@@ -314,14 +313,14 @@ export default function Landing({ onLaunchApp }) {
             </div>
 
             <p className="text-sm text-muted lowercase">
-              paid plans from $12/mo without watermark. prefer to run it yourself?{' '}
+              runs entirely on free AI providers (OpenRouter, DeepSeek, GLM, Qwen, Kimi, Groq…).{' '}
               <a
-                href="https://github.com/mutonby/openshorts"
+                href="https://github.com/tahsinxiao/openshort-"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-ink2 underline hover:text-ink transition-colors"
               >
-                self-host free on github →
+                deploy it free on vercel + render →
               </a>
             </p>
           </div>
@@ -639,7 +638,7 @@ export default function Landing({ onLaunchApp }) {
       <section id="comparison" className="py-20 px-6 border-t border-rule">
         <div className="max-w-4xl mx-auto">
           <SectionHeader eyebrow="09 · Comparison" title="Free Clip Generator vs Paid Alternatives">
-            Hosted OpenShorts starts at $12/mo — or self-host free. Opus Clip runs $15-228/month, Kapwing $24-79/month.
+            100% free forever — no watermark, no limits, free AI models. Opus Clip runs $15-228/month, Kapwing $24-79/month.
           </SectionHeader>
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -738,7 +737,7 @@ export default function Landing({ onLaunchApp }) {
       <section className="py-24 px-6 border-t border-rule">
         <div className="max-w-3xl mx-auto text-center">
           <h2 className="font-display text-4xl md:text-5xl lowercase text-ink tracking-tight mb-5">start creating viral videos today.</h2>
-          <p className="text-muted mb-10 max-w-xl mx-auto leading-relaxed lowercase">free plan · 20 min/month · no credit card — or self-host free with docker.</p>
+          <p className="text-muted mb-10 max-w-xl mx-auto leading-relaxed lowercase">zero budget · no watermark · no limits · free AI models — forever.</p>
           <div className="flex flex-wrap items-center justify-center gap-4">
             {billingEnabled ? (
               <a href="#pricing" className="btn-primary whitespace-nowrap">

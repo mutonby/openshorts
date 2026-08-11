@@ -32,6 +32,8 @@ import json
 import os
 import time
 
+import ai_gateway
+
 import numpy as np
 
 ENABLED = os.environ.get("SCREENCAST_LAYOUT", "0") == "1"
@@ -172,41 +174,56 @@ def detect_content_ranges(video_path, video_duration):
     """
     if not ENABLED:
         return []
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
+    if not ai_gateway.is_configured() and not os.getenv("GEMINI_API_KEY"):
         return []
 
-    from google import genai
-    from google.genai import types as genai_types
     import gemini_worker
 
-    model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
     print("🔎 Checking for full-width on-screen content…")
     try:
-        client = genai.Client(api_key=api_key)
-        file_upload = client.files.upload(file=video_path)
-        deadline = time.time() + 180
-        while True:
-            info = client.files.get(name=file_upload.name)
-            state = str(getattr(getattr(info, "state", info), "name", "")).upper()
-            if state == "ACTIVE":
-                break
-            if state == "FAILED" or time.time() > deadline:
-                print("   ⚠️ Upload not usable — keeping face-only routing.")
+        if ai_gateway.is_configured():
+            # Zero-budget gateway: free vision model over sampled stills
+            # (same validation as layout_picker — frames beat uploading).
+            frames = ai_gateway.extract_frames(video_path, n=12, width=1280)
+            if not frames:
+                print("   ⚠️ No readable frames — keeping face-only routing.")
                 return []
-            time.sleep(2)
+            parsed, _result = ai_gateway.complete_json(
+                system="You are a video framing expert. Return strict JSON only — "
+                       "no markdown, no commentary.",
+                user=gemini_worker.WIDE_CONTENT_PROMPT_TEMPLATE.format(
+                    video_duration=video_duration),
+                temperature=0.0, images=frames, kind="vision")
+            raw = parsed.get("ranges") or []
+        else:
+            from google import genai
+            from google.genai import types as genai_types
+            api_key = os.getenv("GEMINI_API_KEY")
+            model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
+            client = genai.Client(api_key=api_key)
+            file_upload = client.files.upload(file=video_path)
+            deadline = time.time() + 180
+            while True:
+                info = client.files.get(name=file_upload.name)
+                state = str(getattr(getattr(info, "state", info), "name", "")).upper()
+                if state == "ACTIVE":
+                    break
+                if state == "FAILED" or time.time() > deadline:
+                    print("   ⚠️ Upload not usable — keeping face-only routing.")
+                    return []
+                time.sleep(2)
 
-        response = client.models.generate_content(
-            model=model_name,
-            contents=[file_upload,
-                      gemini_worker.WIDE_CONTENT_PROMPT_TEMPLATE.format(
-                          video_duration=video_duration)],
-            config=genai_types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=gemini_worker.WideContentResponse,
-            ))
-        gemini_worker.raise_if_blocked(response)
-        raw = (json.loads(response.text) or {}).get("ranges") or []
+            response = client.models.generate_content(
+                model=model_name,
+                contents=[file_upload,
+                          gemini_worker.WIDE_CONTENT_PROMPT_TEMPLATE.format(
+                              video_duration=video_duration)],
+                config=genai_types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=gemini_worker.WideContentResponse,
+                ))
+            gemini_worker.raise_if_blocked(response)
+            raw = (json.loads(response.text) or {}).get("ranges") or []
     except Exception as e:
         print(f"   ⚠️ On-screen check failed ({e}) — keeping face-only routing.")
         return []

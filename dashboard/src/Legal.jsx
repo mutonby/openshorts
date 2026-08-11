@@ -55,12 +55,12 @@ export default function Legal() {
                             your own machine with your own API keys. No account, no payment, no data held by us.
                         </li>
                         <li>
-                            <strong className="text-ink">Hosted at openshorts.app:</strong> we run everything for
-                            you. It requires an account and offers a free plan and paid subscriptions; we store the
-                            videos you generate subject to the retention rules below.
+                            <strong className="text-ink">OpenShorts+ (zero-budget edition):</strong> a free and open
+                            source rebuild of OpenShorts that runs entirely on free AI providers. It has no accounts,
+                            no paid plans, no usage limits and no watermark.
                         </li>
                     </ul>
-                    <p>By using the hosted Service you agree to the terms below.</p>
+                    <p>By using the Service you agree to the terms below.</p>
                 </Section>
 
                 <Section title="Accounts & sign-in">
@@ -71,53 +71,30 @@ export default function Legal() {
                     </p>
                 </Section>
 
-                <Section title="Free plan, paid plans & billing">
+                <Section title="Free & billing">
                     <p>
-                        Paid plans are <strong className="text-ink">Starter ($12/mo · 100 min)</strong>,{' '}
-                        <strong className="text-ink">Creator ($29/mo · 300 min)</strong> and{' '}
-                        <strong className="text-ink">Pro ($59/mo · 750 min)</strong>, each also available annually (two
-                        months free). "Minutes" are minutes of input video processed per billing period; additional
-                        minutes can be bought as one-off top-ups.
+                        OpenShorts+ is the <strong className="text-ink">zero-budget edition</strong>: the Service is
+                        free to use, with <strong className="text-ink">no paid plans, no subscriptions, no usage
+                        limits and no watermark</strong>. No payment method is ever required.
                     </p>
                     <p>
-                        <strong className="text-ink">Free plan:</strong> accounts signed in with Google get{' '}
-                        <strong className="text-ink">20 minutes</strong> of video processing per calendar month at no
-                        cost and with no payment method required. Free clips carry a watermark and are stored for{' '}
-                        <strong className="text-ink">7 days</strong>, after which they are deleted. Free allowances,
-                        limits and features may change; the free plan may not be available to accounts we reasonably
-                        believe are abusing it (e.g. duplicate accounts).
+                        The AI pipeline runs on third-party free tiers (OpenRouter free models, Google AI Studio,
+                        Groq, DeepSeek, Zhipu GLM, Alibaba Qwen, Moonshot, Microsoft Edge TTS). Those providers may
+                        change their free allowances or availability at any time, which can affect the Service's
+                        AI features; the core clipping pipeline (YouTube ingest, Whisper transcription, FFmpeg
+                        editing) runs on your own machine / hosting and is not affected.
                     </p>
                     <p>
-                        <strong className="text-ink">Auto-renewal:</strong> paid subscriptions renew automatically each
-                        period (monthly or yearly) at the then-current price until you cancel.
-                    </p>
-                    <p>
-                        <strong className="text-ink">Legacy trials:</strong> subscriptions started before the free plan
-                        existed may include a 3-day free trial under the terms shown at their sign-up; those trials
-                        convert or cancel per Stripe's standard flow.
-                    </p>
-                    <p>
-                        Payments are processed by <strong className="text-ink">Stripe</strong>. We never see or store
-                        your full card details. Prices are in USD and exclude any applicable taxes/VAT, which are added
-                        at checkout where required.
+                        Optional integrations with paid third parties (fal.ai image/video generation, ElevenLabs
+                        dubbing, Upload-Post publishing) are billed directly by those providers when you supply your
+                        own keys — never by this Service.
                     </p>
                 </Section>
 
                 <Section title="Cancellation & refunds">
                     <p>
-                        You can cancel anytime from your account (or Stripe's billing portal). On cancellation your plan
-                        stays active until the end of the current paid period; we do not charge you again after that.
-                    </p>
-                    <p>
-                        Except where required by law, payments are <strong className="text-ink">non-refundable</strong>{' '}
-                        and we do not prorate partial periods. To avoid being charged for a period you don't want, cancel
-                        before it renews (and, for the trial, before it ends).
-                    </p>
-                    <p>
-                        <strong className="text-ink">EU/EEA consumers:</strong> the Service is digital content/services
-                        supplied immediately. By starting to use it (including during the trial) you request immediate
-                        performance and acknowledge that you lose the 14-day right of withdrawal once performance has
-                        begun, to the extent permitted by law.
+                        There is nothing to cancel or refund: the Service has no paid plans and no recurring charges.
+                        If an optional third-party integration bills you, their terms apply.
                     </p>
                 </Section>
 
