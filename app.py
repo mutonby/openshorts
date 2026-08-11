@@ -1485,9 +1485,6 @@ async def get_config():
         "aiConfigured": ai_gateway.is_configured(),
         "aiProviders": ai_gateway.configured_providers(),
         "providerStatus": ai_gateway.provider_status(),
-        "youtubeDirectEnabled": bool(
-            os.environ.get("GOOGLE_YT_CLIENT_ID")
-            and os.environ.get("GOOGLE_YT_CLIENT_SECRET")),
     }
 
 
@@ -2994,133 +2991,6 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
 
 
 # --------------------------------------------------------------------------- #
-# Direct YouTube upload (zero-budget publishing to your own channel)
-# --------------------------------------------------------------------------- #
-class YouTubePostRequest(BaseModel):
-    job_id: str
-    clip_index: int
-    title: Optional[str] = None
-    description: Optional[str] = None
-    privacy: str = "public"  # public | unlisted | private
-
-
-@app.get("/api/youtube/status")
-async def youtube_status(request: Request):
-    """Is a YouTube channel connected? + whether OAuth creds are configured."""
-    import youtube_publish as yt
-    return {
-        "configured": yt.is_configured(),
-        "connected": yt.connection_status().get("connected", False),
-        "channelTitle": yt.connection_status().get("channelTitle", ""),
-        "channelId": yt.connection_status().get("channelId", ""),
-    }
-
-
-@app.get("/api/youtube/auth-url")
-async def youtube_auth_url(request: Request):
-    """Google consent URL for the user's own channel."""
-    import youtube_publish as yt
-    if not yt.is_configured():
-        raise HTTPException(status_code=400, detail={
-            "error": "not_configured",
-            "message": "Google OAuth credentials missing. Set GOOGLE_YT_CLIENT_ID "
-                       "and GOOGLE_YT_CLIENT_SECRET in your backend env vars "
-                       "(see the Settings page for step-by-step instructions).",
-        })
-    api_base = os.environ.get("PUBLIC_API_URL", "").rstrip("/") or str(request.base_url).rstrip("/")
-    redirect_uri = f"{api_base}/api/youtube/callback"
-    return {"url": yt.build_auth_url(redirect_uri), "redirect_uri": redirect_uri}
-
-
-@app.get("/api/youtube/callback")
-async def youtube_callback(request: Request,
-                           code: Optional[str] = None,
-                           error: Optional[str] = None):
-    """OAuth callback: exchange the code, cache the refresh token, done."""
-    import youtube_publish as yt
-    api_base = os.environ.get("PUBLIC_API_URL", "").rstrip("/") or str(request.base_url).rstrip("/")
-    redirect_uri = f"{api_base}/api/youtube/callback"
-    html_ok = (
-        "<html><body style='font-family:sans-serif;background:#0b0b12;color:#eee;"
-        "display:flex;align-items:center;justify-content:center;height:100vh'>"
-        "<div style='text-align:center'><h2>✅ YouTube connected!</h2>"
-        "<p>You can close this tab and go back to OpenShorts+.</p></div></body></html>"
-    )
-    html_fail = (
-        "<html><body style='font-family:sans-serif;background:#0b0b12;color:#eee;"
-        "display:flex;align-items:center;justify-content:center;height:100vh'>"
-        "<div style='text-align:center'><h2>❌ YouTube connection failed</h2>"
-        "<p>Close this tab and try again from Settings.</p></div></body></html>"
-    )
-    if error or not code:
-        return HTMLResponse(html_fail)
-    data = yt.exchange_code(code, redirect_uri)
-    if not data:
-        return HTMLResponse(html_fail)
-    try:
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, yt.fetch_channel_info)
-    except Exception:
-        pass
-    return HTMLResponse(html_ok)
-
-
-@app.post("/api/youtube/post")
-async def youtube_post(req: YouTubePostRequest, request: Request):
-    """Upload one clip straight to the connected YouTube channel."""
-    import youtube_publish as yt
-    if not yt.is_configured():
-        raise HTTPException(status_code=400, detail="YouTube OAuth not configured on the server.")
-    status = yt.connection_status()
-    if not status.get("connected"):
-        raise HTTPException(status_code=400, detail={
-            "error": "not_connected",
-            "message": "Connect your YouTube channel first (Settings → YouTube direct upload).",
-        })
-    await _ensure_job_files(req.job_id, request)
-    if req.job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    job = jobs[req.job_id]
-    await _assert_job_owner(request, job)
-    if 'result' not in job or 'clips' not in job['result']:
-        raise HTTPException(status_code=400, detail="Job result not available")
-    clip = job['result']['clips'][req.clip_index]
-    filename = clip['video_url'].split('/')[-1]
-    file_path = os.path.join(OUTPUT_DIR, req.job_id, filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail=f"Video file not found: {file_path}")
-
-    title = req.title or clip.get('video_title_for_youtube_short') or clip.get('title') or "OpenShorts+ Short"
-    description = (req.description
-                   or clip.get('video_description_for_youtube')
-                   or clip.get('video_description_for_tiktok')
-                   or clip.get('video_description_for_instagram')
-                   or "")
-
-    def _do_upload():
-        return yt.upload_video(file_path, title, description, req.privacy)
-
-    try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, _do_upload)
-        if not result:
-            raise HTTPException(status_code=500, detail="YouTube upload returned no result.")
-        return {"success": True, **result, "channelTitle": status.get("channelTitle", "")}
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"❌ YouTube direct upload error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/youtube/disconnect")
-async def youtube_disconnect():
-    import youtube_publish as yt
-    yt.disconnect()
-    return {"connected": False}
-
-
-# --------------------------------------------------------------------------- #
 # Text summary — turn any processed long video into a chaptered written digest
 # --------------------------------------------------------------------------- #
 class SummaryRequest(BaseModel):
@@ -3245,6 +3115,70 @@ async def get_text_summary(job_id: str, request: Request):
         raise HTTPException(status_code=404, detail="No summary yet — generate one first.")
     with open(summary_path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+# --------------------------------------------------------------------------- #
+# Publish kit — viral title + description + trending hashtags for one clip.
+# Nothing is posted automatically: the user reviews the clip, copies the kit
+# and posts it themselves (YouTube/TikTok/IG terms: manual posting).
+# --------------------------------------------------------------------------- #
+class PublishKitRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    language: str = "auto"   # "auto" uses the transcript's language
+    region: str = "US"       # trend region for the daily trending hashtags
+
+
+@app.get("/api/publish-kit/regions")
+async def publish_kit_regions():
+    import publish_kit
+    return {"regions": publish_kit.REGIONS}
+
+
+@app.post("/api/publish-kit")
+async def generate_publish_kit(req: PublishKitRequest, request: Request):
+    api_key = await resolve_gemini(request)
+    if not api_key:
+        raise gemini_missing_error()
+    await _ensure_job_files(req.job_id, request)
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs[req.job_id]
+    await _assert_job_owner(request, job)
+
+    output_dir = os.path.join(OUTPUT_DIR, req.job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+    with open(json_files[0], "r", encoding="utf-8") as f:
+        metadata = json.load(f)
+
+    import publish_kit as pk
+
+    def _run():
+        return pk.generate_publish_kit(
+            metadata, req.clip_index,
+            language=req.language, region=req.region)
+
+    try:
+        loop = asyncio.get_event_loop()
+        kit = await loop.run_in_executor(None, _run)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ai_gateway.AIGatewayError as e:
+        raise HTTPException(status_code=500,
+                            detail=f"Publish kit generation failed: {e}")
+
+    # Persist next to the job for re-fetching later.
+    try:
+        kit_path = os.path.join(output_dir, "publish_kit.json")
+        with open(kit_path, "w", encoding="utf-8") as f:
+            json.dump({"job_id": req.job_id, "clip_index": req.clip_index,
+                       **kit}, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠️ Could not persist publish kit: {e}")
+
+    return {"success": True, "kit": kit}
 
 
 @app.get("/api/social/user")

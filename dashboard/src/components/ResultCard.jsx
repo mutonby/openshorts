@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2 } from 'lucide-react';
+import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Megaphone } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
 import SubtitleModal from './SubtitleModal';
+import PublishKitModal from './PublishKitModal';
 import HookModal from './HookModal';
 import TranslateModal from './TranslateModal';
 import Modal from './ui/Modal';
@@ -29,6 +30,7 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
     const [showModal, setShowModal] = useState(false);
     const [showDescModal, setShowDescModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
+    const [showPublishKit, setShowPublishKit] = useState(false);
     const [showWatermarkModal, setShowWatermarkModal] = useState(false);
     const { plan } = useAuth();
     const videoRef = React.useRef(null);
@@ -107,46 +109,6 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
     const [posting, setPosting] = useState(false);
     const [postResult, setPostResult] = useState(null);
     const [copied, setCopied] = useState(null);
-
-    // Direct YouTube upload (own channel, no third party).
-    const [ytStatus, setYtStatus] = useState(null);
-    const [ytPosting, setYtPosting] = useState(false);
-    const [ytResult, setYtResult] = useState(null);
-
-    useEffect(() => {
-        let cancelled = false;
-        apiFetch('/api/youtube/status')
-            .then((res) => (res.ok ? res.json() : null))
-            .then((data) => { if (!cancelled && data) setYtStatus(data); })
-            .catch(() => {});
-        return () => { cancelled = true; };
-    }, []);
-
-    const handleYoutubeDirectPost = async () => {
-        setYtPosting(true);
-        setYtResult(null);
-        try {
-            const res = await apiFetch('/api/youtube/post', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    job_id: jobId,
-                    clip_index: index,
-                    title: postTitle || clip.video_title_for_youtube_short || 'OpenShorts+ Short',
-                    description: postDescription || clip.video_description_for_tiktok || clip.video_description_for_instagram || '',
-                    privacy: 'public',
-                }),
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(data.detail?.message || data.detail || 'upload failed');
-            setYtResult({ success: true, msg: `Uploaded to YouTube — ${data.url || 'check your channel'}` });
-            setShowModal(false);
-        } catch (e) {
-            setYtResult({ success: false, msg: String(e.message || e) });
-        } finally {
-            setYtPosting(false);
-        }
-    };
 
     const handleCopy = async (field, text) => {
         try {
@@ -786,6 +748,13 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
                     </button>
 
                     <button
+                        onClick={() => setShowPublishKit(true)}
+                        className={QUIET_BTN}
+                        title="Generate viral title, description and trending hashtags — you post manually"
+                    >
+                        <Megaphone size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" /> publish kit
+                    </button>
+                    <button
                         onClick={() => setShowModal(true)}
                         className="btn-primary flex-col gap-1 py-2 px-1 text-[11px] rounded-input whitespace-nowrap"
                     >
@@ -979,31 +948,16 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
                         </div>
                     )}
 
-                    {/* Direct YouTube upload to the user's own channel (no third party) */}
-                    {ytStatus?.connected && (
-                        <div className="pt-3 border-t border-rule">
-                            <button
-                                type="button"
-                                onClick={handleYoutubeDirectPost}
-                                disabled={ytPosting}
-                                className="btn-ghost w-full flex items-center justify-center gap-2 text-xs"
-                            >
-                                {ytPosting
-                                    ? <><Loader2 size={14} className="animate-spin" /> uploading to {ytStatus.channelTitle || 'your channel'}…</>
-                                    : <><Youtube size={14} className="text-danger" /> post straight to my channel (direct)</>}
-                            </button>
-                            <p className="text-[11px] text-muted text-center mt-1.5">
-                                No third party — uploaded via your Google account. ~6 free uploads/day.
-                            </p>
-                        </div>
-                    )}
-                    {ytResult && !ytResult.success && (
-                        <div className="badge-danger">
-                            <AlertCircle size={12} className="shrink-0" /> {ytResult.msg}
-                        </div>
-                    )}
                 </div>
             </Modal>
+
+            <PublishKitModal
+                isOpen={showPublishKit}
+                onClose={() => setShowPublishKit(false)}
+                jobId={jobId}
+                clipIndex={index}
+                clip={clip}
+            />
 
             <SubtitleModal
                 isOpen={showSubtitleModal}

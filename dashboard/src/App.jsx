@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, FileText } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import ServerSettingsCard from './components/ServerSettingsCard';
-import YoutubeDirectCard from './components/YoutubeDirectCard';
 import SummaryModal from './components/SummaryModal';
 import MediaInput from './components/MediaInput';
 import ResultCard from './components/ResultCard';
@@ -943,7 +942,6 @@ function App() {
                 </div>
               )}
               <ServerSettingsCard aiConfigured={aiConfigured} aiProviders={aiProviders} />
-              <YoutubeDirectCard />
               <KeyInput onKeySet={setApiKey} savedKey={apiKey} />
 
               <div className="card p-4 sm:p-6 mt-8">

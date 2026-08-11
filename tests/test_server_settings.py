@@ -164,19 +164,6 @@ def test_settings_post_clears_all_keys(client):
     assert os.environ.get("GROQ_API_KEY_2") is None
 
 
-def test_youtube_status_endpoint(client):
-    r = client.get("/api/youtube/status")
-    assert r.status_code == 200
-    data = r.json()
-    assert data["configured"] is False
-    assert data["connected"] is False
-
-
-def test_youtube_auth_url_requires_credentials(client):
-    r = client.get("/api/youtube/auth-url")
-    assert r.status_code == 400
-
-
 def test_summary_endpoint_missing_metadata(client):
     r = client.post("/api/summary", json={"job_id": "does-not-exist"})
     assert r.status_code in (400, 404, 500)  # job guard fires before AI

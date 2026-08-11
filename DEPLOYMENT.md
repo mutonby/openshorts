@@ -95,19 +95,18 @@ Pick a **default theme** in Settings (TikTok, Reels, Shorts Pop, Gold Glow,
 Neon, Cyber, Karaoke, Minimal, Beast, Boxed, Classic), and restyle any clip
 individually from its **subtitles** modal with a live preview.
 
-## Direct YouTube publishing (optional, free)
+## Publish kits (manual posting, no auto-upload)
 
-The app can upload clips straight to your **own YouTube channel** — your Google
-account, no third party:
+Every clip gets a **publish kit**: a viral title, a description, and hashtags
+mixing niche tags with **today's trending hashtags** for a region of your
+choice (US, IN, GB, BD, …). Trends refresh automatically every day — the
+backend pulls free public trend data with an AI fallback, cached per day, so
+hashtags stay current with zero maintenance.
 
-1. Google Cloud Console (free): enable **YouTube Data API v3**, create an
-   **OAuth Client ID** (Web application), add `<your-backend-url>/api/youtube/callback`
-   as an authorized redirect URI.
-2. Backend env vars: `GOOGLE_YT_CLIENT_ID` and `GOOGLE_YT_CLIENT_SECRET`.
-3. In the app: Settings → **YouTube direct upload** → **Connect YouTube**.
-4. On any clip → **post** → **post straight to my channel (direct)**.
-   Free API quota ≈ 6 uploads/day. Upload-Post (free tier) remains the option
-   for TikTok/Instagram/more volume.
+Nothing is posted automatically (and the short-lived "direct YouTube upload"
+feature was removed for the same reason): you play the clip, copy
+title + description + hashtags, and paste them into YouTube/TikTok/Instagram
+yourself.
 
 ## Text summaries
 

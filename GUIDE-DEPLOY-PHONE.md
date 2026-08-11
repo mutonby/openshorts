@@ -101,49 +101,27 @@ That's it — no Vercel/Render env edits for keys. ✅
    points, best quotes, clip hooks). Copy or download as .md for show notes,
    newsletters or LinkedIn threads.
 
-## Step 6 — (Optional) Post straight to your YouTube channel
+## Step 6 — Publish kit (manual posting, YouTube-safe)
 
-The app can upload clips **directly to your own YouTube channel** with your
-Google account — no third party:
+No auto-posting: you always review and post yourself (that's also the
+YouTube-safe way).
 
-1. In the app → **Settings** → **YouTube direct upload** → tap **show steps**
-   for the full walkthrough. The short version:
-   - console.cloud.google.com → create a free project
-   - enable **YouTube Data API v3**
-   - create **OAuth Client ID** (type: Web application)
-   - add `https://yourapp.onrender.com/api/youtube/callback` as a redirect URI
-   - copy Client ID + Secret into your backend env vars:
-     `GOOGLE_YT_CLIENT_ID` and `GOOGLE_YT_CLIENT_SECRET` (these two DO go in
-     Render env — it's a one-time 5-minute setup)
-2. Back in the app → **Connect YouTube** → sign in with your Google account.
-3. On any clip → **post** → **post straight to my channel (direct)**.
-   Free YouTube API quota ≈ 6 uploads/day — plenty for shorts.
-4. Prefer the simpler path? The normal **post** button via Upload-Post
-   (free tier) also publishes to YouTube, TikTok and Instagram.
+1. On any clip, tap **publish kit**.
+2. The app writes a **viral title**, a **description**, and **hashtags** for
+   that clip — mixing relevant niche tags with **today's trending hashtags**
+   for the region you pick (US, India, UK, Bangladesh, …).
+3. The trend list **refreshes automatically every day** (live public trends,
+   with an AI fallback), so the hashtags stay current with no work from you.
+4. Edit anything you like, toggle hashtags on/off, then:
+   - **copy title + description + hashtags** and paste into YouTube's upload
+     page (hashtags go at the end of the description), or
+   - **download .txt** and keep it for later.
+5. Play the clip once more, post it manually. That's it — nothing is posted
+   automatically, ever.
 
----
-
-## Answers to your questions
-
-**“App UI to fetch keys, or Vercel env?”**
-> Both work. I built the **in-app UI** (Step 4) — that's the easiest from your
-> phone and it applies instantly (no redeploy). Vercel/Render env vars also
-> work and survive redeploys. If you set a key in BOTH places, the in-app one
-> wins while it's set. You can just use the app UI and ignore env vars.
-
-**“Does it support Kick?”**
-> Yes — Kick live streams and VODs work through the same URL box. yt-dlp
-> (the downloader) natively supports `kick:live`, `kick:vod`, `kick:clips`,
-> and there are **no length limits** — paste any long podcast VOD.
-
-**“Does it have subtitle theme options?”**
-> Yes, two levels:
-> 1. **Per clip:** open any clip → **subtitles** → 11 presets (TikTok, Reels,
->    Shorts Pop, Gold Glow, Neon, Cyber, Karaoke, Minimal, Beast, Boxed,
->    Classic) + font, colors, highlight, border, background box, position,
->    animation — with a live preview.
-> 2. **Default for all new clips:** Settings → **default caption theme** — set
->    it once, every clip ships with that look.
+The old "post straight to my channel" auto-upload is removed on purpose:
+posting into YouTube yourself keeps you in control of what goes on your
+channel.
 
 ## Troubleshooting (quick)
 
