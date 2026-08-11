@@ -22,13 +22,15 @@
 
 ## Step 1 — Put the new code on your `main` branch (2 min)
 
-The work lives on the branch `arena/019feea4-openshort`. In the **GitHub app
-on your phone**:
+The work lives on the branch `arena/019feea4-openshort`. Merge it into
+`main` with the dedicated step-by-step guide:
 
-1. Open your repo `tahsinxiao/openshort-`.
-2. Tap **Branches** → find `arena/019feea4-openshort` → **New pull request**.
-3. It asks: base `main` ← compare `arena/019feea4-openshort`. Tap **Create
-   pull request** → **Merge pull request** → **Confirm merge**.
+> 📖 **`GUIDE-BRANCH-MERGE.md`** — merge via the GitHub app or browser,
+> verify, and what to do if something looks off.
+
+Short version: GitHub app → **Branches** → `arena/019feea4-openshort` →
+**New pull request** → base `main` ← compare `arena/019feea4-openshort` →
+**Create pull request** → **Merge pull request** → **Confirm merge**.
 
 Now your `main` has everything.
 
