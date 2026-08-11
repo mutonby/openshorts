@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download } from 'lucide-react';
 import KeyInput from './components/KeyInput';
+import ServerSettingsCard from './components/ServerSettingsCard';
 import MediaInput from './components/MediaInput';
 import ResultCard from './components/ResultCard';
 import ProcessingAnimation from './components/ProcessingAnimation';
@@ -172,7 +173,7 @@ const pollJob = async (jobId) => {
 
 function App() {
   // Cloud auth/billing session (inert when billing is disabled).
-  const { billingEnabled, aiConfigured, isManaged, isSignedIn, me, plan, refreshMe } = useAuth();
+  const { billingEnabled, aiConfigured, aiProviders, isManaged, isSignedIn, me, plan, refreshMe } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
   const [showTopUp, setShowTopUp] = useState(false);
   const [showPlanChoice, setShowPlanChoice] = useState(false);
@@ -933,12 +934,12 @@ function App() {
                   </div>
                   <p className="text-xs text-muted leading-relaxed">
                     This server runs on free AI providers. Nothing to configure here —
-                    no watermark, no limits, no plans. The key field below is optional
-                    and only needed if you want to override the server's providers
-                    with your own Gemini key.
+                    no watermark, no limits, no plans. You can still add or change
+                    free provider keys below from any device.
                   </p>
                 </div>
               )}
+              <ServerSettingsCard aiConfigured={aiConfigured} aiProviders={aiProviders} />
               <KeyInput onKeySet={setApiKey} savedKey={apiKey} />
 
               <div className="card p-4 sm:p-6 mt-8">

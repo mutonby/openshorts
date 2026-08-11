@@ -97,19 +97,31 @@ export function AuthProvider({ children }) {
     return true;
   }, [refreshMe]);
 
+  const refreshConfig = useCallback(async () => {
+    try {
+      const cfg = await (await fetch(getApiUrl('/api/config'))).json();
+      setConfig(cfg);
+      return cfg;
+    } catch (_) { return null; }
+  }, []);
+
   useEffect(() => {
     (async () => {
-      try {
-        const cfg = await (await fetch(getApiUrl('/api/config'))).json();
-        setConfig(cfg);
-        if (cfg.billingEnabled) {
-          const handled = await handleAuthHash();
-          if (!handled) await refreshMe();
-        }
-      } catch (_) { /* config fetch failed — stay in BYOK */ }
+      const cfg = await refreshConfig();
+      if (cfg?.billingEnabled) {
+        const handled = await handleAuthHash();
+        if (!handled) await refreshMe();
+      }
       setLoading(false);
     })();
-  }, [handleAuthHash, refreshMe]);
+  }, [handleAuthHash, refreshMe, refreshConfig]);
+
+  // Server settings card re-fetches the config after saving keys so the
+  // "no AI provider configured" banner clears without a page reload.
+  useEffect(() => {
+    window.addEventListener('os-settings-saved', refreshConfig);
+    return () => window.removeEventListener('os-settings-saved', refreshConfig);
+  }, [refreshConfig]);
 
   const requestMagicLink = useCallback(async (email) => {
     const res = await apiFetch('/api/auth/magic-link', {
@@ -147,6 +159,7 @@ export function AuthProvider({ children }) {
     // Managed = signed-in AND entitled (active plan or top-up credit).
     isManaged: !!(config.billingEnabled && me?.entitled),
     refreshMe,
+    refreshConfig,
     requestMagicLink,
     loginWithGoogle,
     logout,

@@ -51,10 +51,18 @@ a sleep takes ~30s to wake. Fine for personal use.
   sleeps.
 - **Coolify / your own VPS** — `docker compose up -d` works out of the box.
 
-## Free AI providers (backend env vars)
+## Free AI providers — two ways to set them
 
-Set **any one** of these — the gateway uses everything you give it, with
-automatic fallback:
+**Way 1 — in the app UI (easiest, works from a phone):** after deploying, open
+the dashboard → **Settings → Free AI keys (server)** → paste one or more keys →
+**Save to server**. Keys are stored on the backend's disk (`DATA_DIR`), merged
+into the environment immediately, and inherited by processing jobs — no env
+edits, no redeploys. The same page sets the **default caption theme** for every
+new clip.
+
+**Way 2 — backend env vars (survive redeploys):** set **any one** of these on
+Render/Vercel. The gateway uses everything you give it, with automatic
+fallback. Keys set in the app UI take precedence while they exist.
 
 | Env var | Provider | Free tier |
 |---|---|---|
@@ -70,9 +78,23 @@ Optional: `EDGE_TTS_VOICE` (default `en-US-JennyNeural`) for free AI-Shorts
 voiceovers. `UPLOAD_POST_API_KEY` (free tier) enables publishing to TikTok /
 Instagram / YouTube.
 
+## Sources: Kick, YouTube & beyond
+
+The URL box accepts any site yt-dlp supports: **Kick** (live streams and VODs —
+`https://kick.com/<channel>/videos/<id>`), **YouTube**, Twitch, TikTok,
+Facebook, Vimeo, Dailymotion, Reddit and more. There is **no length limit** —
+paste any multi-hour podcast VOD and clip it freely.
+
+## Subtitles: themed by default
+
+Every clip burns stylish captions automatically (karaoke word-highlight look).
+Pick a **default theme** in Settings (TikTok, Reels, Shorts Pop, Gold Glow,
+Neon, Cyber, Karaoke, Minimal, Beast, Boxed, Classic), and restyle any clip
+individually from its **subtitles** modal with a live preview.
+
 ## What stays free forever
 
-- Clip Generator: unlimited YouTube/upload processing — **no watermark, no
+- Clip Generator: unlimited YouTube/Kick/upload processing — **no watermark, no
   limits, no 20-min/month quota**.
 - YouTube Studio: titles, descriptions, thumbnails (free image gen or local
   typographic fallback).

@@ -3,8 +3,8 @@ import { Link2, Upload, FileVideo, X, Info, Loader2 } from 'lucide-react';
 import { getApiUrl } from '../config';
 
 const SUPPORTED_PLATFORMS = [
-    'YouTube', 'Vimeo', 'TikTok', 'X / Twitter', 'Twitch',
-    'Facebook', 'Instagram', 'Dailymotion', 'Reddit', 'Streamable',
+    'YouTube', 'Kick (live + VOD)', 'Twitch', 'TikTok', 'Vimeo',
+    'X / Twitter', 'Facebook', 'Instagram', 'Dailymotion', 'Reddit', 'Streamable',
 ];
 
 export default function MediaInput({ onProcess, isProcessing }) {
@@ -108,7 +108,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                 type="url"
                                 value={url}
                                 onChange={(e) => setUrl(e.target.value)}
-                                placeholder="https://... paste a video link"
+                                placeholder="https://kick.com/... · https://youtube.com/... · any video link"
                                 className="input-field pr-11"
                                 required
                             />

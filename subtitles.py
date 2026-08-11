@@ -248,6 +248,96 @@ AUTO_CAPTION_STYLE = {
 }
 
 
+# Named caption themes — the same looks the subtitle modal offers as presets,
+# so auto-captions on every new clip can be themed too. Pick one with
+# CAPTION_THEME=<name> (or the Settings page of the dashboard). Each dict
+# overrides AUTO_CAPTION_STYLE field by field.
+CAPTION_THEMES = {
+    "tiktok": {
+        "font_name": "Verdana", "highlight_color": "#FE2C55",
+        "border_width": 2, "effect": "none", "base_opacity": 0.75,
+        "uppercase": False,
+    },
+    "reels": {
+        "font_name": "Verdana", "highlight_color": "#E1306C",
+        "border_width": 2, "effect": "none", "base_opacity": 0.7,
+        "uppercase": False,
+    },
+    "shorts": {
+        "font_name": "Verdana", "highlight_color": "#FF0000",
+        "border_width": 2, "effect": "pop", "base_opacity": 0.7,
+        "uppercase": False,
+    },
+    "gold": {
+        "font_name": "Verdana", "highlight_color": "#FFD700",
+        "border_width": 2, "effect": "glow", "base_opacity": 0.6,
+        "uppercase": False,
+    },
+    "neon": {
+        "font_name": "Verdana", "highlight_color": "#00FF88",
+        "border_width": 2, "effect": "glow", "base_opacity": 0.55,
+        "uppercase": False,
+    },
+    "cyber": {
+        "font_name": "Verdana", "highlight_color": "#00FFFF",
+        "border_width": 2, "effect": "glow", "base_opacity": 0.5,
+        "uppercase": False,
+    },
+    "karaoke": {
+        "font_name": "Verdana", "highlight_color": "#FF6B6B",
+        "border_width": 2, "effect": "none", "base_opacity": 0.6,
+        "uppercase": False,
+    },
+    "minimal": {
+        "font_name": "Verdana", "highlight_color": "#FFFFFF",
+        "border_width": 1, "effect": "none", "base_opacity": 0.65,
+        "uppercase": False,
+    },
+    "beast": {
+        "font_name": "Impact", "highlight_color": "#FFD700",
+        "border_width": 3, "effect": "pop", "base_opacity": 1.0,
+        "uppercase": True,
+    },
+    "boxed": {
+        "font_name": "Verdana", "highlight_color": "#7C3AED",
+        "border_width": 2, "effect": "box", "base_opacity": 0.85,
+        "uppercase": False,
+    },
+    "classic": {
+        "font_name": "Verdana", "highlight_color": "#FFFFFF",
+        "border_width": 2, "effect": "none", "base_opacity": 1.0,
+        "uppercase": False,
+    },
+}
+
+
+def caption_theme(name):
+    """The caption style for a named theme, or None if unknown.
+
+    The theme dict is merged over AUTO_CAPTION_STYLE so every field the
+    renderers read is present even when a theme only overrides a few.
+    """
+    base = dict(AUTO_CAPTION_STYLE)
+    theme = CAPTION_THEMES.get(str(name or "").strip().lower())
+    if theme is None:
+        return None
+    base.update(theme)
+    base["style"] = "karaoke"  # themes are karaoke burns by design
+    return base
+
+
+def resolve_caption_style():
+    """The style to auto-burn onto clips: CAPTION_THEME env override, else
+    the built-in AUTO_CAPTION_STYLE."""
+    raw = os.environ.get("CAPTION_THEME", "").strip()
+    if raw and raw.lower() not in ("", "auto", "default"):
+        themed = caption_theme(raw)
+        if themed is not None:
+            return themed
+        print(f"   ⚠️ Unknown CAPTION_THEME={raw!r} — using the default style.")
+    return dict(AUTO_CAPTION_STYLE)
+
+
 def _ass_time(seconds):
     """Format seconds as ASS timestamp H:MM:SS.cc (centiseconds)."""
     seconds = max(0, seconds)

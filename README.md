@@ -12,10 +12,12 @@
 | | OpenShorts+ (this repo) |
 |---|---|
 | **Price** | Free forever, MIT — no paid plans at all |
-| **AI providers** | Free by default: OpenRouter `:free` models (DeepSeek, Qwen, GLM, Kimi, Gemma, gpt-oss...), Gemini free tier, Groq, Zhipu GLM, Alibaba Qwen, Moonshot Kimi — automatic fallback between them |
+| **AI providers** | Free by default: OpenRouter `:free` models (DeepSeek, Qwen, GLM, Kimi, Gemma, gpt-oss...), Gemini free tier, Groq, Zhipu GLM, Alibaba Qwen, Moonshot Kimi — automatic fallback between them. Paste keys right in the app UI (Settings) — no server env edits |
+| **Sources** | YouTube, **Kick (live + VOD)**, Twitch, TikTok, Facebook, and any other site yt-dlp supports — unlimited length |
 | **Video length** | Unlimited — cut any long video freely |
 | **Watermark** | Never |
 | **Voiceover** | Free Microsoft Edge TTS (ElevenLabs optional, BYOK) |
+| **Subtitles** | 11 caption themes (TikTok, Neon, Beast, Boxed...) burned in by default, per-clip styling with live preview |
 | **AI Shorts actors** | Free image generation / local portraits + free Ken Burns motion (fal.ai optional, BYOK) |
 | **Setup** | Docker, 8GB+ RAM, model downloads — or free hosting (Vercel + Render) |
 | **Your data** | Your server |
@@ -202,11 +204,18 @@ cd OpenShorts
 ```
 
 ### 2. Configure (optional — free AI keys)
+Two ways, both free:
+
+1. **In the app UI (easiest, works from your phone):** deploy, open Settings →
+   **Free AI keys (server)** → paste one or more keys → Save to server.
+   No env edits, applies instantly. You can also pick the **default caption
+   theme** there.
+2. **Env vars:** copy `.env.example` to `.env` (or set them on your host) and
+   add at least ONE key — OpenRouter, Gemini, Groq, DeepSeek, GLM, Qwen or
+   Kimi. The gateway falls back across all of them. AWS keys are only for S3
+   clip backup (optional).
 ```bash
 cp .env.example .env
-# Set at least ONE free AI key (OpenRouter, Gemini, Groq, DeepSeek, GLM,
-# Qwen or Kimi — see .env.example). The gateway falls back across all of them.
-# AWS keys are only for S3 clip backup (optional).
 ```
 
 ### 3. Launch
@@ -217,7 +226,9 @@ docker compose up --build
 ### 4. Open Dashboard
 Navigate to **`http://localhost:5175`**
 
-1. If the server has no free AI provider configured, go to **Settings** and add a key; otherwise everything just works — no watermark, no limits
+1. Open **Settings** → **Free AI keys (server)** and paste a free key if you haven't already; everything works with no watermark and no limits
+2. **Clip Generator**: paste a **Kick** / **YouTube** / Twitch / any video link (or upload a file) to generate viral shorts
+3. **Subtitles**: open any clip → **subtitles** → pick a theme (TikTok, Neon, Beast, Boxed…) or set a default theme in Settings
 2. **Clip Generator**: Upload a long-form video to generate viral shorts
 3. **AI Shorts**: Describe your product or paste a URL to generate UGC marketing videos
 4. **YouTube Studio**: Generate thumbnails, titles, and descriptions for YouTube

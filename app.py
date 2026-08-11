@@ -82,6 +82,82 @@ else:
     _cloud_config = None
     _alerts = None
 
+# ---- Server-side settings store (free AI keys + caption theme) ---------------
+# Lets you paste free provider keys straight into the dashboard Settings page
+# (from a phone, no server env edits needed). Keys are stored on the server's
+# disk (DATA_DIR/OUTPUT_DIR), merged into the process environment so the AI
+# gateway picks them up immediately, and inherited by processing subprocesses.
+# Platform env vars (Vercel/Render) work exactly the same way — UI-set keys
+# simply take precedence while they exist.
+PROVIDER_KEY_ENV = {
+    "openrouter": "OPENROUTER_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "zhipu": "ZHIPU_API_KEY",
+    "dashscope": "DASHSCOPE_API_KEY",
+    "moonshot": "MOONSHOT_API_KEY",
+}
+
+SETTINGS_DIR = os.environ.get("DATA_DIR", "").strip() or OUTPUT_DIR
+SETTINGS_FILE = os.path.join(SETTINGS_DIR, "server_settings.json")
+
+DEFAULT_SETTINGS = {"keys": {}, "caption_theme": "auto"}
+
+
+def _load_settings() -> dict:
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+    merged = dict(DEFAULT_SETTINGS)
+    merged.update(data or {})
+    if not isinstance(merged.get("keys"), dict):
+        merged["keys"] = {}
+    return merged
+
+
+def _save_settings(settings: dict) -> None:
+    try:
+        os.makedirs(SETTINGS_DIR, exist_ok=True)
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2)
+    except Exception as e:
+        print(f"⚠️ Could not persist server settings: {e}")
+
+
+def _apply_settings(settings: dict) -> None:
+    """Merge stored settings into the process environment (live)."""
+    for provider, env_var in PROVIDER_KEY_ENV.items():
+        key = (settings.get("keys") or {}).get(provider)
+        if key:
+            os.environ[env_var] = key
+    theme = (settings.get("caption_theme") or "auto").strip().lower()
+    if theme in ("", "auto", "default"):
+        os.environ.pop("CAPTION_THEME", None)
+    else:
+        os.environ["CAPTION_THEME"] = theme
+
+
+def _settings_summary() -> dict:
+    settings = _load_settings()
+    keys = settings.get("keys") or {}
+    return {
+        "configuredProviders": [p for p in PROVIDER_KEY_ENV if keys.get(p)],
+        "captionTheme": (settings.get("caption_theme") or "auto").strip().lower(),
+    }
+
+
+# Apply persisted settings at import time so the gateway + subprocesses see
+# them from the first request onward (fail-open on any error).
+try:
+    _apply_settings(_load_settings())
+except Exception as e:
+    print(f"⚠️ Could not apply server settings at startup: {e}")
+
     async def get_current_user_optional(request: Request):
         # No-op dependency in self-host mode: every request is anonymous / BYOK.
         return None
@@ -1370,6 +1446,57 @@ async def get_config():
         # so the dashboard knows whether a client-side key is required at all.
         "aiConfigured": ai_gateway.is_configured(),
         "aiProviders": ai_gateway.configured_providers(),
+        **{f"keyConfigured_{p}": bool(os.environ.get(env))
+           for p, env in PROVIDER_KEY_ENV.items()},
+    }
+
+
+class SettingsUpdateRequest(BaseModel):
+    keys: Optional[Dict[str, Optional[str]]] = None   # provider -> key ("" / null clears)
+    caption_theme: Optional[str] = None               # "auto" | theme name
+
+
+@app.get("/api/settings")
+async def get_server_settings():
+    """What's configured server-side (provider names only — never secrets)."""
+    settings = _load_settings()
+    return {
+        "configuredProviders": list((settings.get("keys") or {}).keys()),
+        "captionTheme": (settings.get("caption_theme") or "auto").strip().lower(),
+        "availableProviders": list(PROVIDER_KEY_ENV.keys()),
+    }
+
+
+@app.post("/api/settings")
+async def update_server_settings(req: SettingsUpdateRequest):
+    """Save free AI keys / default caption theme on the server.
+
+    Keys are stored in server_settings.json (DATA_DIR/OUTPUT_DIR), merged into
+    the environment immediately, and inherited by processing subprocesses —
+    so you can configure everything from the app UI on any device.
+    """
+    settings = _load_settings()
+    keys = settings.get("keys") or {}
+    if req.keys:
+        for provider, key in req.keys.items():
+            if provider not in PROVIDER_KEY_ENV:
+                continue
+            key = (key or "").strip()
+            if key:
+                keys[provider] = key
+            else:
+                keys.pop(provider, None)
+                os.environ.pop(PROVIDER_KEY_ENV[provider], None)
+        settings["keys"] = keys
+    if req.caption_theme is not None:
+        theme = req.caption_theme.strip().lower()
+        settings["caption_theme"] = theme if theme in ("", "auto") else theme
+    _save_settings(settings)
+    _apply_settings(settings)
+    return {
+        "configuredProviders": list(keys.keys()),
+        "captionTheme": (settings.get("caption_theme") or "auto").strip().lower(),
+        "aiConfigured": ai_gateway.is_configured(),
     }
 
 async def _probe_youtube_quality(url: str) -> dict:
