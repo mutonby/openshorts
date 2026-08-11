@@ -12,8 +12,11 @@
    (free).
 4. Get one **free AI key** (any of these — OpenRouter is easiest):
    - **OpenRouter** → openrouter.ai/keys → “Create key” → copy `sk-or-v1-...`
-     (free models need no credits)
+     (free models need no credits). Our app auto-fetches OpenRouter's catalog
+     and **uses only the FREE models** — paid ones are never touched.
    - or **Google AI Studio** → aistudio.google.com/apikey → `AIzaSy...`
+   - Get as many as you like — the app tries them all and **switches
+     automatically** when one is rate-limited.
 
 ---
 
@@ -62,16 +65,21 @@ Now your `main` has everything.
 4. Click **Deploy**. In ~1 minute you get `https://yourproject.vercel.app`.
 5. Open that URL — you should see the OpenShorts+ landing page.
 
-## Step 4 — Add your AI key inside the app (2 min, no env vars!)
+## Step 4 — Add your AI keys inside the app (2 min, no env vars!)
 
 1. In the app → **Settings** (gear icon, top right).
-2. You'll see **“Free AI keys (server)”**.
-3. Paste your **OpenRouter** key into the box (or Gemini/Groq/DeepSeek/GLM/
-   Qwen/Kimi — add as many as you like; the app falls back between them
-   automatically).
+2. You'll see **“Free AI keys (server)”** with one empty row.
+3. Paste your first **OpenRouter** key → tap **+ add new** → paste another
+   key (Gemini/Groq/DeepSeek/GLM/Qwen/Kimi, or even a second OpenRouter key)
+   — add as many rows as you want, like Vercel's env section.
 4. Tap **Save to server** → it turns green: **Saved & active**.
-5. While you're there, pick a **default caption theme** (e.g. TikTok, Neon,
-   Beast) — every new clip will burn that stylish subtitle look automatically.
+5. The panel shows you:
+   - **Auto-switching** status — if a provider gets rate-limited it's put in
+     cooldown and the app routes around it to the next key/model automatically.
+   - **OpenRouter free models** count — only free models are ever used.
+   - **Fallback order** — the providers your app will try in order.
+6. While you're there, pick a **default caption theme** (TikTok, Neon, Beast…)
+   — every new clip burns that look automatically.
 
 That's it — no Vercel/Render env edits for keys. ✅
 
@@ -88,6 +96,30 @@ That's it — no Vercel/Render env edits for keys. ✅
 5. Want a different subtitle look per clip? Open a clip → **subtitles** →
    pick a preset (TikTok, Reels, Gold Glow, Neon, Boxed…) → **apply to this
    clip** — live preview included.
+6. **Text summary:** on the results screen, tap **text summary** — the app
+   turns the whole video into a chaptered written digest (timestamps, key
+   points, best quotes, clip hooks). Copy or download as .md for show notes,
+   newsletters or LinkedIn threads.
+
+## Step 6 — (Optional) Post straight to your YouTube channel
+
+The app can upload clips **directly to your own YouTube channel** with your
+Google account — no third party:
+
+1. In the app → **Settings** → **YouTube direct upload** → tap **show steps**
+   for the full walkthrough. The short version:
+   - console.cloud.google.com → create a free project
+   - enable **YouTube Data API v3**
+   - create **OAuth Client ID** (type: Web application)
+   - add `https://yourapp.onrender.com/api/youtube/callback` as a redirect URI
+   - copy Client ID + Secret into your backend env vars:
+     `GOOGLE_YT_CLIENT_ID` and `GOOGLE_YT_CLIENT_SECRET` (these two DO go in
+     Render env — it's a one-time 5-minute setup)
+2. Back in the app → **Connect YouTube** → sign in with your Google account.
+3. On any clip → **post** → **post straight to my channel (direct)**.
+   Free YouTube API quota ≈ 6 uploads/day — plenty for shorts.
+4. Prefer the simpler path? The normal **post** button via Upload-Post
+   (free tier) also publishes to YouTube, TikTok and Instagram.
 
 ---
 

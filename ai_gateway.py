@@ -139,6 +139,22 @@ _TRANSIENT_STATUS = {408, 429, 500, 502, 503, 504}
 
 _TIMEOUT = httpx.Timeout(30.0, read=300.0)
 
+# OpenRouter free-model autodiscovery. The API returns every model with its
+# pricing; free models have $0 pricing (or a ":free" suffix). We cache the
+# list for a few hours and build the default chain from it, so when a model is
+# retired the next refresh simply routes around it — no config edits.
+_FREE_MODELS_CACHE: Dict[str, Any] = {"at": 0.0, "text": [], "vision": []}
+_FREE_MODELS_TTL = 6 * 3600
+FREE_MODEL_AUTODISCOVERY = os.environ.get(
+    "FREE_MODEL_AUTODISCOVERY", "1").strip().lower() in ("1", "true", "yes")
+
+# Provider failure memory: when a provider answers 429/5xx/timeout we put it
+# in cooldown and the chain skips it for a while, so a limited model never
+# blocks the pipeline and traffic shifts to healthy providers automatically.
+_FAILURES: Dict[str, Dict[str, float]] = {}
+_COOLDOWN_BASE_SECONDS = 45
+_COOLDOWN_MAX_SECONDS = 10 * 60
+
 
 class AIGatewayError(RuntimeError):
     """All providers in the chain failed for the request."""
@@ -180,11 +196,34 @@ def _provider_base(provider: str) -> Optional[str]:
 
 
 def provider_key(provider: str) -> Optional[str]:
-    """The API key for a provider, or None when not configured."""
+    """The primary API key for a provider, or None when not configured."""
+    keys = provider_keys(provider)
+    return keys[0] if keys else None
+
+
+def provider_keys(provider: str) -> List[str]:
+    """Every API key configured for a provider.
+
+    The first key comes from the provider's KEY env var; additional keys use
+    the numbered scheme KEY_2, KEY_3... so the settings UI can store as many
+    free keys per provider as the user likes.
+    """
     spec = PROVIDERS.get(provider)
     if not spec:
-        return None
-    return os.environ.get(spec["key_env"], "").strip() or None
+        return []
+    keys: List[str] = []
+    env = spec["key_env"]
+    primary = os.environ.get(env, "").strip()
+    if primary:
+        keys.append(primary)
+    i = 2
+    while True:
+        extra = os.environ.get(f"{env}_{i}", "").strip()
+        if not extra:
+            break
+        keys.append(extra)
+        i += 1
+    return keys
 
 
 def _split_entry(entry: str) -> Tuple[str, str]:
@@ -205,37 +244,62 @@ def resolve_chain(kind: str = "text") -> List[Tuple[str, str, str]]:
     """The ordered, configured (provider, model, key) chain for a task kind.
 
     kind: "text" | "vision" | "image". Entries whose provider has no key are
-    dropped. Returns [] when nothing is configured at all.
+    dropped; every configured key of a provider is expanded into its own
+    chain entry. Returns [] when nothing is configured at all.
+
+    With an OpenRouter key and no explicit AI_MODEL_CHAIN, the chain is built
+    from OpenRouter's catalog filtered to FREE models only (never paid), with
+    the other configured providers' defaults appended as extra fallbacks —
+    so the app auto-adapts when free models are added/retired.
     """
     explicit = os.environ.get("AI_MODEL_CHAIN") or os.environ.get(
         "FREE_AI_MODEL_CHAIN")
-    if kind == "vision":
-        raw = os.environ.get("AI_VISION_MODEL_CHAIN") or DEFAULT_VISION_CHAIN
-    elif kind == "image":
-        raw = os.environ.get("AI_IMAGE_MODEL") or DEFAULT_IMAGE_MODEL
+    vision_chain = os.environ.get("AI_VISION_MODEL_CHAIN")
+    image_model = os.environ.get("AI_IMAGE_MODEL")
+
+    entries: List[Tuple[str, str]] = []
+    if kind == "vision" and vision_chain:
+        for entry in vision_chain.split(","):
+            entries.append(_split_entry(entry))
+    elif kind == "image" and image_model:
+        entries.append(_split_entry(image_model))
+    elif kind == "text" and explicit:
+        for entry in explicit.split(","):
+            entries.append(_split_entry(entry))
     else:
-        raw = explicit or DEFAULT_TEXT_CHAIN
+        # Auto-discovery: free OpenRouter models first, then configured
+        # providers' defaults as fallback.
+        openrouter_discovered = False
+        if FREE_MODEL_AUTODISCOVERY and provider_key("openrouter"):
+            free = discover_openrouter_free_models(
+                kind=kind, limit=12 if kind == "text" else 6)
+            if free:
+                openrouter_discovered = True
+                for mid in free:
+                    entries.append(("openrouter", mid))
+        default_raw = (DEFAULT_VISION_CHAIN if kind == "vision"
+                       else DEFAULT_IMAGE_MODEL if kind == "image"
+                       else DEFAULT_TEXT_CHAIN)
+        for entry in default_raw.split(","):
+            provider, model = _split_entry(entry)
+            if provider == "openrouter" and openrouter_discovered:
+                continue  # already covered by discovered free models
+            entries.append((provider, model))
 
     # Legacy GEMINI_MODEL env vars keep working: a named Gemini model is
     # prepended to whatever chain is active (only usable when a key exists).
     legacy_model = os.environ.get("GEMINI_MODEL", "").strip()
     if not explicit and kind == "text" and legacy_model:
-        raw = f"google:{legacy_model}," + raw
+        entries.insert(0, ("google", legacy_model))
 
     chain: List[Tuple[str, str, str]] = []
-    for entry in raw.split(","):
-        entry = entry.strip()
-        if not entry:
-            continue
-        provider, model = _split_entry(entry)
+    for provider, model in entries:
         if not provider or not model:
-            continue
-        key = provider_key(provider)
-        if not key:
             continue
         if not _provider_base(provider):
             continue
-        chain.append((provider, model, key))
+        for key in provider_keys(provider):
+            chain.append((provider, model, key))
     return chain
 
 
@@ -246,6 +310,135 @@ def is_configured() -> bool:
 
 def configured_providers() -> List[str]:
     return [p for p in PROVIDERS if provider_key(p)]
+
+
+# --------------------------------------------------------------------------- #
+# Failure memory — automatic switching when a provider gets limited
+# --------------------------------------------------------------------------- #
+def _cooldown_seconds(provider: str) -> float:
+    state = _FAILURES.get(provider)
+    if not state:
+        return 0.0
+    return max(0.0, state.get("until", 0.0) - time.time())
+
+
+def provider_in_cooldown(provider: str) -> bool:
+    return _cooldown_seconds(provider) > 0
+
+
+def _mark_failure(provider: str) -> None:
+    state = _FAILURES.setdefault(provider, {"count": 0, "until": 0.0})
+    state["count"] = int(state.get("count", 0)) + 1
+    delay = min(_COOLDOWN_MAX_SECONDS,
+                _COOLDOWN_BASE_SECONDS * (2 ** (state["count"] - 1)))
+    state["until"] = time.time() + delay
+    print(f"⚠️ [ai_gateway] {provider} limited — skipping it for "
+          f"{int(delay)}s (failures={state['count']})")
+
+
+def _mark_success(provider: str) -> None:
+    if provider in _FAILURES:
+        state = _FAILURES[provider]
+        state["count"] = max(0, int(state.get("count", 0)) - 1)
+        if state["count"] == 0:
+            _FAILURES.pop(provider, None)
+
+
+def provider_status() -> Dict[str, Dict[str, Any]]:
+    """Health snapshot for the UI: cooldown + failure counts per provider."""
+    out = {}
+    for provider in PROVIDERS:
+        keys = provider_keys(provider)
+        if not keys:
+            continue
+        state = _FAILURES.get(provider)
+        out[provider] = {
+            "keys": len(keys),
+            "cooldown": round(_cooldown_seconds(provider), 1),
+            "failures": int((state or {}).get("count", 0)),
+        }
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# OpenRouter free-model autodiscovery (only free models — never paid)
+# --------------------------------------------------------------------------- #
+def discover_openrouter_free_models(key: Optional[str] = None,
+                                     kind: str = "text",
+                                     limit: int = 10) -> List[str]:
+    """Fetch OpenRouter's catalog and return ONLY free model ids.
+
+    Filters out every paid model: a model is free when its prompt and
+    completion prices are both $0, or its id ends with ':free'. Results are
+    ordered by OpenRouter's own popularity rank. Cached for _FREE_MODELS_TTL.
+    Vision results only include models that accept image input.
+
+    Returns [] when the fetch fails — callers then use the built-in defaults.
+    """
+    global _FREE_MODELS_CACHE
+    now = time.time()
+    cached = _FREE_MODELS_CACHE
+    if now - cached.get("at", 0) < _FREE_MODELS_TTL and cached.get(kind):
+        return cached[kind][:limit]
+
+    key = key or provider_key("openrouter")
+    if not key:
+        return []
+    try:
+        resp = httpx.get(
+            "https://openrouter.ai/api/v1/models",
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=httpx.Timeout(20.0),
+        )
+        resp.raise_for_status()
+        models = resp.json().get("data") or []
+    except Exception as e:
+        print(f"⚠️ [ai_gateway] OpenRouter catalog fetch failed: {e}")
+        return []
+
+    free_text, free_vision = [], []
+    for m in models:
+        mid = str(m.get("id") or "")
+        pricing = m.get("pricing") or {}
+
+        def _zero(v):
+            try:
+                return float(v) == 0.0
+            except (TypeError, ValueError):
+                return False
+
+        is_free = mid.endswith(":free") or (
+            _zero(pricing.get("prompt")) and _zero(pricing.get("completion")))
+        if not is_free:
+            continue  # paid models are never used
+        arch = m.get("architecture") or {}
+        modalities = [str(x).lower() for x in arch.get("input_modalities", [])]
+        is_vision = any(mm in modalities for mm in ("image", "video"))
+        entry = (int(m.get("order") or 999999), mid)
+        (free_vision if is_vision else free_text).append(entry)
+
+    free_text.sort(key=lambda e: e[0])
+    free_vision.sort(key=lambda e: e[0])
+    _FREE_MODELS_CACHE = {
+        "at": now,
+        "text": [mid for _o, mid in free_text],
+        "vision": [mid for _o, mid in free_vision],
+    }
+    print(f"✅ [ai_gateway] Discovered {len(free_text)} free text + "
+          f"{len(free_vision)} free vision models on OpenRouter")
+    return (_FREE_MODELS_CACHE["vision"] if kind == "vision"
+            else _FREE_MODELS_CACHE["text"])[:limit]
+
+
+def _expand_chain(entries: List[Tuple[str, str]]) -> List[Tuple[str, str, str]]:
+    """Expand (provider, model) entries across every configured key of the
+    provider, so multiple keys per provider all get used (a key's provider is
+    skipped entirely while it is in cooldown)."""
+    chain: List[Tuple[str, str, str]] = []
+    for provider, model in entries:
+        for key in provider_keys(provider):
+            chain.append((provider, model, key))
+    return chain
 
 
 # --------------------------------------------------------------------------- #
@@ -406,8 +599,12 @@ def complete(
 
     msgs = _build_messages(system, user, messages, images)
     last_error: Optional[Exception] = None
+    tried = 0
 
     for provider, model, api_key in chain:
+        if provider_in_cooldown(provider):
+            continue  # auto-switch: skip providers that were just limited
+        tried += 1
         attempts = 2
         for attempt in range(1, attempts + 1):
             try:
@@ -418,6 +615,7 @@ def complete(
                 )
                 if json_mode and not _parse_json_text(result.text):
                     raise ValueError("JSON mode: answer did not parse as JSON")
+                _mark_success(provider)
                 return result
             except Exception as e:  # noqa: BLE001 - fall through the chain
                 last_error = e
@@ -428,13 +626,16 @@ def complete(
                     "did not parse as JSON", "ServiceUnavailable",
                     "Overloaded", "overloaded",
                 ))
-                if transient and attempt < attempts:
-                    time.sleep(2.0 * attempt)
-                    continue
+                if transient:
+                    _mark_failure(provider)
+                    if attempt < attempts:
+                        time.sleep(2.0 * attempt)
+                        continue
                 break  # next provider
 
     raise AIGatewayError(
-        f"All {len(chain)} AI provider(s) failed. Last error: {last_error}")
+        f"All {len(chain)} AI provider(s) failed"
+        f" ({tried} tried). Last error: {last_error}")
 
 
 def complete_json(

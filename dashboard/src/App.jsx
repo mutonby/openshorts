@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download } from 'lucide-react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, FileText } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import ServerSettingsCard from './components/ServerSettingsCard';
+import YoutubeDirectCard from './components/YoutubeDirectCard';
+import SummaryModal from './components/SummaryModal';
 import MediaInput from './components/MediaInput';
 import ResultCard from './components/ResultCard';
 import ProcessingAnimation from './components/ProcessingAnimation';
@@ -214,6 +216,7 @@ function App() {
   // within a clip's subtitle modal via "apply to all").
   const [bulkSub, setBulkSub] = useState({ running: false, current: 0, total: 0, errors: 0 });
   const [downloadingAll, setDownloadingAll] = useState(false);
+  const [showSummary, setShowSummary] = useState(false);
   // Pre-flight quality gate: { info: {max_height, min_height, cookies_invalid}, data }
   const [qualityGate, setQualityGate] = useState(null);
   const [logs, setLogs] = useState([]);
@@ -940,6 +943,7 @@ function App() {
                 </div>
               )}
               <ServerSettingsCard aiConfigured={aiConfigured} aiProviders={aiProviders} />
+              <YoutubeDirectCard />
               <KeyInput onKeySet={setApiKey} savedKey={apiKey} />
 
               <div className="card p-4 sm:p-6 mt-8">
@@ -1369,6 +1373,13 @@ function App() {
                   {results?.clips?.length > 0 && status === 'complete' && (
                     <div className="flex items-center gap-2 ml-auto">
                       <button
+                        onClick={() => setShowSummary(true)}
+                        className="btn-ghost px-3 py-2 text-xs"
+                        title="Generate a chaptered text summary of the whole video"
+                      >
+                        <FileText size={14} />text summary
+                      </button>
+                      <button
                         onClick={handleDownloadAll}
                         disabled={downloadingAll}
                         className="btn-ghost px-3 py-2 text-xs"
@@ -1591,6 +1602,13 @@ function App() {
           plan={plan}
           onActivated={refreshMe}
           onClose={() => setShowTrialUpgrade(false)}
+        />
+      )}
+      {showSummary && (
+        <SummaryModal
+          isOpen={showSummary}
+          onClose={() => setShowSummary(false)}
+          jobId={jobId}
         />
       )}
     </div>

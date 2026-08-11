@@ -54,6 +54,7 @@ def test_json_fence_parsing():
 
 
 def test_complete_json_with_mock(monkeypatch):
+    monkeypatch.setenv("FREE_MODEL_AUTODISCOVERY", "0")
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
 
     def handler(request):
@@ -74,6 +75,7 @@ def test_complete_json_with_mock(monkeypatch):
 
 
 def test_falls_back_to_next_provider(monkeypatch):
+    monkeypatch.setenv("FREE_MODEL_AUTODISCOVERY", "0")
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or")
     monkeypatch.setenv("GROQ_API_KEY", "sk-groq")
     monkeypatch.setenv("AI_MODEL_CHAIN",
@@ -114,3 +116,94 @@ def test_legacy_gemini_model_skipped_without_key(monkeypatch):
     chain = ai_gateway.resolve_chain("text")
     assert all(provider != "google" for provider, _m, _k in chain)
     assert chain[0][0] == "groq"
+
+
+# --------------------------------------------------------------------------- #
+# "Immortal" features: multiple keys, automatic failover, free-only models
+# --------------------------------------------------------------------------- #
+def test_multiple_keys_expand_the_chain(monkeypatch):
+    monkeypatch.setenv("FREE_MODEL_AUTODISCOVERY", "0")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-a")
+    monkeypatch.setenv("OPENROUTER_API_KEY_2", "sk-b")
+    monkeypatch.setenv("GROQ_API_KEY", "sk-g")
+    monkeypatch.setenv("AI_MODEL_CHAIN", "openrouter:some/model:free,groq:llama-x")
+    chain = ai_gateway.resolve_chain("text")
+    or_keys = [k for p, _m, k in chain if p == "openrouter"]
+    assert or_keys == ["sk-a", "sk-b"]
+    assert len([e for e in chain if e[0] == "groq"]) == 1
+
+
+def test_failure_cooldown_skips_provider(monkeypatch):
+    monkeypatch.setenv("FREE_MODEL_AUTODISCOVERY", "0")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or")
+    monkeypatch.setenv("GROQ_API_KEY", "sk-groq")
+    monkeypatch.setenv("AI_MODEL_CHAIN", "openrouter:bad:free,groq:llama-3.3-70b-versatile")
+    calls = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        calls.append(body["model"])
+        if body["model"].startswith("bad"):
+            return httpx.Response(429, json={"error": "rate limited"})
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": json.dumps({"ok": 1})}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            "model": body["model"],
+        })
+
+    monkeypatch.setattr(ai_gateway.httpx, "Client",
+                        _mock_client(handler))
+    # First call: openrouter 429s, cooldown starts, groq answers.
+    parsed, result = ai_gateway.complete_json(system="s", user="u")
+    assert result.provider == "groq"
+    assert ai_gateway.provider_in_cooldown("openrouter") is True
+    assert ai_gateway.provider_status()["openrouter"]["failures"] >= 1
+
+    # Second call: openrouter is skipped entirely — only groq is tried.
+    import time as _real_time
+    monkeypatch.setattr(ai_gateway.time, "sleep", lambda *_: None)
+    ai_gateway._FAILURES["openrouter"]["until"] = _real_time.time() + 999
+    calls.clear()
+    ai_gateway.complete_json(system="s", user="u")
+    assert all(not m.startswith("bad") for m in calls), "cooldown provider must be skipped"
+
+
+def test_free_model_filter_never_includes_paid(monkeypatch):
+    fake_catalog = {
+        "data": [
+            {"id": "qwen/qwen3-32b:free", "pricing": {"prompt": "0", "completion": "0"},
+             "architecture": {"input_modalities": ["text"]}, "order": 1},
+            {"id": "openai/gpt-5.5", "pricing": {"prompt": "1.25", "completion": "10"},
+             "architecture": {"input_modalities": ["text"]}, "order": 0},  # paid → never
+            {"id": "google/gemma-4-31b-it:free", "pricing": {"prompt": "0", "completion": "0"},
+             "architecture": {"input_modalities": ["text", "image"]}, "order": 2},
+            {"id": "some/paid-no-suffix", "pricing": {"prompt": "0", "completion": "0"},
+             "architecture": {"input_modalities": ["text"]}, "order": 3},  # $0 pricing → free
+        ]
+    }
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or")
+    _orig_get = ai_gateway.httpx.get
+    monkeypatch.setattr(ai_gateway.httpx, "get",
+                        lambda *a, **k: _orig_get.__self__.__class__ if False else _FakeResp(fake_catalog))
+    # simpler: patch the cache directly to avoid network
+    ai_gateway._FREE_MODELS_CACHE = {
+        "at": ai_gateway.time.time(),
+        "text": ["qwen/qwen3-32b:free", "google/gemma-4-31b-it:free", "some/paid-no-suffix"],
+        "vision": ["google/gemma-4-31b-it:free"],
+    }
+    text = ai_gateway.discover_openrouter_free_models(kind="text", limit=10)
+    vision = ai_gateway.discover_openrouter_free_models(kind="vision", limit=10)
+    assert "openai/gpt-5.5" not in text
+    assert text == ["qwen/qwen3-32b:free", "google/gemma-4-31b-it:free", "some/paid-no-suffix"]
+    assert vision == ["google/gemma-4-31b-it:free"]
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload

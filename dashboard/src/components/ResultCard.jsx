@@ -108,6 +108,46 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
     const [postResult, setPostResult] = useState(null);
     const [copied, setCopied] = useState(null);
 
+    // Direct YouTube upload (own channel, no third party).
+    const [ytStatus, setYtStatus] = useState(null);
+    const [ytPosting, setYtPosting] = useState(false);
+    const [ytResult, setYtResult] = useState(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        apiFetch('/api/youtube/status')
+            .then((res) => (res.ok ? res.json() : null))
+            .then((data) => { if (!cancelled && data) setYtStatus(data); })
+            .catch(() => {});
+        return () => { cancelled = true; };
+    }, []);
+
+    const handleYoutubeDirectPost = async () => {
+        setYtPosting(true);
+        setYtResult(null);
+        try {
+            const res = await apiFetch('/api/youtube/post', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    job_id: jobId,
+                    clip_index: index,
+                    title: postTitle || clip.video_title_for_youtube_short || 'OpenShorts+ Short',
+                    description: postDescription || clip.video_description_for_tiktok || clip.video_description_for_instagram || '',
+                    privacy: 'public',
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail?.message || data.detail || 'upload failed');
+            setYtResult({ success: true, msg: `Uploaded to YouTube — ${data.url || 'check your channel'}` });
+            setShowModal(false);
+        } catch (e) {
+            setYtResult({ success: false, msg: String(e.message || e) });
+        } finally {
+            setYtPosting(false);
+        }
+    };
+
     const handleCopy = async (field, text) => {
         try {
             await navigator.clipboard.writeText(text || '');
@@ -936,6 +976,30 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
                         <div className={postResult.success ? 'badge-ok' : 'badge-danger'}>
                             {postResult.success ? <Check size={12} className="shrink-0" /> : <AlertCircle size={12} className="shrink-0" />}
                             {postResult.msg}
+                        </div>
+                    )}
+
+                    {/* Direct YouTube upload to the user's own channel (no third party) */}
+                    {ytStatus?.connected && (
+                        <div className="pt-3 border-t border-rule">
+                            <button
+                                type="button"
+                                onClick={handleYoutubeDirectPost}
+                                disabled={ytPosting}
+                                className="btn-ghost w-full flex items-center justify-center gap-2 text-xs"
+                            >
+                                {ytPosting
+                                    ? <><Loader2 size={14} className="animate-spin" /> uploading to {ytStatus.channelTitle || 'your channel'}…</>
+                                    : <><Youtube size={14} className="text-danger" /> post straight to my channel (direct)</>}
+                            </button>
+                            <p className="text-[11px] text-muted text-center mt-1.5">
+                                No third party — uploaded via your Google account. ~6 free uploads/day.
+                            </p>
+                        </div>
+                    )}
+                    {ytResult && !ytResult.success && (
+                        <div className="badge-danger">
+                            <AlertCircle size={12} className="shrink-0" /> {ytResult.msg}
                         </div>
                     )}
                 </div>

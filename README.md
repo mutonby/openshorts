@@ -12,11 +12,13 @@
 | | OpenShorts+ (this repo) |
 |---|---|
 | **Price** | Free forever, MIT — no paid plans at all |
-| **AI providers** | Free by default: OpenRouter `:free` models (DeepSeek, Qwen, GLM, Kimi, Gemma, gpt-oss...), Gemini free tier, Groq, Zhipu GLM, Alibaba Qwen, Moonshot Kimi — automatic fallback between them. Paste keys right in the app UI (Settings) — no server env edits |
+| **AI providers** | Free by default: OpenRouter `:free` models (DeepSeek, Qwen, GLM, Kimi, Gemma, gpt-oss...), Gemini free tier, Groq, Zhipu GLM, Alibaba Qwen, Moonshot Kimi — automatic fallback between them, with failure cooldowns that route around limited providers. Paste unlimited keys in the app UI (Settings → + add new) — no server env edits |
 | **Sources** | YouTube, **Kick (live + VOD)**, Twitch, TikTok, Facebook, and any other site yt-dlp supports — unlimited length |
 | **Video length** | Unlimited — cut any long video freely |
 | **Watermark** | Never |
 | **Voiceover** | Free Microsoft Edge TTS (ElevenLabs optional, BYOK) |
+| **Publishing** | Direct **YouTube upload** to your own channel (Google OAuth, no third party) + Upload-Post free tier for TikTok/IG/YouTube |
+| **Text repurposing** | One click: chaptered text summary of any long video (timestamps, quotes, hooks) |
 | **Subtitles** | 11 caption themes (TikTok, Neon, Beast, Boxed...) burned in by default, per-clip styling with live preview |
 | **AI Shorts actors** | Free image generation / local portraits + free Ken Burns motion (fal.ai optional, BYOK) |
 | **Setup** | Docker, 8GB+ RAM, model downloads — or free hosting (Vercel + Render) |
@@ -82,7 +84,9 @@ All generated videos and avatars are saved to a public gallery with SEO pages fo
 ## Key Features
 
 ### Clip Generator
-- **Viral Moment Detection**: free multi-provider AI (OpenRouter `:free` models / Gemini free tier / Groq / DeepSeek / GLM / Qwen / Kimi, with automatic fallback) analyzes transcripts and scene boundaries to detect 3-15 high-potential moments
+- **Viral Moment Detection**: free multi-provider AI (OpenRouter `:free` models / Gemini free tier / Groq / DeepSeek / GLM / Qwen / Kimi) — the app auto-fetches OpenRouter's catalog and **uses free models only**, with automatic failover when a provider is rate-limited
+- **Text Summary**: turn any processed long video into a chaptered written digest (timestamps, key points, best quotes, clip hooks) — copy or download as markdown
+- **Direct YouTube Publishing**: connect your own Google account and post clips straight to your channel — no third party, ~6 free uploads/day
 - **Smart 9:16 Cropping**: Dual-mode AI reframing — TRACK mode (MediaPipe + YOLOv8 face tracking) and GENERAL mode (blurred background)
 - **Auto Subtitles**: faster-whisper with word-level timestamps, styled and burned into clips
 - **AI Voice Dubbing**: ElevenLabs integration (BYOK) for 30+ languages — or free Edge TTS voiceovers

@@ -14,7 +14,7 @@ import itertools
 import asyncio
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -130,11 +130,35 @@ def _save_settings(settings: dict) -> None:
 
 
 def _apply_settings(settings: dict) -> None:
-    """Merge stored settings into the process environment (live)."""
+    """Merge stored settings into the process environment (live).
+
+    Multiple keys per provider are supported: the first goes to the provider's
+    KEY env var, the rest to KEY_2, KEY_3... (the AI gateway expands them all).
+
+    IMPORTANT: this never removes a provider's primary env var — platform env
+    (Vercel/Render) is a legitimate key source that must survive restarts.
+    UI-set keys only override while they exist; clearing happens explicitly in
+    update_server_settings.
+    """
     for provider, env_var in PROVIDER_KEY_ENV.items():
-        key = (settings.get("keys") or {}).get(provider)
-        if key:
-            os.environ[env_var] = key
+        keys = settings.get("keys") or {}
+        stored = keys.get(provider)
+        if isinstance(stored, str):  # legacy single-string form
+            stored = [stored] if stored.strip() else []
+        if not isinstance(stored, list):
+            stored = []
+        stored = [k.strip() for k in stored if k and k.strip()]
+        if stored:
+            os.environ[env_var] = stored[0]
+        # Numbered slots (_2, _3, ...) only ever come from settings, so prune
+        # them when the list shrinks; the primary slot is left untouched.
+        i = 2
+        for extra in stored[1:]:
+            os.environ[f"{env_var}_{i}"] = extra
+            i += 1
+        while os.environ.get(f"{env_var}_{i}"):
+            os.environ.pop(f"{env_var}_{i}")
+            i += 1
     theme = (settings.get("caption_theme") or "auto").strip().lower()
     if theme in ("", "auto", "default"):
         os.environ.pop("CAPTION_THEME", None)
@@ -142,13 +166,27 @@ def _apply_settings(settings: dict) -> None:
         os.environ["CAPTION_THEME"] = theme
 
 
-def _settings_summary() -> dict:
-    settings = _load_settings()
-    keys = settings.get("keys") or {}
-    return {
-        "configuredProviders": [p for p in PROVIDER_KEY_ENV if keys.get(p)],
-        "captionTheme": (settings.get("caption_theme") or "auto").strip().lower(),
-    }
+def _normalize_stored_keys(keys) -> dict:
+    """Coerce settings['keys'] into {provider: [key, ...]}."""
+    if not isinstance(keys, dict):
+        return {}
+    out = {}
+    for provider, value in keys.items():
+        if provider not in PROVIDER_KEY_ENV:
+            continue
+        if isinstance(value, str):
+            items = [value]
+        elif isinstance(value, list):
+            items = value
+        else:
+            continue
+        cleaned = []
+        for k in items:
+            if isinstance(k, str) and k.strip():
+                cleaned.append(k.strip())
+        if cleaned:
+            out[provider] = cleaned
+    return out
 
 
 # Apply persisted settings at import time so the gateway + subprocesses see
@@ -1446,24 +1484,37 @@ async def get_config():
         # so the dashboard knows whether a client-side key is required at all.
         "aiConfigured": ai_gateway.is_configured(),
         "aiProviders": ai_gateway.configured_providers(),
-        **{f"keyConfigured_{p}": bool(os.environ.get(env))
-           for p, env in PROVIDER_KEY_ENV.items()},
+        "providerStatus": ai_gateway.provider_status(),
+        "youtubeDirectEnabled": bool(
+            os.environ.get("GOOGLE_YT_CLIENT_ID")
+            and os.environ.get("GOOGLE_YT_CLIENT_SECRET")),
     }
 
 
 class SettingsUpdateRequest(BaseModel):
-    keys: Optional[Dict[str, Optional[str]]] = None   # provider -> key ("" / null clears)
-    caption_theme: Optional[str] = None               # "auto" | theme name
+    keys: Optional[Dict[str, Any]] = None   # provider -> key | [keys] ("" / [] / null clears)
+    caption_theme: Optional[str] = None     # "auto" | theme name
 
 
 @app.get("/api/settings")
 async def get_server_settings():
     """What's configured server-side (provider names only — never secrets)."""
     settings = _load_settings()
+    keys = _normalize_stored_keys(settings.get("keys") or {})
+    free_count = 0
+    try:
+        free_count = len(ai_gateway.discover_openrouter_free_models(
+            kind="text", limit=1000))
+    except Exception:
+        pass
     return {
-        "configuredProviders": list((settings.get("keys") or {}).keys()),
+        "configuredProviders": list(keys.keys()),
+        "keyCounts": {p: len(v) for p, v in keys.items()},
         "captionTheme": (settings.get("caption_theme") or "auto").strip().lower(),
         "availableProviders": list(PROVIDER_KEY_ENV.keys()),
+        "providerStatus": ai_gateway.provider_status(),
+        "openrouterFreeModels": free_count,
+        "freeModelAutoDiscovery": ai_gateway.FREE_MODEL_AUTODISCOVERY,
     }
 
 
@@ -1472,21 +1523,29 @@ async def update_server_settings(req: SettingsUpdateRequest):
     """Save free AI keys / default caption theme on the server.
 
     Keys are stored in server_settings.json (DATA_DIR/OUTPUT_DIR), merged into
-    the environment immediately, and inherited by processing subprocesses —
-    so you can configure everything from the app UI on any device.
+    the environment immediately (KEY, KEY_2, ... for multiple keys), and
+    inherited by processing subprocesses — so you can configure everything
+    from the app UI on any device.
     """
     settings = _load_settings()
-    keys = settings.get("keys") or {}
+    keys = _normalize_stored_keys(settings.get("keys") or {})
     if req.keys:
-        for provider, key in req.keys.items():
-            if provider not in PROVIDER_KEY_ENV:
-                continue
-            key = (key or "").strip()
-            if key:
-                keys[provider] = key
-            else:
+        incoming = _normalize_stored_keys(req.keys)
+        for provider in PROVIDER_KEY_ENV:
+            if provider in incoming:
+                keys[provider] = incoming[provider]
+            elif provider in req.keys and not incoming.get(provider):
+                # Explicit clear: remove numbered slots (UI-only) and the
+                # primary slot too when it was UI-set. A platform env key that
+                # was never overridden stays untouched.
+                env_var = PROVIDER_KEY_ENV[provider]
+                i = 2
+                while os.environ.get(f"{env_var}_{i}"):
+                    os.environ.pop(f"{env_var}_{i}")
+                    i += 1
+                if keys.get(provider):
+                    os.environ.pop(env_var, None)
                 keys.pop(provider, None)
-                os.environ.pop(PROVIDER_KEY_ENV[provider], None)
         settings["keys"] = keys
     if req.caption_theme is not None:
         theme = req.caption_theme.strip().lower()
@@ -1495,8 +1554,10 @@ async def update_server_settings(req: SettingsUpdateRequest):
     _apply_settings(settings)
     return {
         "configuredProviders": list(keys.keys()),
+        "keyCounts": {p: len(v) for p, v in keys.items()},
         "captionTheme": (settings.get("caption_theme") or "auto").strip().lower(),
         "aiConfigured": ai_gateway.is_configured(),
+        "providerStatus": ai_gateway.provider_status(),
     }
 
 async def _probe_youtube_quality(url: str) -> dict:
@@ -2930,6 +2991,261 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
     except Exception as e:
         print(f"❌ Social Post Exception: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --------------------------------------------------------------------------- #
+# Direct YouTube upload (zero-budget publishing to your own channel)
+# --------------------------------------------------------------------------- #
+class YouTubePostRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    title: Optional[str] = None
+    description: Optional[str] = None
+    privacy: str = "public"  # public | unlisted | private
+
+
+@app.get("/api/youtube/status")
+async def youtube_status(request: Request):
+    """Is a YouTube channel connected? + whether OAuth creds are configured."""
+    import youtube_publish as yt
+    return {
+        "configured": yt.is_configured(),
+        "connected": yt.connection_status().get("connected", False),
+        "channelTitle": yt.connection_status().get("channelTitle", ""),
+        "channelId": yt.connection_status().get("channelId", ""),
+    }
+
+
+@app.get("/api/youtube/auth-url")
+async def youtube_auth_url(request: Request):
+    """Google consent URL for the user's own channel."""
+    import youtube_publish as yt
+    if not yt.is_configured():
+        raise HTTPException(status_code=400, detail={
+            "error": "not_configured",
+            "message": "Google OAuth credentials missing. Set GOOGLE_YT_CLIENT_ID "
+                       "and GOOGLE_YT_CLIENT_SECRET in your backend env vars "
+                       "(see the Settings page for step-by-step instructions).",
+        })
+    api_base = os.environ.get("PUBLIC_API_URL", "").rstrip("/") or str(request.base_url).rstrip("/")
+    redirect_uri = f"{api_base}/api/youtube/callback"
+    return {"url": yt.build_auth_url(redirect_uri), "redirect_uri": redirect_uri}
+
+
+@app.get("/api/youtube/callback")
+async def youtube_callback(request: Request,
+                           code: Optional[str] = None,
+                           error: Optional[str] = None):
+    """OAuth callback: exchange the code, cache the refresh token, done."""
+    import youtube_publish as yt
+    api_base = os.environ.get("PUBLIC_API_URL", "").rstrip("/") or str(request.base_url).rstrip("/")
+    redirect_uri = f"{api_base}/api/youtube/callback"
+    html_ok = (
+        "<html><body style='font-family:sans-serif;background:#0b0b12;color:#eee;"
+        "display:flex;align-items:center;justify-content:center;height:100vh'>"
+        "<div style='text-align:center'><h2>✅ YouTube connected!</h2>"
+        "<p>You can close this tab and go back to OpenShorts+.</p></div></body></html>"
+    )
+    html_fail = (
+        "<html><body style='font-family:sans-serif;background:#0b0b12;color:#eee;"
+        "display:flex;align-items:center;justify-content:center;height:100vh'>"
+        "<div style='text-align:center'><h2>❌ YouTube connection failed</h2>"
+        "<p>Close this tab and try again from Settings.</p></div></body></html>"
+    )
+    if error or not code:
+        return HTMLResponse(html_fail)
+    data = yt.exchange_code(code, redirect_uri)
+    if not data:
+        return HTMLResponse(html_fail)
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, yt.fetch_channel_info)
+    except Exception:
+        pass
+    return HTMLResponse(html_ok)
+
+
+@app.post("/api/youtube/post")
+async def youtube_post(req: YouTubePostRequest, request: Request):
+    """Upload one clip straight to the connected YouTube channel."""
+    import youtube_publish as yt
+    if not yt.is_configured():
+        raise HTTPException(status_code=400, detail="YouTube OAuth not configured on the server.")
+    status = yt.connection_status()
+    if not status.get("connected"):
+        raise HTTPException(status_code=400, detail={
+            "error": "not_connected",
+            "message": "Connect your YouTube channel first (Settings → YouTube direct upload).",
+        })
+    await _ensure_job_files(req.job_id, request)
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs[req.job_id]
+    await _assert_job_owner(request, job)
+    if 'result' not in job or 'clips' not in job['result']:
+        raise HTTPException(status_code=400, detail="Job result not available")
+    clip = job['result']['clips'][req.clip_index]
+    filename = clip['video_url'].split('/')[-1]
+    file_path = os.path.join(OUTPUT_DIR, req.job_id, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail=f"Video file not found: {file_path}")
+
+    title = req.title or clip.get('video_title_for_youtube_short') or clip.get('title') or "OpenShorts+ Short"
+    description = (req.description
+                   or clip.get('video_description_for_youtube')
+                   or clip.get('video_description_for_tiktok')
+                   or clip.get('video_description_for_instagram')
+                   or "")
+
+    def _do_upload():
+        return yt.upload_video(file_path, title, description, req.privacy)
+
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, _do_upload)
+        if not result:
+            raise HTTPException(status_code=500, detail="YouTube upload returned no result.")
+        return {"success": True, **result, "channelTitle": status.get("channelTitle", "")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ YouTube direct upload error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/youtube/disconnect")
+async def youtube_disconnect():
+    import youtube_publish as yt
+    yt.disconnect()
+    return {"connected": False}
+
+
+# --------------------------------------------------------------------------- #
+# Text summary — turn any processed long video into a chaptered written digest
+# --------------------------------------------------------------------------- #
+class SummaryRequest(BaseModel):
+    job_id: str
+    language: str = "auto"
+
+
+_SUMMARY_SYSTEM = (
+    "You are a professional content repurposing editor. Return strict JSON "
+    "only — no markdown, no commentary."
+)
+
+SUMMARY_PROMPT_TEMPLATE = """Turn this long-form video transcript into a polished, repurposable text summary.
+
+VIDEO DURATION: {duration} seconds
+VIDEO LANGUAGE: {language}
+
+TRANSCRIPT:
+{transcript}
+
+Return JSON exactly like this:
+{{
+  "title": "catchy summary title",
+  "overview": "3-4 sentence overview of the whole video",
+  "chapters": [
+    {{
+      "start": 0,
+      "end": 123.4,
+      "title": "short chapter title",
+      "points": ["key point 1", "key point 2", "key point 3"]
+    }}
+  ],
+  "key_takeaways": ["3-6 overall takeaways"],
+  "quotes": [
+    {{"time": 45.2, "quote": "memorable exact or near-exact spoken line"}}
+  ],
+  "hooks": [
+    "5 short scroll-stopping hook lines that could caption a clip from this video"
+  ]
+}}
+
+RULES:
+- Chapters must cover the whole video in order, minimum 3, maximum 12.
+- Keep every "points" bullet under 140 characters.
+- The whole summary must be in the video's language ({language}).
+- Timestamps are absolute seconds from the start."""
+
+
+@app.post("/api/summary")
+async def generate_text_summary(req: SummaryRequest, request: Request):
+    """Chaptered text summary of a processed job's transcript (free AI)."""
+    api_key = await resolve_gemini(request)
+    if not api_key:
+        raise gemini_missing_error()
+    await _ensure_job_files(req.job_id, request)
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs[req.job_id]
+    await _assert_job_owner(request, job)
+
+    output_dir = os.path.join(OUTPUT_DIR, req.job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+    with open(json_files[0], "r", encoding="utf-8") as f:
+        data = json.load(f)
+    transcript = data.get("transcript")
+    if not transcript:
+        raise HTTPException(status_code=400, detail="No transcript available for this job.")
+
+    segments = transcript.get("segments") or []
+    if not segments:
+        raise HTTPException(status_code=400, detail="Transcript has no segments.")
+    text = transcript.get("text") or " ".join(
+        str(s.get("text") or "") for s in segments)
+    duration = max(s.get("end", 0) for s in segments)
+    language = (req.language if req.language != "auto"
+                else transcript.get("language") or "english")
+    # Cap the transcript so long podcasts don't blow the free model context.
+    max_chars = int(os.environ.get("SUMMARY_MAX_CHARS", "24000"))
+    if len(text) > max_chars:
+        text = text[:max_chars] + " …[truncated]"
+
+    prompt = SUMMARY_PROMPT_TEMPLATE.format(
+        duration=duration, language=language, transcript=text)
+
+    def _run():
+        parsed, _result = ai_gateway.complete_json(
+            system=_SUMMARY_SYSTEM, user=prompt, temperature=0.4)
+        return parsed
+
+    try:
+        loop = asyncio.get_event_loop()
+        summary = await loop.run_in_executor(None, _run)
+    except ai_gateway.AIGatewayError as e:
+        raise HTTPException(status_code=500, detail=f"Summary generation failed: {e}")
+
+    if not isinstance(summary, dict):
+        raise HTTPException(status_code=500, detail="Summary generation returned no data.")
+
+    # Persist the summary next to the job + return it.
+    try:
+        summary_path = os.path.join(output_dir, "summary.json")
+        with open(summary_path, "w", encoding="utf-8") as f:
+            json.dump({"job_id": req.job_id, "language": language, **summary},
+                      f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠️ Could not persist summary: {e}")
+
+    return {"success": True, "summary": summary, "language": language}
+
+
+@app.get("/api/summary/{job_id}")
+async def get_text_summary(job_id: str, request: Request):
+    """Fetch a previously generated summary for a job."""
+    await _ensure_job_files(job_id, request)
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    await _assert_job_owner(request, jobs[job_id])
+    summary_path = os.path.join(OUTPUT_DIR, job_id, "summary.json")
+    if not os.path.exists(summary_path):
+        raise HTTPException(status_code=404, detail="No summary yet — generate one first.")
+    with open(summary_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
 
 @app.get("/api/social/user")
 async def get_social_user(request: Request):

@@ -62,7 +62,10 @@ new clip.
 
 **Way 2 — backend env vars (survive redeploys):** set **any one** of these on
 Render/Vercel. The gateway uses everything you give it, with automatic
-fallback. Keys set in the app UI take precedence while they exist.
+fallback — it also auto-fetches OpenRouter's catalog and uses **free models
+only**, and puts rate-limited providers in cooldown so traffic shifts to the
+next healthy key/model automatically. Keys set in the app UI take precedence
+while they exist.
 
 | Env var | Provider | Free tier |
 |---|---|---|
@@ -91,6 +94,27 @@ Every clip burns stylish captions automatically (karaoke word-highlight look).
 Pick a **default theme** in Settings (TikTok, Reels, Shorts Pop, Gold Glow,
 Neon, Cyber, Karaoke, Minimal, Beast, Boxed, Classic), and restyle any clip
 individually from its **subtitles** modal with a live preview.
+
+## Direct YouTube publishing (optional, free)
+
+The app can upload clips straight to your **own YouTube channel** — your Google
+account, no third party:
+
+1. Google Cloud Console (free): enable **YouTube Data API v3**, create an
+   **OAuth Client ID** (Web application), add `<your-backend-url>/api/youtube/callback`
+   as an authorized redirect URI.
+2. Backend env vars: `GOOGLE_YT_CLIENT_ID` and `GOOGLE_YT_CLIENT_SECRET`.
+3. In the app: Settings → **YouTube direct upload** → **Connect YouTube**.
+4. On any clip → **post** → **post straight to my channel (direct)**.
+   Free API quota ≈ 6 uploads/day. Upload-Post (free tier) remains the option
+   for TikTok/Instagram/more volume.
+
+## Text summaries
+
+Any processed job can produce a **chaptered written digest** — timestamps, key
+points, best quotes, clip hooks — via the **text summary** button on the
+results screen. Copy it or download as `.md` for show notes / newsletters /
+LinkedIn threads.
 
 ## What stays free forever
 
