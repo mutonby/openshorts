@@ -35,7 +35,13 @@ class MagicLinkToken(Base):
     used_at = Column(DateTime(timezone=True), nullable=True)
     request_ip = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    __table_args__ = (Index("ix_magic_email_created", "email", "created_at"),)
+    __table_args__ = (
+        Index("ix_magic_email_created", "email", "created_at"),
+        # NOTE: schema is create_all-only; on an existing DB this index must be
+        # applied by hand: CREATE INDEX IF NOT EXISTS ix_magic_ip_created
+        #   ON magic_link_tokens (request_ip, created_at);
+        Index("ix_magic_ip_created", "request_ip", "created_at"),
+    )
 
 
 class Subscription(Base):

@@ -399,6 +399,8 @@ async def _sweeper_loop():
             await warn_free_expiring()
             await purge_expired()
             await purge_free_expired()
+            from .auth import purge_stale_magic_tokens
+            await purge_stale_magic_tokens()
         except asyncio.CancelledError:
             break
         except Exception as e:

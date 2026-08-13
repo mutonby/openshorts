@@ -1,0 +1,18 @@
+# MX-target domains of disposable/temp-mail providers (one per line, lowercase).
+# Comments (#) and blank lines ignored. Matched as a suffix against the MX
+# hostnames of a sign-up domain: front domains rotate (onldm.net was one of
+# 10minutemail's) but they all point MX at the provider's real SMTP hosts,
+# which stay put. Add the MX target here when a new front domain shows up in
+# the bounces (dig +short MX <domain>).
+10minutemail.com
+1secmail.com
+dropmail.me
+generator.email
+guerrillamail.com
+harakirimail.com
+mail.tm
+maildrop.cc
+mailinator.com
+mohmal.com
+temp-mail.org
+yopmail.com
