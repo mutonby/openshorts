@@ -384,7 +384,7 @@ lives in [`examples/n8n/`](examples/n8n/).
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=mutonby/openshorts&type=Date)](https://star-history.com/#mutonby/openshorts&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=mutonby/openshorts&type=Date)](https://star-history.dera.page/#mutonby/openshorts&Date)
 
 ## Contributions
 
