@@ -1,5 +1,6 @@
 /* Hallmark · genre: atmospheric · theme: lumen (night foundry) · design-system: design.md · designed-as-app */
 @import url('https://fonts.googleapis.com/css2?family=Noto+Serif:wght@700&display=swap'); /* hook-overlay font burned into videos — not UI */
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@800&family=Bebas+Neue&family=Bangers&display=swap'); /* caption-preset fonts (fonts/*.ttf) so the subtitle preview matches the burn — not UI */
 @import './tokens.css';
 @tailwind base;
 @tailwind components;

@@ -982,13 +982,19 @@ def finalize_clip_passthrough(input_video, final_output_video):
     return True
 
 
-def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=None):
+def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=None,
+                      preset=None):
     """Burn the default caption style onto a finished clip.
 
     ``split_ranges``: (start, end) stretches, in clip seconds, rendered with
     the SPLIT layout; captions there sit on the seam between the two speakers
     instead of the bottom. None reads the render's own sidecar next to
     ``clip_path`` (layout_ranges), which is where recut hands it over.
+
+    ``preset``: a subtitles.CAPTION_PRESETS name laid over the default look.
+    None reads AUTO_CAPTION_PRESET, which /api/process sets per job; app.py
+    passes the job's recorded preset explicitly when it re-applies captions
+    after an edit, since the server process does not carry the job's env.
 
     Captions are mandatory for short-form to land, but they were opt-in behind a
     modal and only 9% of delivered clips ever got them (prod audit, 25-jul-2026).
@@ -1009,7 +1015,8 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
         return None  # silent video: nothing to caption
     try:
         import subtitles as _subs
-        style = _subs.AUTO_CAPTION_STYLE
+        style = _subs.auto_caption_style(
+            preset or os.environ.get("AUTO_CAPTION_PRESET"))
         output_dir = os.path.dirname(clip_path)
         stem = os.path.basename(clip_path)
         generation_id = int(time.time())
@@ -1977,6 +1984,10 @@ if __name__ == '__main__':
             # --keep-original) or in uploads/ (upload jobs).
             clips_data['source_video'] = os.path.basename(input_video)
             clips_data['output_format'] = output_format
+            # The caption look of this job, so app.py can re-apply the same
+            # one after an edit (it runs outside this process's env).
+            if os.environ.get("AUTO_CAPTION_PRESET"):
+                clips_data['caption_preset'] = os.environ["AUTO_CAPTION_PRESET"]
             metadata_file = os.path.join(output_dir, f"{video_title}_metadata.json")
             with open(metadata_file, 'w') as f:
                 json.dump(clips_data, f, indent=2)

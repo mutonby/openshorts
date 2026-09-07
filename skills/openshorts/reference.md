@@ -118,13 +118,23 @@ const expected = 'sha256=' + crypto
 `POST /api/subtitle`
 
 ```json
+{ "job_id": "...", "clip_index": 0, "preset": "hormozi" }
+```
+
+`preset` is a ready-made look (font, colours, outline, effect, case): `hormozi`,
+`mrbeast`, `bounce`, `karaoke`, `tiktok`, `reels`, `shorts`, `gold`, `neon`,
+`cyber`, `minimal`, `boxed` or `classic` (`GET /api/config` lists them under
+`captionPresets`). Any explicit field overrides the preset:
+
+```json
 { "job_id": "...", "clip_index": 0, "style": "karaoke", "position": "bottom",
   "font_size": 48, "font_name": "...", "font_color": "#FFFFFF",
   "highlight_color": "#FFE600", "uppercase": true }
 ```
 
 `style` is `classic` or `karaoke`; `position` is `top`, `middle` or `bottom`.
-Only `job_id` and `clip_index` are required.
+Only `job_id` and `clip_index` are required. To burn a preset on every clip of
+a job instead, pass `caption_preset` to `POST /api/process`.
 
 ## Re-cut a clip
 

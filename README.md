@@ -84,7 +84,7 @@ All generated videos and avatars are saved to a public gallery with SEO pages fo
 - **Viral Moment Detection**: Google Gemini 3.1 Flash-Lite analyzes transcripts and scene boundaries to detect 3-15 high-potential moments
 - **Runs fully local if you want**: point `LLM_BASE_URL` at Ollama, LM Studio, vLLM or any OpenAI-compatible server and the moment picker runs on your own model, no Google key needed (see [Run without a Google key](#6-run-without-a-google-key-local-llm-optional))
 - **Smart 9:16 Cropping**: AI reframing per scene — TRACK mode (MediaPipe + YOLOv8 face tracking), GENERAL mode (blurred background), SPLIT mode (two speakers stacked, captions on the seam) and SCREENCAST mode (screen over presenter); the layout is picked per video by Gemini or forced from the dashboard
-- **Auto Subtitles**: faster-whisper with word-level timestamps, styled and burned into clips
+- **Auto Subtitles**: faster-whisper with word-level timestamps, styled and burned into clips. 13 ready-made looks (Hormozi, MrBeast, Bounce, Karaoke, TikTok, Reels...) with their fonts bundled, pickable per clip in the editor, per job (`caption_preset`) or by name from the API and MCP (`preset`)
 - **AI Voice Dubbing**: ElevenLabs integration for 30+ languages with voice cloning
 - **Hook Text Overlays**: AI-generated attention-grabbing text overlays
 - **AI Video Effects**: Gemini-generated FFmpeg filters for professional effects
@@ -434,6 +434,7 @@ lives in [`examples/n8n/`](examples/n8n/).
 | `AWS_S3_BUCKET` | Private bucket for clip backup |
 | `AWS_S3_PUBLIC_BUCKET` | Public bucket for gallery/avatars |
 | `MAX_CONCURRENT_JOBS` | Concurrent processing limit (default: 5) |
+| `AUTO_CAPTION_PRESET` | Caption look burned on every clip by default, by name (`hormozi`, `mrbeast`, `bounce`, `karaoke`, `tiktok`, `reels`, `shorts`, `gold`, `neon`, `cyber`, `minimal`, `boxed`, `classic`). Unset keeps the built-in look; `caption_preset` on `/api/process` overrides it per job |
 | `LLM_BASE_URL` | OpenAI-compatible server for the moment picker (Ollama, vLLM, LM Studio...). Set it and the Gemini key becomes optional |
 | `LLM_MODEL` | Model name on that server (default `llama3.1:8b`) |
 | `LLM_API_KEY` | Bearer token for that server, if it checks one |

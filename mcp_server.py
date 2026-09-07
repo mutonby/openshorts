@@ -29,6 +29,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
 import mcp_ui
+from subtitles import CAPTION_PRESETS
 
 router = APIRouter()
 
@@ -222,13 +223,17 @@ TOOLS = [
         "title": "Burn styled captions onto a clip",
         "description": (
             "Re-style the captions of one clip (clips already ship with default "
-            "captions). style 'karaoke' highlights the active word."
+            "captions). Pick a preset for a ready-made look; style 'karaoke' "
+            "highlights the active word."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "job_id": {"type": "string"},
                 "clip_index": {"type": "integer", "description": "0-based index from list_clips."},
+                "preset": {"type": "string", "enum": list(CAPTION_PRESETS),
+                           "description": "Named look (font, colours, effect). "
+                                          "Any field below overrides it."},
                 "style": {"type": "string", "enum": ["classic", "karaoke"]},
                 "position": {"type": "string", "enum": ["top", "middle", "bottom"]},
                 "font_size": {"type": "integer"},
@@ -446,7 +451,7 @@ async def _tool_get_quota(client, args):
 
 async def _tool_add_subtitles(client, args):
     body = {"job_id": args["job_id"], "clip_index": args["clip_index"]}
-    for k in ("style", "position", "font_size", "font_name", "font_color",
+    for k in ("preset", "style", "position", "font_size", "font_name", "font_color",
               "highlight_color", "uppercase"):
         if args.get(k) is not None:
             body[k] = args[k]

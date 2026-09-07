@@ -36,6 +36,13 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [layout, setLayout] = useState(() => {
         try { return localStorage.getItem('os_layout') || 'auto'; } catch { return 'auto'; }
     });
+    // Caption look burned on every clip of the job. '' = the server default;
+    // the list comes from /api/config (subtitles.CAPTION_PRESETS), the same
+    // presets the subtitle modal offers per clip.
+    const [captionPresets, setCaptionPresets] = useState([]);
+    const [captionPreset, setCaptionPreset] = useState(() => {
+        try { return localStorage.getItem('os_caption_preset') || ''; } catch { return ''; }
+    });
     const infoRef = useRef(null);
 
     // Close the compatibility popover on any outside click.
@@ -56,6 +63,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     setYoutubeUrlEnabled(false);
                     setMode('file');
                 }
+                if (cfg && Array.isArray(cfg.captionPresets)) setCaptionPresets(cfg.captionPresets);
             })
             .catch(() => {});
     }, []);
@@ -85,11 +93,13 @@ export default function MediaInput({ onProcess, isProcessing }) {
             autoHook,
             autoHookStyle,
             layout,
+            captionPreset: captionPreset || null,
         };
         try {
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
             localStorage.setItem('os_auto_hook_style', autoHookStyle);
             localStorage.setItem('os_layout', layout);
+            localStorage.setItem('os_caption_preset', captionPreset);
         } catch { /* ignore */ }
         if (mode === 'url' && url) {
             onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat, ...advanced });
@@ -253,7 +263,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     >
                         <ChevronDown size={14} className={`transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
                         advanced options
-                        {(targetClips || clipMinSeconds || clipMaxSeconds || !autoHook) && (
+                        {(targetClips || clipMinSeconds || clipMaxSeconds || !autoHook || captionPreset) && (
                             <span className="text-brass">·</span>
                         )}
                     </button>
@@ -309,6 +319,22 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                     <option value="none">Single crop only</option>
                                 </select>
                             </div>
+                            {captionPresets.length > 0 && (
+                                <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">
+                                    <span className="text-xs text-ink2">caption style</span>
+                                    <select
+                                        value={captionPreset}
+                                        onChange={(e) => setCaptionPreset(e.target.value)}
+                                        className="input-field !w-auto text-xs py-1.5"
+                                        aria-label="caption style"
+                                    >
+                                        <option value="">Default</option>
+                                        {captionPresets.map((p) => (
+                                            <option key={p.id} value={p.id}>{p.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
                             <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">
                                 <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
                                     <input

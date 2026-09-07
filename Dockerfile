@@ -83,7 +83,8 @@ RUN pip install --upgrade --pre --no-cache-dir "yt-dlp[default]" bgutil-ytdlp-po
 # Copy application code
 COPY . .
 
-# Register the bundled fonts (Anton for Impact) and the UI-name -> real-font
+# Register the bundled fonts (Anton for Impact; Montserrat ExtraBold, Bebas
+# Neue and Bangers for the caption presets) and the UI-name -> real-font
 # aliases with fontconfig so libass resolves what the subtitle modal offers.
 RUN mkdir -p /usr/local/share/fonts/openshorts \
     && cp fonts/*.ttf /usr/local/share/fonts/openshorts/ \

@@ -139,6 +139,9 @@ export function AuthProvider({ children }) {
   const value = {
     billingEnabled: config.billingEnabled,
     localLlm: config.localLlm || null,
+    // Caption looks, in display order, defined once server-side
+    // (subtitles.CAPTION_PRESETS) so the modal, the API and the auto pass agree.
+    captionPresets: config.captionPresets || [],
     googleAuthEnabled: config.googleAuthEnabled,
     jobRetentionSeconds: config.jobRetentionSeconds || null,
     loading,

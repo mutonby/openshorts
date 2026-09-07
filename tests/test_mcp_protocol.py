@@ -68,6 +68,13 @@ class TestTools:
             for req in tool["inputSchema"].get("required", []):
                 assert req in tool["inputSchema"]["properties"], tool["name"]
 
+    def test_add_subtitles_offers_every_caption_preset(self):
+        # The enum is what lets an agent pick "hormozi" by name; it must not
+        # drift from the server-side list.
+        from subtitles import CAPTION_PRESETS
+        tool = next(t for t in TOOLS if t["name"] == "add_subtitles")
+        assert tool["inputSchema"]["properties"]["preset"]["enum"] == list(CAPTION_PRESETS)
+
     def test_call_wraps_result_as_text_and_structured(self):
         resp = _run({"jsonrpc": "2.0", "id": 4, "method": "tools/call",
                      "params": {"name": "get_quota", "arguments": {"a": 1}}})
