@@ -26,6 +26,11 @@ export const SUBTITLE_FONTS: Record<string, string> = {
   Helvetica: "Helvetica, Arial, sans-serif",
   Georgia: "Georgia, 'Times New Roman', serif",
   "Courier New": "'Courier New', Courier, monospace",
+  // Bundled caption-preset fonts (fonts/*.ttf); the dashboard loads the same
+  // families from Google Fonts so the preview matches the burn.
+  "Montserrat ExtraBold": "Montserrat, Arial, sans-serif",
+  "Bebas Neue": "'Bebas Neue', Impact, sans-serif",
+  Bangers: "Bangers, Impact, sans-serif",
 };
 
 export function getFontStack(fontFamily: string): string {

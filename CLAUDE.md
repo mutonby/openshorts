@@ -53,7 +53,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 | `editor.py` | Gemini AI integration for dynamic video effects (FFmpeg filter generation) |
 | `hooks.py` | Hook text overlay generation with font rendering |
 | `s3_uploader.py` | AWS S3 upload with caching |
-| `subtitles.py` | SRT generation, FFmpeg subtitle burning, and dubbed video transcription |
+| `subtitles.py` | SRT/ASS generation, the named caption looks (`CAPTION_PRESETS`), FFmpeg subtitle burning, and dubbed video transcription |
 | `translate.py` | ElevenLabs dubbing API for AI voice translation |
 | `dashboard/src/App.jsx` | Main React component with state management |
 | `dashboard/src/components/TranslateModal.jsx` | Voice dubbing UI with language selection |

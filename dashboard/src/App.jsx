@@ -864,6 +864,8 @@ function App() {
         auto_hook_style: data.autoHook ? (data.autoHookStyle || 'classic') : null,
         // 'auto' is the server default, so only a deliberate choice travels.
         layouts: data.layout && data.layout !== 'auto' ? data.layout : null,
+        // Same rule: absent = the deployment's default caption look.
+        caption_preset: data.captionPreset || null,
       };
 
       if (data.type === 'url') {

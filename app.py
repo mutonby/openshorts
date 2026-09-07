@@ -549,6 +549,10 @@ def _reapply_captions(job_id, clip_index, video_path):
             return None
         clip = clips[clip_index]
         import main as _main
+        # The look this job was generated with (main.py records the job's
+        # AUTO_CAPTION_PRESET in the metadata); the server process itself does
+        # not carry the job's env.
+        preset = data.get('caption_preset')
         # A recut clip is a concatenation of source segments, so the flat
         # start..end window is wrong for it — caption against the clip-relative
         # remapped transcript instead (same trick /api/subtitle uses).
@@ -557,9 +561,9 @@ def _reapply_captions(job_id, clip_index, video_path):
             v_transcript = recut.virtual_transcript(transcript, recipe_segments)
             return _main.auto_caption_clip(
                 video_path, v_transcript, 0.0,
-                recut.total_duration(recipe_segments))
+                recut.total_duration(recipe_segments), preset=preset)
         return _main.auto_caption_clip(video_path, transcript,
-                                       clip['start'], clip['end'])
+                                       clip['start'], clip['end'], preset=preset)
     except Exception as e:
         print(f"⚠️  Could not re-apply captions to {video_path}: {e}")
         return None
@@ -1945,6 +1949,9 @@ async def get_config():
         # Self-host only: tells the dashboard the Gemini key is optional
         # because the moment picker runs on an OpenAI-compatible server.
         "localLlm": None if BILLING_ENABLED else llm_backend.describe(),
+        # The caption looks the subtitle modal and the advanced options offer,
+        # in display order. Defined once, server-side (subtitles.py).
+        "captionPresets": caption_presets_for_api(),
     }
 
 async def _probe_youtube_quality(url: str) -> dict:
@@ -2179,6 +2186,7 @@ async def process_endpoint(
     auto_hook_style: Optional[str] = Form(None),
     thumbnail_session_id: Optional[str] = Form(None),
     captions: Optional[str] = Form(None),
+    caption_preset: Optional[str] = Form(None),
     upload_id: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
@@ -2213,6 +2221,7 @@ async def process_endpoint(
         auto_hook_style = body.get("auto_hook_style")
         thumbnail_session_id = body.get("thumbnail_session_id")
         captions = body.get("captions")
+        caption_preset = body.get("caption_preset")
         upload_id = body.get("upload_id")
 
     # Normalize output format (auto = keep pipeline default).
@@ -2224,6 +2233,16 @@ async def process_endpoint(
         layouts = [p for p in layouts.split(",") if p.strip()]
     elif not isinstance(layouts, list):
         layouts = []
+
+    # caption_preset: a subtitles.CAPTION_PRESETS name for the auto-caption
+    # pass of this job. A bad name 400s here, before any download or probe,
+    # rather than silently shipping a look the user did not ask for.
+    caption_preset = caption_preset or None
+    if caption_preset is not None and caption_preset not in CAPTION_PRESETS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown caption_preset '{caption_preset}'. "
+                   f"One of: {', '.join(CAPTION_PRESETS)}.")
 
     # Module handover (issue #68): reuse the Thumbnail Studio source video and
     # its transcript so publishing to YouTube can flow straight into clip
@@ -2385,6 +2404,13 @@ async def process_endpoint(
     if captions is not None and str(captions).lower() in ("0", "false", "no"):
         env["AUTO_CAPTIONS"] = "0"
         print(f"[captions] job={job_id} auto-captions off")
+
+    # caption_preset: the look the auto pass burns on every clip of THIS job.
+    # Absent → the deployment default, so API and MCP callers keep their old
+    # output. Validated up front, next to the other request fields.
+    if caption_preset:
+        env["AUTO_CAPTION_PRESET"] = caption_preset
+        print(f"[captions] job={job_id} preset={caption_preset}")
 
     input_path = None
     if url:
@@ -2918,7 +2944,9 @@ async def _ensure_job_files(job_id: str, request: Request) -> bool:
 
 
 from editor import VideoEditor
-from subtitles import generate_srt, generate_ass, burn_subtitles, generate_srt_from_video
+from subtitles import (generate_srt, generate_ass, burn_subtitles, generate_srt_from_video,
+                       CAPTION_PRESETS, CAPTION_PRESET_LOOK_FIELDS, caption_preset,
+                       caption_presets_for_api)
 from hooks import add_hook_to_video
 from translate import translate_video, get_supported_languages
 from thumbnail import (analyze_video_for_titles, refine_titles, generate_thumbnail,
@@ -3122,9 +3150,13 @@ class SubtitleRequest(BaseModel):
     bg_opacity: float = 0.0
     style: str = "classic"  # classic (uniform color) or karaoke (word highlight)
     highlight_color: str = "#FFD700"
-    effect: str = "none"  # none | glow | pop | box (karaoke only)
+    effect: str = "none"  # none | glow | pop | box | wipe | bounce (karaoke only)
     base_opacity: float = 1.0  # opacity of non-active words (dimmed modern look)
     uppercase: bool = False
+    # A named look from subtitles.CAPTION_PRESETS. Fills every style field the
+    # caller did NOT set explicitly, so `{"preset": "hormozi"}` is enough and
+    # `{"preset": "hormozi", "highlight_color": "#FF0000"}` keeps the override.
+    preset: Optional[str] = None
     input_filename: Optional[str] = None
     # User-edited caption words. When present, the burn uses them VERBATIM
     # instead of regenerating from the stored transcript — without this, text
@@ -4013,8 +4045,30 @@ async def generate_effects_config(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _apply_caption_preset(req: SubtitleRequest):
+    """Fill the style fields the caller left out from ``req.preset``.
+
+    Explicit fields win: only what the JSON did not carry comes from the
+    preset (pydantic records the sent fields in ``model_fields_set``), so
+    ``{"preset": "hormozi", "highlight_color": "#FF0000"}`` is the Hormozi
+    look with a red active word. An unknown name 400s with the valid list.
+    """
+    if req.preset is None:
+        return
+    look = caption_preset(req.preset)
+    if look is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown caption preset '{req.preset}'. "
+                   f"One of: {', '.join(CAPTION_PRESETS)}.")
+    for field in ("style", *CAPTION_PRESET_LOOK_FIELDS):
+        if field not in req.model_fields_set:
+            setattr(req, field, look[field])
+
+
 @app.post("/api/subtitle")
 async def add_subtitles(req: SubtitleRequest, request: Request):
+    _apply_caption_preset(req)
     await require_managed_entitlement(request)
     await _ensure_job_files(req.job_id, request)
     if req.job_id not in jobs:

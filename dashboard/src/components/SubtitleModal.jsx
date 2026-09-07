@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Loader2 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
 import RemotionPreview from './RemotionPreview';
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
 
+// Every name here must resolve to a real font in the Docker image (fonts/ +
+// fonts/openshorts-fontmap.conf), or libass burns DejaVu instead (#57).
 const FONT_OPTIONS = [
     { value: 'Verdana', label: 'Verdana' },
     { value: 'Arial', label: 'Arial' },
@@ -12,6 +15,9 @@ const FONT_OPTIONS = [
     { value: 'Helvetica', label: 'Helvetica' },
     { value: 'Georgia', label: 'Georgia' },
     { value: 'Courier New', label: 'Courier New' },
+    { value: 'Montserrat ExtraBold', label: 'Montserrat ExtraBold' },
+    { value: 'Bebas Neue', label: 'Bebas Neue' },
+    { value: 'Bangers', label: 'Bangers' },
 ];
 
 const COLOR_PRESETS = [
@@ -44,21 +50,14 @@ const POSITION_OPTIONS = [
     { value: 'bottom', label: 'bottom' },
 ];
 
-// Ready-made caption looks burned server-side as karaoke ASS (word highlight):
-// dimmed base text + strong active word, optional glow/pop/box effect.
-const CAPTION_PRESETS = [
-    { id: 'tiktok',  label: 'TikTok',     style: 'karaoke', effect: 'none', highlightColor: '#FE2C55', baseOpacity: 0.75, uppercase: false, fontName: 'Verdana', borderWidth: 2 },
-    { id: 'reels',   label: 'Reels',      style: 'karaoke', effect: 'none', highlightColor: '#E1306C', baseOpacity: 0.7,  uppercase: false, fontName: 'Verdana', borderWidth: 2 },
-    { id: 'shorts',  label: 'Shorts Pop', style: 'karaoke', effect: 'pop',  highlightColor: '#FF0000', baseOpacity: 0.7,  uppercase: false, fontName: 'Verdana', borderWidth: 2 },
-    { id: 'gold',    label: 'Gold Glow',  style: 'karaoke', effect: 'glow', highlightColor: '#FFD700', baseOpacity: 0.6,  uppercase: false, fontName: 'Verdana', borderWidth: 2 },
-    { id: 'neon',    label: 'Neon',       style: 'karaoke', effect: 'glow', highlightColor: '#00FF88', baseOpacity: 0.55, uppercase: false, fontName: 'Verdana', borderWidth: 2 },
-    { id: 'cyber',   label: 'Cyber',      style: 'karaoke', effect: 'glow', highlightColor: '#00FFFF', baseOpacity: 0.5,  uppercase: false, fontName: 'Verdana', borderWidth: 2 },
-    { id: 'karaoke', label: 'Karaoke',    style: 'karaoke', effect: 'none', highlightColor: '#FF6B6B', baseOpacity: 0.6,  uppercase: false, fontName: 'Verdana', borderWidth: 2 },
-    { id: 'minimal', label: 'Minimal',    style: 'karaoke', effect: 'none', highlightColor: '#FFFFFF', baseOpacity: 0.65, uppercase: false, fontName: 'Verdana', borderWidth: 1 },
-    { id: 'beast',   label: 'Beast',      style: 'karaoke', effect: 'pop',  highlightColor: '#FFD700', baseOpacity: 1.0,  uppercase: true,  fontName: 'Impact',  borderWidth: 3 },
-    { id: 'boxed',   label: 'Boxed',      style: 'karaoke', effect: 'box',  highlightColor: '#7C3AED', baseOpacity: 0.85, uppercase: false, fontName: 'Verdana', borderWidth: 2 },
-    { id: 'classic', label: 'Classic',    style: 'classic', effect: 'none', highlightColor: '#FFD700', baseOpacity: 1.0,  uppercase: false, fontName: 'Verdana', borderWidth: 2 },
-];
+// The Remotion preview knows four animations; the server burn knows six
+// effects. Closest match, so the preview moves roughly like the export will.
+const previewAnimation = (style, effect) => {
+    if (style !== 'karaoke') return 'none';
+    if (effect === 'pop' || effect === 'bounce') return 'pop';
+    if (effect === 'glow') return 'word-highlight';
+    return 'karaoke';
+};
 
 const swatchClass = (selected) =>
     `w-6 h-6 rounded-full transition-all ${selected
@@ -66,6 +65,9 @@ const swatchClass = (selected) =>
         : 'ring-1 ring-[color:var(--color-rule-2)] hover:ring-[color:var(--color-accent)]'}`;
 
 export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll, onRemove, isProcessing, videoUrl, jobId, clipIndex, existingHook, bulkCount = 0, bulkProgress }) {
+    // Ready-made caption looks (subtitles.CAPTION_PRESETS, via /api/config):
+    // font, colours, outline, effect and case. Size and position stay yours.
+    const { captionPresets } = useAuth();
     const [position, setPosition] = useState('bottom');
     const [fontSize] = useState(24);
     const [fontName, setFontName] = useState('Verdana');
@@ -80,7 +82,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
 
     // Karaoke (server-side ASS burn) state
     const [style, setStyle] = useState('classic'); // classic | karaoke
-    const [effect, setEffect] = useState('none'); // none | glow | pop | box
+    const [effect, setEffect] = useState('none'); // none | glow | pop | box | wipe | bounce
     const [baseOpacity, setBaseOpacity] = useState(1.0);
     const [uppercase, setUppercase] = useState(false);
     const [activePreset, setActivePreset] = useState(null);
@@ -89,15 +91,14 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
         setActivePreset(p.id);
         setStyle(p.style);
         setEffect(p.effect);
-        setHighlightColor(p.highlightColor);
-        setBaseOpacity(p.baseOpacity);
+        setHighlightColor(p.highlight_color);
+        setBaseOpacity(p.base_opacity);
         setUppercase(p.uppercase);
-        setFontName(p.fontName);
-        setBorderWidth(p.borderWidth);
-        setFontColor('#FFFFFF');
+        setFontName(p.font_name);
+        setBorderWidth(p.border_width);
+        setFontColor(p.font_color);
         setBgOpacity(0);
-        // Keep the Remotion preview roughly in sync with the burned look
-        setAnimation(p.style === 'karaoke' ? (p.effect === 'pop' ? 'pop' : p.effect === 'glow' ? 'word-highlight' : 'karaoke') : 'none');
+        setAnimation(previewAnimation(p.style, p.effect));
     };
 
     // Remotion preview state
@@ -243,7 +244,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                         <div>
                             <p className="eyebrow mb-2">Preset</p>
                             <div className="grid grid-cols-3 gap-1.5">
-                                {CAPTION_PRESETS.map((p) => (
+                                {captionPresets.map((p) => (
                                     <button
                                         key={p.id}
                                         onClick={() => applyPreset(p)}
@@ -253,7 +254,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                                 : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
                                         title={p.label}
                                     >
-                                        <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: p.highlightColor }} />
+                                        <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: p.highlight_color }} />
                                         {p.label}
                                     </button>
                                 ))}

@@ -55,8 +55,9 @@ anonymous: there is no minute quota to enforce.
    "platforms": ["tiktok", "instagram", "youtube"]}`, optional `title`,
    `scheduled_date` (ISO) + `timezone`. TikTok lands as a draft in the app;
    Instagram and YouTube publish directly. Restyle captions first if asked:
-   `POST /api/subtitle` with `{"job_id", "clip_index", "style"}` (`classic`
-   or `karaoke` word highlighting).
+   `POST /api/subtitle` with `{"job_id", "clip_index", "preset"}` (a named
+   look such as `hormozi`, `mrbeast` or `karaoke`; see the reference) or with
+   explicit `style` (`classic` or `karaoke` word highlighting) and colours.
 
 ## The choices the API cannot make for you
 

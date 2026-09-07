@@ -1,4 +1,6 @@
 """Tests for subtitle word merging, SRT generation and style sanitizing."""
+import os
+
 from subtitles import (
     merge_continuation_words,
     generate_srt,
@@ -330,3 +332,117 @@ class TestFilterQuoting:
     def test_plain_path_untouched(self):
         from subtitles import _escape_ffmpeg_filter_value
         assert _escape_ffmpeg_filter_value("/out/subs_0_123.ass") == "/out/subs_0_123.ass"
+
+
+class TestWipeAndBounceEffects:
+    def _t(self, words):
+        return {"segments": [{"start": 0, "end": 99, "text": "", "words": words}]}
+
+    def test_wipe_fills_over_the_word_duration(self, tmp_path):
+        from subtitles import generate_ass
+        out = tmp_path / "subs.ass"
+        words = [_w(" slow", 0.0, 0.5), _w(" quick", 0.5, 0.62)]
+        assert generate_ass(self._t(words), 0, 10, str(out),
+                            effect="wipe", highlight_color="#0080FF") is True
+        content = out.read_text(encoding="utf-8-sig")
+        # \kf<centiseconds> per word: the fill takes exactly as long as the word.
+        assert "{\\kf50\\c&HFF8000&}slow{\\r}" in content
+        assert "{\\kf12\\c&HFF8000&}quick{\\r}" in content
+
+    def test_wipe_never_emits_a_zero_length_fill(self, tmp_path):
+        from subtitles import generate_ass
+        out = tmp_path / "subs.ass"
+        # A 3ms word rounds to 0cs; \kf0 would render as an instant colour
+        # change on some players and as nothing on others.
+        words = [_w(" x", 1.0, 1.003), _w(" y", 1.2, 1.5)]
+        assert generate_ass(self._t(words), 0, 10, str(out), effect="wipe") is True
+        content = out.read_text(encoding="utf-8-sig")
+        assert "\\kf1\\" in content
+        assert "\\kf0\\" not in content
+
+    def test_bounce_overshoots_then_settles(self, tmp_path):
+        from subtitles import generate_ass
+        out = tmp_path / "subs.ass"
+        assert generate_ass(self._t([_w(" boing", 0.0, 0.4)]), 0, 10, str(out),
+                            effect="bounce", highlight_color="#FF00FF") is True
+        content = out.read_text(encoding="utf-8-sig")
+        assert "\\c&HFF00FF&" in content
+        assert "\\t(0,50,\\fscx118\\fscy118)\\t(50,110,\\fscx100\\fscy100)" in content
+
+
+class TestCaptionPresets:
+    """Named looks shared by the modal grid (/api/config), /api/subtitle, the
+    MCP add_subtitles tool and the auto-caption pass (AUTO_CAPTION_PRESET)."""
+
+    LOOK_KWARGS = {"font_name", "font_color", "highlight_color", "border_width",
+                   "effect", "base_opacity", "uppercase"}
+
+    def test_every_preset_carries_the_full_look(self):
+        from subtitles import CAPTION_PRESETS, CAPTION_PRESET_LOOK_FIELDS
+        assert set(CAPTION_PRESET_LOOK_FIELDS) == self.LOOK_KWARGS
+        for pid, look in CAPTION_PRESETS.items():
+            assert pid == pid.lower() and " " not in pid, pid
+            assert {"label", "style", *CAPTION_PRESET_LOOK_FIELDS} <= set(look), pid
+            assert look["style"] in ("classic", "karaoke"), pid
+            assert look["effect"] in ("none", "glow", "pop", "box", "wipe", "bounce"), pid
+
+    def test_preset_fonts_are_ones_the_image_ships(self):
+        # libass falls back to DejaVu SILENTLY (#57), so a preset may only name
+        # a bundled TTF family or a UI alias from the fontconfig map.
+        import re
+        from subtitles import CAPTION_PRESETS
+        fontmap = open("fonts/openshorts-fontmap.conf").read()
+        aliased = set(re.findall(r"<alias[^>]*><family>([^<]+)</family>", fontmap))
+        bundled = {"Anton": "Anton-Regular.ttf", "Montserrat ExtraBold": "Montserrat-ExtraBold.ttf",
+                   "Bebas Neue": "BebasNeue-Regular.ttf", "Bangers": "Bangers-Regular.ttf"}
+        for family, filename in bundled.items():
+            assert os.path.exists(os.path.join("fonts", filename)), family
+        for pid, look in CAPTION_PRESETS.items():
+            assert look["font_name"] in aliased | set(bundled), (pid, look["font_name"])
+
+    def test_lookup_is_case_insensitive_and_returns_a_copy(self):
+        from subtitles import CAPTION_PRESETS, caption_preset
+        look = caption_preset(" Hormozi ")
+        assert look["font_name"] == "Montserrat ExtraBold"
+        look["font_name"] = "changed"
+        assert CAPTION_PRESETS["hormozi"]["font_name"] == "Montserrat ExtraBold"
+        assert caption_preset("nope") is None
+        assert caption_preset(None) is None
+
+    def test_api_listing_keeps_order_and_ids(self):
+        from subtitles import CAPTION_PRESETS, caption_presets_for_api
+        listed = caption_presets_for_api()
+        assert [p["id"] for p in listed] == list(CAPTION_PRESETS)
+        assert all(p["label"] == CAPTION_PRESETS[p["id"]]["label"] for p in listed)
+
+    def test_every_preset_renders_through_the_ass_path(self, tmp_path):
+        from subtitles import CAPTION_PRESETS, auto_caption_style, generate_ass
+        words = [_w(" one", 0.0, 0.4), _w(" two", 0.4, 0.9)]
+        for pid in CAPTION_PRESETS:
+            style = auto_caption_style(pid)
+            out = tmp_path / f"{pid}.ass"
+            kwargs = {k: style[k] for k in self.LOOK_KWARGS}
+            assert generate_ass({"segments": [{"words": words}]}, 0, 10, str(out),
+                                fontsize=style["font_size"], **kwargs) is True, pid
+            assert f"Style: Default,{style['font_name']}," in out.read_text(encoding="utf-8-sig")
+
+    def test_auto_style_is_unchanged_without_a_preset(self):
+        from subtitles import AUTO_CAPTION_STYLE, auto_caption_style
+        assert auto_caption_style(None) == AUTO_CAPTION_STYLE
+        assert auto_caption_style("") == AUTO_CAPTION_STYLE
+        # A typo in AUTO_CAPTION_PRESET degrades to the default look, never to
+        # no captions (a caption problem must never cost the user the clip).
+        assert auto_caption_style("typo") == AUTO_CAPTION_STYLE
+
+    def test_auto_style_overlays_only_the_look(self):
+        from subtitles import AUTO_CAPTION_STYLE, auto_caption_style
+        s = auto_caption_style("mrbeast")
+        assert s["font_name"] == "Bebas Neue" and s["font_color"] == "#FFFF00"
+        for key in ("font_size", "alignment", "max_chars", "max_duration", "border_color"):
+            assert s[key] == AUTO_CAPTION_STYLE[key], key
+
+    def test_auto_style_classic_preset_has_no_active_word(self):
+        # The auto pass is always an ASS burn; "classic" means uniform text.
+        from subtitles import auto_caption_style
+        s = auto_caption_style("classic")
+        assert s["highlight_color"] == s["font_color"] and s["effect"] == "none"

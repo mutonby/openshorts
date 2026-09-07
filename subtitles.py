@@ -253,6 +253,122 @@ AUTO_CAPTION_STYLE = {
 }
 
 
+# Named caption looks — one source of truth for the dashboard's preset grid
+# (served through /api/config), the `preset` field of /api/subtitle and the
+# MCP add_subtitles tool, and the AUTO_CAPTION_PRESET default of the auto pass.
+# They used to live only in SubtitleModal.jsx, so an API or MCP caller could
+# not ask for "the Hormozi look" without spelling out every colour.
+#
+# Each entry carries only the LOOK: font, colours, outline, effect, case.
+# Size, position and timing stay with the caller, so a preset reads the same
+# in the modal, in bulk apply and on the auto pass, and the user's size and
+# position survive switching presets. Keys match SubtitleRequest field names
+# on purpose: the endpoint copies a preset onto the request field by field,
+# skipping whatever the caller set explicitly.
+#
+# Every font here must be one the image ships (fonts/ + the fontconfig
+# aliases in fonts/openshorts-fontmap.conf): libass falls back to DejaVu
+# silently otherwise (#57). Montserrat ExtraBold, Bebas Neue and Bangers are
+# bundled for the looks that are defined by their typeface as much as by their
+# colours, and named exactly as their TTF name table does: libass's fontsdir
+# provider matches on that name, not on the typographic family.
+CAPTION_PRESETS = {
+    # The three looks named after the creators who made them ubiquitous.
+    "hormozi": {"label": "Hormozi", "style": "karaoke", "font_name": "Montserrat ExtraBold",
+                "font_color": "#FFFFFF", "highlight_color": "#00FFFF",
+                "border_width": 4, "effect": "none", "base_opacity": 1.0,
+                "uppercase": True},
+    "mrbeast": {"label": "MrBeast", "style": "karaoke", "font_name": "Bebas Neue",
+                "font_color": "#FFFF00", "highlight_color": "#FF6600",
+                "border_width": 5, "effect": "none", "base_opacity": 1.0,
+                "uppercase": True},
+    "bounce": {"label": "Bounce", "style": "karaoke", "font_name": "Bangers",
+               "font_color": "#00FF88", "highlight_color": "#FF00FF",
+               "border_width": 4, "effect": "bounce", "base_opacity": 1.0,
+               "uppercase": True},
+    # Real karaoke: the colour sweeps across the word as it is spoken.
+    "karaoke": {"label": "Karaoke", "style": "karaoke", "font_name": "Montserrat ExtraBold",
+                "font_color": "#FFFFFF", "highlight_color": "#0080FF",
+                "border_width": 3, "effect": "wipe", "base_opacity": 1.0,
+                "uppercase": True},
+    # Platform-coloured highlights on dimmed base text.
+    "tiktok": {"label": "TikTok", "style": "karaoke", "font_name": "Verdana",
+               "font_color": "#FFFFFF", "highlight_color": "#FE2C55",
+               "border_width": 2, "effect": "none", "base_opacity": 0.75,
+               "uppercase": False},
+    "reels": {"label": "Reels", "style": "karaoke", "font_name": "Verdana",
+              "font_color": "#FFFFFF", "highlight_color": "#E1306C",
+              "border_width": 2, "effect": "none", "base_opacity": 0.7,
+              "uppercase": False},
+    "shorts": {"label": "Shorts Pop", "style": "karaoke", "font_name": "Verdana",
+               "font_color": "#FFFFFF", "highlight_color": "#FF0000",
+               "border_width": 2, "effect": "pop", "base_opacity": 0.7,
+               "uppercase": False},
+    "gold": {"label": "Gold Glow", "style": "karaoke", "font_name": "Verdana",
+             "font_color": "#FFFFFF", "highlight_color": "#FFD700",
+             "border_width": 2, "effect": "glow", "base_opacity": 0.6,
+             "uppercase": False},
+    "neon": {"label": "Neon", "style": "karaoke", "font_name": "Verdana",
+             "font_color": "#FFFFFF", "highlight_color": "#00FF88",
+             "border_width": 2, "effect": "glow", "base_opacity": 0.55,
+             "uppercase": False},
+    "cyber": {"label": "Cyber", "style": "karaoke", "font_name": "Verdana",
+              "font_color": "#FFFFFF", "highlight_color": "#00FFFF",
+              "border_width": 2, "effect": "glow", "base_opacity": 0.5,
+              "uppercase": False},
+    "minimal": {"label": "Minimal", "style": "karaoke", "font_name": "Verdana",
+                "font_color": "#FFFFFF", "highlight_color": "#FFFFFF",
+                "border_width": 1, "effect": "none", "base_opacity": 0.65,
+                "uppercase": False},
+    "boxed": {"label": "Boxed", "style": "karaoke", "font_name": "Verdana",
+              "font_color": "#FFFFFF", "highlight_color": "#7C3AED",
+              "border_width": 2, "effect": "box", "base_opacity": 0.85,
+              "uppercase": False},
+    # Plain SRT burn, no active word.
+    "classic": {"label": "Classic", "style": "classic", "font_name": "Verdana",
+                "font_color": "#FFFFFF", "highlight_color": "#FFD700",
+                "border_width": 2, "effect": "none", "base_opacity": 1.0,
+                "uppercase": False},
+}
+
+# The preset fields that are generate_ass / SubtitleRequest style fields
+# (everything but the label and the SRT-vs-ASS switch).
+CAPTION_PRESET_LOOK_FIELDS = ("font_name", "font_color", "highlight_color",
+                              "border_width", "effect", "base_opacity", "uppercase")
+
+
+def caption_preset(name):
+    """A copy of the named preset (label included), or None if unknown."""
+    look = CAPTION_PRESETS.get(str(name or "").strip().lower())
+    return dict(look) if look else None
+
+
+def caption_presets_for_api():
+    """The presets as the dashboard renders them: an ordered list, id first."""
+    return [{"id": pid, **look} for pid, look in CAPTION_PRESETS.items()]
+
+
+def auto_caption_style(preset=None):
+    """AUTO_CAPTION_STYLE with a named preset's look laid over it.
+
+    None or an unknown name returns the default unchanged: a typo in
+    AUTO_CAPTION_PRESET degrades to the look every clip shipped with before,
+    never to no captions. The auto pass is always a karaoke ASS burn, so a
+    ``style: classic`` preset renders with the active word in the text colour,
+    which is the same uniform look without a second code path.
+    """
+    style = dict(AUTO_CAPTION_STYLE)
+    look = caption_preset(preset)
+    if not look:
+        return style
+    for key in CAPTION_PRESET_LOOK_FIELDS:
+        style[key] = look[key]
+    if look.get("style") == "classic":
+        style["highlight_color"] = style["font_color"]
+        style["effect"] = "none"
+    return style
+
+
 def _ass_time(seconds):
     """Format seconds as ASS timestamp H:MM:SS.cc (centiseconds)."""
     seconds = max(0, seconds)
@@ -314,7 +430,9 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     the highlight moves with the audio without flicker.
 
     effect: "none" | "glow" (neon shine around the active word) |
-            "pop" (active word scales up) | "box" (thick colored outline).
+            "pop" (active word scales up) | "box" (thick colored outline) |
+            "wipe" (highlight sweeps across the word as it is spoken) |
+            "bounce" (active word overshoots and settles).
     base_opacity: opacity of the non-active words — dimmed base text is the
     modern captioneer look (e.g. 0.4).
     """
@@ -364,22 +482,36 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     highlight_inline = _hex_to_ass_inline_color(highlight_color, fallback="FFD700")
 
     # Inline override tags for the active word; {\r} after it resets to the
-    # (dimmed) style so the rest of the block stays untouched.
-    if effect == "glow":
-        glow_bord = max(3, int(outline_width) + 2)
-        active_prefix = (f"{{\\c&HFFFFFF&\\3c{highlight_inline}"
-                         f"\\bord{glow_bord}\\blur4}}")
-    elif effect == "box":
-        box_bord = max(4, int(outline_width) + 3)
-        active_prefix = (f"{{\\c&HFFFFFF&\\3c{highlight_inline}"
-                         f"\\bord{box_bord}\\blur0}}")
-    elif effect == "pop":
-        # Gentle pop. The old 75->112 range started the word so small that any
-        # frame caught mid-animation read as a sizing bug rather than a beat.
-        active_prefix = (f"{{\\c{highlight_inline}"
-                         f"\\fscx90\\fscy90\\t(0,110,\\fscx108\\fscy108)}}")
-    else:
-        active_prefix = f"{{\\c{highlight_inline}}}"
+    # (dimmed) style so the rest of the block stays untouched. A function of
+    # the word's duration because "wipe" fills over exactly that long.
+    def active_prefix(word_cs):
+        if effect == "glow":
+            glow_bord = max(3, int(outline_width) + 2)
+            return (f"{{\\c&HFFFFFF&\\3c{highlight_inline}"
+                    f"\\bord{glow_bord}\\blur4}}")
+        if effect == "box":
+            box_bord = max(4, int(outline_width) + 3)
+            return (f"{{\\c&HFFFFFF&\\3c{highlight_inline}"
+                    f"\\bord{box_bord}\\blur0}}")
+        if effect == "pop":
+            # Gentle pop. The old 75->112 range started the word so small that
+            # any frame caught mid-animation read as a sizing bug rather than
+            # a beat.
+            return (f"{{\\c{highlight_inline}"
+                    f"\\fscx90\\fscy90\\t(0,110,\\fscx108\\fscy108)}}")
+        if effect == "wipe":
+            # Karaoke fill: \kf sweeps the word left to right from
+            # SecondaryColour (the style's base text colour) to the inline
+            # highlight over the word's own duration, then holds. The words
+            # after the tag belong to the same syllable, but {\r} puts their
+            # primary back to the base colour, so their sweep is invisible.
+            return f"{{\\kf{word_cs}\\c{highlight_inline}}}"
+        if effect == "bounce":
+            # Overshoot and settle, 100 -> 118 -> 100 in 110ms. Wider than
+            # pop on purpose: bounce is the whole point of the look.
+            return (f"{{\\c{highlight_inline}"
+                    f"\\t(0,50,\\fscx118\\fscy118)\\t(50,110,\\fscx100\\fscy100)}}")
+        return f"{{\\c{highlight_inline}}}"
 
     header = (
         "[Script Info]\n"
@@ -411,13 +543,14 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
             if ev_end <= ev_start:
                 continue
 
+            word_cs = max(1, int(round((word['end'] - word['start']) * 100)))
             parts = []
             for j, other in enumerate(block):
                 text = _escape_ass_text(other['word'])
                 if uppercase:
                     text = text.upper()
                 if j == i:
-                    parts.append(f"{active_prefix}{text}{{\\r}}")
+                    parts.append(f"{active_prefix(word_cs)}{text}{{\\r}}")
                 else:
                     parts.append(text)
 
