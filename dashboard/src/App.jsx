@@ -78,6 +78,57 @@ const TikTokIcon = ({ size = 16, className = "" }) => (
 // meaningless to the user, so the selector shows connected networks instead.
 const isAutoProfileId = (username) => /^os_[0-9a-f]/i.test(username || "");
 
+/* The job a signed-out visitor started, parked until they come back signed in.
+ *
+ * Pressing "get free clips" without a session used to open the login modal and
+ * drop the work on the floor: the magic link lands on a fresh document, so the
+ * pasted URL was gone and the highest-intent step in the funnel ended in an
+ * empty form. The same is true of the Google round trip.
+ *
+ * So the request is written down before the redirect and replayed after it.
+ * localStorage rather than sessionStorage because the magic link usually opens
+ * in a new tab, and a TTL because a request parked last week is not what the
+ * user is doing now. File uploads cannot be serialised (a File is not JSON), so
+ * those are only resumed within the same document, via the in-memory fallback. */
+const PENDING_JOB_KEY = 'os_pending_job';
+const PENDING_JOB_TTL_MS = 60 * 60 * 1000;
+let pendingJobInMemory = null;
+
+function stashPendingJob(data) {
+  const stamp = Date.now();
+  const entry = { stamp, data: { ...data, payload: typeof data?.payload === 'string' ? data.payload : null } };
+  pendingJobInMemory = { stamp, data };
+  try {
+    localStorage.setItem(PENDING_JOB_KEY, JSON.stringify(entry));
+  } catch (_) { /* private mode: the in-memory copy still covers same-document flows */ }
+  return stamp;
+}
+
+function peekPendingJob() {
+  try {
+    const raw = localStorage.getItem(PENDING_JOB_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.data?.payload && Date.now() - (parsed.stamp || 0) < PENDING_JOB_TTL_MS) {
+        return parsed;
+      }
+      localStorage.removeItem(PENDING_JOB_KEY);
+    }
+  } catch (_) { /* ignore */ }
+  // A File cannot survive a reload; this covers a sign-in that did not reload.
+  if (pendingJobInMemory && Date.now() - pendingJobInMemory.stamp < PENDING_JOB_TTL_MS) {
+    return pendingJobInMemory;
+  }
+  return null;
+}
+
+function clearPendingJob() {
+  pendingJobInMemory = null;
+  try {
+    localStorage.removeItem(PENDING_JOB_KEY);
+  } catch (_) { /* ignore */ }
+}
+
 const formatRetention = (seconds) => {
   if (seconds >= 86400) return `${Math.round(seconds / 86400)} day${seconds >= 172800 ? 's' : ''}`;
   if (seconds >= 3600) return `${Math.round(seconds / 3600)} hour${seconds >= 7200 ? 's' : ''}`;
@@ -835,12 +886,19 @@ function App() {
   const handleProcess = async (data, forceLowQuality = false) => {
     // Hosted: must be signed in AND on an active plan/trial. Self-host: BYOK keys.
     if (billingEnabled) {
-      if (!isSignedIn) { setShowLogin(true); return; }
+      // The billing gate below is unchanged: signed in, then entitled, then the
+      // processing path. The only new thing is the first branch remembering what
+      // the visitor asked for before sending them to sign in, so the resume
+      // effect can hand the exact same request back to this function and let it
+      // fall through the same gates.
+      if (!isSignedIn) { stashPendingJob(data); setShowLogin(true); return; }
       if (!isManaged) { window.location.hash = '#/pricing'; return; }
     } else if (keysMissing) {
       setShowKeyModal(true);
       return;
     }
+    // Past every gate, so this request is really running: nothing left to resume.
+    clearPendingJob();
     setStatus('processing');
     setLogs(["Starting process..."]);
     setResults(null);
@@ -958,6 +1016,27 @@ function App() {
       setLogs(l => [...l, `Error starting job: ${e.message}`]);
     }
   };
+
+  // Resume the job the visitor started before signing in. Runs on the render
+  // that first sees isSignedIn true — after a magic link or a Google round trip,
+  // i.e. a fresh document — and replays the request through handleProcess, so
+  // the entitlement gate still decides whether it actually runs: an unentitled
+  // account lands on #/pricing with the request still parked, and pays for it
+  // later. `resumedStamp` keeps one parked request from being replayed twice in
+  // the same document (the pricing redirect would otherwise loop on it).
+  const handleProcessRef = useRef(null);
+  const resumedStampRef = useRef(0);
+  useEffect(() => {
+    handleProcessRef.current = handleProcess;
+  });
+  useEffect(() => {
+    if (!billingEnabled || !isSignedIn) return;
+    const pending = peekPendingJob();
+    if (!pending || pending.stamp === resumedStampRef.current) return;
+    resumedStampRef.current = pending.stamp;
+    track('JobResumedAfterSignin', { props: { type: pending.data?.type || 'unknown' } });
+    handleProcessRef.current(pending.data);
+  }, [billingEnabled, isSignedIn]);
 
   const handleReset = () => {
     // Flush any pending edit-state sync before dropping the project: the clips
@@ -2187,7 +2266,7 @@ function App() {
           onReframed={handleClipRerendered}
         />
       )}
-      {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}
+      {showLogin && <LoginModal onClose={() => setShowLogin(false)} queued={!!peekPendingJob()} />}
       {tutorialPhase && (
         <ClipTutorial
           phase={tutorialPhase}

@@ -4,7 +4,10 @@ import { useAuth } from '../contexts/AuthContext';
 import Modal from './ui/Modal';
 
 // Sign-in modal: magic link (email) + Google OAuth.
-export default function LoginModal({ onClose }) {
+// `queued` says the visitor pressed "get free clips" before signing in and the
+// request is parked: the work resumes by itself once they are back, and saying
+// so is the difference between a sign-in wall and a saved job.
+export default function LoginModal({ onClose, queued = false }) {
   const { requestMagicLink, loginWithGoogle, googleAuthEnabled } = useAuth();
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
@@ -29,6 +32,15 @@ export default function LoginModal({ onClose }) {
   return (
     <Modal isOpen onClose={onClose} eyebrow="ACCOUNT" title="Sign in to OpenShorts" size="md">
       <p className="text-muted text-sm mb-6 lowercase">Access your plan and generate shorts with no API keys.</p>
+
+      {queued && (
+        <div className="flex items-start gap-2 border border-rule2 rounded-input bg-paper2 px-3 py-2 mb-5">
+          <Check size={14} className="mt-0.5 shrink-0 text-ok" />
+          <p className="text-xs text-ink2 leading-relaxed m-0">
+            Your video is saved. Sign in and the clips start on their own — you will not have to paste it again.
+          </p>
+        </div>
+      )}
 
       {sent ? (
         <div className="text-center py-6">

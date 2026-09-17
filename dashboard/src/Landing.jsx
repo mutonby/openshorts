@@ -780,7 +780,14 @@ export default function Landing({ onLaunchApp }) {
             <a href="/youtube-to-shorts-converter" className="hover:text-ink transition-colors">youtube to shorts</a>
             <a href="/how-openshorts-works" className="hover:text-ink transition-colors">how it works</a>
             <a href="/alternatives" className="hover:text-ink transition-colors">alternatives</a>
+            <a href="/alternativas" className="hover:text-ink transition-colors">alternativas</a>
             <a href="/alternatives/opus-clip" className="hover:text-ink transition-colors">vs opus clip</a>
+            <a href="/opus-clip-pricing" className="hover:text-ink transition-colors">opus clip pricing</a>
+            <a href="/opus-clip-free-alternative" className="hover:text-ink transition-colors">free opus clip alternative</a>
+            <a href="/opus-ai" className="hover:text-ink transition-colors">opus ai</a>
+            <a href="/opus-pro" className="hover:text-ink transition-colors">opus pro</a>
+            <a href="/vizard-ai-video-to-text" className="hover:text-ink transition-colors">vizard ai video to text</a>
+            <a href="/submagic-reviews" className="hover:text-ink transition-colors">submagic review</a>
             <a href="/mcp" className="hover:text-ink transition-colors">mcp server & api</a>
             <a href="/automate-shorts-api" className="hover:text-ink transition-colors">automate shorts</a>
             <a href="/n8n-youtube-shorts-automation" className="hover:text-ink transition-colors">n8n workflow</a>

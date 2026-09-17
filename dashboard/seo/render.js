@@ -102,6 +102,18 @@ td.os{color:var(--ink)}
 .cluster a:hover{border-color:var(--rule2)}
 .cluster strong{display:block;color:var(--ink);font-weight:500;margin-bottom:.15rem}
 .cluster span{font-size:.85rem;color:var(--muted)}
+.cta-box{border:1px solid var(--rule2);border-left:3px solid var(--brass);border-radius:10px;
+  background:var(--paper2);padding:1.25rem 1.4rem;margin:2rem 0;
+  display:flex;flex-wrap:wrap;gap:1rem 1.5rem;align-items:center;justify-content:space-between}
+.cta-box .copy{flex:1 1 18rem}
+.cta-box .label{font-family:var(--mono);font-size:.65rem;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--brass);display:block;margin-bottom:.4rem}
+.cta-box strong{display:block;font-family:var(--display);font-weight:400;font-size:1.2rem;
+  line-height:1.25;color:var(--ink);margin-bottom:.35rem}
+.cta-box p{margin:0;font-size:.9rem;color:var(--muted)}
+.cta-box .btn{background:var(--brass);color:oklch(17% 0.03 50);padding:.65rem 1.2rem;
+  border-radius:8px;font-size:.9rem;font-weight:500;text-decoration:none;white-space:nowrap}
+.cta-box .btn:hover{color:oklch(17% 0.03 50);filter:brightness(1.06)}
 footer.site{border-top:1px solid var(--rule);padding:2.5rem 0;font-size:.85rem;color:var(--muted)}
 footer.site a{color:var(--muted)}
 footer.site .row{display:flex;flex-wrap:wrap;gap:1.25rem;margin-bottom:1rem}
@@ -205,13 +217,102 @@ const footer = (_related) => `
     <a href="/gta-5-clips">GTA 5 clips</a>
     <a href="/how-openshorts-works">How it works</a>
     <a href="/alternatives">Alternatives compared</a>
+    <a href="/alternativas">Alternativas (ES)</a>
     <a href="/mcp">MCP server and API</a>
     <a href="/automate-shorts-api">Automate shorts</a>
+  </div>
+  <div class="row">
+    <a href="/opus-clip-pricing">Opus Clip pricing</a>
+    <a href="/opus-clip-free-alternative">Free Opus Clip alternative</a>
+    <a href="/opus-ai">Opus AI</a>
+    <a href="/opus-pro">Opus Pro</a>
+    <a href="/vizard-ai-video-to-text">Vizard AI video to text</a>
+    <a href="/submagic-reviews">Submagic review</a>
   </div>
   <p>OpenShorts self-hosted is free and open source under MIT. OpenShorts Cloud
   is the hosted service: 20 free minutes a month, paid plans from $12/month.
   Last updated ${esc(SITE.updated)}.</p>
 </div></footer>`
+
+/* Product analytics for the static pages.
+ *
+ * These pages are served straight from nginx and never hydrate React, so the
+ * consent manager that boots the tracker in the app (src/lib/consent.js) never
+ * runs here. Without this block their traffic is invisible: they were ranking
+ * at positions 1.8 to 4 and reporting nothing at all.
+ *
+ * The shim, the placeholder gate and ANALYTICS_HOSTS are the same ones
+ * index.html uses, on purpose — one deployment, one switch. The placeholders
+ * are substituted at build time by vite-plugin-seo.js (Vite only rewrites
+ * index.html, and these files are emitted as assets), so an unset
+ * VITE_OPENPANEL_* still yields an inert page: no init, no script, no request.
+ *
+ * The call is unconditional because first-party audience measurement is exempt
+ * from prior consent (AEPD/CNIL criteria) and is always on in the app too; the
+ * banner only gates marketing, of which there is none on these pages. */
+const ANALYTICS = `
+<script>
+  window.op = window.op || function () { var n = []; return new Proxy(function () { arguments.length && n.push([].slice.call(arguments)); }, { get: function (t, r) { return "q" === r ? n : function () { n.push([r].concat([].slice.call(arguments))); }; }, has: function (t, r) { return "q" === r; } }); }();
+  window.__osAnalyticsInit = (function () {
+    var started = false;
+    return function () {
+      if (started) return false;
+      var apiUrl = "%VITE_OPENPANEL_API_URL%";
+      var clientId = "%VITE_OPENPANEL_CLIENT_ID%";
+      var unset = function (v) { return !v || v.charAt(0) === "%"; };
+      if (unset(apiUrl) || unset(clientId)) return false;
+      var ANALYTICS_HOSTS = /^(www\\.)?openshorts\\.app$/;
+      if (!ANALYTICS_HOSTS.test(location.hostname)) return false;
+      started = true;
+      window.op("init", {
+        apiUrl: apiUrl,
+        clientId: clientId,
+        trackScreenViews: true,
+        trackOutgoingLinks: true,
+        trackAttributes: true,
+      });
+      var s = document.createElement("script");
+      s.src = "/op1.js";
+      s.defer = true;
+      s.async = true;
+      document.head.appendChild(s);
+      return true;
+    };
+  })();
+  window.__osAnalyticsInit();
+</script>`
+
+/* The body CTA. Until now the only link to the app on these pages was the fixed
+ * nav button, so a reader who finished the article had nothing to click: the
+ * pages sit at positions 1.8-4 with a 0.2-1.6% CTR and no path into the
+ * product. Copy is per page (`page.cta`) because the push differs — a reader
+ * on the no-watermark page is arguing about watermarks, not about editing.
+ *
+ * The link carries utm_* so the click is attributable: lib/attribution.js
+ * snapshots it on arrival and posts it with the signup. The inline handler
+ * reports the click itself, which is what tells us whether the CTA or the nav
+ * button is doing the work. */
+const DEFAULT_CTA = {
+  label: 'Try it',
+  title: 'Paste a link, get vertical clips',
+  body: '20 free minutes a month, no credit card. Or self-host it free under MIT.',
+  button: 'Get free clips',
+}
+
+const ctaBlock = (page) => {
+  const c = { ...DEFAULT_CTA, ...(page.cta || {}) }
+  const slug = page.path.replace(/^\//, '').replace(/\//g, '-') || 'home'
+  const href = `${SITE.url}/?utm_source=seo&utm_medium=body-cta&utm_campaign=${slug}`
+  return `
+<div class="cta-box">
+  <div class="copy">
+    <span class="label">${esc(c.label)}</span>
+    <strong>${esc(c.title)}</strong>
+    <p>${esc(c.body)}</p>
+  </div>
+  <a class="btn" href="${esc(href)}" onclick="window.op&amp;&amp;window.op('track','SeoCtaClick',{page:'${esc(page.path)}'})">${esc(c.button)}</a>
+</div>`
+}
 
 /* Internal links are rendered as a visible block rather than a nav bar because
  * an engine reading the raw HTML has no way to weight a nav differently from
@@ -226,8 +327,9 @@ const relatedBlock = (related) =>
         )
         .join('')}</div>`
 
-export function renderPage(page, related = []) {
+export function renderPage(page, related = [], { cta = true } = {}) {
   const canonical = `${SITE.url}${page.path}`
+  const showCta = cta && !page.noindex
   const crumbs = [
     `<a href="${SITE.url}/">Home</a>`,
     ...(page.breadcrumb || []).map((c) =>
@@ -247,6 +349,7 @@ ${page.noindex ? '' : `<link rel="canonical" href="${canonical}">\n`}<meta name=
   }">
 <link rel="icon" type="image/png" href="/logo-openshorts.png">
 <link rel="stylesheet" href="/fonts.css">
+${ANALYTICS}
 <meta property="og:type" content="article">
 <meta property="og:url" content="${canonical}">
 <meta property="og:title" content="${esc(page.title)}">
@@ -278,6 +381,7 @@ ${
 </div>`
 }
 ${page.tldr ? `<div class="tldr"><span class="label">TL;DR</span>${page.tldr.map((p) => `<p>${p}</p>`).join('')}</div>` : ''}
+${showCta ? ctaBlock(page) : ''}
 ${page.body}
 ${relatedBlock(related)}
 </div></main>

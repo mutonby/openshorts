@@ -29,7 +29,7 @@ const TERMS_EN = `
 <p>OpenShorts Cloud (openshorts.app) is operated by TONVI TECH SL, a company
 incorporated in Spain, CIF B-19780394, with registered address at Calle Puerta
 del Mar 18, 5th floor, 29005 Málaga, Spain ("OpenShorts", "we", "us"). You can
-reach us at info@openshorts.app. These Terms of Service ("Terms") govern your
+reach us at <a href="mailto:info@openshorts.app">info@openshorts.app</a>. These Terms of Service ("Terms") govern your
 use of the hosted service at openshorts.app.</p>
 <p>The open-source edition of OpenShorts that you can download and run on your
 own hardware is licensed separately under the MIT License and is not covered by
@@ -52,7 +52,7 @@ subscriptions and top-ups billed through Stripe.</p>
 <p>You must be at least 16 years old, or the age of digital consent in your
 country if it is higher. You are responsible for everything done through your
 account and your API keys. Keep your access credentials confidential and tell
-us at info@openshorts.app if you believe your account has been compromised.</p>
+us at <a href="mailto:info@openshorts.app">info@openshorts.app</a> if you believe your account has been compromised.</p>
 
 <h2>4. Your content stays yours</h2>
 <p>You keep all ownership of the videos you submit. By submitting content, you
@@ -104,7 +104,7 @@ submit), we engage only the sub-processors listed in our
 apply appropriate security measures, and we delete the content under the
 retention rules in Section 13 or earlier on your instruction. If you need a
 countersigned Data Processing Agreement for your business, request it at
-info@openshorts.app. When you self-host OpenShorts with your own keys, your
+<a href="mailto:info@openshorts.app">info@openshorts.app</a>. When you self-host OpenShorts with your own keys, your
 content flows directly between your own instance and the AI provider under
 your own agreement with them. On OpenShorts Cloud that is not the case even
 when you supply your own provider key: the request is made by our servers,
@@ -172,7 +172,7 @@ may block re-registration by the same person after a termination for abuse.</p>
 <p>The full procedure, with what a notice needs and how to challenge a removal,
 is on its own page: <a href="/report-content">Report Illegal Content</a>.</p>
 <p>If you believe content processed or hosted through the service infringes
-your rights, email info@openshorts.app (our point of contact for users and
+your rights, email <a href="mailto:info@openshorts.app">info@openshorts.app</a> (our point of contact for users and
 authorities under Articles 11 and 12 DSA) with: your name and contact details,
 the work you own, the exact URL or identifier of the infringing material, a
 statement in good faith that the use is unauthorised, and your signature. We
@@ -189,7 +189,7 @@ U.S.C. § 512(c)(2):</p>
 Málaga, Spain. Email: info@upload-post.com.</p>
 <p>That address is the one on file with the US Copyright Office for this
 company, which operates openshorts.app and upload-post.com. Notices sent to
-info@openshorts.app are acted upon too, but the address above is the formal
+<a href="mailto:info@openshorts.app">info@openshorts.app</a> are acted upon too, but the address above is the formal
 channel.</p>
 <p>A notification must be in writing and include: a physical or electronic
 signature of the owner or of a person authorised to act for them; identification
@@ -242,7 +242,7 @@ exercise it you will pay the proportional part of the service already provided,
 and the right is lost once the service has been fully performed (Articles 98.8,
 103.a and 108 of the Spanish Consumer Act, implementing Directive 2011/83/EU).
 Automatic renewals of an ongoing subscription do not open a new withdrawal
-period. To withdraw, email info@openshorts.app or use the model form we include
+period. To withdraw, email <a href="mailto:info@openshorts.app">info@openshorts.app</a> or use the model form we include
 in your confirmation email; refunds are issued to the original payment method
 within 14 days.</p>
 <p>Separately from this right, our <a href="/refunds">refund policy</a> returns
@@ -304,7 +304,7 @@ consumer protection rules of your country of residence. Disputes are submitted
 to the courts of Málaga, Spain — except that if you are a consumer, you keep
 the right to sue and be sued in the courts of your own domicile, and you may
 use the consumer mediation and arbitration bodies available in your country of
-residence. Complaints route: write to info@openshorts.app first; most issues
+residence. Complaints route: write to <a href="mailto:info@openshorts.app">info@openshorts.app</a> first; most issues
 are fixed in days.</p>
 `
 
@@ -313,7 +313,7 @@ const TERMS_ES = `
 <p>OpenShorts Cloud (openshorts.app) es un servicio prestado por TONVI TECH SL,
 sociedad española con CIF B-19780394 y domicilio en Calle Puerta del Mar 18,
 5ª planta, 29005 Málaga, España ("OpenShorts", "nosotros"). Puedes escribirnos
-a info@openshorts.app. Estos Términos de Servicio ("Términos") regulan el uso
+a <a href="mailto:info@openshorts.app">info@openshorts.app</a>. Estos Términos de Servicio ("Términos") regulan el uso
 del servicio alojado en openshorts.app.</p>
 <p>La edición de código abierto de OpenShorts que puedes descargar y ejecutar
 en tu propio hardware se licencia por separado bajo la Licencia MIT y no está
@@ -335,7 +335,7 @@ de pago facturadas a través de Stripe.</p>
 <h2>3. Requisitos y cuentas</h2>
 <p>Debes tener al menos 16 años, o la edad de consentimiento digital de tu país
 si es mayor. Eres responsable de todo lo que se haga con tu cuenta y tus claves
-API. Mantén tus credenciales en secreto y avísanos en info@openshorts.app si
+API. Mantén tus credenciales en secreto y avísanos en <a href="mailto:info@openshorts.app">info@openshorts.app</a> si
 crees que tu cuenta está comprometida.</p>
 
 <h2>4. Tu contenido sigue siendo tuyo</h2>
@@ -389,7 +389,7 @@ recurrimos únicamente a los subencargados listados en la
 almacenamiento y entrega), aplicamos medidas de seguridad apropiadas y
 eliminamos el contenido según las reglas de la cláusula 13 o antes si nos lo
 pides. Si tu empresa necesita un contrato de encargo de tratamiento firmado,
-solicítalo en info@openshorts.app. Cuando autoalojas OpenShorts con tus
+solicítalo en <a href="mailto:info@openshorts.app">info@openshorts.app</a>. Cuando autoalojas OpenShorts con tus
 propias claves, tu contenido fluye directamente entre tu instancia y el
 proveedor de IA bajo tu propio acuerdo con él. En OpenShorts Cloud eso no es
 así ni siquiera si aportas tu propia clave de proveedor: la petición la hacen
@@ -463,7 +463,7 @@ abuso.</p>
 impugnar una retirada, está en su propia página:
 <a href="/reportar-contenido">Reportar Contenido Ilícito</a>.</p>
 <p>Si crees que contenido procesado o alojado a través del servicio infringe
-tus derechos, escribe a info@openshorts.app (nuestro punto de contacto para
+tus derechos, escribe a <a href="mailto:info@openshorts.app">info@openshorts.app</a> (nuestro punto de contacto para
 usuarios y autoridades según los artículos 11 y 12 de la DSA) indicando: tu
 nombre y datos de contacto, la obra de la que eres titular, la URL o el
 identificador exacto del material infractor, una declaración de buena fe de que
@@ -481,7 +481,7 @@ siguiente agente para recibir notificaciones de presunta infracción conforme al
 Málaga, España. Email: info@upload-post.com.</p>
 <p>Esa es la dirección que consta en el Copyright Office estadounidense para
 esta empresa, que opera openshorts.app y upload-post.com. Las notificaciones
-enviadas a info@openshorts.app también se atienden, pero el canal formal es la
+enviadas a <a href="mailto:info@openshorts.app">info@openshorts.app</a> también se atienden, pero el canal formal es la
 dirección anterior.</p>
 <p>La notificación debe hacerse por escrito e incluir: la firma física o
 electrónica del titular o de quien esté autorizado a actuar en su nombre; la
@@ -536,7 +536,7 @@ pero si lo ejerces abonarás la parte proporcional del servicio ya prestado, y
 el derecho se pierde una vez el servicio se ha ejecutado por completo
 (artículos 98.8, 103.a y 108 del TRLGDCU, que transponen la Directiva
 2011/83/UE). Las renovaciones automáticas de una suscripción en curso no abren
-un nuevo plazo de desistimiento. Para desistir, escribe a info@openshorts.app o
+un nuevo plazo de desistimiento. Para desistir, escribe a <a href="mailto:info@openshorts.app">info@openshorts.app</a> o
 usa el formulario modelo que incluimos en tu email de confirmación; los
 reembolsos se emiten al medio de pago original en un máximo de 14 días.</p>
 <p>Al margen de este derecho, nuestra <a href="/reembolsos">política de
@@ -604,7 +604,7 @@ disputas se someten a los juzgados y tribunales de Málaga, España — con la
 salvedad de que, si eres consumidor, conservas el derecho a demandar y ser
 demandado ante los tribunales de tu propio domicilio, y puedes acudir a los
 sistemas de mediación y arbitraje de consumo de tu país de residencia. Vía de
-reclamación: escribe primero a info@openshorts.app; la mayoría de los problemas
+reclamación: escribe primero a <a href="mailto:info@openshorts.app">info@openshorts.app</a>; la mayoría de los problemas
 se resuelven en días.</p>
 `
 
@@ -612,7 +612,7 @@ const PRIVACY_EN = `
 <h2>1. Who is responsible</h2>
 <p>The data controller is TONVI TECH SL (CIF B-19780394), Calle Puerta del Mar
 18, 5th floor, 29005 Málaga, Spain — the company behind OpenShorts
-(openshorts.app). For anything about your data, write to info@openshorts.app.
+(openshorts.app). For anything about your data, write to <a href="mailto:info@openshorts.app">info@openshorts.app</a>.
 This policy is also available in <a href="/privacidad">Spanish</a>; for
 residents of Spain, the Spanish version prevails in case of discrepancy.</p>
 
@@ -664,7 +664,7 @@ random uuid) with these events so we can tell first-time from repeat use; we
 do <em>not</em> send your email address. No advertising pixels, no cross-site
 tracking, nothing shared with anyone. Basis: your consent (Art. 6.1.a GDPR and
 Art. 22.2 of Law 34/2002); withdraw it at any time in the banner or by
-emailing info@openshorts.app.</p>
+emailing <a href="mailto:info@openshorts.app">info@openshorts.app</a>.</p>
 <h3>Security and anti-abuse</h3>
 <p>Server logs, IP-based rate limits and fraud signals, kept to protect the
 service and its users. Basis: legitimate interest (Art. 6.1.f). Application
@@ -792,7 +792,7 @@ that enforces it, is in the public repository at
 <h2>6. Your rights</h2>
 <p>You can ask us for access, rectification, erasure, restriction, portability
 of your data, and object to processing based on legitimate interest — email
-info@openshorts.app or info@openshorts.app from your account address; we answer
+<a href="mailto:info@openshorts.app">info@openshorts.app</a> or <a href="mailto:info@openshorts.app">info@openshorts.app</a> from your account address; we answer
 within one month. Two of these you can exercise yourself, right now, without
 asking anyone: <strong>Account → Download my data</strong> gives you a JSON
 file with everything our database holds about you plus a download link for
@@ -834,7 +834,7 @@ characteristics about you, so the right to limit its use does not arise.</p>
 have it corrected, to have it deleted, and not to be discriminated against for
 exercising any of these rights: we do not offer a worse service, a higher price
 or fewer features to anyone who does. Exercise them by emailing
-info@openshorts.app from your account address, or delete everything yourself
+<a href="mailto:info@openshorts.app">info@openshorts.app</a> from your account address, or delete everything yourself
 with <strong>Account → Delete account</strong>. We verify a request by the
 control you have over the account email, which is the same credential you sign
 in with, and we answer within 45 days. An authorised agent may act for you if
@@ -844,7 +844,7 @@ they provide your written permission.</p>
 <p>The service is not directed at children. You must be at least 16, or the
 age of digital consent in your country if higher, to create an account, and
 you are asked to confirm that when you sign up. If you believe a minor has
-created an account, write to info@openshorts.app and we will delete it.</p>
+created an account, write to <a href="mailto:info@openshorts.app">info@openshorts.app</a> and we will delete it.</p>
 
 <h2>8 bis. AI-generated content</h2>
 <p>Dubbing, AI Shorts and AI thumbnails produce synthetic content. We mark
@@ -870,7 +870,7 @@ const PRIVACY_ES = `
 <p>El responsable es TONVI TECH SL (CIF B-19780394), Calle Puerta del Mar 18,
 5ª planta, 29005 Málaga, España — la empresa detrás de OpenShorts
 (openshorts.app). Para cualquier cuestión sobre tus datos, escribe a
-info@openshorts.app. Esta política está también disponible en
+<a href="mailto:info@openshorts.app">info@openshorts.app</a>. Esta política está también disponible en
 <a href="/privacy">inglés</a>; para residentes en España prevalece la versión
 en castellano en caso de discrepancia.</p>
 
@@ -924,7 +924,7 @@ primer uso del uso recurrente; <em>no</em> enviamos tu dirección de email. Sin
 píxeles publicitarios, sin seguimiento entre sitios, sin compartir nada con
 nadie. Base: tu consentimiento (art. 6.1.a RGPD y art. 22.2 de la Ley
 34/2002); puedes retirarlo cuando quieras en el banner o escribiendo a
-info@openshorts.app.</p>
+<a href="mailto:info@openshorts.app">info@openshorts.app</a>.</p>
 <h3>Seguridad y antiabuso</h3>
 <p>Registros del servidor, límites de uso por IP y señales de fraude,
 conservados para proteger el servicio y a sus usuarios. Base: interés legítimo
@@ -1062,7 +1062,7 @@ realmente la aplica, está en el repositorio público en
 <h2>6. Tus derechos</h2>
 <p>Puedes pedirnos acceso, rectificación, supresión, limitación y portabilidad
 de tus datos, y oponerte a los tratamientos basados en interés legítimo — basta
-un email a info@openshorts.app o a info@openshorts.app desde la dirección de tu
+un email a <a href="mailto:info@openshorts.app">info@openshorts.app</a> o a <a href="mailto:info@openshorts.app">info@openshorts.app</a> desde la dirección de tu
 cuenta; respondemos en el plazo de un mes. Dos de ellos puedes ejercerlos tú
 mismo, ahora y sin pedir permiso a nadie: <strong>Cuenta → Descargar mis
 datos</strong> te entrega un fichero JSON con todo lo que nuestra base de datos
@@ -1106,7 +1106,7 @@ el derecho a limitar su uso no llega a nacer.</p>
 rectifique, a que se elimine y a no sufrir discriminación por ejercer
 cualquiera de estos derechos: no damos peor servicio, ni precio más alto, ni
 menos funciones a quien los ejerce. Se ejercen escribiendo a
-info@openshorts.app desde la dirección de tu cuenta, o eliminándolo todo tú
+<a href="mailto:info@openshorts.app">info@openshorts.app</a> desde la dirección de tu cuenta, o eliminándolo todo tú
 mismo desde <strong>Cuenta → Eliminar cuenta</strong>. Verificamos la solicitud
 por el control que tienes sobre el email de la cuenta, que es la misma
 credencial con la que accedes, y respondemos en 45 días. Un agente autorizado
@@ -1116,7 +1116,7 @@ puede actuar por ti si aporta tu permiso por escrito.</p>
 <p>El servicio no está dirigido a menores. Para crear una cuenta debes tener al
 menos 16 años, o la edad de consentimiento digital de tu país si es mayor, y
 se te pide confirmarlo al registrarte. Si crees que un menor ha creado una
-cuenta, escribe a info@openshorts.app y la eliminaremos.</p>
+cuenta, escribe a <a href="mailto:info@openshorts.app">info@openshorts.app</a> y la eliminaremos.</p>
 
 <h2>8 bis. Contenido generado por IA</h2>
 <p>El doblaje, AI Shorts y las miniaturas con IA producen contenido sintético.
@@ -1148,8 +1148,8 @@ openshorts.app is:</p>
 <li><strong>Tax ID (CIF):</strong> B-19780394</li>
 <li><strong>Registered address:</strong> Calle Puerta del Mar 18, 5th floor,
 29005 Málaga, Spain</li>
-<li><strong>Contact:</strong> info@openshorts.app (general and legal notices)
-and info@openshorts.app (data protection)</li>
+<li><strong>Contact:</strong> <a href="mailto:info@openshorts.app">info@openshorts.app</a> (general and legal notices)
+and <a href="mailto:info@openshorts.app">info@openshorts.app</a> (data protection)</li>
 </ul>
 
 <h2>Purpose of the site</h2>
@@ -1170,7 +1170,7 @@ service belong to their respective owners.</p>
 <p>TONVI TECH SL acts as a hosting and processing provider for content
 submitted by its users, within the liability regime of Articles 14–17 LSSI-CE
 and Regulation (EU) 2022/2065 (DSA). Notices about allegedly unlawful content
-can be sent to info@openshorts.app, which is our single point of contact for
+can be sent to <a href="mailto:info@openshorts.app">info@openshorts.app</a>, which is our single point of contact for
 users and authorities; see Section 9 of the <a href="/terms">Terms of
 Service</a> for the procedure.</p>
 
@@ -1189,8 +1189,8 @@ openshorts.app es:</p>
 <li><strong>CIF:</strong> B-19780394</li>
 <li><strong>Domicilio:</strong> Calle Puerta del Mar 18, 5ª planta, 29005
 Málaga, España</li>
-<li><strong>Contacto:</strong> info@openshorts.app (general y avisos legales)
-y info@openshorts.app (protección de datos)</li>
+<li><strong>Contacto:</strong> <a href="mailto:info@openshorts.app">info@openshorts.app</a> (general y avisos legales)
+y <a href="mailto:info@openshorts.app">info@openshorts.app</a> (protección de datos)</li>
 </ul>
 
 <h2>Objeto del sitio</h2>
@@ -1212,7 +1212,7 @@ procesados a través del servicio pertenecen a sus respectivos titulares.</p>
 procesamiento del contenido remitido por sus usuarios, dentro del régimen de
 responsabilidad de los artículos 14 a 17 de la LSSI-CE y del Reglamento (UE)
 2022/2065 (DSA). Los avisos sobre contenido presuntamente ilícito pueden
-dirigirse a info@openshorts.app, nuestro punto único de contacto para usuarios
+dirigirse a <a href="mailto:info@openshorts.app">info@openshorts.app</a>, nuestro punto único de contacto para usuarios
 y autoridades; el procedimiento se describe en la cláusula 9 de los
 <a href="/terminos">Términos de Servicio</a>.</p>
 
@@ -1230,10 +1230,10 @@ stored or transmitted through openshorts.app is illegal, including content that
 infringes copyright, trademarks, image rights or privacy. You do not need an
 account and you do not need a lawyer.</p>
 <p>If your complaint is about your own account, your billing or your data, this
-is the wrong page: write to info@openshorts.app and say what you need.</p>
+is the wrong page: write to <a href="mailto:info@openshorts.app">info@openshorts.app</a> and say what you need.</p>
 
 <h2>How to send a notice</h2>
-<p>Email <strong>info@openshorts.app</strong> with the subject line
+<p>Email <strong><a href="mailto:info@openshorts.app">info@openshorts.app</a></strong> with the subject line
 <strong>Illegal content report</strong>, in English or Spanish. So that we can
 act on it without having to come back to you, the notice needs:</p>
 <ul>
@@ -1264,7 +1264,7 @@ sender. Accounts that repeatedly upload infringing material are terminated.</p>
 grounds, you get a statement of reasons under Article 17 DSA: what we removed,
 the facts we relied on, the legal or contractual ground, whether an automated
 system was involved, and how to challenge the decision.</p>
-<p>To challenge it, reply to that message or write to info@openshorts.app. A
+<p>To challenge it, reply to that message or write to <a href="mailto:info@openshorts.app">info@openshorts.app</a>. A
 person reviews it, not a filter. You also keep two routes that do not depend on
 us at all: an out-of-court dispute settlement body certified under Article 21
 DSA, and the courts. Nothing on this page limits either.</p>
@@ -1276,7 +1276,7 @@ Act, section 9 of our <a href="/terms">Terms of Service</a> names our designated
 agent and lists what section 512(c)(3) requires the notification to contain.</p>
 
 <h2>Point of contact</h2>
-<p>info@openshorts.app is our single point of contact for users (Article 12
+<p><a href="mailto:info@openshorts.app">info@openshorts.app</a> is our single point of contact for users (Article 12
 DSA) and for Member State authorities, the Commission and the European Board
 for Digital Services (Article 11 DSA). We accept communications in Spanish and
 in English. The service is operated by TONVI TECH SL, CIF B-19780394, Calle
@@ -1291,10 +1291,10 @@ de que un contenido procesado, almacenado o transmitido a través de
 openshorts.app es ilícito, incluidos los que infringen derechos de autor,
 marcas, derechos de imagen o privacidad. No necesitas tener cuenta ni abogado.</p>
 <p>Si tu problema es con tu cuenta, tu facturación o tus datos, esta no es la
-página: escribe a info@openshorts.app y cuéntanos qué necesitas.</p>
+página: escribe a <a href="mailto:info@openshorts.app">info@openshorts.app</a> y cuéntanos qué necesitas.</p>
 
 <h2>Cómo enviar una notificación</h2>
-<p>Escribe a <strong>info@openshorts.app</strong> con el asunto
+<p>Escribe a <strong><a href="mailto:info@openshorts.app">info@openshorts.app</a></strong> con el asunto
 <strong>Reporte de contenido ilícito</strong>, en español o en inglés. Para que
 podamos actuar sin tener que volver a preguntarte, la notificación necesita:</p>
 <ul>
@@ -1328,7 +1328,7 @@ estos motivos, recibes una declaración de motivos conforme al artículo 17 de l
 DSA: qué hemos retirado, los hechos en que nos basamos, el fundamento legal o
 contractual, si ha intervenido un sistema automatizado y cómo impugnar la
 decisión.</p>
-<p>Para impugnarla, responde a ese mensaje o escribe a info@openshorts.app. Lo
+<p>Para impugnarla, responde a ese mensaje o escribe a <a href="mailto:info@openshorts.app">info@openshorts.app</a>. Lo
 revisa una persona, no un filtro. Además conservas dos vías que no dependen de
 nosotros: un órgano de resolución extrajudicial de litigios certificado
 conforme al artículo 21 de la DSA, y los tribunales. Nada de esta página limita
@@ -1342,7 +1342,7 @@ Millennium Copyright Act estadounidense, el apartado 9 de nuestros
 designado y detalla lo que la sección 512(c)(3) exige que contenga.</p>
 
 <h2>Punto de contacto</h2>
-<p>info@openshorts.app es nuestro punto único de contacto para los usuarios
+<p><a href="mailto:info@openshorts.app">info@openshorts.app</a> es nuestro punto único de contacto para los usuarios
 (artículo 12 de la DSA) y para las autoridades de los Estados miembros, la
 Comisión y la Junta Europea de Servicios Digitales (artículo 11 de la DSA).
 Aceptamos comunicaciones en español y en inglés. El servicio lo opera TONVI
@@ -1373,7 +1373,7 @@ made. Signing in and looking around is not using it.</li>
 legal rights below may still get you money back.</p>
 
 <h2>How to ask</h2>
-<p>Email <strong>info@openshorts.app</strong> from the address your account
+<p>Email <strong><a href="mailto:info@openshorts.app">info@openshorts.app</a></strong> from the address your account
 uses and say you want a refund. We check the date of the charge and whether any
 minutes were spent after it, and we reply the same working day.</p>
 
@@ -1423,7 +1423,7 @@ miniatura. Entrar y mirar no cuenta como usarlo.</li>
 de más abajo pueden devolverte dinero igualmente.</p>
 
 <h2>Cómo pedirlo</h2>
-<p>Escribe a <strong>info@openshorts.app</strong> desde la dirección de tu
+<p>Escribe a <strong><a href="mailto:info@openshorts.app">info@openshorts.app</a></strong> desde la dirección de tu
 cuenta y dinos que quieres el reembolso. Comprobamos la fecha del cargo y si se
 gastaron minutos después, y respondemos el mismo día laborable.</p>
 
@@ -1474,7 +1474,7 @@ export function legalPages() {
       path: '/privacy',
       title: 'Privacy Policy | OpenShorts',
       description:
-        'What OpenShorts stores (email, billing reference, the videos you process), for how long, which providers touch it, and your GDPR rights. Nothing non-essential loads before you accept it.',
+        'What OpenShorts stores (email, billing reference, the videos you process), for how long, which providers touch it, and your GDPR rights.',
       h1: 'Privacy Policy',
       breadcrumb: [{ name: 'Privacy Policy' }],
       published: PUBLISHED,
@@ -1496,7 +1496,7 @@ export function legalPages() {
       published: PUBLISHED,
       updated: PUBLISHED,
       tldr: [
-        'openshorts.app is operated by TONVI TECH SL, CIF B-19780394, Calle Puerta del Mar 18, 29005 Málaga, Spain — contact info@openshorts.app.',
+        'openshorts.app is operated by TONVI TECH SL, CIF B-19780394, Calle Puerta del Mar 18, 29005 Málaga, Spain — contact <a href="mailto:info@openshorts.app">info@openshorts.app</a>.',
       ],
       body: LEGAL_EN,
     },
@@ -1504,7 +1504,7 @@ export function legalPages() {
       path: '/terminos',
       title: 'Términos de Servicio | OpenShorts',
       description:
-        'Los términos de OpenShorts Cloud: tu contenido sigue siendo tuyo, sin entrenamiento de IA con tus vídeos, derechos de los consumidores de la UE y plazos de conservación.',
+        'Los términos de OpenShorts Cloud: tu contenido sigue siendo tuyo, sin entrenar IA con tus vídeos, derechos del consumidor UE y plazos de conservación.',
       h1: 'Términos de Servicio',
       breadcrumb: [{ name: 'Términos de Servicio' }],
       published: PUBLISHED,
@@ -1521,7 +1521,7 @@ export function legalPages() {
       path: '/privacidad',
       title: 'Política de Privacidad | OpenShorts',
       description:
-        'Qué guarda OpenShorts (email, referencia de facturación, los vídeos que procesas), durante cuánto tiempo, qué proveedores intervienen y tus derechos RGPD. Sin rastreadores de terceros.',
+        'Qué guarda OpenShorts (email, referencia de facturación, los vídeos que procesas), cuánto tiempo, qué proveedores intervienen y tus derechos RGPD.',
       h1: 'Política de Privacidad',
       breadcrumb: [{ name: 'Política de Privacidad' }],
       published: PUBLISHED,
@@ -1545,7 +1545,7 @@ export function legalPages() {
       updated: PUBLISHED,
       lang: 'es',
       tldr: [
-        'openshorts.app es un servicio de TONVI TECH SL, CIF B-19780394, Calle Puerta del Mar 18, 29005 Málaga, España — contacto info@openshorts.app.',
+        'openshorts.app es un servicio de TONVI TECH SL, CIF B-19780394, Calle Puerta del Mar 18, 29005 Málaga, España — contacto <a href="mailto:info@openshorts.app">info@openshorts.app</a>.',
       ],
       body: LEGAL_ES,
     },
@@ -1559,7 +1559,7 @@ export function legalPages() {
       published: PUBLISHED,
       updated: PUBLISHED,
       tldr: [
-        'Email info@openshorts.app with the subject "Illegal content report", the exact URL, why it is illegal, and your contact details.',
+        'Email <a href="mailto:info@openshorts.app">info@openshorts.app</a> with the subject "Illegal content report", the exact URL, why it is illegal, and your contact details.',
         'We confirm receipt without undue delay, review it with human judgement, and tell you what we decided and why.',
         'If we removed your content you get a statement of reasons and can challenge it, with the courts and an Article 21 dispute body always open to you.',
       ],
@@ -1569,14 +1569,14 @@ export function legalPages() {
       path: '/reportar-contenido',
       title: 'Reportar Contenido Ilícito | OpenShorts',
       description:
-        'Cómo reportar contenido ilícito o infractor en openshorts.app: qué debe contener la notificación, qué hacemos con ella y cómo impugnar una retirada. Artículo 16 DSA.',
+        'Cómo reportar contenido ilícito o infractor en openshorts.app: qué debe contener la notificación, qué hacemos con ella y cómo impugnar una retirada.',
       h1: 'Reportar Contenido Ilícito',
       breadcrumb: [{ name: 'Reportar Contenido Ilícito' }],
       published: PUBLISHED,
       updated: PUBLISHED,
       lang: 'es',
       tldr: [
-        'Escribe a info@openshorts.app con el asunto "Reporte de contenido ilícito", la URL exacta, por qué es ilícito y tus datos de contacto.',
+        'Escribe a <a href="mailto:info@openshorts.app">info@openshorts.app</a> con el asunto "Reporte de contenido ilícito", la URL exacta, por qué es ilícito y tus datos de contacto.',
         'Confirmamos la recepción sin dilaciones indebidas, lo revisa una persona y te comunicamos qué decidimos y por qué.',
         'Si te hemos retirado contenido recibes una declaración de motivos y puedes impugnarla, con los tribunales y un órgano del artículo 21 siempre abiertos.',
       ],
@@ -1586,14 +1586,14 @@ export function legalPages() {
       path: '/refunds',
       title: 'Refund Policy | OpenShorts',
       description:
-        'Charged in the last 14 days and have not used the service since? OpenShorts refunds it in full. What counts as used, how to ask, and how EU withdrawal rights cover the rest.',
+        'Charged in the last 14 days and have not used the service since? OpenShorts refunds it in full. What counts as used, and how to ask.',
       h1: 'Refund Policy',
       breadcrumb: [{ name: 'Refund Policy' }],
       published: PUBLISHED,
       updated: PUBLISHED,
       tldr: [
         'Charged in the last 14 days and have not used the service since? We refund it in full, no reason needed.',
-        'It covers your most recent charge only, and it is built for the renewal you did not notice. One email to info@openshorts.app.',
+        'It covers your most recent charge only, and it is built for the renewal you did not notice. One email to <a href="mailto:info@openshorts.app">info@openshorts.app</a>.',
         'If you did spend minutes, the EU withdrawal right in section 12 of the Terms may still refund the part you did not use.',
       ],
       body: REFUNDS_EN,
@@ -1602,7 +1602,7 @@ export function legalPages() {
       path: '/reembolsos',
       title: 'Política de Reembolsos | OpenShorts',
       description:
-        '¿Te han cobrado en los últimos 14 días y no has usado el servicio? OpenShorts te lo devuelve entero. Qué cuenta como usarlo, cómo pedirlo y qué cubre el desistimiento.',
+        '¿Te han cobrado en los últimos 14 días y no has usado el servicio? OpenShorts te lo devuelve entero. Qué cuenta como usarlo y cómo pedirlo.',
       h1: 'Política de Reembolsos',
       breadcrumb: [{ name: 'Política de Reembolsos' }],
       published: PUBLISHED,
@@ -1610,7 +1610,7 @@ export function legalPages() {
       lang: 'es',
       tldr: [
         '¿Te hemos cobrado en los últimos 14 días y no has usado el servicio desde entonces? Te lo devolvemos entero, sin justificación.',
-        'Cubre solo tu último cargo, y está pensada para la renovación que no te sonó. Basta un email a info@openshorts.app.',
+        'Cubre solo tu último cargo, y está pensada para la renovación que no te sonó. Basta un email a <a href="mailto:info@openshorts.app">info@openshorts.app</a>.',
         'Si sí gastaste minutos, el desistimiento del apartado 12 de los Términos puede devolverte la parte no consumida.',
       ],
       body: REFUNDS_ES,

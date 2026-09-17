@@ -15,6 +15,7 @@
  * `/alternatives/opus-clip` without any server config change.
  */
 
+import { loadEnv } from 'vite'
 import { SITE } from './seo/data.js'
 import { buildPages, relatedFor } from './seo/pages.js'
 import { legalPages } from './seo/legal.js'
@@ -94,12 +95,34 @@ const notFoundPage = () => ({
   faq: [],
 })
 
+/* The analytics block in render.js carries the same %VITE_OPENPANEL_*%
+ * placeholders index.html does, but Vite only rewrites index.html: the pages
+ * below are emitted as raw assets and never pass through its HTML transform.
+ * Substituting here keeps one switch for the whole deployment: unset collapses
+ * to an empty string, the page's own `unset()` check catches that and nothing
+ * loads — the same inert result index.html gets from its unreplaced literal. */
+const substituteAnalyticsEnv = (html, env) => {
+  const value = (name) => {
+    const v = env[`VITE_${name}`] || process.env[`VITE_${name}`] || ''
+    // A value containing the placeholder marker would defeat the unset() check.
+    return String(v).replace(/[%"]/g, '')
+  }
+  return html
+    .replace(/%VITE_OPENPANEL_API_URL%/g, value('OPENPANEL_API_URL'))
+    .replace(/%VITE_OPENPANEL_CLIENT_ID%/g, value('OPENPANEL_CLIENT_ID'))
+}
+
 export default function seoPlugin() {
   const pages = buildPages()
+  let env = {}
 
   return {
     name: 'openshorts-seo',
     apply: 'build',
+
+    configResolved(config) {
+      env = loadEnv(config.mode, config.envDir, 'VITE_')
+    },
 
     transformIndexHtml(html) {
       if (!html.includes('<div id="root"></div>')) {
@@ -126,19 +149,21 @@ export default function seoPlugin() {
           // `try_files $uri.html` (added to nginx.conf) serves these at the
           // clean path with a 200 and no redirect.
           fileName: `${page.path.replace(/^\//, '')}.html`,
-          source: renderPage(page, relatedFor(page, pages)),
+          source: substituteAnalyticsEnv(renderPage(page, relatedFor(page, pages)), env),
         })
       }
 
       // Legal pages (terms/privacy/legal notice, EN+ES): indexed and present in
       // the sitemap and llms.txt, but OUT of the marketing interlinking ring —
-      // they are linked from the footer, where readers expect them.
+      // they are linked from the footer, where readers expect them. The body CTA
+      // is off here: nobody reading a refund policy needs a "get free clips"
+      // button in the middle of the withdrawal procedure.
       const legal = legalPages()
       for (const page of legal) {
         this.emitFile({
           type: 'asset',
           fileName: `${page.path.replace(/^\//, '')}.html`,
-          source: renderPage(page, []),
+          source: substituteAnalyticsEnv(renderPage(page, [], { cta: false }), env),
         })
       }
 
@@ -152,7 +177,10 @@ export default function seoPlugin() {
       this.emitFile({
         type: 'asset',
         fileName: '404.html',
-        source: renderPage(notFoundPage(), relatedFor(pages[0], pages)),
+        source: substituteAnalyticsEnv(
+          renderPage(notFoundPage(), relatedFor(pages[0], pages), { cta: false }),
+          env
+        ),
       })
     },
   }

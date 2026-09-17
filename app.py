@@ -5897,6 +5897,33 @@ async def saasshorts_post_to_socials(req: SaaSPostRequest, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# The gallery and the per-video pages are rendered by this API service, but the
+# app they advertise lives on www. A relative href on `api.` host resolves
+# against `api.`, where `/` is not the app (it is a 404), so every link that
+# crosses hosts is written absolute. `www.openshorts.app/gallery` and
+# `/video/...` 301 to the api host (dashboard/nginx.conf), so the api host is
+# the final domain for those two and the app host is final for everything else.
+APP_HOST = "https://www.openshorts.app"
+GALLERY_HOST = "https://api.openshorts.app"
+
+
+def _json_ld(payload: dict) -> str:
+    """Serialise a JSON-LD payload for an inline <script> block.
+
+    `html.escape()` is the wrong tool here: inside JSON-LD it produces
+    `&amp;quot;` and friends, which is still valid JSON *text* but no longer
+    means what it said, so the crawler reads a literal entity instead of a
+    quote. The right escaping for this context is JSON's own, plus `<>` and `&`
+    as unicode escapes so a title can never close the script tag.
+    """
+    return (
+        json.dumps(payload, ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+
+
 @app.get("/gallery", response_class=HTMLResponse)
 async def gallery_html_page():
     """SEO gallery page with all generated UGC videos."""
@@ -5907,7 +5934,11 @@ async def gallery_html_page():
     cards_html = ""
     ld_items = []
     for i, v in enumerate(videos):
-        title = html_mod.escape(v.get("title", "Untitled"))
+        # Two versions of the same string on purpose: the HTML one is escaped
+        # for markup, the JSON-LD one is serialised as JSON. Escaping once and
+        # reusing the result in both places is what produced `&amp;amp;`.
+        raw_title = v.get("title", "Untitled")
+        title = html_mod.escape(raw_title)
         video_url = v.get("video_url", "")
         actor_url = v.get("actor_url", "")
         video_id = v.get("video_id", "")
@@ -5934,9 +5965,29 @@ async def gallery_html_page():
           </div>
         </a>'''
 
-        ld_items.append(f'{{"@type":"ListItem","position":{i+1},"url":"https://openshorts.app/video/{video_id}","name":"{title}"}}')
+        ld_items.append(
+            {
+                "@type": "ListItem",
+                "position": i + 1,
+                # The apex 301s to www, which 301s to here: name the host the
+                # page is actually served from.
+                "url": f"{GALLERY_HOST}/video/{video_id}",
+                "name": raw_title,
+            }
+        )
 
-    ld_json = f'{{"@context":"https://schema.org","@type":"CollectionPage","name":"AI UGC Video Gallery","mainEntity":{{"@type":"ItemList","numberOfItems":{len(videos)},"itemListElement":[{",".join(ld_items)}]}}}}'
+    ld_json = _json_ld(
+        {
+            "@context": "https://schema.org",
+            "@type": "CollectionPage",
+            "name": "AI UGC Video Gallery",
+            "mainEntity": {
+                "@type": "ItemList",
+                "numberOfItems": len(videos),
+                "itemListElement": ld_items,
+            },
+        }
+    )
 
     return f'''<!DOCTYPE html>
 <html lang="en">
@@ -5945,6 +5996,7 @@ async def gallery_html_page():
 <title>AI UGC Video Gallery | OpenShorts</title>
 <meta name="description" content="Browse {len(videos)} AI-generated UGC marketing videos. Create viral TikTok and Instagram Reels for your SaaS product.">
 <meta name="robots" content="index, follow">
+<link rel="canonical" href="{GALLERY_HOST}/gallery">
 <meta property="og:title" content="AI UGC Video Gallery | OpenShorts">
 <meta property="og:type" content="website">
 <meta property="og:description" content="Browse AI-generated UGC marketing videos for SaaS products.">
@@ -5960,11 +6012,11 @@ h1{{font-size:28px;font-weight:700;padding:40px 20px 0;text-align:center}}
 </style>
 </head>
 <body>
-<nav><strong style="font-size:18px">OpenShorts</strong><a href="/" class="cta">Create Your Video</a></nav>
+<nav><strong style="font-size:18px">OpenShorts</strong><a href="{APP_HOST}/" class="cta">Create Your Video</a></nav>
 <h1>AI-Generated UGC Videos</h1>
 <p class="subtitle">{len(videos)} videos generated · Low Cost & Premium modes</p>
 <div class="grid">{cards_html}</div>
-<div style="text-align:center;padding:40px"><a href="/" class="cta">Create Your Own UGC Video</a></div>
+<div style="text-align:center;padding:40px"><a href="{APP_HOST}/" class="cta">Create Your Own UGC Video</a></div>
 </body></html>'''
 
 
@@ -5978,8 +6030,12 @@ async def video_html_page(video_id: str):
     if not meta:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    title = html_mod.escape(meta.get("title", "Untitled"))
-    caption = html_mod.escape(meta.get("caption", ""))
+    # Raw values feed the JSON-LD (serialised as JSON by _json_ld) while the
+    # escaped ones feed the markup; they are not interchangeable.
+    raw_title = meta.get("title", "Untitled")
+    raw_caption = meta.get("caption", "")
+    title = html_mod.escape(raw_title)
+    caption = html_mod.escape(raw_caption)
     narration = html_mod.escape(meta.get("full_narration", ""))
     video_url = meta.get("video_url", "")
     actor_url = meta.get("actor_url", "")
@@ -5993,7 +6049,21 @@ async def video_html_page(video_id: str):
     created = meta.get("created_at", "")
     actor_desc = html_mod.escape(meta.get("actor_description", ""))
 
-    ld_json = f'{{"@context":"https://schema.org","@type":"VideoObject","name":"{title}","description":"{caption}","thumbnailUrl":"{actor_url}","contentUrl":"{video_url}","uploadDate":"{created}","duration":"PT{int(duration)}S","width":1080,"height":1920,"inLanguage":"{language}"}}'
+    ld_json = _json_ld(
+        {
+            "@context": "https://schema.org",
+            "@type": "VideoObject",
+            "name": raw_title,
+            "description": raw_caption,
+            "thumbnailUrl": actor_url,
+            "contentUrl": video_url,
+            "uploadDate": created,
+            "duration": f"PT{int(duration)}S",
+            "width": 1080,
+            "height": 1920,
+            "inLanguage": language,
+        }
+    )
 
     mode_label = "Low Cost" if mode == "lowcost" else "Premium"
 
@@ -6003,6 +6073,7 @@ async def video_html_page(video_id: str):
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title} - AI UGC Video | OpenShorts</title>
 <meta name="description" content="{caption} {hashtags}">
+<link rel="canonical" href="{GALLERY_HOST}/video/{video_id}">
 <meta property="og:type" content="video.other">
 <meta property="og:title" content="{title}">
 <meta property="og:description" content="{caption}">
@@ -6033,7 +6104,7 @@ h1{{font-size:22px;font-weight:700;margin-bottom:8px}}
 </style>
 </head>
 <body>
-<nav><strong>OpenShorts</strong><a href="/gallery">Gallery</a><span style="color:#3f3f46">›</span><span style="color:#e4e4e7;font-size:14px">{title}</span></nav>
+<nav><strong>OpenShorts</strong><a href="{GALLERY_HOST}/gallery">Gallery</a><span style="color:#3f3f46">›</span><span style="color:#e4e4e7;font-size:14px">{title}</span></nav>
 <div class="container">
 <div><video src="{video_url}" poster="{actor_url}" controls autoplay playsinline style="aspect-ratio:9/16;object-fit:cover"></video></div>
 <div>
@@ -6043,8 +6114,8 @@ h1{{font-size:22px;font-weight:700;margin-bottom:8px}}
 <div class="section"><h2>Script</h2><p>{narration}</p></div>
 <div class="section"><h2>Actor</h2><p>{actor_desc}</p></div>
 {f'<div class="section"><h2>Product</h2><p><a href="{product_url}" style="color:#8b5cf6" target="_blank">{product}</a></p></div>' if product_url else ''}
-<a href="/gallery">← Back to Gallery</a>
-<br><a href="/" class="cta">Create Your Own</a>
+<a href="{GALLERY_HOST}/gallery">← Back to Gallery</a>
+<br><a href="{APP_HOST}/" class="cta">Create Your Own</a>
 </div>
 </div>
 </body></html>'''

@@ -145,6 +145,22 @@ export const COMPETITORS = {
     name: 'Vizard',
     checked: '2026-07-27',
     entryPrice: '$19.99/month',
+    // "vizard ai" is the spelling most of its search volume uses, so the page
+    // answers the brand question explicitly instead of hoping the comparison
+    // table catches the query on its own.
+    brandAlias: 'also written Vizard AI',
+    brandBlurb:
+      'Vizard (written Vizard AI in most searches, and served from vizard.ai) is a browser-based clipper: it transcribes the video, finds candidate moments and hands you a timeline to fix them in. That transcription pass is also its video-to-text feature, so a transcript comes out of the same job as the clips.',
+    extraFaq: [
+      {
+        q: 'Is Vizard AI free?',
+        a: 'Partly. Vizard has a free plan that allows 120 upload minutes and 10 exports. Its paid plans start at $19.99/month. OpenShorts self-hosted is free with no watermark and no usage cap, and OpenShorts Cloud gives 20 watermarked minutes a month with paid plans from $12/month.',
+      },
+      {
+        q: 'What is Vizard AI used for?',
+        a: 'Turning long recordings into short vertical clips, with an emphasis on editing them afterwards: it finds the moments, transcribes them and gives you a timeline for the captions and the clip boundaries. It is also used as a video-to-text tool, because the transcript comes out of the same job.',
+      },
+    ],
     tiers: [['Creator and higher tiers', 'From $19.99/month, scaling by minutes processed']],
     gotcha:
       'Vizard is built around a browser editing timeline, so it sits between a pure auto-clipper and a full editor. That is useful if you intend to hand-adjust every clip, and overhead if you do not.',
@@ -163,7 +179,9 @@ export const COMPETITORS = {
   submagic: {
     name: 'Submagic',
     checked: '2026-07-27',
-    entryPrice: '$14–20/month depending on billing period and listing',
+    // Short enough to survive inside a 160-character meta description; the
+    // annual/monthly spread is spelled out in the tiers below.
+    entryPrice: '$14/month annual',
     tiers: [
       ['Free', '3 videos per month, watermarked'],
       ['Starter', 'From $14/month annual, around $20/month monthly, for roughly 30 videos'],

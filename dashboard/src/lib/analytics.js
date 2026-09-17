@@ -26,6 +26,8 @@ import { allows } from './consent';
 //   - ClipTutorialStarted  — first-login tutorial: user hit Start
 //   - ClipTutorialSkipped  — first-login tutorial dismissed (intro or coach)
 //   - ClipTutorialCompleted— first Clip Generator job finished with clips
+//   - JobResumedAfterSignin— a job started signed-out was replayed after the
+//                          sign-in (App.jsx), instead of being dropped
 // The Started → Redirected → Subscribed chain is what separates "never reached
 // Stripe" from "reached Stripe and abandoned"; before 2-ago-2026 the modals
 // emitted only their own *Checkout event and the difference was invisible.

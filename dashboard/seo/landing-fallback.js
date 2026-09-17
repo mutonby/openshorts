@@ -147,6 +147,13 @@ export const LANDING_FALLBACK = `<div id="seo-content" style="background:oklch(1
     <a style="${S.a}" href="/youtube-to-shorts-converter">YouTube to Shorts converter</a> &middot;
     <a style="${S.a}" href="/how-openshorts-works">How it works</a> &middot;
     <a style="${S.a}" href="/alternatives">All alternatives compared</a> &middot;
+    <a style="${S.a}" href="/alternativas">Alternativas (ES)</a> &middot;
+    <a style="${S.a}" href="/opus-clip-pricing">Opus Clip pricing</a> &middot;
+    <a style="${S.a}" href="/opus-clip-free-alternative">Free Opus Clip alternative</a> &middot;
+    <a style="${S.a}" href="/opus-ai">Opus AI</a> &middot;
+    <a style="${S.a}" href="/opus-pro">Opus Pro</a> &middot;
+    <a style="${S.a}" href="/vizard-ai-video-to-text">Vizard AI video to text</a> &middot;
+    <a style="${S.a}" href="/submagic-reviews">Submagic review</a> &middot;
     <a style="${S.a}" href="/mcp">MCP server &amp; API</a> &middot;
     <a style="${S.a}" href="/automate-shorts-api">Automate shorts via API</a> &middot;
     <a style="${S.a}" href="/n8n-youtube-shorts-automation">n8n template: channel on autopilot</a>
