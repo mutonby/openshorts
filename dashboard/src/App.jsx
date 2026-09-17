@@ -786,6 +786,13 @@ function App() {
       if (qa === 'celebrate') { setTutorialPhase('celebrate'); return; }
       if (localStorage.getItem('os_show_clip_tutorial') === '1') showTutorial = true;
       if (localStorage.getItem('os_clip_tutorial') === 'coach') resumeCoach = true;
+      // A request parked before the sign-in redirect is about to resume on its
+      // own: opening the intro ("paste a link and generate") on top of a job
+      // that is already starting contradicts itself. Skip it for this signup.
+      if (showTutorial && peekPendingJob()) {
+        showTutorial = false;
+        localStorage.removeItem('os_show_clip_tutorial');
+      }
     } catch (_) { /* ignore */ }
     if (showTutorial) {
       setTutorialPhase('intro');
@@ -2266,7 +2273,7 @@ function App() {
           onReframed={handleClipRerendered}
         />
       )}
-      {showLogin && <LoginModal onClose={() => setShowLogin(false)} queued={!!peekPendingJob()} />}
+      {showLogin && <LoginModal onClose={() => setShowLogin(false)} queued={typeof peekPendingJob()?.data?.payload === 'string'} />}
       {tutorialPhase && (
         <ClipTutorial
           phase={tutorialPhase}

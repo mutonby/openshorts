@@ -288,10 +288,11 @@ const ANALYTICS = `
  * product. Copy is per page (`page.cta`) because the push differs — a reader
  * on the no-watermark page is arguing about watermarks, not about editing.
  *
- * The link carries utm_* so the click is attributable: lib/attribution.js
- * snapshots it on arrival and posts it with the signup. The inline handler
- * reports the click itself, which is what tells us whether the CTA or the nav
- * button is doing the work. */
+ * Plain same-origin link on purpose: utm_* here would overwrite the visitor's
+ * real acquisition source (google, reddit...) in lib/attribution.js and split
+ * the OpenPanel session. The inline handler reports the click with the page
+ * slug, which is what tells us whether the CTA or the nav button is doing the
+ * work. */
 const DEFAULT_CTA = {
   label: 'Try it',
   title: 'Paste a link, get vertical clips',
@@ -302,7 +303,7 @@ const DEFAULT_CTA = {
 const ctaBlock = (page) => {
   const c = { ...DEFAULT_CTA, ...(page.cta || {}) }
   const slug = page.path.replace(/^\//, '').replace(/\//g, '-') || 'home'
-  const href = `${SITE.url}/?utm_source=seo&utm_medium=body-cta&utm_campaign=${slug}`
+  const href = `${SITE.url}/`
   return `
 <div class="cta-box">
   <div class="copy">

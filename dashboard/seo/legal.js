@@ -186,7 +186,7 @@ Article 16 DSA.</p>
 following agent to receive notifications of claimed infringement under 17
 U.S.C. § 512(c)(2):</p>
 <p>Copyright Agent, TONVI TECH SL, Calle Puerta del Mar 18, 5th floor, 29005
-Málaga, Spain. Email: info@upload-post.com.</p>
+Málaga, Spain. Email: <a href="mailto:info@upload-post.com">info@upload-post.com</a>.</p>
 <p>That address is the one on file with the US Copyright Office for this
 company, which operates openshorts.app and upload-post.com. Notices sent to
 <a href="mailto:info@openshorts.app">info@openshorts.app</a> are acted upon too, but the address above is the formal
@@ -478,7 +478,7 @@ de la DSA.</p>
 siguiente agente para recibir notificaciones de presunta infracción conforme al
 17 U.S.C. § 512(c)(2):</p>
 <p>Copyright Agent, TONVI TECH SL, Calle Puerta del Mar 18, 5ª planta, 29005
-Málaga, España. Email: info@upload-post.com.</p>
+Málaga, España. Email: <a href="mailto:info@upload-post.com">info@upload-post.com</a>.</p>
 <p>Esa es la dirección que consta en el Copyright Office estadounidense para
 esta empresa, que opera openshorts.app y upload-post.com. Las notificaciones
 enviadas a <a href="mailto:info@openshorts.app">info@openshorts.app</a> también se atienden, pero el canal formal es la
