@@ -12,14 +12,15 @@ from datetime import datetime, timezone
 
 import httpx
 import stripe
-from fastapi import APIRouter, Request, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
+from typing import Literal
+from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import select
 
 from .config import (settings, PLAN_MINUTES, TRIAL_DAYS, SUBSCRIPTION_LOOKUP_KEYS,
                      TOPUP_LOOKUP_KEYS, new_subscriber_label)
 from . import analytics, config, database
-from .models import User, Subscription, CreditTopup, StripeEvent, SignupAttribution
+from .models import User, Subscription, CreditTopup, StripeEvent, SignupAttribution, CancellationFeedback
 from .auth import get_current_user_required
 
 router = APIRouter()
@@ -256,6 +257,62 @@ async def end_trial(request: Request):
     except Exception:
         raise HTTPException(status_code=502, detail="Could not activate your plan. Try again.")
     return {"status": updated.get("status", "active")}
+
+
+class CancellationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: Literal["too_expensive", "not_using", "quality", "missing_features",
+                    "technical_issues", "switching", "other"] | None = None
+    comment: str | None = Field(default=None, max_length=2000)
+    rating: int | None = Field(default=None, ge=1, le=5, strict=True)
+
+
+@router.post("/api/billing/cancel")
+async def cancellation_portal(body: CancellationRequest, request: Request, background_tasks: BackgroundTasks):
+    """Optional private feedback; only Stripe webhooks establish billing state."""
+    user = await get_current_user_required(request)
+    async with database.session() as s:
+        sub = (await s.execute(select(Subscription).where(
+            Subscription.user_id == user.id))).scalar_one_or_none()
+        owner = await s.get(User, user.id)
+        customer_id = owner.stripe_customer_id if owner else None
+    if not sub or sub.status in ("canceled", "incomplete_expired"):
+        raise HTTPException(status_code=409, detail="No subscription to cancel. Use Manage billing.")
+    if not customer_id:
+        raise HTTPException(status_code=409, detail="No billing account. Use Manage billing.")
+    _init_stripe()
+    kwargs = dict(customer=customer_id,
+                  return_url=f"{settings.frontend_url}/#/account")
+    try:
+        portal = await asyncio.to_thread(lambda: stripe.billing_portal.Session.create(
+            **kwargs, flow_data={"type": "subscription_cancel", "subscription_cancel": {
+                "subscription": sub.stripe_subscription_id}}))
+    except Exception:
+        # Some portal configurations cannot deep link: preserve the normal portal.
+        try:
+            portal = await asyncio.to_thread(
+                lambda: stripe.billing_portal.Session.create(**kwargs))
+        except Exception:
+            raise HTTPException(status_code=502, detail="Could not open billing portal. Please try again.")
+    try:
+        async with database.session() as s:
+            s.add(CancellationFeedback(
+                user_id=user.id, stripe_subscription_id=sub.stripe_subscription_id,
+                reason=body.reason, comment=(body.comment or "").strip() or None,
+                rating=body.rating, status="intent"))
+            await s.commit()
+    except Exception:
+        # SQL exceptions may contain private text. Never log them or block billing.
+        pass
+    comment = (body.comment or "").strip()
+    if body.reason or comment or body.rating is not None:
+        from .cancellation_notifications import notify_cancellation_feedback
+        background_tasks.add_task(
+            notify_cancellation_feedback, user_id=user.id,
+            reason=body.reason or "Not provided", comment=comment,
+            rating=body.rating, plan=getattr(sub, "plan", None),
+        )
+    return {"url": portal.url}
 
 
 @router.post("/api/billing/portal")

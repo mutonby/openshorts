@@ -41,7 +41,7 @@ from . import database, email_policy, storage
 from .models import (
     User, Subscription, CreditTopup, UsageLedger, MagicLinkToken,
     SignupAttribution, ApiKey, UploadPostProfile, UserVideo, ClipExpiryWarning,
-    Project, AccountDeletion, OAuthCode, AutopilotRun, AutopilotSettings,
+    Project, AccountDeletion, OAuthCode, AutopilotRun, AutopilotSettings, CancellationFeedback,
 )
 
 # Every table that holds rows belonging to a user, child-first (clip_expiry_
@@ -56,7 +56,7 @@ from .models import (
 USER_OWNED_TABLES = (
     ClipExpiryWarning, UserVideo, Project, UsageLedger, CreditTopup,
     Subscription, ApiKey, SignupAttribution, UploadPostProfile, OAuthCode,
-    AutopilotRun, AutopilotSettings,
+    AutopilotRun, AutopilotSettings, CancellationFeedback,
 )
 
 # The optional "why are you leaving" answer, as a closed list. It was a free

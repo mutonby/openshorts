@@ -82,6 +82,21 @@ class Subscription(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class CancellationFeedback(Base):
+    """Private cancellation intent, NOT evidence of a completed cancellation."""
+    __tablename__ = "cancellation_feedback"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
+                     nullable=False, index=True)
+    # Snapshot: subscriptions can be replaced later for this same user.
+    stripe_subscription_id = Column(Text, nullable=False, index=True)
+    reason = Column(String(32), nullable=True)
+    comment = Column(String(2000), nullable=True)
+    rating = Column(Integer, nullable=True)
+    status = Column(String(20), nullable=False, default="intent")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class CreditTopup(Base):
     __tablename__ = "credit_topups"
     id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)

@@ -8,6 +8,7 @@ import McpConnectCard from './McpConnectCard';
 import DeleteAccountCard from './DeleteAccountCard';
 import SocialAnalyticsCard from './SocialAnalyticsCard';
 import InvoicesCard from './InvoicesCard';
+import CancellationFeedback from './CancellationFeedback';
 
 const fmt1 = (n) => Math.round((n || 0) * 10) / 10;
 
@@ -184,6 +185,10 @@ export default function AccountPage() {
           </div>
         </div>
       </div>
+
+      {me.has_billing_account && !me.cancel_at_period_end
+        && ['active', 'trialing', ...PAYMENT_ISSUE_STATES].includes(me.status)
+        && <CancellationFeedback />}
 
       {/* Only accounts that ever had a Stripe relationship can have invoices. */}
       {me.has_billing_account && <InvoicesCard />}
