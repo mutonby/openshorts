@@ -27,6 +27,7 @@ import gemini_worker
 import hook_grounding
 import layout_picker
 import llm_backend
+import llm_providers
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
                             score_batches, shortlist_target,
@@ -1770,59 +1771,74 @@ def transcribe_video(video_path):
     return transcript
 
 def _run_gemini_stage(client, model_name, prompt, schema):
-    """One schema-enforced model call with transient-error backoff.
+    """One schema-enforced model call with transient-error backoff and multi-provider fallback.
     Returns (parsed_dict, cost_analysis).
 
     With an OpenAI-compatible server configured (``llm_backend.active()``)
-    the call goes there instead of Gemini and ``client`` is unused; the
-    retry policy is shared because a local server has the same failure
-    shapes (connection refused while the model loads, a truncated body,
-    a 5xx from a busy vLLM)."""
-    use_local = llm_backend.active()
-    config = None if use_local else genai_types.GenerateContentConfig(
-        response_mime_type="application/json",
-        response_schema=schema,
-    )
-    max_attempts = 3
-    for attempt in range(1, max_attempts + 1):
-        try:
-            if use_local:
+    the call goes there instead of Gemini and ``client`` is unused.
+
+    Otherwise, uses llm_providers.call_with_fallback() to try a chain of
+    providers (Gemini, Claude, DeepSeek, OpenAI, Grok, Bedrock Nova) until
+    one succeeds. The fallback order is configurable via LLM_FALLBACK_ORDER env var.
+    """
+    # Preserve existing llm_backend support (local OpenAI-compatible server)
+    if llm_backend.active():
+        config = None
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
                 return llm_backend.generate_json(prompt, schema, model=model_name)
-            response = client.models.generate_content(model=model_name, contents=prompt, config=config)
-            # Policy blocks are deterministic — retrying only burns quota and
-            # time, and the user deserves the real reason instead of a generic
-            # "empty response" (prod 23-jul: PROHIBITED_CONTENT on every try).
-            gemini_worker.raise_if_blocked(response)
-            # Parsing lives inside the retry loop on purpose: Gemini sometimes
-            # returns 200 with an empty body, which raises here rather than at
-            # the call. Retrying that recovered every occurrence seen in prod
-            # (22-jul-2026) — the same payload succeeds on the next attempt.
-            parsed_obj = getattr(response, "parsed", None)
-            if parsed_obj is not None:
-                parsed = parsed_obj.model_dump() if hasattr(parsed_obj, "model_dump") else parsed_obj
-            else:
-                parsed = gemini_worker._parse_json_response_text(
-                    gemini_worker._get_response_text(response))
-            return parsed, gemini_worker._calculate_cost_analysis(response, model_name)
-        except gemini_worker.GeminiBlockedError:
-            raise  # deterministic policy block — never retry
-        except Exception as e:
-            msg = str(e)
-            transient = any(tok in msg for tok in (
-                '503', 'UNAVAILABLE', '429', 'RESOURCE_EXHAUSTED',
-                '500', 'INTERNAL', 'overloaded', 'Deadline',
-                'empty response body', 'did not contain a JSON object',
-                'Failed to parse Gemini JSON response',
-                # OpenAI-compatible servers: model still loading, busy, or a
-                # small model that skipped a required field this time.
-                'ConnectError', 'ReadTimeout', 'RemoteProtocolError', '502', '504',
-                'validation error'))
-            if attempt == max_attempts or not transient:
-                raise
-            wait = 5 * (2 ** (attempt - 1))
-            who = "LLM server" if use_local else "Gemini"
-            print(f"⚠️ {who} transient error (attempt {attempt}/{max_attempts}), retrying in {wait}s: {msg[:150]}")
-            time.sleep(wait)
+            except Exception as e:
+                msg = str(e)
+                transient = any(tok in msg for tok in (
+                    '503', 'UNAVAILABLE', '429', 'RESOURCE_EXHAUSTED',
+                    '500', 'INTERNAL', 'overloaded', 'Deadline',
+                    'ConnectError', 'ReadTimeout', 'RemoteProtocolError', '502', '504',
+                    'validation error'))
+                if attempt == max_attempts or not transient:
+                    raise
+                wait = 5 * (2 ** (attempt - 1))
+                print(f"⚠️ LLM server transient error (attempt {attempt}/{max_attempts}), retrying in {wait}s: {msg[:150]}")
+                time.sleep(wait)
+
+    # Multi-provider fallback mode
+    # Determine which stage this is (score vs detail) from schema name
+    stage_label = "score" if hasattr(schema, '__name__') and "Score" in schema.__name__ else "detail"
+
+    def _call_provider(provider, model_name_override):
+        """Callback to try a provider's method."""
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                if stage_label == "score":
+                    return provider.score(prompt, model_name_override)
+                else:
+                    return provider.detail(prompt, model_name_override)
+            except Exception as e:
+                msg = str(e)
+                transient = any(tok in msg for tok in (
+                    '503', 'UNAVAILABLE', '429', 'RESOURCE_EXHAUSTED',
+                    '500', 'INTERNAL', 'overloaded', 'Deadline',
+                    'empty response body', 'did not contain a JSON object',
+                    'ConnectError', 'ReadTimeout', 'RemoteProtocolError', '502', '504',
+                    'validation error'))
+                if attempt == max_attempts or not transient:
+                    raise
+                wait = 5 * (2 ** (attempt - 1))
+                print(f"   ⚠️ Transient error in {provider.name()} (attempt {attempt}/{max_attempts}), retrying in {wait}s: {msg[:100]}")
+                time.sleep(wait)
+
+    parsed, cost, provider_used = llm_providers.call_with_fallback(
+        _call_provider,
+        model_name or llm_providers.get_model_for_provider("gemini"),
+        stage_label=stage_label
+    )
+
+    if parsed is None:
+        raise RuntimeError(f"Clip detection ({stage_label} pass) failed: no providers available or all returned errors")
+
+    print(f"   Provider used: {provider_used}")
+    return parsed, cost or {}
 
 
 def _run_stage_split(client, model_name, items, build_prompt, schema, key, costs, label):
