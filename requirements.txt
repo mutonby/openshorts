@@ -13,6 +13,8 @@ openai==1.52.0
 python-dotenv==1.2.2
 mediapipe==0.10.14
 boto3==1.43.4
+pytz==2024.1
+google-auth-oauthlib==1.2.1
 
 fastapi==0.136.1
 uvicorn==0.46.0
