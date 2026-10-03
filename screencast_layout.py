@@ -114,30 +114,27 @@ def screencast_filtergraph(orig_w, orig_h, out_w, out_h, face_centre):
 def detect_faces_full_res(frame):
     """Face boxes from the UNSCALED frame, in original coordinates.
 
-    main.detect_face_candidates() runs detection on a 640px copy, which is the
-    right trade for a talking head whose face spans a third of the frame. A
-    presenter inset into a screen recording does not survive it: measured on a
-    1920x1080 Excel walkthrough, the presenter's ~110px face becomes ~37px at
-    640 and BlazeFace returned zero detections on every sample. At full width
-    the same frames detect fine. Six samples per scene, so the cost is paid on
-    screencast candidates only.
+    Runs YOLO person detection at full frame resolution to capture presenter insets
+    in screencasts, extracting the upper-body / face candidate area.
     """
-    import cv2
     import main as m
 
     h, w, _ = frame.shape
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     with m.DETECT_LOCK:
-        results = m.face_detection.process(rgb)
-    if not results.detections:
+        results = m.model(frame, verbose=False, classes=[0])
+    if not results or not results[0].boxes:
         return []
 
     out = []
-    for detection in results.detections:
-        b = detection.location_data.relative_bounding_box
-        box = [int(b.xmin * w), int(b.ymin * h),
-               int(b.width * w), int(b.height * h)]
-        out.append({'box': box, 'score': box[2] * box[3]})
+    for box in results[0].boxes:
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+        pw = x2 - x1
+        ph = y2 - y1
+        fh = int(ph * 0.45)
+        fw = int(pw * 0.8)
+        fx = x1 + int(pw * 0.1)
+        b = [fx, y1, fw, fh]
+        out.append({'box': b, 'score': fw * fh})
     return out
 
 

@@ -2933,6 +2933,7 @@ async def process_endpoint(
     captions: Optional[str] = Form(None),
     upload_id: Optional[str] = Form(None),
     max_minutes: Optional[str] = Form(None),
+    global_layout_coords: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -2968,6 +2969,7 @@ async def process_endpoint(
         captions = body.get("captions")
         upload_id = body.get("upload_id")
         max_minutes = body.get("max_minutes")
+        global_layout_coords = body.get("global_layout_coords")
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square"):
@@ -3120,6 +3122,10 @@ async def process_endpoint(
     if captions is not None and str(captions).lower() in ("0", "false", "no"):
         env["AUTO_CAPTIONS"] = "0"
         print(f"[captions] job={job_id} auto-captions off")
+
+    if global_layout_coords:
+        env["GLOBAL_LAYOUT_COORDS"] = global_layout_coords
+        print(f"[global-layout] job={job_id} using custom triple split setup")
 
     input_path = None
     if url:
@@ -4526,12 +4532,23 @@ async def reframe_clip(req: ReframeRequest, request: Request):
         try:
             idx = int(key)
             if isinstance(value, dict):
-                def _half(h):
-                    if isinstance(h, dict):
-                        return {"x": _fraction(h["x"]), "y": _fraction(h.get("y", 0.5))}
-                    return {"x": _fraction(h), "y": 0.5}
-                overrides[idx] = {"top": _half(value["top"]),
-                                  "bottom": _half(value["bottom"])}
+                if 'custom' in value and isinstance(value['custom'], list):
+                    custom_panels = []
+                    for panel in value['custom']:
+                        crop = panel.get('crop', {})
+                        dest = panel.get('dest', {})
+                        custom_panels.append({
+                            "crop": {"x": _fraction(crop.get("x", 0)), "y": _fraction(crop.get("y", 0)), "w": _fraction(crop.get("w", 1)), "h": _fraction(crop.get("h", 1))},
+                            "dest": {"x": _fraction(dest.get("x", 0)), "y": _fraction(dest.get("y", 0)), "w": _fraction(dest.get("w", 1)), "h": _fraction(dest.get("h", 1))}
+                        })
+                    overrides[idx] = {"custom": custom_panels}
+                else:
+                    def _half(h):
+                        if isinstance(h, dict):
+                            return {"x": _fraction(h["x"]), "y": _fraction(h.get("y", 0.5))}
+                        return {"x": _fraction(h), "y": 0.5}
+                    overrides[idx] = {"top": _half(value["top"]),
+                                      "bottom": _half(value["bottom"])}
             else:
                 overrides[idx] = _fraction(value)
         except (KeyError, TypeError, ValueError):
