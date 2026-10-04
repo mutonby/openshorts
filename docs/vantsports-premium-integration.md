@@ -15,6 +15,10 @@ La landing de VANTCLIP pasa a presentar **Vantsports** como la capa de producto 
 - Metadatos HTML principales en español para Vantsports × VANTCLIP.
 - Host público del sandbox permitido en `dashboard/vite.config.js` para revisión de previews.
 
+## Stack técnico de la nueva web
+
+La integración queda preparada con **React** para la interfaz, **JavaScript** para la lógica existente del dashboard, **CSS** para el sistema visual premium, **TypeScript** para los contratos compartidos en `dashboard/src/vantsports/types.ts`, **HTML** como documento de entrada y SEO, **Python** para el puente firmado entre Vantsports y VANTCLIP en `vantsports/api/bridge.py`, y **PL/pgSQL** para la migración Supabase en `supabase/migrations/20261004190000_vantsports_core.sql`.
+
 ## Decisiones de arquitectura
 
 - **React/Vite** se mantiene como base de la web para aprovechar autenticación, billing, app y componentes existentes de VANTCLIP.
