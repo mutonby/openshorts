@@ -2,6 +2,7 @@
 .vs-page { min-height: 100vh; color: var(--vs-ink); background: #0b131b; font-family: var(--font-body); overflow: hidden; }
 .vs-header { height: 72px; display:flex; align-items:center; justify-content:space-between; gap:24px; padding:0 clamp(20px,4vw,64px); position:sticky; top:0; z-index:30; background:rgba(11,19,27,.82); border-bottom:1px solid var(--vs-line); backdrop-filter:blur(18px); }
 .vs-brand { display:inline-flex; align-items:center; gap:10px; color:var(--vs-ink); font:800 17px var(--font-body); letter-spacing:.08em; text-decoration:none; white-space:nowrap; }
+.vs-logo-image { width:32px; height:32px; display:block; border-radius:5px; object-fit:cover; }
 .vs-brand-sub { color:var(--vs-muted); font-size:9px; letter-spacing:.2em; margin-left:5px; vertical-align:middle; }
 .vs-logo-mark { width:29px; height:29px; display:grid; place-items:center; color:#0b131b; background:linear-gradient(135deg,var(--vs-coral),var(--vs-amber)); clip-path:polygon(50% 0,100% 18%,100% 82%,50% 100%,0 82%,0 18%); font-weight:900; }
 .vs-nav { display:flex; gap:clamp(16px,2.5vw,34px); font:500 11px var(--font-mono); letter-spacing:.08em; text-transform:uppercase; }

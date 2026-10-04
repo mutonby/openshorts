@@ -36,7 +36,7 @@ const features = [
 ];
 
 function VantsLogo() {
-  return <span className="vs-logo-mark" aria-hidden="true">V</span>;
+  return <img className="vs-logo-image" src="/vantsports/favicon-32.png" alt="" width="32" height="32" />;
 }
 
 function SectionHeading({ eyebrow, title, text }) {
