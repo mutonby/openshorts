@@ -59,7 +59,7 @@ export default function VantsportsLanding({ onLaunchApp }) {
         <nav className="vs-nav" aria-label="Navegación principal">
           <a href="#vs-platform">Plataforma</a><a href="#vs-tournaments">Torneos</a><a href="#vs-clips">VANTCLIP</a><a href="#vs-pricing">Planes</a>
         </nav>
-        <div className="vs-header-actions"><a className="vs-text-link" href="#vs-pricing">Entrar al circuito</a><button className="vs-button vs-button-small" onClick={onLaunchApp}>Crear clips <ArrowRight size={14} /></button></div>
+        <div className="vs-header-actions"><a className="vs-text-link" href="#circuit">Entrar al circuito</a><button className="vs-button vs-button-small" onClick={onLaunchApp}>Crear clips <ArrowRight size={14} /></button></div>
       </header>
 
       <main>
