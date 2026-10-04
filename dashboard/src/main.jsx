@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import VantsportsLanding from './VantsportsLanding.jsx'
 import VantsportsControlRoom from './VantsportsControlRoom.jsx'
+import VantsportsNetwork from './VantsportsNetwork.jsx'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { capture as captureAttribution } from './lib/attribution'
 import PricingPage from './components/PricingPage'
@@ -79,7 +80,8 @@ function Root() {
     if (hash.startsWith('#/account')) return 'account';
     if (hash.startsWith('#/deleted')) return 'deleted';
     if (hash.startsWith('#/pricing')) return 'pricing';
-    if (hash === '#circuit' || hash === '#/circuit') return 'circuit';
+    if (hash === '#circuit' || hash === '#/circuit') return 'network';
+    if (hash === '#/control-room') return 'circuit';
     if (hash === '#/clip-studio') return 'app';
     if (hash === '#legal') return 'legal';
     // #landing = explicit landing view (app logo); section anchors keep the landing mounted
@@ -111,6 +113,7 @@ function Root() {
     return <div className="min-h-screen flex items-center justify-center bg-background text-zinc-400">Signing you in…</div>;
   }
   if (view === 'app') return <App />;
+  if (view === 'network') return <VantsportsNetwork onOpenCircuit={() => { window.location.hash = '#/control-room'; setView('circuit'); }} onOpenStudio={handleLaunchApp} />;
   if (view === 'circuit') return <VantsportsControlRoom onOpenStudio={handleLaunchApp} />;
   return <VantsportsLanding onLaunchApp={handleLaunchApp} />;
 }
