@@ -25,7 +25,6 @@
 | **Tus datos** | Tu servidor | Nuestra infraestructura |
 
 Self-hosting es genuinamente free y siempre lo será. Los planes hosted existen para cubrir hardware y API keys, no para desbloquear features.
-
 ## 3 Herramientas en 1 Plataforma
 
 ### 1. Clip Generator (Generador de Clips)
@@ -37,6 +36,7 @@ Genera videos de marketing con actores AI para **cualquier producto o negocio**.
 ### 3. YouTube Studio
 Toolkit completo de YouTube con IA: thumbnails, títulos, descripciones y publicación directa.
 
+---
 
 ---
 
@@ -117,8 +117,7 @@ frontend/package.json
     <meta name="description" content="Convierte podcasts en shorts virales automáticamente. Free, open source, en español.">
   </head>
 
-
-  <header>
+ <header>
   <h1>OpenShorts</h1>  →  <h1>🎬 VANTCLIP</h1>
   <p>Open source AI clip generator</p>  →  
   <p>Convierte podcasts en shorts virales automáticamente</p>
@@ -132,8 +131,14 @@ frontend/package.json
 
 
 # En VS Code, usa Ctrl+Shift+H (Find and Replace in Files)
-Buscar: OpenShorts
+Buscar: OpenShorts y lo cambia por vantclip
 Reemplazar: VANTCLIP
+
+Buscar: openshorts.app y lo cambia por vantclip.app
+Reemplazar: vantclip.app
+
+Buscar: open source AI clip generator
+Reemplazar: AI clip generator en español
 
 Buscar: openshorts.app
 Reemplazar: vantclip.app
@@ -221,12 +226,21 @@ STRIPE_PRICE_ID_PRO=price_2DEF...      # $29/mes
 STRIPE_PRICE_ID_BUSINESS=price_3GHI... # $79/mes
 
 # ===========================================
+# Monetización (Stripe)
+# ===========================================
+STRIPE_SECRET_KEY=sk_test_...  # https://stripe.com
+STRIPE_WEBHOOK_SECRET=whsec_...
+STRIPE_PRICE_ID_STARTER=price_1ABC...  # $15/mes
+STRIPE_PRICE_ID_PRO=price_2DEF...      # $29/mes
+STRIPE_PRICE_ID_BUSINESS=price_3GHI... # $79/mes
+
+# ===========================================
 # Dominio y branding
 # ===========================================
 APP_NAME=VANTCLIP
 APP_URL=https://vantclip.app
 SUPPORT_EMAIL=soporte@vantclip.app
-DISCORD_URL=https://discord.gg/tu-invite
+DISCORD_URL=https://discord.gg/kYDc6Jzp62
 
 import { useState } from 'react'
 import axios from 'axios'
@@ -431,4 +445,3 @@ STRIPE_PRICE_ID_BUSINESS=price_3GHI...
 - [ ] Docker compose up funciona localmente
 - [ ] Tests del pipeline corren sin errores
 - [ ] API endpoints documentados
-- [ ] 
