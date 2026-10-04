@@ -9,7 +9,7 @@
 **Open source AI video platform** with 3 tools in one...  →  
 **🇪🇸 El AI clip generator open source en español** — Convierte podcasts y videos largos en shorts virales para TikTok, Instagram Reels y YouTube Shorts automáticamente.
 
-![Your podcast, and the vertical clip OpenShorts makes of it...]  →  
+![Your podcast, and the vertical clip vantclip makes of it...]  →  
 ![Demo VANTCLIP](screenshots/split-before-after.gif)  # Mantén el mismo GIF
 
 **Two ways to run it, same software either way:**  →  
