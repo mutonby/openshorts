@@ -82,6 +82,57 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
         });
     }, [clamp]);
 
+    const toggleTripleSplit = useCallback((idx) => {
+        setOverrides((o) => {
+            const cur = o[idx];
+            if (cur && typeof cur === 'object' && ('custom' in cur)) {
+                return { ...o, [idx]: 0.5 };
+            }
+            return { ...o, [idx]: {
+                custom: [
+                    { crop: { x: 0, y: 0, w: 1, h: 0.5 }, dest: { x: 0, y: 0, w: 1, h: 0.5 } },
+                    { crop: { x: 0, y: 0.5, w: 0.5, h: 0.5 }, dest: { x: 0, y: 0.5, w: 0.5, h: 0.5 } },
+                    { crop: { x: 0.5, y: 0.5, w: 0.5, h: 0.5 }, dest: { x: 0.5, y: 0.5, w: 0.5, h: 0.5 } }
+                ]
+            } };
+        });
+    }, []);
+
+    const swapTripleLayout = useCallback((idx) => {
+        setOverrides((o) => {
+            const cur = o[idx];
+            if (!cur || !cur.custom) return o;
+            const isLayoutA = cur.custom[0].dest.w === 1;
+            if (isLayoutA) {
+                return { ...o, [idx]: {
+                    custom: [
+                        { crop: cur.custom[1].crop, dest: { x: 0, y: 0, w: 0.5, h: 0.5 } },
+                        { crop: cur.custom[2].crop, dest: { x: 0.5, y: 0, w: 0.5, h: 0.5 } },
+                        { crop: cur.custom[0].crop, dest: { x: 0, y: 0.5, w: 1, h: 0.5 } }
+                    ]
+                } };
+            } else {
+                return { ...o, [idx]: {
+                    custom: [
+                        { crop: cur.custom[2].crop, dest: { x: 0, y: 0, w: 1, h: 0.5 } },
+                        { crop: cur.custom[0].crop, dest: { x: 0, y: 0.5, w: 0.5, h: 0.5 } },
+                        { crop: cur.custom[1].crop, dest: { x: 0.5, y: 0.5, w: 0.5, h: 0.5 } }
+                    ]
+                } };
+            }
+        });
+    }, []);
+
+    const updateCustomCrop = useCallback((idx, boxIndex, newCrop) => {
+        setOverrides((o) => {
+            const cur = o[idx];
+            if (!cur || !cur.custom) return o;
+            const newCustom = [...cur.custom];
+            newCustom[boxIndex] = { ...newCustom[boxIndex], crop: newCrop };
+            return { ...o, [idx]: { custom: newCustom } };
+        });
+    }, []);
+
     const toggleSplit = useCallback((idx, scene) => {
         setOverrides((o) => {
             const cur = o[idx];
@@ -115,13 +166,21 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
         setSaving(true);
         setError(null);
         try {
-            const payload = Object.fromEntries(Object.entries(overrides).map(([k, v]) => [
-                String(k),
-                typeof v === 'object'
-                    ? { top: { x: Number(v.top.x.toFixed(4)), y: Number(v.top.y.toFixed(4)) },
-                        bottom: { x: Number(v.bottom.x.toFixed(4)), y: Number(v.bottom.y.toFixed(4)) } }
-                    : Number(v.toFixed(4)),
-            ]));
+            const payload = Object.fromEntries(Object.entries(overrides).map(([k, v]) => {
+                if (typeof v === 'object') {
+                    if ('custom' in v) {
+                        return [String(k), { custom: v.custom.map(p => ({
+                            crop: { x: Number(p.crop.x.toFixed(4)), y: Number(p.crop.y.toFixed(4)), w: Number(p.crop.w.toFixed(4)), h: Number(p.crop.h.toFixed(4)) },
+                            dest: p.dest
+                        })) }];
+                    }
+                    return [String(k), {
+                        top: { x: Number(v.top.x.toFixed(4)), y: Number(v.top.y.toFixed(4)) },
+                        bottom: { x: Number(v.bottom.x.toFixed(4)), y: Number(v.bottom.y.toFixed(4)) }
+                    }];
+                }
+                return [String(k), Number(v.toFixed(4))];
+            }));
             const res = await apiJson('/api/clip/reframe', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -188,6 +247,9 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
                             onMoveSingle={(f) => setSingle(scene.index, f)}
                             onMoveHalf={(which, f) => setSplitHalf(scene.index, which, f)}
                             onToggleSplit={() => toggleSplit(scene.index, scene)}
+                            onToggleTripleSplit={() => toggleTripleSplit(scene.index)}
+                            onSwapTripleLayout={() => swapTripleLayout(scene.index)}
+                            onUpdateCustomCrop={(boxIdx, crop) => updateCustomCrop(scene.index, boxIdx, crop)}
                             onReset={() => resetScene(scene.index)}
                         />
                     ))}
@@ -218,16 +280,17 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
 }
 
 
-// One scene. While it plays, the frame is replaced by the uncropped preview
 // seeked to this scene, so the rectangle can be judged against moving pictures
 // and sound rather than a single still.
 function SceneRow({ scene, value, widthFraction, previewUrl, touched, playing,
-                    onPlayToggle, onMoveSingle, onMoveHalf, onToggleSplit, onReset }) {
+                    onPlayToggle, onMoveSingle, onMoveHalf, onToggleSplit, onToggleTripleSplit, onSwapTripleLayout, onUpdateCustomCrop, onReset }) {
     const boxRef = useRef(null);
     const videoRef = useRef(null);
     const [dragging, setDragging] = useState(null);   // null | 'single' | 'top' | 'bottom'
 
-    const isSplit = value && typeof value === 'object';
+    const isDoubleSplit = value && typeof value === 'object' && ('top' in value);
+    const isTripleSplit = value && typeof value === 'object' && ('custom' in value);
+    const isSplit = isDoubleSplit; // legacy single-axis split
 
     // Play only this scene's slice of the shared preview.
     useEffect(() => {
@@ -315,10 +378,18 @@ function SceneRow({ scene, value, widthFraction, previewUrl, touched, playing,
                     <button
                         onClick={onToggleSplit}
                         className={`flex items-center gap-1 transition-colors ${
-                            isSplit ? 'text-brass' : 'text-muted hover:text-ink2'}`}
+                            isDoubleSplit ? 'text-brass' : 'text-muted hover:text-ink2'}`}
                         title="stack two regions instead of one window"
                     >
                         <Columns2 size={12} /> split
+                    </button>
+                    <button
+                        onClick={onToggleTripleSplit}
+                        className={`flex items-center gap-1 transition-colors ${
+                            isTripleSplit ? 'text-brass' : 'text-muted hover:text-ink2'}`}
+                        title="3 boxes custom layout"
+                    >
+                        <Columns2 size={12} className="rotate-90" /> triple
                     </button>
                     {touched ? (
                         <button onClick={onReset} className="flex items-center gap-1 text-brass hover:underline">
@@ -355,7 +426,7 @@ function SceneRow({ scene, value, widthFraction, previewUrl, touched, playing,
 
                 {/* Everything outside the kept region is dimmed, so what survives
                     the crop is what stays bright. */}
-                {!isSplit && (
+                {(!isDoubleSplit && !isTripleSplit) && (
                     <>
                         <div className="absolute inset-y-0 left-0 bg-black/65 pointer-events-none"
                              style={{ width: `${Math.max(0, (value - widthFraction / 2) * 100)}%` }} />
@@ -364,17 +435,112 @@ function SceneRow({ scene, value, widthFraction, previewUrl, touched, playing,
                     </>
                 )}
 
-                {isSplit
+                {isDoubleSplit
                     ? [win(value.top.x, 'top', 'top'), win(value.bottom.x, 'bottom', 'bottom')]
-                    : win(value, null, 'single')}
+                    : null}
+                    
+                {isTripleSplit
+                    ? value.custom.map((panel, i) => (
+                        <CustomBox 
+                            key={i}
+                            crop={panel.crop}
+                            dest={panel.dest}
+                            label={`Box ${i + 1}`}
+                            parentRef={boxRef}
+                            onChange={(newCrop) => onUpdateCustomCrop(i, newCrop)}
+                        />
+                    ))
+                    : null}
+
+                {(!isDoubleSplit && !isTripleSplit) ? win(value, null, 'single') : null}
             </div>
 
-            {isSplit && (
+            {isDoubleSplit && (
                 <p className="text-[11px] text-muted leading-snug">
                     Two regions stacked in the vertical frame: <strong>top</strong> above,
                     <strong> bottom</strong> below. Drag each one onto the person it should hold.
                 </p>
             )}
+            
+            {isTripleSplit && (
+                <div className="flex items-start justify-between gap-4 mt-2">
+                    <p className="text-[11px] text-muted leading-snug flex-1">
+                        Three regions for the vertical frame. Drag boxes to move, drag bottom-right corner to resize.
+                    </p>
+                    <button onClick={onSwapTripleLayout} className="text-[11px] text-brass hover:underline whitespace-nowrap">
+                        Swap Layout
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function CustomBox({ crop, label, onChange, parentRef }) {
+    const startRef = useRef(null);
+
+    const handlePointerDown = (e, mode) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const parentRect = parentRef.current.getBoundingClientRect();
+        const x = e.touches ? e.touches[0].clientX : e.clientX;
+        const y = e.touches ? e.touches[0].clientY : e.clientY;
+        startRef.current = { x, y, cropX: crop.x, cropY: crop.y, cropW: crop.w, cropH: crop.h, mode, parentRect };
+        
+        const move = (eMove) => {
+            const currentX = eMove.touches ? eMove.touches[0].clientX : eMove.clientX;
+            const currentY = eMove.touches ? eMove.touches[0].clientY : eMove.clientY;
+            const dx = (currentX - startRef.current.x) / startRef.current.parentRect.width;
+            const dy = (currentY - startRef.current.y) / startRef.current.parentRect.height;
+            
+            let newCrop = { ...crop };
+            if (startRef.current.mode === 'move') {
+                newCrop.x = Math.max(0, Math.min(1 - newCrop.w, startRef.current.cropX + dx));
+                newCrop.y = Math.max(0, Math.min(1 - newCrop.h, startRef.current.cropY + dy));
+            } else if (startRef.current.mode === 'resize') {
+                let w = startRef.current.cropW + dx;
+                let h = startRef.current.cropH + dy;
+                w = Math.max(0.1, Math.min(1 - startRef.current.cropX, w));
+                h = Math.max(0.1, Math.min(1 - startRef.current.cropY, h));
+                newCrop.w = w;
+                newCrop.h = h;
+            }
+            onChange(newCrop);
+        };
+        
+        const up = () => {
+            window.removeEventListener('mousemove', move);
+            window.removeEventListener('mouseup', up);
+            window.removeEventListener('touchmove', move);
+            window.removeEventListener('touchmove', move); // extra listener removal not needed but ok
+            window.removeEventListener('touchend', up);
+        };
+        window.addEventListener('mousemove', move);
+        window.addEventListener('mouseup', up);
+        window.addEventListener('touchmove', move);
+        window.addEventListener('touchend', up);
+    };
+
+    return (
+        <div 
+            className="absolute border-2 border-brass bg-[color:var(--color-brass)]/20 cursor-move hover:bg-[color:var(--color-brass)]/30 transition-colors"
+            style={{ 
+                left: `${crop.x * 100}%`, 
+                top: `${crop.y * 100}%`, 
+                width: `${crop.w * 100}%`, 
+                height: `${crop.h * 100}%` 
+            }}
+            onMouseDown={(e) => handlePointerDown(e, 'move')}
+            onTouchStart={(e) => handlePointerDown(e, 'move')}
+        >
+            <span className="absolute top-1 left-1 text-[10px] px-1 rounded bg-brass text-paper lowercase shadow-sm">
+                {label}
+            </span>
+            <div 
+                className="absolute bottom-0 right-0 w-3 h-3 bg-brass cursor-se-resize"
+                onMouseDown={(e) => handlePointerDown(e, 'resize')}
+                onTouchStart={(e) => handlePointerDown(e, 'resize')}
+            />
         </div>
     );
 }

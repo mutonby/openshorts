@@ -876,7 +876,7 @@ function App() {
   // A self-hosted server running the moment picker on a local LLM
   // (LLM_BASE_URL) does not need a Gemini key for the core pipeline.
   const geminiOk = !!apiKey || !!localLlm;
-  const keysMissing = !billingEnabled && (!geminiOk || !uploadPostKey);
+  const keysMissing = !billingEnabled && !geminiOk;
   const needsPlan = billingEnabled && !isManaged;   // hosted, signed-out or no active plan/trial
 
   // Fresh sign-up: Clip Generator tutorial (AuthContext set os_show_clip_tutorial
@@ -1076,6 +1076,7 @@ function App() {
         // Set when the user took the quota wall's "clip the first N minutes"
         // offer: the server reserves N minutes and cuts the source to them.
         max_minutes: data.maxMinutes || null,
+        global_layout_coords: data.globalLayoutCoords ? JSON.stringify(data.globalLayoutCoords) : null,
       };
 
       if (data.type === 'url') {
@@ -2355,11 +2356,7 @@ function App() {
         isOpen={showKeyModal}
         onClose={() => setShowKeyModal(false)}
         eyebrow="SETUP"
-        title={!geminiOk && !uploadPostKey
-          ? 'Required API Keys Missing'
-          : !geminiOk
-            ? 'Gemini API Key Required'
-            : 'Upload-Post API Key Required'}
+        title={'Gemini API Key Required'}
         footer={
           <div className="flex gap-3">
             <button
@@ -2379,7 +2376,7 @@ function App() {
       >
         <div className="space-y-4">
           <p className="text-sm text-muted">
-            OpenShorts needs both a <strong className="text-ink2">Gemini</strong> API key and an <strong className="text-ink2">Upload-Post</strong> API key. Both have free tiers.
+            OpenShorts needs a <strong className="text-ink2">Gemini</strong> API key to generate shorts. It has a generous free tier.
           </p>
 
           {/* Gemini block */}
@@ -2410,36 +2407,7 @@ function App() {
             )}
           </div>
 
-          {/* Upload-Post block */}
-          <div className={`rounded-input p-4 space-y-2 border ${!uploadPostKey ? 'border-rule2' : 'border-rule opacity-70'}`}>
-            <p className="text-xs font-medium text-ink flex items-center gap-2">
-              {uploadPostKey ? <Check size={12} className="text-ok" /> : <AlertTriangle size={12} className="text-warn" />}
-              Upload-Post API Key {uploadPostKey && <span className="text-ok">— set</span>}
-            </p>
-            {!uploadPostKey && (
-              <>
-                <p className="text-xs text-muted">
-                  Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts. Free tier available, no credit card needed.
-                </p>
-                <ol className="text-xs text-muted space-y-1 list-decimal list-inside">
-                  <li>Register at <a href="https://app.upload-post.com/login" target="_blank" rel="noopener noreferrer" className="text-brass underline">app.upload-post.com</a></li>
-                  <li>Connect your TikTok, Instagram, or YouTube accounts</li>
-                  <li>Go to <a href="https://app.upload-post.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-brass underline">API Keys</a> and generate one</li>
-                  <li>Paste it below</li>
-                </ol>
-                <input
-                  type="text"
-                  placeholder="Paste your Upload-Post API key here..."
-                  className="input-field"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && e.target.value.trim()) {
-                      setUploadPostKey(e.target.value.trim());
-                    }
-                  }}
-                />
-              </>
-            )}
-          </div>
+
         </div>
       </Modal>
 

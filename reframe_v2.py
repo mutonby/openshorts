@@ -169,7 +169,7 @@ def general_filtergraph(out_w, out_h, content_h=None, orig_w=None, orig_h=None):
 # --- analysis ---------------------------------------------------------------
 
 def apply_crop_overrides(xs, strategies, scene_boundaries, overrides,
-                         crop_w, orig_w, orig_h=None, splits=None):
+                         crop_w, orig_w, orig_h=None, splits=None, custom_layouts=None):
     """Frame the scenes the user positioned by hand.
 
     ``overrides`` maps a scene index to either
@@ -213,6 +213,12 @@ def apply_crop_overrides(xs, strategies, scene_boundaries, overrides,
             continue
 
         if isinstance(value, dict):
+            if 'custom' in value:
+                if custom_layouts is not None:
+                    custom_layouts[start_f] = value['custom']
+                    strategies[idx] = 'CUSTOM'
+                continue
+
             # Split: the halves are centres in SOURCE PIXELS, which is what
             # split_filtergraph expects — unlike the single-crop path, there is
             # no crop window to offset by.
@@ -294,7 +300,7 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
             # whole scene), so like GENERAL they need no camera trajectory.
             # ALTERNATE gets one written in after this pass.
             if strategy in ('GENERAL', 'SPLIT', 'SCREENCAST', 'WIDE',
-                            'INSET', 'ALTERNATE'):
+                            'INSET', 'ALTERNATE', 'CUSTOM'):
                 cameraman.current_center_x = orig_w / 2
                 cameraman.target_center_x = orig_w / 2
                 xs.append(None)
@@ -407,7 +413,21 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     # whole frame into the middle of a blurred copy of itself. Skip the
     # classifier and every layout upgrade instead of trying to survive them.
     passthrough = source_already_fits(orig_w, orig_h, aspect_ratio)
-    if force_strategy:
+    global_layout = os.environ.get("GLOBAL_LAYOUT_COORDS")
+    custom_layouts = {}
+    if global_layout:
+        import json
+        strategies = ['CUSTOM'] * len(scenes)
+        content_ranges = []
+        try:
+            coords = json.loads(global_layout)
+            for s_idx in range(len(scenes)):
+                start_f = scene_boundaries[s_idx][0]
+                custom_layouts[start_f] = coords
+        except Exception:
+            pass
+        print(f"   🎯 Framing override: every scene -> GLOBAL_LAYOUT_COORDS")
+    elif force_strategy:
         strategies = [force_strategy] * len(scenes)
         content_ranges = []  # no screencast/inset upgrades over an explicit choice
         print(f"   🎯 Framing override: every scene -> {force_strategy}")
@@ -562,7 +582,7 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     if crop_overrides:
         xs, strategies = apply_crop_overrides(
             xs, strategies, scene_boundaries, crop_overrides, crop_w,
-            orig_w, orig_h=orig_h, splits=splits)
+            orig_w, orig_h=orig_h, splits=splits, custom_layouts=custom_layouts)
         print(f"   ✋ Manual framing on {len(crop_overrides)} scene(s)")
 
     ranges = scene_frame_ranges(scene_boundaries, strategies, len(xs))
@@ -598,6 +618,10 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
                 left, right = splits[start_f]
                 graph = split_layout.split_filtergraph(
                     orig_w, orig_h, out_w, out_h, left, right)
+            elif strategy == 'CUSTOM':
+                import custom_layout
+                graph = custom_layout.custom_filtergraph(
+                    orig_w, orig_h, out_w, out_h, custom_layouts[start_f])
             elif strategy == 'GENERAL':
                 graph = general_filtergraph(out_w, out_h,
                                             orig_w=orig_w, orig_h=orig_h)
