@@ -18,7 +18,7 @@ import math
 import numpy as np
 from tqdm import tqdm
 import yt_dlp
-import mediapipe as mp
+
 # import whisper (replaced by faster_whisper inside function)
 from google import genai
 from google.genai import types as genai_types
@@ -90,10 +90,7 @@ OUTPUT — RETURN ONLY VALID JSON (no markdown, no comments). Order clips by pre
 # volume mounted over the workdir doesn't trigger a re-download at startup.
 model = YOLO(os.environ.get("YOLO_MODEL_PATH", "yolov8n.pt"))
 
-# --- MediaPipe Setup ---
-# Use standard Face Detection (BlazeFace) for speed
-mp_face_detection = mp.solutions.face_detection
-face_detection = mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
+
 
 # Consecutive detections a large target move must survive before the camera
 # follows it (see SmoothedCameraman.update_target). Env-overridable so the
@@ -408,14 +405,24 @@ class SpeakerTracker:
 # coords and YOLO boxes are scaled back up. Running them on a ≤640px copy cuts
 # per-frame preprocessing cost hard, which is what dominates CPU-only renders.
 DETECT_MAX_WIDTH = 640
-# The global MediaPipe graph and YOLO model are NOT thread-safe; clips render
+# The global YOLO model is NOT thread-safe; clips render
 # in parallel, so every inference goes through this lock. Contention is small
 # (a few ms per call) — the ffmpeg renders are where the parallel time goes.
 DETECT_LOCK = threading.Lock()
 # Detect every Nth frame; SmoothedCameraman interpolates between updates.
 DETECT_STRIDE = max(int(os.environ.get("DETECT_STRIDE", "4")), 1)
-# YOLO fallback (no face found) is far heavier than MediaPipe — extra throttle.
+# YOLO fallback (no face found) is far heavier than FaceDetection — extra throttle.
 YOLO_FALLBACK_STRIDE = DETECT_STRIDE * 2
+
+
+class _FaceDetectionCompat:
+    """Compatibility shim for callers expecting legacy face_detection module/instance."""
+    def process(self, rgb_frame):
+        class _Result:
+            detections = []
+        return _Result()
+
+face_detection = _FaceDetectionCompat()
 
 
 def _detection_frame(frame):
@@ -432,34 +439,51 @@ def _detection_frame(frame):
 
 def detect_face_candidates(frame):
     """
-    Returns list of all detected faces using lightweight FaceDetection.
+    Returns list of all detected candidates (people) using YOLO.
     Boxes are in ORIGINAL frame coordinates (detection runs downscaled;
-    MediaPipe's relative coords make the mapping exact).
+    boxes are then scaled up). We use the top half of the person's bounding box
+    to approximate a face/upper-body crop for reframing.
     """
     height, width, _ = frame.shape
-    small, _scale = _detection_frame(frame)
+    small, scale = _detection_frame(frame)
     rgb_frame = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+    
     with DETECT_LOCK:
-        results = face_detection.process(rgb_frame)
+        results = model(rgb_frame, verbose=False)
     
     candidates = []
     
-    if not results.detections:
+    if not results:
         return []
         
-    for detection in results.detections:
-        bboxC = detection.location_data.relative_bounding_box
-        x = int(bboxC.xmin * width)
-        y = int(bboxC.ymin * height)
-        w = int(bboxC.width * width)
-        h = int(bboxC.height * height)
-        
-        candidates.append({
-            'box': [x, y, w, h],
-            'score': w * h # Area as score
-        })
+    for box in results[0].boxes:
+        # Class 0 is person in YOLO COCO model
+        if int(box.cls[0]) == 0:
+            x1, y1, x2, y2 = map(float, box.xyxy[0])
+            
+            # Map back to original frame scale
+            x1 = int(x1 * scale)
+            y1 = int(y1 * scale)
+            x2 = int(x2 * scale)
+            y2 = int(y2 * scale)
+            
+            person_w = x2 - x1
+            person_h = y2 - y1
+            
+            # Approximate the face/head bounding box from the top portion of the person
+            # Usually the top 55% of the YOLO box works well for upper-body/head reframing
+            h = int(person_h * 0.55)
+            y = y1
+            w = int(person_w * 0.8)
+            x = x1 + int(person_w * 0.1)
+            
+            candidates.append({
+                'box': [x, y, w, h],
+                'score': w * h  # Area as score
+            })
             
     return candidates
+
 
 def detect_person_yolo(frame):
     """
@@ -468,9 +492,8 @@ def detect_person_yolo(frame):
     ORIGINAL frame coordinates (inference runs on a downscaled copy).
     """
     small, scale = _detection_frame(frame)
-    # Use the globally loaded model
     with DETECT_LOCK:
-        results = model(small, verbose=False, classes=[0]) # class 0 is person
+        results = model(small, verbose=False, classes=[0])  # class 0 is person
 
     if not results:
         return None
@@ -489,11 +512,11 @@ def detect_person_yolo(frame):
             if area > max_area:
                 max_area = area
                 # Focus on the top 40% of the person (head/chest) for framing
-                # This approximates where the face is if we can't detect it directly
                 face_h = int(h * 0.4)
                 best_box = [x1, y1, w, face_h]
                 
     return best_box
+
 
 def create_general_frame(frame, output_width, output_height):
     """

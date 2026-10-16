@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Link2, Upload, FileVideo, X, Info, Loader2, ChevronDown } from 'lucide-react';
 import { track } from '../lib/analytics';
 import { getApiUrl } from '../config';
+import GlobalLayoutSetup from './GlobalLayoutSetup';
 
 const SUPPORTED_PLATFORMS = [
     'YouTube', 'Vimeo', 'TikTok', 'X / Twitter', 'Twitch',
@@ -61,6 +62,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [layout, setLayout] = useState(() => {
         try { return localStorage.getItem('os_layout') || 'auto'; } catch { return 'auto'; }
     });
+    const [globalLayoutCoords, setGlobalLayoutCoords] = useState(null);
     const infoRef = useRef(null);
 
     // Close the compatibility popover on any outside click.
@@ -124,6 +126,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
             autoHook,
             autoHookStyle,
             layout,
+            ...((layout === 'triple' || layout === 'split') && globalLayoutCoords ? { globalLayoutCoords } : {})
         };
         try {
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
@@ -351,10 +354,22 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                 >
                                     <option value="auto">Auto (AI picks per video)</option>
                                     <option value="split">Two speakers stacked</option>
+                                    <option value="triple">Three boxes (Triple Split Reframe)</option>
                                     <option value="screencast">Screen over presenter</option>
                                     <option value="none">Single crop only</option>
                                 </select>
                             </div>
+                            {(layout === 'triple' || layout === 'split') && (
+                                <div className="col-span-1 sm:col-span-3 pb-2 border-t border-rule mt-2">
+                                    <GlobalLayoutSetup 
+                                        mode={mode} 
+                                        url={url} 
+                                        file={file} 
+                                        layoutType={layout}
+                                        onChange={setGlobalLayoutCoords} 
+                                    />
+                                </div>
+                            )}
                             <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">
                                 <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
                                     <input

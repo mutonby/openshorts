@@ -223,3 +223,15 @@ class TestApplyCropOverrides:
         top, bottom = splits[0]
         assert top == (0.6 * 1920, 0.3 * 1080)
         assert bottom == (0.2 * 1920, 0.5 * 1080)
+
+    def test_custom_writes_into_custom_layouts(self):
+        custom_layouts = {}
+        xs, strategies = self.rf.apply_crop_overrides(
+            [None] * 10, ["GENERAL"], [(0, 10)],
+            {"0": {"custom": [{"crop": {"x": 0.1, "w": 0.5}, "dest": {"y": 0.5}}]}},
+            crop_w=608, orig_w=1920, orig_h=1080, custom_layouts=custom_layouts)
+        assert strategies == ["CUSTOM"]
+        panels = custom_layouts[0]
+        assert len(panels) == 1
+        assert panels[0]["crop"]["x"] == 0.1
+        assert panels[0]["dest"]["y"] == 0.5
