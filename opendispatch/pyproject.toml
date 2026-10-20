@@ -1,0 +1,58 @@
+[project]
+name = "open-dispatch"
+version = "0.4.0"
+description = "One API to dispatch content anywhere — open-source cross-poster."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Matthew Selvam" }]
+keywords = ["social-media", "cross-posting", "twitter", "bluesky", "instagram", "telegram", "fastapi"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+    "tweepy>=4.14",
+    "atproto>=0.0.50",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.20",
+    "Pillow>=10",
+]
+
+[project.urls]
+Homepage = "https://open-dispatch-landing.vercel.app"
+Repository = "https://github.com/Matthew-Selvam/Open-Dispatch"
+"Bug Tracker" = "https://github.com/Matthew-Selvam/Open-Dispatch/issues"
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio>=0.23"]
+redis = ["redis>=5.0"]
+postgres = ["psycopg2-binary>=2.9"]
+mcp = ["mcp>=1.0"]  # 1.x FastMCP and 2.x MCPServer both supported
+youtube = ["google-auth-oauthlib>=1.0"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["profiles"]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["api*", "adapters*", "scheduler*", "ai*", "media*", "web*"]
+
+[tool.setuptools.package-data]
+web = ["templates/*.html", "static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = [".."]

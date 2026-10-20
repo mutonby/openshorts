@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Open-Dispatch{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Queue</h1>
+    <p class="subtitle">{{ rows|length }} row{{ '' if rows|length == 1 else 's' }} · auto-refresh every 5s</p>
+  </div>
+  <div class="actions">
+    {% if counts.get('published', 0) > 0 %}
+    <form method="post" action="/_purge?status=published" style="display:inline"
+          onsubmit="return confirm('Clear all {{ counts.get('published', 0) }} published rows?')">
+      <button type="submit" class="btn btn-ghost btn-mini" title="Remove all published rows">Clear published</button>
+    </form>
+    {% endif %}
+    {% if counts.get('dead', 0) > 0 %}
+    <form method="post" action="/_purge?status=dead" style="display:inline"
+          onsubmit="return confirm('Clear all {{ counts.get('dead', 0) }} dead rows?')">
+      <button type="submit" class="btn btn-ghost btn-mini" style="color:var(--err)" title="Remove all dead rows">Clear dead</button>
+    </form>
+    {% endif %}
+    <a href="/compose" class="btn btn-primary">+ Compose</a>
+  </div>
+</div>
+
+<div class="filter-bar">
+  {% set statuses = ['all','queued','publishing','published','failed','dead','canceled'] %}
+  {% for s in statuses %}
+    <a href="/{% if s != 'all' %}?status={{ s }}{% endif %}"
+       class="chip {% if filter_status == s or (filter_status is none and s == 'all') %}chip-active{% endif %}">
+      {{ s }}
+      {% if counts[s] is defined %}<span class="chip-count">{{ counts[s] }}</span>{% endif %}
+    </a>
+  {% endfor %}
+</div>
+
+<div id="queue-table"
+     hx-get="/_queue-fragment?status={{ filter_status or '' }}"
+     hx-trigger="every 5s"
+     hx-swap="innerHTML">
+  {% include "_queue_table.html" %}
+</div>
+{% endblock %}

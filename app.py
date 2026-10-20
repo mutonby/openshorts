@@ -2291,6 +2291,11 @@ async def lifespan(app: FastAPI):
         # a single job-failure alert is easy to miss and ingest stays broken
         # until someone tops the balance up.
         asyncio.create_task(_alerts.proxy_watch_loop())
+    else:
+        # Local clip poster. The thread no-ops when DISPATCH_WORKER=0, which
+        # the test suite sets so a TestClient never publishes.
+        from opendispatch.local import start_worker
+        start_worker(OUTPUT_DIR)
     yield
     # Cleanup (optional: cancel worker)
 
@@ -2644,7 +2649,122 @@ async def get_config():
         # Self-host only: tells the dashboard the Gemini key is optional
         # because the moment picker runs on an OpenAI-compatible server.
         "localLlm": None if BILLING_ENABLED else llm_backend.describe(),
+        # Local poster (YouTube from disk, Instagram via R2). Null in cloud
+        # mode, where Upload-Post stays the publisher. Values are booleans,
+        # never the tokens.
+        "dispatch": None if BILLING_ENABLED else _local_dispatch_config(),
     }
+
+
+def _local_dispatch_config():
+    from opendispatch.local import dispatch_config
+    return dispatch_config()
+
+
+class DispatchClipIn(BaseModel):
+    index: int
+    platforms: List[str]
+    title: str = ""
+    caption: str = ""
+    collaborators: List[str] = []
+    when: Optional[str] = None
+
+
+class DispatchIn(BaseModel):
+    job_id: str
+    timezone: str = "UTC"
+    mode: str
+    start: Optional[str] = None
+    every_minutes: Optional[int] = None
+    clips: List[DispatchClipIn]
+
+
+def _dispatch_payload(req: DispatchIn) -> dict:
+    clips = []
+    for clip in req.clips:
+        raw = clip.model_dump() if hasattr(clip, "model_dump") else clip.dict()
+        clips.append(raw)
+    return {
+        "job_id": req.job_id,
+        "timezone": req.timezone,
+        "mode": req.mode,
+        "start": req.start,
+        "every_minutes": req.every_minutes,
+        "clips": clips,
+    }
+
+
+def _dispatch_resolve(job_id: str):
+    from opendispatch.shorts import DispatchError
+
+    def resolve(index: int) -> str:
+        job = jobs.get(job_id)
+        if not job or "result" not in job:
+            raise DispatchError("Job not found")
+        clip_list = (job.get("result") or {}).get("clips") or []
+        if index < 0 or index >= len(clip_list):
+            raise DispatchError(f"clip {index} not found")
+        filename = str(clip_list[index].get("video_url") or "").rsplit("/", 1)[-1]
+        if not filename:
+            raise DispatchError(f"clip {index} has no video file")
+        return os.path.join(OUTPUT_DIR, job_id, filename)
+    return resolve
+
+
+@app.post("/api/dispatch/preview")
+async def preview_dispatch(req: DispatchIn):
+    """Resolve post times without enqueueing. The results screen confirms this list."""
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
+    from opendispatch.local import plan_posts
+    from opendispatch.shorts import DispatchError
+    try:
+        planned = plan_posts(
+            _dispatch_payload(req),
+            resolve_file=_dispatch_resolve(req.job_id),
+            now=datetime.now(timezone.utc),
+        )
+    except DispatchError as exc:
+        status = 404 if exc.message == "Job not found" else 400
+        raise HTTPException(status_code=status, detail=exc.message)
+    return {"planned": [{k: v for k, v in item.items() if k != "video_path"} for item in planned]}
+
+
+@app.post("/api/dispatch")
+async def create_dispatch(req: DispatchIn):
+    """Queue YouTube and Instagram posts for clips already on disk. Local mode only."""
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
+    from opendispatch.local import create_posts, local_store
+    from opendispatch.shorts import DispatchError
+    try:
+        return create_posts(
+            _dispatch_payload(req),
+            resolve_file=_dispatch_resolve(req.job_id),
+            store=local_store(OUTPUT_DIR),
+            now=datetime.now(timezone.utc),
+        )
+    except DispatchError as exc:
+        status = 404 if exc.message == "Job not found" else 400
+        raise HTTPException(status_code=status, detail=exc.message)
+
+
+@app.get("/api/dispatch")
+async def list_dispatch(job_id: Optional[str] = None):
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
+    from opendispatch.local import list_rows, local_store
+    return {"rows": list_rows(local_store(OUTPUT_DIR), job_id)}
+
+
+@app.post("/api/dispatch/{row_id}/cancel")
+async def cancel_dispatch(row_id: str):
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
+    from opendispatch.local import cancel, local_store
+    if not cancel(local_store(OUTPUT_DIR), row_id):
+        raise HTTPException(status_code=409, detail="That post is no longer queued")
+    return {"ok": True}
 
 async def _probe_youtube_quality(url: str) -> dict:
     """Run quality_probe.py in a worker thread; {} on any failure (fail-open)."""

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>{% block title %}Open-Dispatch{% endblock %}</title>
+  <script src="/static/htmx.min.js" defer></script>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <a href="/" class="logo">
+        <span class="logo-mark">⏚</span>
+        <span class="logo-text">open-dispatch</span>
+      </a>
+      <span class="badge-version">v{{ version }}</span>
+    </div>
+    <nav class="nav">
+      <a href="/" class="{% if active == 'dashboard' %}active{% endif %}">Dashboard</a>
+      <a href="/compose" class="{% if active == 'compose' %}active{% endif %}">Compose</a>
+      <a href="/profiles" class="{% if active == 'profiles' %}active{% endif %}">Profiles</a>
+      <a href="/healthz" class="{% if active == 'health' %}active{% endif %}">Health</a>
+      <a href="https://github.com/Matthew-Selvam/Open-Dispatch" target="_blank" rel="noopener" class="muted">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    <span>open-dispatch · MIT · self-host free</span>
+    <span class="muted">{{ now }}</span>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+{% block title %}Compose · Open-Dispatch{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Compose</h1>
+    <p class="subtitle">Send one piece of content to multiple platforms.</p>
+  </div>
+</div>
+
+<form id="compose-form"
+      hx-post="/_compose"
+      hx-target="#compose-result"
+      hx-swap="innerHTML"
+      class="compose-form">
+
+  {# ── Profile selector ──────────────────────────────────────────────────── #}
+  <div class="field">
+    <label>Profile</label>
+    <div class="profile-selector-row">
+      <select name="profile_id" id="profile-select" class="input profile-select">
+        <option value="">— None (use .env defaults) —</option>
+        {% for p in profiles %}
+        <option value="{{ p.id }}"
+          {% if request.query_params.get('profile_id') == p.id %}selected{% endif %}>
+          {{ p.emoji }} {{ p.name }}
+          ({{ p.configured_platforms() | join(', ') or 'no creds' }})
+        </option>
+        {% endfor %}
+      </select>
+      <a href="/profiles/new" class="btn btn-ghost btn-mini profile-new-btn"
+         title="Create a new profile">+</a>
+    </div>
+    {% if not profiles %}
+    <p class="hint">
+      No profiles yet —
+      <a href="/profiles/new" style="color:var(--accent)">create one</a>
+      to group credentials under a name.
+    </p>
+    {% endif %}
+  </div>
+
+  {# ── Platforms ─────────────────────────────────────────────────────────── #}
+  <div class="field">
+    <label>Platforms</label>
+    <div class="checkbox-grid" id="platform-list">
+      {% for p in platforms %}
+        <label class="check">
+          <input type="checkbox" name="platforms" value="{{ p }}"
+                 {% if p == 'telegram' %}checked{% endif %} />
+          <span>{{ p }}</span>
+          {# Dots: .dot-env = configured in .env, .dot-profile = configured in profile #}
+          {% if p in configured %}
+            <span class="dot-green dot-env" title="{{ p }} configured in .env"></span>
+          {% endif %}
+          <span class="dot-green dot-profile" data-platform="{{ p }}"
+                title="{{ p }} configured in selected profile"
+                style="display:none"></span>
+        </label>
+      {% endfor %}
+    </div>
+    <p class="hint" id="platform-hint">
+      Green dot = credentials present.
+      {% if profiles %}Select a profile above to see its configured platforms.{% endif %}
+    </p>
+  </div>
+
+  {# ── Text ──────────────────────────────────────────────────────────────── #}
+  <div class="field">
+    <label>
+      Text / caption
+      <span id="char-counter" class="char-counter" style="display:none"></span>
+    </label>
+    <textarea name="text" id="compose-text" rows="4" required class="input mono"
+              placeholder="Type your post…"></textarea>
+    <p class="hint">Same text used for every platform unless overridden in JSON below.</p>
+  </div>
+
+  <div class="row-2">
+    <div class="field">
+      <label>Schedule for (optional)</label>
+      <input type="datetime-local" id="scheduled-picker" class="input mono" />
+      <input type="hidden" name="scheduled_for" id="scheduled-iso" />
+      <p class="hint">Leave blank to dispatch immediately (uses your local timezone).</p>
+    </div>
+    <div class="field">
+      <label>Webhook URL (optional)</label>
+      <input type="url" name="webhook_url" class="input mono"
+             placeholder="https://your-app.example/dispatch-cb" />
+    </div>
+  </div>
+
+  <div class="field" style="margin-top:-4px">
+    <button type="button"
+            class="btn btn-ghost btn-mini"
+            hx-post="/_compose-adapt"
+            hx-include="closest form"
+            hx-target="#ai-preview"
+            hx-swap="innerHTML">
+      ✦ Adapt with AI (preview per platform)
+    </button>
+    <p class="hint">Rewrites the text for each selected platform. Uses OpenRouter / Ollama / heuristic — whichever is configured.</p>
+    <div id="ai-preview"></div>
+  </div>
+
+  <details class="advanced">
+    <summary>Advanced — raw formats JSON</summary>
+    <p class="hint small">
+      Overrides the text field. Use to attach images, set parse_mode, build threads, etc.
+      See <a href="https://github.com/Matthew-Selvam/Open-Dispatch#contentunit-shape" target="_blank">README</a>.
+    </p>
+    <textarea name="formats_json" rows="8" class="input mono small"
+              placeholder='{"twitter_thread": {"tweets": ["…","…"]}, "bluesky_post": {"text": "…"}}'></textarea>
+  </details>
+
+  <div class="actions">
+    <button type="submit" class="btn btn-primary">Dispatch →</button>
+    <a href="/" class="btn btn-ghost">Cancel</a>
+  </div>
+</form>
+
+<div id="compose-result"></div>
+
+{# ── Profile-aware dot update ─────────────────────────────────────────────── #}
+<script>
+(function () {
+  const PROFILES = {{ profiles_js | safe }};
+  const select   = document.getElementById('profile-select');
+  const hint     = document.getElementById('platform-hint');
+
+  function updateDots(profileId) {
+    const profile = PROFILES.find(p => p.id === profileId);
+    const configured = profile ? profile.configured : [];
+
+    document.querySelectorAll('.dot-profile').forEach(dot => {
+      const platform = dot.dataset.platform;
+      dot.style.display = configured.includes(platform) ? 'inline-block' : 'none';
+    });
+
+    if (profile) {
+      hint.textContent = configured.length
+        ? `Profile "${profile.name}" has ${configured.join(', ')} configured.`
+        : `Profile "${profile.name}" has no credentials yet — edit it to add accounts.`;
+    } else {
+      hint.textContent = 'Green dot = credentials present in .env.';
+    }
+  }
+
+  select.addEventListener('change', () => updateDots(select.value));
+
+  // On load: if a profile_id was pre-selected via query string, reflect it
+  if (select.value) updateDots(select.value);
+})();
+</script>
+
+{# ── Character counter + datetime-local → ISO conversion ─────────────────── #}
+<script>
+(function () {
+  // Per-platform character limits (display limit for informational counter)
+  const LIMITS = {
+    twitter: 280, bluesky: 300, instagram: 2200,
+    threads: 500, telegram: 4096, linkedin: 3000, youtube: 100,
+  };
+
+  const textarea  = document.getElementById('compose-text');
+  const counter   = document.getElementById('char-counter');
+  const form      = document.getElementById('compose-form');
+  const picker    = document.getElementById('scheduled-picker');
+  const isoField  = document.getElementById('scheduled-iso');
+
+  // ── 1. Character counter ──────────────────────────────────────────────────
+  function checkedPlatforms() {
+    return Array.from(document.querySelectorAll('input[name="platforms"]:checked'))
+      .map(el => el.value);
+  }
+
+  function updateCounter() {
+    const platforms = checkedPlatforms();
+    const len       = (textarea.value || '').length;
+    if (platforms.length === 0) { counter.style.display = 'none'; return; }
+
+    // Find the most restrictive limit among selected platforms
+    const limits = platforms.map(p => LIMITS[p]).filter(Boolean);
+    if (limits.length === 0) { counter.style.display = 'none'; return; }
+    const minLimit = Math.min(...limits);
+    const minPlatform = platforms.find(p => LIMITS[p] === minLimit);
+    const remaining = minLimit - len;
+
+    counter.style.display = 'inline';
+    counter.textContent = `${len} / ${minLimit} (${minPlatform})`;
+    counter.className = 'char-counter ' + (
+      remaining < 0 ? 'char-over' : remaining < 20 ? 'char-warn' : 'char-ok'
+    );
+  }
+
+  textarea.addEventListener('input', updateCounter);
+  document.querySelectorAll('input[name="platforms"]').forEach(cb => {
+    cb.addEventListener('change', updateCounter);
+  });
+  updateCounter(); // run once on load
+
+  // ── 2. datetime-local → ISO-8601 with timezone offset ─────────────────────
+  form.addEventListener('submit', function () {
+    if (picker.value) {
+      // datetime-local gives "YYYY-MM-DDTHH:MM" (no tz) — convert to full ISO
+      const dt = new Date(picker.value);
+      if (!isNaN(dt.getTime())) {
+        isoField.value = dt.toISOString();
+      }
+    }
+  });
+})();
+</script>
+
+<style>
+.profile-selector-row {
+  display: flex; align-items: center; gap: 8px;
+}
+.profile-select { flex: 1; }
+.profile-new-btn {
+  flex-shrink: 0; font-size: 18px !important; padding: 4px 10px !important;
+  line-height: 1; border-radius: 4px;
+}
+.dot-profile { background: var(--info) !important; }  /* blue = profile-configured */
+
+/* Character counter */
+.char-counter {
+  font-family: var(--mono); font-size: 11px;
+  margin-left: 10px; font-weight: normal;
+  vertical-align: middle;
+}
+.char-ok   { color: var(--muted); }
+.char-warn { color: var(--warn); }
+.char-over { color: var(--err); font-weight: 600; }
+</style>
+{% endblock %}

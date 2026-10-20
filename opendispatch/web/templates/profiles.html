@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Profiles · Open-Dispatch{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Profiles</h1>
+    <p class="subtitle">Named sets of platform credentials. Switch accounts without touching .env.</p>
+  </div>
+  <div class="actions">
+    <a href="/profiles/new" class="btn btn-primary">+ New Profile</a>
+  </div>
+</div>
+
+{% if not profiles %}
+<div class="empty-state">
+  <div class="empty-icon">🎭</div>
+  <h2>No profiles yet</h2>
+  <p>Create a profile to group your platform credentials under a single name.<br>
+     Pick it from the Compose page to dispatch as that account.</p>
+  <a href="/profiles/new" class="btn btn-primary" style="margin-top:16px">Create your first profile →</a>
+</div>
+{% else %}
+<div class="profile-grid">
+  {% for p in profiles %}
+  <div class="profile-card" style="--profile-color: {{ p.color }}">
+    <div class="profile-card-header">
+      <span class="profile-avatar" style="background:{{ p.color }}20; border-color:{{ p.color }}40">
+        {{ p.emoji }}
+      </span>
+      <div class="profile-meta">
+        <span class="profile-name">{{ p.name }}</span>
+        <span class="profile-id">{{ p.id }}</span>
+      </div>
+    </div>
+
+    {% set configured = p.configured_platforms() %}
+    {% if configured %}
+    <div class="profile-platforms">
+      {% for platform in configured %}
+      <span class="platform-tag">
+        {{ platform_emoji.get(platform, '🔌') }} {{ platform }}
+      </span>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="profile-no-creds">No credentials yet — edit to add accounts.</p>
+    {% endif %}
+
+    <div class="profile-card-actions">
+      <a href="/compose?profile_id={{ p.id }}" class="btn btn-ghost btn-mini">Use →</a>
+      <a href="/profiles/{{ p.id }}/edit" class="btn btn-ghost btn-mini">Edit</a>
+      <form method="post" action="/profiles/{{ p.id }}/delete"
+            onsubmit="return confirm('Delete {{ p.name }}?')" style="display:inline">
+        <button type="submit" class="btn btn-danger-ghost btn-mini">Delete</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<style>
+.empty-state {
+  text-align: center; padding: 80px 24px;
+  color: var(--muted);
+}
+.empty-icon { font-size: 48px; margin-bottom: 16px; }
+.empty-state h2 { color: var(--fg); margin-bottom: 8px; }
+.empty-state p { max-width: 400px; margin: 0 auto; line-height: 1.6; }
+
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+.profile-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--profile-color, var(--accent));
+  border-radius: 8px;
+  padding: 18px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.profile-card-header { display: flex; align-items: center; gap: 12px; }
+.profile-avatar {
+  width: 42px; height: 42px; border-radius: 8px;
+  border: 1px solid; display: flex; align-items: center; justify-content: center;
+  font-size: 20px; flex-shrink: 0;
+}
+.profile-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.profile-name { font-weight: 600; font-size: 15px; color: var(--fg); }
+.profile-id { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.profile-platforms { display: flex; flex-wrap: wrap; gap: 6px; }
+.platform-tag {
+  font-size: 11px; font-family: var(--mono);
+  padding: 3px 8px; border-radius: 4px;
+  background: var(--panel-2); border: 1px solid var(--border);
+  color: var(--muted); white-space: nowrap;
+}
+.profile-no-creds { font-size: 12px; color: var(--muted); font-style: italic; }
+.profile-card-actions { display: flex; gap: 6px; margin-top: auto; padding-top: 4px; }
+.btn-danger-ghost {
+  background: transparent; color: var(--err);
+  border: 1px solid transparent;
+  cursor: pointer; font-family: var(--sans);
+}
+.btn-danger-ghost:hover { border-color: var(--err); background: rgba(248,113,113,.06); }
+</style>
+{% endblock %}

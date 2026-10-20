@@ -10,6 +10,7 @@ import ThumbnailStudio from './components/ThumbnailStudio';
 import SaaShortsTab from './components/SaaShortsTab';
 import UGCGallery from './components/UGCGallery';
 import ScheduleWeekModal from './components/ScheduleWeekModal';
+import LocalPostPanel from './components/LocalPostPanel';
 import ClipEditor from './components/ClipEditor';
 import ReframeEditor from './components/ReframeEditor';
 import UsageMeter from './components/UsageMeter';
@@ -374,6 +375,7 @@ function App() {
 
   const [sessionRecovered, setSessionRecovered] = useState(false);
   const [showScheduleWeek, setShowScheduleWeek] = useState(false);
+  const [localPost, setLocalPost] = useState(null);
   // Clip editor overlay: index of the clip being edited, or null.
   const [editingClip, setEditingClip] = useState(null);
   const [reframingClip, setReframingClip] = useState(null);
@@ -2153,13 +2155,13 @@ function App() {
                           ? <><Loader2 size={14} className="animate-spin" />zipping…</>
                           : <><Download size={14} />download all</>}
                       </button>
-                      {results.clips.length > 1 && (
+                      {(billingEnabled ? results.clips.length > 1 : true) && (
                         <button
-                          onClick={() => setShowScheduleWeek(true)}
+                          onClick={() => (billingEnabled ? setShowScheduleWeek(true) : setLocalPost({ focusIndex: null }))}
                           className="btn-primary px-4 py-2 text-xs"
                         >
                           <Calendar size={14} />
-                          schedule week
+                          {billingEnabled ? 'schedule week' : 'post clips'}
                         </button>
                       )}
                     </div>
@@ -2282,6 +2284,7 @@ function App() {
                           onBulkSubtitle={handleBulkSubtitles}
                           clipCount={results.clips.length}
                           bulkProgress={bulkSub}
+                          onLocalPost={billingEnabled ? null : (index) => setLocalPost({ focusIndex: index })}
                         />
                       ))}
                     </div>
@@ -2374,15 +2377,26 @@ function App() {
         </div>
       </Modal>
 
-      <ScheduleWeekModal
-        isOpen={showScheduleWeek}
-        onClose={() => setShowScheduleWeek(false)}
-        clips={results?.clips || []}
-        jobId={jobId}
-        uploadPostKey={uploadPostKey}
-        uploadUserId={uploadUserId}
-        isManaged={isManaged}
-      />
+      {billingEnabled && (
+        <ScheduleWeekModal
+          isOpen={showScheduleWeek}
+          onClose={() => setShowScheduleWeek(false)}
+          clips={results?.clips || []}
+          jobId={jobId}
+          uploadPostKey={uploadPostKey}
+          uploadUserId={uploadUserId}
+          isManaged={isManaged}
+        />
+      )}
+      {!billingEnabled && (
+        <LocalPostPanel
+          isOpen={!!localPost}
+          onClose={() => setLocalPost(null)}
+          clips={results?.clips || []}
+          jobId={jobId}
+          focusIndex={localPost ? localPost.focusIndex : null}
+        />
+      )}
 
       {/* Pre-flight quality gate */}
       {qualityGate && (

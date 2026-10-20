@@ -8,7 +8,7 @@ import TikTokDraftNotice from './TikTokDraftNotice';
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-const TIMEZONES = [
+export const TIMEZONES = [
     { value: 'Pacific/Midway', label: '(GMT-11:00) Midway' },
     { value: 'Pacific/Honolulu', label: '(GMT-10:00) Honolulu' },
     { value: 'America/Anchorage', label: '(GMT-09:00) Alaska' },
@@ -63,7 +63,7 @@ function formatDate(date) {
     return `${MONTHS[date.getMonth()]} ${date.getDate()}`;
 }
 
-function detectTimezone() {
+export function detectTimezone() {
     try {
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
         if (TIMEZONES.find(t => t.value === tz)) return tz;

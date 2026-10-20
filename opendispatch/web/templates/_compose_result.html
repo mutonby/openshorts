@@ -1,0 +1,24 @@
+{% if ok %}
+<div class="alert alert-success">
+  <strong>Dispatched.</strong>
+  {% if profile_label %}<span class="muted small"> via {{ profile_label }}</span>{% endif %}
+  <span class="muted small">unit_id: <code class="mono">{{ unit_id }}</code></span>
+  <ul class="enqueued-list">
+    {% for e in enqueued %}
+      <li>
+        <code class="mono">{{ e.target }}</code>
+        <span class="muted">→ {{ e.scheduled_for[:19].replace('T',' ') }}</span>
+        <a href="/queue/{{ e.id }}" class="link-muted small">view row</a>
+      </li>
+    {% endfor %}
+  </ul>
+  <a href="/" class="btn btn-ghost btn-mini">→ Dashboard</a>
+</div>
+{% else %}
+<div class="alert alert-error">
+  <strong>Failed.</strong>
+  <ul>
+    {% for err in errors %}<li>{{ err }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}

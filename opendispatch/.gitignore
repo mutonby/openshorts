@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+data/
+*.jsonl
+__pycache__/
+*.py[cod]
+.venv
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+node_modules/
+.DS_Store
+youtube_credentials.json
