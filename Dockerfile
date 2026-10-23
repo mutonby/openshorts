@@ -65,10 +65,17 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # Deno JS runtime — required by yt-dlp for some extractor challenges.
 COPY --from=denoland/deno:bin /deno /usr/local/bin/deno
 
+# Node.js 22 from NodeSource: bgutil-ytdlp-pot-provider >=1.3 requires node>=22
+# and its `canvas` dependency needs a working node-gyp (Debian's is broken).
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
 # Helper token provider, baked in as a local Node script (no separate service).
+# npm install is retried once: the canvas prebuilt-binary download can time out.
 RUN git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider /opt/bgutil-provider \
     && cd /opt/bgutil-provider/server \
-    && npm install --no-audit --no-fund \
+    && (npm install --no-audit --no-fund || npm install --no-audit --no-fund) \
     && npx tsc \
     && npm cache clean --force
 ENV BGUTIL_SCRIPT_PATH=/opt/bgutil-provider/server/build/generate_once.js
