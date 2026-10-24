@@ -104,8 +104,14 @@ RUN mkdir -p /usr/local/share/fonts/openshorts \
     && cp fonts/openshorts-fontmap.conf /etc/fonts/conf.d/60-openshorts.conf \
     && fc-cache -f
 
-# Create a non-root user (Moved up)
-RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
+# Create a non-root user (Moved up). Fixed at uid/gid 1000 (the default
+# first-user id on Debian/Ubuntu hosts) rather than letting useradd pick a
+# system id: job subprocesses call getpass.getuser() (pulled in transitively
+# by torch/ultralytics), which does pwd.getpwuid(os.getuid()) and raises
+# KeyError if the running uid has no /etc/passwd entry. Matching the common
+# host uid also means self-host's bind-mounted repo (owned by the host user)
+# is writable without a docker-compose `user:` override.
+RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser -d /app -s /sbin/nologin appuser
 
 # Create directories including Ultralytics cache config. /app/.cache/huggingface
 # exists in-image (appuser-owned via the chown below) so a persistent volume
