@@ -98,7 +98,10 @@ def assert_public_url(url: str) -> str:
 
     try:
         infos = socket.getaddrinfo(host, parsed.port or None, proto=socket.IPPROTO_TCP)
-    except socket.gaierror as e:
+    except (socket.gaierror, UnicodeError) as e:
+        # UnicodeError: the idna codec refuses the name before any lookup
+        # (a label over 63 characters, an empty label). Same answer as a
+        # name that does not resolve, not a 500.
         raise UnsafeURLError(f"Could not resolve host {host!r}: {e}")
 
     resolved = {info[4][0] for info in infos}

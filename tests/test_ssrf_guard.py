@@ -68,6 +68,17 @@ def test_hostname_with_one_bad_record_is_refused(monkeypatch):
         assert_public_url("https://videos.example.com/watch.mp4")
 
 
+@pytest.mark.parametrize("url", [
+    "https://" + "a" * 64 + ".example.com/watch.mp4",   # label over 63 chars
+    "https://videos..example.com/watch.mp4",            # empty label
+])
+def test_hostname_the_idna_codec_refuses_is_unsafe_not_a_crash(url):
+    """getaddrinfo raises UnicodeError for these before any DNS lookup; it
+    used to escape the guard and turn POST /api/process into a 500."""
+    with pytest.raises(UnsafeURLError):
+        assert_public_url(url)
+
+
 def test_public_hostname_passes(monkeypatch):
     def fake_getaddrinfo(host, port, *a, **k):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("142.250.184.14", 0))]
