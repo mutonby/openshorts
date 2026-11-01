@@ -64,8 +64,14 @@ because the session JWT lives in localStorage on the frontend host. `POST
 the link said, so it never navigates to a `redirect_uri` the API did not check
 against the client's registered ones. `POST /oauth/token` redeems
 it by **minting an ordinary `osk_` key** named after the client and returning it
-as the access token. No new auth path, no refresh tokens: the key shows up in
-Account → API keys and revoking it disconnects the app. The `/mcp` 401 carries
+as the access token. No new auth path: the key shows up in Account → API keys
+and revoking it disconnects the app. The key never expires, but a refresh token
+(`osr_`, table `oauth_refresh_tokens`, hashed) comes with it for clients that
+want one (Gemini connected apps require "persistent linking"): `grant_type=
+refresh_token` swaps the key's secret in place and returns the same refresh
+token, and a revoked key refuses it. `POST /oauth/revoke` (RFC 7009, always 200)
+revokes the OAuth key behind an access or refresh token; hand-made keys are
+never revocable there. The `/mcp` 401 carries
 `WWW-Authenticate: Bearer resource_metadata=...` so clients find the flow.
 The key carries the granted scope (`api_keys.scope`, `cloud/scopes.py`). The only
 scope is `openshorts`, the default every client asks for (unknown scopes are
@@ -75,7 +81,7 @@ scope. OAuth keys minted before the column are recognised by their name
 suffix. Hand-made keys have no scope and keep the whole API. A new MCP tool
 calling a new endpoint must add it to `scopes._MCP_ROUTES` (a test reads the
 tool code and fails otherwise).
-`oauth_codes` is in `USER_OWNED_TABLES`; `oauth_clients` deliberately not.
+`oauth_codes` and `oauth_refresh_tokens` are in `USER_OWNED_TABLES`; `oauth_clients` deliberately not.
 Registration is capped per client IP (`OAUTH_REGISTRATIONS_PER_HOUR`, 429
 `slow_down`): a client registers once per connection, the cap only stops one
 stuck in a loop. Agent upload slots (`POST /api/uploads`) are capped at

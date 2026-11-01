@@ -41,7 +41,7 @@ from . import database, email_policy, storage
 from .models import (
     User, Subscription, CreditTopup, UsageLedger, MagicLinkToken,
     SignupAttribution, ApiKey, UploadPostProfile, UserVideo, ClipExpiryWarning,
-    Project, AccountDeletion, OAuthCode, AutopilotRun, AutopilotSettings,
+    Project, AccountDeletion, OAuthCode, OAuthRefreshToken, AutopilotRun, AutopilotSettings,
     LifecycleEmail, CancellationFeedback, OnboardingSurvey, LoginCode,
 )
 
@@ -56,7 +56,7 @@ from .models import (
 # foreign-key violation the first time a real user tries to leave.
 USER_OWNED_TABLES = (
     ClipExpiryWarning, UserVideo, Project, UsageLedger, CreditTopup,
-    Subscription, ApiKey, SignupAttribution, UploadPostProfile, OAuthCode,
+    Subscription, OAuthRefreshToken, ApiKey, SignupAttribution, UploadPostProfile, OAuthCode,
     AutopilotRun, AutopilotSettings, LifecycleEmail, CancellationFeedback,
     OnboardingSurvey, LoginCode,
 )

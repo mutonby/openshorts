@@ -24,7 +24,11 @@ Redeeming the code mints an ordinary ``osk_`` API key named after the client
 and returns it as the access token. That is deliberate: every existing auth,
 quota and ownership rule already understands those keys, the connection shows
 up in the account page next to hand-made keys, and revoking it there is how
-the user disconnects the client. No refresh tokens: the key does not expire.
+the user disconnects the client. The key does not expire, but a refresh
+token comes with it for clients that insist on one (Gemini's "persistent
+linking"): refreshing swaps the key's secret in place and returns the same
+refresh token. ``POST /oauth/revoke`` (RFC 7009) disconnects from the client
+side, the same as revoking the key in the account page.
 """
 import base64
 import hashlib
@@ -41,7 +45,7 @@ from sqlalchemy import select
 
 from . import database, api_keys, scopes
 from .config import settings
-from .models import OAuthClient, OAuthCode, ApiKey
+from .models import OAuthClient, OAuthCode, OAuthRefreshToken, ApiKey
 
 router = APIRouter()
 
@@ -82,12 +86,14 @@ def server_metadata(base: str) -> dict:
         "authorization_endpoint": f"{base}/oauth/authorize",
         "token_endpoint": f"{base}/oauth/token",
         "registration_endpoint": f"{base}/oauth/register",
+        "revocation_endpoint": f"{base}/oauth/revoke",
         "response_types_supported": ["code"],
         "response_modes_supported": ["query"],
-        "grant_types_supported": ["authorization_code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
         "scopes_supported": [SCOPE],
+        "revocation_endpoint_auth_methods_supported": ["none"],
         "service_documentation": "https://www.openshorts.app/mcp",
     }
 
@@ -221,7 +227,7 @@ async def register_client(request: Request):
     grants = body.get("grant_types") or ["authorization_code"]
     if any(g not in ("authorization_code", "refresh_token") for g in grants):
         return _oauth_error(400, "invalid_client_metadata",
-                            "Only the authorization_code grant is supported.")
+                            "Only the authorization_code and refresh_token grants are supported.")
 
     name = str(body.get("client_name") or "MCP client").strip()[:80] or "MCP client"
     client_id = secrets.token_urlsafe(24)
@@ -235,7 +241,7 @@ async def register_client(request: Request):
         "client_name": name,
         "redirect_uris": uris,
         "token_endpoint_auth_method": "none",
-        "grant_types": ["authorization_code"],
+        "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
         "scope": SCOPE,
     }, status_code=201, headers={"Access-Control-Allow-Origin": "*"})
@@ -370,9 +376,11 @@ async def token(request: Request):
     else:
         form = dict(await request.form())
     grant = form.get("grant_type")
+    if grant == "refresh_token":
+        return await _refresh(form)
     if grant != "authorization_code":
         return _oauth_error(400, "unsupported_grant_type",
-                            "Only authorization_code is supported (tokens do not expire).")
+                            "Only authorization_code and refresh_token are supported.")
     code = str(form.get("code") or "")
     verifier = str(form.get("code_verifier") or "")
     client_id = str(form.get("client_id") or "")
@@ -394,16 +402,96 @@ async def token(request: Request):
 
         granted = scopes.normalise(row.scope)
         raw, key_hash, prefix = api_keys.generate_key()
-        session.add(ApiKey(user_id=row.user_id, key_hash=key_hash, prefix=prefix, scope=granted,
-                           name=f"{(client.client_name if client else 'MCP client')[:50]} {scopes.OAUTH_KEY_NAME_SUFFIX}"))
+        key = ApiKey(user_id=row.user_id, key_hash=key_hash, prefix=prefix, scope=granted,
+                     name=f"{(client.client_name if client else 'MCP client')[:50]} {scopes.OAUTH_KEY_NAME_SUFFIX}")
+        session.add(key)
+        await session.flush()   # key.id for the refresh token's FK
+        refresh = new_refresh_token()
+        session.add(OAuthRefreshToken(token_hash=hash_code(refresh), api_key_id=key.id,
+                                      client_id=client_id, user_id=row.user_id))
         await session.commit()
 
-    return JSONResponse({"access_token": raw, "token_type": "bearer", "scope": granted},
+    return _token_response(raw, refresh, granted)
+
+
+def new_refresh_token() -> str:
+    # Never "osk_": a refresh token must not work as a bearer token.
+    return "osr_" + secrets.token_urlsafe(32)
+
+
+def _token_response(access: str, refresh: str, scope: str):
+    return JSONResponse({"access_token": access, "token_type": "bearer",
+                         "refresh_token": refresh, "scope": scope},
                         headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"})
+
+
+async def _refresh(form: dict):
+    """Persistent linking: a new access token, the same refresh token. The
+    access token is the key's secret, stored only hashed, so refreshing swaps
+    it in place: the old access token stops working, the key keeps its row,
+    name and history, and revoking it still disconnects the client."""
+    refresh = str(form.get("refresh_token") or "")
+    client_id = str(form.get("client_id") or "")
+    async with database.session() as session:
+        rt = (await session.execute(
+            select(OAuthRefreshToken).where(OAuthRefreshToken.token_hash == hash_code(refresh))
+            .with_for_update())).scalar_one_or_none()
+        if rt is None or (client_id and rt.client_id != client_id):
+            return _oauth_error(400, "invalid_grant", "Unknown refresh token.")
+        key = (await session.execute(
+            select(ApiKey).where(ApiKey.id == rt.api_key_id).with_for_update())).scalar_one_or_none()
+        if key is None or key.revoked_at is not None:
+            return _oauth_error(400, "invalid_grant", "This connection was revoked; connect again.")
+        raw, key_hash, prefix = api_keys.generate_key()
+        key.key_hash, key.prefix = key_hash, prefix
+        rt.last_used_at = _now()
+        granted = scopes.effective(key.scope, key.name) or scopes.MCP_SCOPE
+        await session.commit()
+    return _token_response(raw, refresh, granted)
+
+
+# --------------------------------------------------------------------------- #
+# Revocation (RFC 7009): the client disconnects
+# --------------------------------------------------------------------------- #
+@router.post("/oauth/revoke")
+async def revoke(request: Request):
+    """Takes an access or refresh token and revokes the OAuth connection it
+    belongs to. Always 200, known token or not (RFC 7009 2.2). Only keys an
+    OAuth flow minted can be revoked here: a hand-made key is managed from the
+    account page, never by whoever holds it."""
+    ctype = request.headers.get("content-type", "")
+    if "application/json" in ctype:
+        try:
+            form = json.loads(await request.body() or b"{}")
+        except ValueError:
+            form = {}
+    else:
+        form = dict(await request.form())
+    token_value = str((form or {}).get("token") or "") if isinstance(form, dict) else ""
+    if token_value:
+        async with database.session() as session:
+            key = None
+            if api_keys.looks_like_key(token_value):
+                key = (await session.execute(
+                    select(ApiKey).where(ApiKey.key_hash == api_keys.hash_key(token_value))
+                )).scalar_one_or_none()
+            else:
+                rt = (await session.execute(
+                    select(OAuthRefreshToken).where(
+                        OAuthRefreshToken.token_hash == hash_code(token_value)))).scalar_one_or_none()
+                if rt is not None:
+                    key = (await session.execute(
+                        select(ApiKey).where(ApiKey.id == rt.api_key_id))).scalar_one_or_none()
+            if key is not None and scopes.effective(key.scope, key.name) is not None \
+                    and key.revoked_at is None:
+                key.revoked_at = _now()
+                await session.commit()
+    return JSONResponse({}, headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"})
 
 
 @router.options("/oauth/register")
 @router.options("/oauth/token")
+@router.options("/oauth/revoke")
 async def preflight():
     return JSONResponse({}, headers={
         "Access-Control-Allow-Origin": "*",

@@ -333,6 +333,26 @@ class OAuthCode(Base):
     used_at = Column(DateTime(timezone=True), nullable=True)
 
 
+class OAuthRefreshToken(Base):
+    """The refresh token handed out with an OAuth access token. Access tokens
+    are ``osk_`` keys that never expire, so a refresh only happens when a
+    client insists on one: it swaps the key's secret in place (same row, same
+    entry in the account page) and returns the *same* refresh token, which is
+    what "persistent linking" clients (Gemini) expect. Revoking the key in the
+    account page or through ``/oauth/revoke`` kills the refresh token with it.
+    Only the sha256 is stored. Its own table because the schema bootstrap is
+    ``create_all`` (new columns on ``api_keys`` would not appear)."""
+    __tablename__ = "oauth_refresh_tokens"
+    token_hash = Column(Text, primary_key=True)
+    api_key_id = Column(UUID(as_uuid=True), ForeignKey("api_keys.id", ondelete="CASCADE"),
+                        nullable=False, index=True)
+    client_id = Column(Text, ForeignKey("oauth_clients.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
+                     nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class ProxyUsage(Base):
     """One row per event that put bytes through the per-GB paid proxy, or per
     download route decision worth keeping (the winner and why the free routes
