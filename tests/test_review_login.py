@@ -39,3 +39,14 @@ def test_login_method_flags_only_the_review_account(monkeypatch):
     assert c.post("/api/auth/login-method", json={"email": "other@example.com"}).json() == {"password": False}
     monkeypatch.delenv("REVIEW_LOGIN_PASSWORD")
     assert c.post("/api/auth/login-method", json={"email": "review@example.com"}).json() == {"password": False}
+
+
+def test_non_ascii_email_is_refused_not_a_500(monkeypatch):
+    monkeypatch.setenv("REVIEW_LOGIN_EMAIL", "Review@Example.com")
+    monkeypatch.setenv("REVIEW_LOGIN_PASSWORD", "correct-horse")
+    c = _client()
+    r = c.post("/api/auth/login-method", json={"email": "josé@example.com"})
+    assert r.status_code == 200 and r.json() == {"password": False}
+    r = c.post("/api/auth/review-login", json={"email": "josé@example.com", "password": "correct-horse"})
+    assert r.status_code == 401
+    assert c.post("/api/auth/login-method", json={"email": "review@example.com"}).json() == {"password": True}

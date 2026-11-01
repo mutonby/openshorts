@@ -398,6 +398,11 @@ def _review_email() -> str:
     return email_policy.normalize_email(settings.review_login_email)
 
 
+def _is_review_email(email: str) -> bool:
+    # compare_digest only takes ASCII str; EmailStr admits non-ASCII addresses.
+    return hmac.compare_digest(email.encode(), _review_email().encode())
+
+
 class LoginMethodRequest(BaseModel):
     email: EmailStr
 
@@ -409,7 +414,7 @@ async def login_method(payload: LoginMethodRequest):
     Reviewers are handed a username and a password, so the password field has
     to be on screen before they press anything that reads "email me a link"."""
     email = email_policy.normalize_email(payload.email)
-    return {"password": review_login_enabled() and hmac.compare_digest(email, _review_email())}
+    return {"password": review_login_enabled() and _is_review_email(email)}
 
 
 @router.post("/api/auth/review-login")
@@ -421,7 +426,7 @@ async def review_login(payload: ReviewLoginRequest):
     can sign in this way, and only while both env vars are set."""
     email = email_policy.normalize_email(payload.email)
     ok = (review_login_enabled()
-          and hmac.compare_digest(email, _review_email())
+          and _is_review_email(email)
           and hmac.compare_digest(payload.password.encode(), settings.review_login_password.encode()))
     if not ok:
         raise HTTPException(status_code=401, detail="Wrong email or password.")
