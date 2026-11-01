@@ -87,9 +87,8 @@ Welcome (minutes after sign-up), first-clip nudge (24-72 h, nothing processed),
 win-back (2-7 days after the first committed video, no plan; with
 `WINBACK_PROMO_CODE` when set) and checkout recovery (`checkout.session.expired`
 with the `after_expiration.recovery` URL that `create_checkout` enables; sessions
-expire after `CHECKOUT_EXPIRES_SECONDS` (1 h) instead of Stripe's 24 h so the
-email goes out while the intent is fresh, and it names the plan or pack from the
-session metadata, `lifecycle.cart_label`). Each at
+keep Stripe's default 24 h expiry (a 1 h expiry was tried and reverted), and the
+email names the plan or pack from the session metadata, `lifecycle.cart_label`). Each at
 most once per account: a `lifecycle_emails` row is claimed before the send
 (unique `user_id, kind`). The loop sends at most `BATCH` per 10-minute tick. All
 four are commercial: `emails.send_commercial_email` skips `marketing_opt_out`
@@ -196,8 +195,8 @@ same doomed event for days.
   session metadata with `plan`, and decides the `cancel_url`: `#/pricing?checkout=cancel`
   for pricing-page clicks (the page scrolls to the plans), `#app?checkout=cancel`
   for everything opened inside the app. Both emit `CheckoutCanceled`.
-- `allow_promotion_codes` only for someone who was handed a code: the win-back
-  email (`source` `pricing_email_winback`, or a `winback` row in `lifecycle_emails`).
+- `allow_promotion_codes` for everyone (limiting it to win-back recipients was
+  tried and reverted).
 - The terms checkbox stays (`consent_collection`, art. 16(m) request for immediate
   performance) with a one-sentence `CONSENT_MESSAGE`.
 - Checkout buttons reset their spinner on a back/forward-cache restore

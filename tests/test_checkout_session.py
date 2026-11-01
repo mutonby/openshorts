@@ -1,10 +1,8 @@
-"""What /api/billing/checkout asks Stripe for: a short expiry (so the recovery
-email goes out while the intent is fresh), the surface on the session, a
-cancel URL back to where the click came from, and the promotion-code field
-only for someone who was handed a code.
+"""What /api/billing/checkout asks Stripe for: Stripe's default expiry, the
+surface on the session, a cancel URL back to where the click came from, and
+the promotion-code field for everyone.
 """
 import asyncio
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -31,9 +29,6 @@ def created(monkeypatch):
     async def _customer(*a, **k):
         return "cus_1"
 
-    async def _promo(user_id, source):
-        return source.startswith("pricing_email_winback")
-
     def _create(**kwargs):
         calls.append(kwargs)
         return SimpleNamespace(url="https://checkout.stripe.com/c/x")
@@ -42,7 +37,6 @@ def created(monkeypatch):
     monkeypatch.setattr(billing, "get_catalog", _catalog)
     monkeypatch.setattr(billing, "_blocking_sub_status", _none)
     monkeypatch.setattr(billing, "ensure_stripe_customer", _customer)
-    monkeypatch.setattr(billing, "_has_promo_code", _promo)
     monkeypatch.setattr(billing.stripe.checkout.Session, "create", _create)
     return calls
 
@@ -52,11 +46,9 @@ def _checkout(source=""):
     return asyncio.run(billing.create_checkout(body, request=None))
 
 
-def test_expires_within_the_hour(created):
-    before = int(time.time())
+def test_default_expiry(created):
     assert _checkout("wall") == {"url": "https://checkout.stripe.com/c/x"}
-    expires = created[0]["expires_at"]
-    assert before + 30 * 60 <= expires <= before + billing.CHECKOUT_EXPIRES_SECONDS + 5
+    assert "expires_at" not in created[0]  # Stripe's 24 h
 
 
 def test_source_and_plan_on_the_session(created):
@@ -80,12 +72,10 @@ def test_bad_source_is_dropped(created):
     assert created[0]["cancel_url"].endswith("/#/pricing?checkout=cancel")
 
 
-def test_promo_field_only_with_a_code(created):
+def test_promo_field_for_everyone(created):
     _checkout("wall")
-    _checkout("pricing_email_winback")
-    assert created[0]["allow_promotion_codes"] is False
-    assert created[0]["after_expiration"]["recovery"]["allow_promotion_codes"] is False
-    assert created[1]["allow_promotion_codes"] is True
+    assert created[0]["allow_promotion_codes"] is True
+    assert created[0]["after_expiration"]["recovery"]["allow_promotion_codes"] is True
 
 
 def test_consent_box_kept_and_short(created):

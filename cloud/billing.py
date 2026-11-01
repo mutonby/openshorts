@@ -9,7 +9,6 @@ Design (matches the Stripe implementation planner for this use case):
 """
 import asyncio
 import re
-import time
 from datetime import datetime, timezone
 
 import httpx
@@ -21,7 +20,7 @@ from sqlalchemy import select
 from .config import (settings, PLAN_MINUTES, TRIAL_DAYS, SUBSCRIPTION_LOOKUP_KEYS,
                      TOPUP_LOOKUP_KEYS, new_subscriber_label)
 from . import analytics, config, database
-from .models import User, Subscription, CreditTopup, StripeEvent, SignupAttribution, LifecycleEmail
+from .models import User, Subscription, CreditTopup, StripeEvent, SignupAttribution
 from .auth import get_current_user_required, get_session_user_required
 
 router = APIRouter()
@@ -147,11 +146,6 @@ CONSENT_MESSAGE = (
     "EU: if you withdraw within 14 days, minutes already used are charged."
 )
 
-# An unpaid session expires after this long, and checkout.session.expired is
-# what mails the recovery link (cloud/lifecycle.py). Stripe's default is 24 h,
-# by which time the intent is gone; 30 min is the minimum it accepts.
-CHECKOUT_EXPIRES_SECONDS = 3600
-
 _SOURCE_RE = re.compile(r"^[a-z0-9_]{1,40}$")
 
 
@@ -161,18 +155,6 @@ class CheckoutRequest(BaseModel):
     # Saved on the session so Stripe-side data can be split by origin, and used
     # to send whoever cancels back to where they came from.
     source: str = ""
-
-
-async def _has_promo_code(user_id, source: str) -> bool:
-    """Show Stripe's "Add promotion code" link only to someone who was given a
-    code: the win-back email is the only place one is handed out. For everyone
-    else an empty code field is an invitation to leave and hunt for one."""
-    if source.startswith("pricing_email_winback"):
-        return True
-    async with database.session() as s:
-        row = (await s.execute(select(LifecycleEmail.id).where(
-            LifecycleEmail.user_id == user_id, LifecycleEmail.kind == "winback"))).first()
-    return row is not None
 
 
 @router.post("/api/billing/checkout")
@@ -210,7 +192,6 @@ async def create_checkout(body: CheckoutRequest, request: Request):
         cancel_url = f"{fe}/#/pricing?checkout=cancel"
     else:
         cancel_url = f"{fe}/#app?checkout=cancel"
-    promo = await _has_promo_code(user.id, source)
     kwargs = dict(
         mode=mode,
         customer=customer_id,
@@ -218,8 +199,10 @@ async def create_checkout(body: CheckoutRequest, request: Request):
         client_reference_id=str(user.id),
         success_url=f"{fe}/#/account?checkout=success",
         cancel_url=cancel_url,
-        allow_promotion_codes=promo,
-        expires_at=int(time.time()) + CHECKOUT_EXPIRES_SECONDS,
+        # Stripe's default 24 h expiry and the code field for everyone: the 1 h
+        # expiry and the code field only for win-back recipients coincided with
+        # fewer completed checkouts, so both went back to the defaults.
+        allow_promotion_codes=True,
         # Business customers need their legal name and VAT on the invoice to
         # deduct the tax, and this is the only place they can ever type them:
         # nothing in the dashboard asks for fiscal data. Without it every
@@ -236,7 +219,7 @@ async def create_checkout(body: CheckoutRequest, request: Request):
         customer_update={"name": "auto", "address": "auto"},
         # Recovery makes Stripe hand the checkout.session.expired webhook a URL
         # that reopens the same cart, which cloud/lifecycle.py mails once.
-        after_expiration={"recovery": {"enabled": True, "allow_promotion_codes": promo}},
+        after_expiration={"recovery": {"enabled": True, "allow_promotion_codes": True}},
         metadata={
             "user_id": str(user.id),
             "kind": entry["kind"],
