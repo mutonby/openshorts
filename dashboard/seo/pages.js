@@ -2726,10 +2726,12 @@ uploads the video at all.</p>
 your RP server co-stars' VODs with their blessing, clients' channels you manage.
 Two separate rights questions apply to GTA clips and they have different
 answers: the <strong>recording</strong> belongs to whoever streamed it, and the
-<strong>game footage</strong> is covered by Rockstar Games' own policy on fan
-videos, which has historically permitted gameplay videos monetised through the
-platforms' standard ad programs. That is their policy and it can change, so
-check the current version rather than taking this page's word for it. Reuploading
+<strong>game footage</strong> is covered by Rockstar Games' policy on posting
+its material. As of November 2026 that policy says Take-Two generally does not
+object to non-commercial use that does not spoil the plot, defines
+non-commercial as not making money through the footage, and reserves the right
+to take material down. That is their policy and it can change, so check the
+current version rather than taking this page's word for it. Reuploading
 another streamer's clips without permission is the one case that is clearly not
 fine, and the platforms strike it.</p>
 
