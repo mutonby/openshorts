@@ -54,7 +54,7 @@ single-upload path, unchanged. Do not port the frame trick here. Gemini-only: a
 text-only `LLM_BASE_URL` server cannot see footage, and without `GEMINI_API_KEY`
 the function logs one line and returns None, which fails the job.
 
-The public `/gta-5-clips`, `/gta-6-clips` and `/platforms/twitch` pages state
+The public `/gta-5-clips`, `/gta-6-clips`, `/wow-forever-clips` and `/platforms/twitch` pages state
 these thresholds and the stretch sizes; if the behaviour changes, change
 `dashboard/seo/pages.js` and `dashboard/seo/clip-tools.js` too.
 

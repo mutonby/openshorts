@@ -914,7 +914,9 @@ the clip stays automatic. The rest of the Twitch clip editor works the same way:
 trim or extend a clip on word boundaries, restyle the captions, rewrite the hook. The <a href="/gta-5-clips">GTA 5 clips</a> page goes
 deeper into the inset layout and how it was measured, and the
 <a href="/gta-6-clips">GTA 6 clips</a> page covers console captures with no
-facecam and no commentary.</p>
+facecam and no commentary. For World of Warcraft raids, where the interface
+sits at the edges of the screen, see <a href="/wow-forever-clips">WoW Forever
+clips</a>.</p>
 
 <h2>Silent gameplay and music-only streams</h2>
 <p>The default picker reads what you say, which is exactly right for

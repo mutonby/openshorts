@@ -143,6 +143,14 @@ $${STARTER.monthly.price}/month for ${STARTER.monthly.minutes} minutes to
 $${PRO.monthly.price}/month for ${PRO.monthly.minutes}, and trims, reframes,
 hooks and captions on the clips are not counted. Self-hosted under MIT there is
 no meter, no watermark and no cap; you supply the machine and the API keys.</p>`,
+  raid: () => `<p>On ${esc(CLOUD.name)} a raid night is metered like any other
+source, by the minute of video you import, after ${FREE_CLOUD}. A three-hour
+raid VOD is 180 minutes, against ${STARTER.monthly.minutes} minutes on the
+$${STARTER.monthly.price}/month plan and ${PRO.monthly.minutes} on the
+$${PRO.monthly.price}/month one, so clipping only the pulls you care about is
+what keeps the bill down. Edits on the clips (trims, reframes, hooks, captions)
+are not counted. Self-hosted under MIT there is no meter, no watermark and no
+cap, with your own machine and API keys.</p>`,
   es: () => `<p>OpenShorts tiene dos ediciones con precios muy distintos. <strong>Autoalojado</strong>
 es gratuito y de código abierto con licencia MIT: se ejecuta con Docker en tu
 máquina, con tus propias claves de API, sin marca de agua y sin límite de uso.
@@ -2830,16 +2838,36 @@ ${sources([
   ],
 })
 
+/* Answer-first sections: each question as an H2 phrased the way people ask
+ * it, a self-contained answer of about 40 to 60 words right under it (the
+ * part an engine lifts), then the detail. The same question and answer feed
+ * the FAQPage node, so the schema never says anything the page does not. */
+const qaSections = (items) => items
+  .map((i) => `<h2>${esc(i.q)}</h2>\n<p><strong>${esc(i.a)}</strong></p>\n${i.detail || ''}`)
+  .join('\n\n')
+const qaFaq = (items) => items.map(({ q, a }) => ({ q, a }))
+
+/* Facts about consoles, capture tools and platforms quoted on the gaming
+ * pages, each with the date it was read on the vendor's own page. */
+const GAMING_CHECKED = '4 November 2026'
+const PS5_CAPTURE_URL = 'https://www.playstation.com/en-us/support/games/capture-ps5-gameplay-screenshots/'
+const PS5_APP_URL = 'https://www.playstation.com/en-us/support/games/ps5-game-captures-ps-app/'
+const PS5_GALLERY_URL = 'https://www.playstation.com/en-us/support/games/ps5-media-gallery-view-screenshots/'
+const XBOX_SHARE_URL = 'https://support.xbox.com/en-US/help/hardware-network/accessories/controller-share-button'
+const XBOX_ONEDRIVE_URL = 'https://news.xbox.com/en-us/2023/09/27/bonus-xbox-update-for-september/'
+const YT_SHORTS_URL = 'https://support.google.com/youtube/answer/12779649'
+const REELS_URL = 'https://www.socialmediatoday.com/news/instagram-officially-expands-reels-length-3-minutes/737766/'
+
 /* /gta-6-clips: written before launch (19 November 2026), so nothing on it is
  * about GTA 6 gameplay. What is new and true is where the footage comes from:
  * the game ships on PS5 and Xbox Series X|S only, so a large share of it will
  * be console captures with no facecam and often no voice, next to the usual
- * stream VODs. The page is built around how each of those is handled, not
- * around the GTA 5 page with the number changed. Rockstar facts are cited to
- * Rockstar; the video policy is stated neutrally with the date it was read.
+ * stream VODs. The page answers the questions people ask at launch (record on
+ * a console, get the file off it, make it vertical, how long, will Rockstar
+ * take it down), each with the vendor's own page cited and dated.
  */
 const GTA6_LAUNCH = '19 November 2026'
-const GTA6_CHECKED = '4 November 2026'
+const GTA6_CHECKED = GAMING_CHECKED
 const ROCKSTAR_LAUNCH_URL = 'https://www.rockstargames.com/newswire/article/ak3ak31a49a221/grand-theft-auto-vi-is-now-set-to-launch-november-19-2026'
 const ROCKSTAR_TIMES_URL = 'https://support.rockstargames.com/articles/29jV3Cv2cCgvwM1XgtMO5o/grand-theft-auto-vi-regional-pre-load-and-release-times-on-playstation-5-and-xbox-series-x-or-s'
 const ROCKSTAR_POLICY_URL = 'https://support.rockstargames.com/articles/7bNaeoMFTV0iUDGhStTXvz/policy-on-posting-copyrighted-rockstar-games-material'
@@ -2847,35 +2875,122 @@ const ROCKSTAR_POLICY_URL = 'https://support.rockstargames.com/articles/7bNaeoMF
 const gta6Steps = [
   ['Bring the footage', 'Paste a Twitch VOD link (twitch.tv/videos/...), a Twitch clip of 45 seconds or more, or a YouTube link, or upload the capture from your console or capture card. Footage needs at least 45 seconds of material.'],
   ['Pick the stretch', 'For a long session, use "clip only part of it" to set a start and an end. Only that stretch is downloaded, analysed and billed.'],
-  ['Leave the layout on auto', 'With the vertical layout on auto (the default; "layouts": ["auto"] on the API) a facecam in a corner becomes INSET and full-frame action keeps its full width as WIDE.'],
+  ['Leave the layout on auto', 'With the vertical layout on auto (the default; "layouts": ["auto"] on the API) a facecam in a corner becomes INSET, and full-frame action becomes WIDE, zoomed around the motion.'],
   ['Let the AI pick the moments', 'With commentary, Gemini ranks the transcript for stretches that stand alone. With almost no speech, Gemini watches the footage instead. Either way the clips are 15 to 60 seconds and 9:16.'],
   ['Check for spoilers, then post', 'Review each clip, then download it or post it to TikTok, YouTube Shorts and Instagram Reels from the dashboard or the API. The AI does not know what counts as a story spoiler.'],
 ]
 
-const gta6Faq = [
+const gta6Qa = [
   {
-    q: 'How do I make GTA 6 clips for TikTok?',
-    a: 'Paste the VOD link of your stream into OpenShorts, or upload the capture from your PS5, Xbox or capture card, with the vertical layout on auto. It picks the moments worth posting, cuts each into a 15 to 60 second 9:16 clip, keeps your facecam if the footage has one, and burns in captions when there is speech. Clips download or post to TikTok, YouTube Shorts and Instagram Reels.',
+    q: 'How do I record GTA 6 on PS5?',
+    a: 'Press the Create button while you play. Save Recent Gameplay keeps anywhere from the last 15 seconds to the last hour, and Start New Recording records up to an hour. The capture options can include your microphone and voice chat, and 4K recording with a compatible display. Then upload the file to OpenShorts.',
+    detail: `<p>That is Sony's own description of the PS5 capture menu (checked
+${GAMING_CHECKED}). Two settings matter for clipping. <strong>Microphone
+audio</strong>: if you talk while you play, include it, because OpenShorts picks
+moments from what is said; without speech it watches the footage instead, and
+those clips have no captions. Sony asks you to check with the people in voice
+chat before you record them. <strong>Resolution</strong>: a 4K capture is a
+larger file and does not go through the PlayStation App upload described
+below, so for clipping, 1080p is the easier format to move off the console.</p>`,
   },
   {
-    q: 'Can I clip PS5 or Xbox captures with no commentary?',
-    a: 'Yes. When the footage has no audio track, or its transcript comes back under 8 words in total or under 5 words a minute, OpenShorts switches by itself to a vision pass where Gemini watches the footage and picks the moments. Those clips have no captions, because there is no speech to caption. Long silent captures are analysed in consecutive segments, so they are not rejected, but minutes are billed on source length, so hand it the session you care about.',
+    q: 'How do I record GTA 6 on Xbox Series X|S?',
+    a: 'Hold the Share button on the controller to save the gameplay that just happened; a single press takes a screenshot. Those are the default actions and you can remap them. Clip length, resolution and where captures are saved are set under Settings, Preferences, Capture and share. Then copy the file off the console and upload it to OpenShorts.',
+    detail: `<p>How long one Xbox clip can be depends on the capture resolution and on
+whether the console captures to its internal storage or to an external drive,
+and Microsoft has changed those limits over the years, so check the current
+values in the capture settings on your console rather than a number on a web
+page. For a full session with commentary and a facecam, a capture card into a
+PC running OBS avoids the console's limits altogether and gives you the
+corner-webcam layout described further down.</p>`,
   },
   {
-    q: 'Does it keep my facecam?',
-    a: 'Yes, with the vertical layout on auto. A webcam box composited into a corner, the usual OBS layout for a console streamed through a capture card, is detected by its geometry (small, off centre, still) and the clip renders as INSET: gameplay full width on top, the facecam cropped out and enlarged below.',
+    q: 'How do I get GTA 6 clips from my PS5 or Xbox to my phone or PC?',
+    a: 'On PS5, turn on Auto-Upload: captures up to 1080p and 3 minutes long appear in the PlayStation App for 14 days, and you download them from there. Longer or 4K captures go by USB drive from the Media Gallery. On Xbox, captures can back up to OneDrive automatically, or be copied to a USB drive.',
+    detail: `<p>The PlayStation App route needs the console linked to the app and left in
+rest mode with the internet connection kept on (Sony, checked
+${GAMING_CHECKED}). Its 3-minute ceiling is the one that matters for GTA 6: a
+whole mission or chase will not fit, so for anything longer, copy it to a USB
+drive (Media Gallery, then Copy to USB Drive) and upload it from your PC. On
+Xbox, the Captures app can bulk upload to OneDrive and keep future captures
+backed up there (Xbox Wire, September 2023). Once the file is on your phone or
+PC, upload it to OpenShorts from the browser.</p>`,
   },
   {
-    q: 'Can I paste a Twitch VOD of a GTA 6 stream?',
-    a: 'Yes: the twitch.tv/videos/ link of the past broadcast, or a Twitch clip of 45 seconds or more. OpenShorts does not connect to your Twitch account and does not clip new streams on its own; you paste the link after the stream.',
+    q: 'How do I turn GTA 6 gameplay into TikToks?',
+    a: 'Upload the capture or paste the stream VOD link into OpenShorts with the vertical layout on auto. It picks the moments worth posting, cuts each into a 15 to 60 second 9:16 clip, keeps your facecam if the footage has one, and burns in captions when there is speech. Post to TikTok, Shorts and Reels from the dashboard, or download.',
+    detail: `${ol(gta6Steps.map(([n, t]) => `<strong>${esc(n)}.</strong> ${esc(t)}`))}`,
+  },
+  {
+    q: 'How does 16:9 GTA 6 gameplay fit a vertical clip?',
+    a: 'It depends on what is in the frame. With your webcam in a corner, the clip renders as INSET: the gameplay across the full width on top, your face enlarged below. With no face and action across the frame, it renders as WIDE: zoomed about 1.3 times, keeping roughly three quarters of the width, slid toward the motion.',
+    detail: `<p>A centre crop of a 16:9 frame keeps a narrow slice of the map and throws
+the rest away, including your face when it sits in a corner. With the vertical
+layout on <strong>auto</strong>, OpenShorts looks for a webcam box by its
+geometry: a subject that is small, off centre and still between samples. The
+<a href="/gta-5-clips">GTA 5 clips</a> page explains how that detector was
+measured. A console capture has no face at all, and the moment worth posting is
+usually spread across the frame: a chase, a crash, a shootout. WIDE zooms so
+the picture fills the space between the hook and the captions instead of
+sitting in a thin strip, and slides the crop toward the motion. Edge HUD such as
+the minimap can fall outside it; the action stays in.</p>`,
+  },
+  {
+    q: 'What is the best length for a GTA 6 TikTok or Short?',
+    a: 'There is no single best length. OpenShorts cuts 15 to 60 seconds by default, because most moments that stand on their own fit in that, and you can raise the maximum to 180 seconds. YouTube Shorts and Instagram Reels accept up to 3 minutes, and TikTok accepts longer uploads. Keep the chase, cut the drive to it.',
+    detail: `<p>Set the range in the advanced options before the job runs: the minimum
+anywhere from 5 to 175 seconds and the maximum from 10 to 180. After the job,
+the clip editor trims or extends a clip on word boundaries without using
+minutes. Shorts' 3-minute limit is from YouTube's help pages (checked 28
+October 2026); Instagram raised Reels to 3 minutes in January 2025.</p>`,
+  },
+  {
+    q: 'How do I clip a GTA 6 stream?',
+    a: 'Paste the VOD link: the twitch.tv/videos/ address of the past broadcast, a Twitch clip of 45 seconds or more, or the YouTube link of the stream. OpenShorts reads what you said across the whole stream, picks the passages that stand alone and cuts them into vertical clips. A channel page is the live channel, not a recording.',
+    detail: `<p>With commentary on, moment picking reads the transcript, so a four-hour
+stream is analysed the same way as a forty-minute one. On a long stream, clip it
+in parts (one job per hour, or just the stretch you know was good) and you get
+more candidates for fewer minutes. OpenShorts works from links you paste: it
+does not connect to your Twitch account and does not clip new streams on its
+own. The <a href="/platforms/twitch">Twitch clip maker</a> page covers VODs,
+chat overlays and long streams in more detail.</p>`,
+  },
+  {
+    q: 'Does it work with no commentary?',
+    a: 'Yes. When the footage has no audio track, or its transcript comes back under 8 words in total or under 5 words a minute, OpenShorts switches by itself to a vision pass where Gemini watches the footage and picks the moments. Those clips have no captions, because there is no speech to caption. Layouts work the same.',
+    detail: `<p>Long silent footage is watched in stretches of up to 40 minutes, and the
+picks from every stretch are ranked together into one list. A job watches up to
+eight stretches, a little over five hours; past that only the first five hours
+are clipped. It is still worth handing it the session you care about rather than
+everything you recorded: on OpenShorts Cloud minutes are billed on source
+length, so three hours of free roam costs three hours whether or not anything
+happened in it. Use <strong>clip only part of it</strong> to set a start and an
+end, or trim the capture in the PS5 Media Gallery before you copy it off.</p>`,
+  },
+  {
+    q: 'Will Rockstar take down my GTA 6 videos?',
+    a: `It can. Rockstar's policy on posting its material (checked ${GAMING_CHECKED}) is written for occasional, non-commercial use, says videos must not spoil the story, and says footage from leaked copies posted before release is taken down. Take-Two decides case by case and can change the policy, so read the current version before you monetise anything.`,
+    detail: `<p>The <a href="${ROCKSTAR_POLICY_URL}" rel="noopener">policy on posting
+copyrighted Rockstar Games material</a> is one policy for all Rockstar games
+rather than one written for GTA VI. Its spoiler rule covers an ending, or story
+cutscenes cut together on their own. In launch week that rule is the one most
+likely to matter, and the AI that picks moments does not know what counts as a
+spoiler: review the clips before you post them.</p>
+<p>The game footage is one rights question; the <strong>recording</strong> is
+another. It belongs to whoever streamed or captured it: clip your own captures
+and streams, and footage whose owner said yes, such as a streamer you edit for.
+Never clip another streamer without permission; reuploads are what the platforms
+strike.</p>`,
   },
   {
     q: 'Will GTA RP clips work on GTA 6?',
-    a: 'Roleplay clips are mostly dialogue, which is what the transcript picker reads best, so the clipping side is ready. Whether and when RP servers run on GTA 6 is up to Rockstar and the server communities; nothing has been announced that this page can point to. GTA 5 RP streams can be clipped today.',
+    a: 'The clipping side is ready: roleplay is mostly dialogue, which is what the transcript picker reads best. Whether and when roleplay servers run on GTA 6 is up to Rockstar and the server communities, and nothing has been announced that this page can point to. Until then, GTA RP clips come from GTA 5 servers.',
+    detail: '<p>The <a href="/gta-5-clips">GTA 5 clips</a> page covers GTA 5 RP streams, which can be clipped today.</p>',
   },
   {
     q: 'How much does it cost to clip GTA 6 footage?',
-    a: `Self-hosted OpenShorts is free and open source under MIT, with no meter and no watermark. OpenShorts Cloud clips your first video free up to 60 minutes, then ${CLOUD.freeMinutes} minutes a month with a watermark; paid plans start at $${CLOUD.lowPrice}/month for ${STARTER.monthly.minutes} minutes of source video.`,
+    a: `Self-hosted OpenShorts is free and open source under MIT, with no meter and no watermark. OpenShorts Cloud clips your first video free up to 60 minutes, then ${CLOUD.freeMinutes} minutes a month with a watermark; paid plans start at $${CLOUD.lowPrice}/month for ${STARTER.monthly.minutes} minutes of source video, and edits on the clips are not counted.`,
+    detail: pricingParagraph('console'),
   },
 ]
 
@@ -2890,10 +3005,10 @@ const gta6Clips = () => ({
   published: '2026-11-04',
   updated: '2026-11-04',
   pasteLink: { placeholder: 'https://www.twitch.tv/videos/...', label: 'Twitch or YouTube VOD link' },
-  related: ['/gta-5-clips', '/platforms/twitch', '/platforms/kick', '/auto-reframe'],
+  related: ['/gta-5-clips', '/wow-forever-clips', '/platforms/twitch', '/platforms/kick', '/auto-reframe'],
   tldr: [
-    `Rockstar has set Grand Theft Auto VI to launch on ${GTA6_LAUNCH}, on PlayStation 5 and Xbox Series X|S. No PC version has been announced, so when it launches every GTA 6 clip starts on a console: a capture saved with the PS5 Create button or the Xbox capture, a recording through a capture card, or a stream VOD.`,
-    'Those sources look different and OpenShorts handles each one differently. A stream with a facecam in a corner becomes gameplay on top and your enlarged face below. Full-frame action keeps its full width. A capture with nobody talking, which describes many console captures, is watched by the model instead of read from a transcript.',
+    `Rockstar has set Grand Theft Auto VI to launch on ${GTA6_LAUNCH}, on PlayStation 5 and Xbox Series X|S. No PC version has been announced, so when it launches every GTA 6 clip starts on a console: a capture saved with the PS5 Create button or the Xbox Share button, a recording through a capture card, or a stream VOD.`,
+    'Those sources look different and OpenShorts handles each one differently. A stream with a facecam in a corner becomes gameplay on top and your enlarged face below. Full-frame action is zoomed around the motion. A capture with nobody talking, which describes many console captures, is watched by the model instead of read from a transcript.',
   ],
   body: `
 <h2>What is different about GTA 6 footage</h2>
@@ -2902,98 +3017,16 @@ from one: the game and the webcam captured together in OBS, streamed, and
 clipped from the VOD. At GTA 6's launch there is no PC version, so the footage
 arrives in three shapes:</p>
 <ul>
-<li><strong>Console captures.</strong> The PS5 Create button and the Xbox capture save the game picture and game audio. No facecam, and often no voice: whether your mic or party chat is recorded depends on the console's capture settings.</li>
+<li><strong>Console captures.</strong> The PS5 Create button and the Xbox Share button save the game picture and game audio. No facecam, and often no voice: whether your mic or party chat is recorded depends on the console's capture settings.</li>
 <li><strong>Capture card recordings.</strong> The console runs into a PC through a capture card and OBS records it, often with a webcam composited into a corner. It is the usual way to stream a console with a camera.</li>
 <li><strong>Stream VODs.</strong> The past broadcast on Twitch or YouTube, usually several hours long, with your commentary and, if you stream with a camera, a facecam.</li>
 </ul>
-<p>An auto-clipper built for talking heads handles none of the three well. The
-sections below are how OpenShorts deals with each. One thing to be clear about:
-nothing here was measured on GTA 6 footage, because until ${GTA6_LAUNCH} there
-is none. The layouts and thresholds below were measured on GTA 5 and other
-stream footage, and they do not depend on which game is on screen.</p>
+<p>Nothing on this page was measured on GTA 6 footage, because until
+${GTA6_LAUNCH} there is none. The layouts and thresholds below were measured on
+GTA 5 and other stream footage, and they do not depend on which game is on
+screen.</p>
 
-<h2>Facecam in a corner: INSET</h2>
-<p>When the footage is a capture card recording or a stream VOD with your
-webcam pinned to a corner, a centre crop to 9:16 keeps a slice of the map and
-throws your face away. With the vertical layout on <strong>auto</strong>,
-OpenShorts looks for that corner box by its geometry: a subject that is small,
-off centre and still between samples. When it finds one, the clip renders as
-INSET: the gameplay across the full width at the top, the webcam box cropped out
-and enlarged underneath. The play and your reaction to it both stay readable on
-a phone. The <a href="/gta-5-clips">GTA 5 clips</a> page explains how that
-detector was measured.</p>
-
-<h2>Full-frame action, no face: WIDE</h2>
-<p>A console capture has no face in it at all, and the moment worth posting is
-usually spread across the frame: a chase, a crash, a shootout. Cropping a
-vertical column out of the middle deletes the half that explains it. When the
-meaningful content spans the whole width, the clip renders as WIDE: zoomed
-about 1.3 times so the picture fills the space between the hook and the
-captions, keeping roughly three quarters of the width, with the crop slid
-toward where the motion is. Edge HUD such as a minimap can fall outside it;
-the action stays in.</p>
-
-<h2>Console captures with nobody talking</h2>
-<p>The default picker reads the transcript, which is what makes it good at
-commentary and roleplay dialogue. A console capture usually has none: game
-audio, music, no voice. OpenShorts notices and switches paths on its own. When
-the footage has no audio track, or the transcript comes back under 8 words in
-total or under 5 words per minute, the video itself goes to Gemini, which
-watches it and picks the moments in the same 15 to 60 second band. Layouts work
-the same way after that. The clips come out without captions, which is correct:
-there is no speech to caption.</p>
-<p>Long silent footage is analysed in consecutive segments, so a long silent
-capture is not rejected. It is still worth handing it the session you care
-about rather than everything you recorded: on OpenShorts Cloud minutes are
-billed on source length, so three hours of free roam costs three hours whether
-or not anything happened in it. Use <strong>clip only part of it</strong> to set
-a start and an end, or trim the capture on the console before you upload it.</p>
-
-<h2>GTA 6 stream VODs from Twitch and YouTube</h2>
-<p>For a stream, paste the VOD link: the <code>twitch.tv/videos/</code> address
-of the past broadcast, a Twitch clip of 45 seconds or more, or the YouTube link
-of the stream. The channel page is the live channel, not a recording, so the box
-asks for the VOD. With commentary on, moment picking reads the transcript, so a
-four-hour stream is analysed the same way as a forty-minute one. On a long
-stream, clip it in parts (one job per hour, or just the stretch you know was
-good) and you get more candidates for fewer minutes. The
-<a href="/platforms/twitch">Twitch clip maker</a> page covers VODs, chat
-overlays and long streams in more detail.</p>
-<p>OpenShorts works from links you paste. It does not connect to your Twitch
-account and does not clip new streams on its own.</p>
-
-<h2>GTA RP clips</h2>
-<p>GTA RP is where a lot of GTA clips come from: hours of in-character dialogue
-with a few scenes worth posting. That is the case the transcript picker is best
-at, because roleplay is mostly talk. Whether and when roleplay servers run on
-GTA 6 is up to Rockstar and the server communities, and there is nothing
-announced that this page can point to. Until then, GTA RP clips come from GTA 5
-servers, and the <a href="/gta-5-clips">GTA 5 clips</a> page covers them.</p>
-
-<h2>How to make GTA 6 clips, step by step</h2>
-${ol(gta6Steps.map(([n, t]) => `<strong>${esc(n)}.</strong> ${esc(t)}`))}
-
-<h2>What it costs</h2>
-${pricingParagraph('console')}
-
-<h2>Whose footage you can clip, and Rockstar's video policy</h2>
-<p>Two rights questions apply and they have different answers. The
-<strong>recording</strong> belongs to whoever streamed or captured it: your own
-captures and streams, and footage whose owner said yes, such as a streamer you
-edit for. Never clip another streamer without permission; reuploads are what
-the platforms strike.</p>
-<p>The <strong>game footage</strong> is covered by Rockstar Games' and
-Take-Two's
-<a href="${ROCKSTAR_POLICY_URL}" rel="noopener">policy on posting copyrighted
-Rockstar Games material</a>. When we checked it on ${GTA6_CHECKED} it was one
-policy for all Rockstar games rather than one written for GTA VI. It describes
-the use it allows as occasional and non-commercial, asks that videos do not
-spoil the story (an ending, or story cutscenes cut together on their own), and
-says footage from leaked copies posted before the official release is taken
-down. Take-Two decides case by case and can change the policy at any time, so
-read the current version before you post or monetise anything. In launch week
-the spoiler rule is the one most likely to matter, and the AI that picks moments
-does not know what counts as a spoiler: review the clips before you post them.</p>
+${qaSections(gta6Qa)}
 
 <h2>What it does not do</h2>
 <ul>
@@ -3004,16 +3037,17 @@ does not know what counts as a spoiler: review the clips before you post them.</
 <li><strong>Free clips carry a watermark.</strong> Upgrading removes it from clips already made.</li>
 </ul>
 
-${faqBlock(gta6Faq)}
-
 ${sources([
   `Launch date: Rockstar Games Newswire, <a href="${ROCKSTAR_LAUNCH_URL}" rel="noopener">"Grand Theft Auto VI is Now Set to Launch November 19, 2026"</a>. Platforms: Rockstar Support, <a href="${ROCKSTAR_TIMES_URL}" rel="noopener">GTA VI pre-load and release times on PlayStation 5 and Xbox Series X|S</a>. Both checked ${GTA6_CHECKED}.`,
   `Video policy: Rockstar Support, <a href="${ROCKSTAR_POLICY_URL}" rel="noopener">Policy on posting copyrighted Rockstar Games material</a>, checked ${GTA6_CHECKED}.`,
-  'Silent-footage thresholds (8 words, 5 words per minute) and the vision pass: <code>main.py</code>; inset detection: <code>camera_inset.py</code>; WIDE layout: <code>screencast_layout.py</code>.',
+  `PS5 capture: PlayStation Support, <a href="${PS5_CAPTURE_URL}" rel="noopener">How to capture gameplay and screenshots on PS5 consoles</a>, <a href="${PS5_APP_URL}" rel="noopener">How to access PS5 game captures on PS App</a> and <a href="${PS5_GALLERY_URL}" rel="noopener">How to view screenshots and video clips on PS5 consoles</a>, checked ${GAMING_CHECKED}.`,
+  `Xbox capture: Xbox Support, <a href="${XBOX_SHARE_URL}" rel="noopener">What's this Share button on my controller?</a>, and Xbox Wire, <a href="${XBOX_ONEDRIVE_URL}" rel="noopener">captures to OneDrive</a> (27 September 2023), checked ${GAMING_CHECKED}.`,
+  `Platform lengths: <a href="${YT_SHORTS_URL}" rel="noopener">YouTube Help: Upload YouTube Shorts</a> (up to 3 minutes), checked 28 October 2026; Instagram Reels up to 3 minutes, announced January 2025, reported by <a href="${REELS_URL}" rel="noopener">Social Media Today</a>.`,
+  'Silent-footage thresholds (8 words, 5 words per minute) and the stretches of the vision pass: <code>main.py</code> and <code>clip_selection.py</code>; inset detection: <code>camera_inset.py</code>; WIDE layout: <code>screencast_layout.py</code>.',
   `OpenShorts plan minutes: <a href="/pricing">pricing</a>. Source: <a href="${SITE.repo}" rel="noopener">github.com/mutonby/openshorts</a>.`,
 ])}
 `,
-  faq: gta6Faq,
+  faq: qaFaq(gta6Qa),
   extraNodes: [
     {
       '@type': 'HowTo',
@@ -3025,6 +3059,193 @@ ${sources([
       supply: [{ '@type': 'HowToSupply', name: 'A GTA 6 stream VOD link or console capture you have the rights to' }],
       tool: [{ '@type': 'HowToTool', name: 'OpenShorts (self-hosted with Docker, or OpenShorts Cloud)' }],
       step: gta6Steps.map(([name, text]) => ({ '@type': 'HowToStep', name, text })),
+    },
+  ],
+})
+
+/* /wow-forever-clips: World of Warcraft: Forever launched on 4 November 2026
+ * (5 November in Europe and Asia-Pacific). The searches around it are about
+ * recording ("how to clip wow gameplay") and the SERP is forum threads, so the
+ * page answers the recording question first, with the tools named and their
+ * own pages cited, and only then what OpenShorts does with the file. Nothing
+ * about Forever itself is stated without a Blizzard (or, for Hardcore timing,
+ * a press) source next to it.
+ */
+const WOW_CHECKED = GAMING_CHECKED
+const WOW_LAUNCH_URL = 'https://news.blizzard.com/en-us/article/24315820/world-of-warcraft-forever-goes-live-globally-november-4'
+const WOW_ANNOUNCE_URL = 'https://worldofwarcraft.blizzard.com/en-us/news/24302093'
+const WOW_WIKI_URL = 'https://warcraft.wiki.gg/wiki/Forever'
+const WOW_HARDCORE_URL = 'https://www.pcgamer.com/games/world-of-warcraft/world-of-warcraft-forever-will-get-a-hardcore-mode-by-winter-say-devs-whichll-be-interesting-given-all-the-new-and-undiscovered-ways-to-die/'
+const WOW_SHACK_URL = 'https://www.shacknews.com/article/150712'
+const BLIZZARD_POLICY_URL = 'https://www.blizzard.com/en-us/legal/2068564f-f427-4c1c-8664-c107c90b34d5/blizzard-video-policy'
+const WOW_RECORDER_URL = 'https://github.com/aza547/wow-recorder'
+const OBS_REPLAY_URL = 'https://obsproject.com/forum/resources/how-to-setup-instant-replay-in-obs-studio.613/'
+const AMD_REPLAY_URL = 'https://www.amd.com/en/resources/support-articles/faqs/DH3-023.html'
+const GAME_BAR_URL = 'https://support.microsoft.com/en-us/help/4026387'
+const MAC_RECORD_URL = 'https://support.apple.com/en-us/102618'
+
+const wowSteps = [
+  ['Bring the recording', 'Paste the twitch.tv/videos/ link of the stream, a Twitch clip of 45 seconds or more, or a YouTube link, or upload the file from OBS, Warcraft Recorder or your GPU\'s replay tool. Sources need at least 45 seconds of material.'],
+  ['Pick the pulls you care about', 'On a long raid night, use "clip only part of it" to set a start and an end around the kill or the wipe. Only that stretch is downloaded, analysed and billed.'],
+  ['Leave the layout on auto', 'A facecam in a corner becomes INSET (game on top, face below); a full-screen fight becomes WIDE, zoomed around the motion.'],
+  ['Let the AI pick the moments', 'With voice chat or commentary, Gemini ranks the transcript for stretches that stand alone. With almost no speech, Gemini watches the footage instead. Clips are 15 to 60 seconds by default.'],
+  ['Review and post', 'Fix a crop or a cut in the clip editor if needed, then post to TikTok, YouTube Shorts and Instagram Reels from the dashboard or the API, or download.'],
+]
+
+const wowQa = [
+  {
+    q: 'How do I record WoW Forever gameplay?',
+    a: 'Use a recorder that keeps a rolling buffer, so you can save a kill after it happens: the replay buffer in OBS Studio, Instant Replay from NVIDIA or AMD, or Xbox Game Bar on Windows. On Windows, Warcraft Recorder records Forever raid encounters on its own. On a Mac, use OBS or Shift-Command-5.',
+    detail: `<ul>
+<li><strong>OBS Studio replay buffer.</strong> Turn on Replay Buffer under Settings, Output, and set a Save Replay hotkey under Settings, Hotkeys. OBS keeps the last stretch in memory and writes it to a file when you press the key. It is also what you stream with, so the webcam lands in the same file.</li>
+<li><strong>NVIDIA and AMD Instant Replay.</strong> The GPU drivers' own recorders keep a rolling buffer too; AMD's support article puts its maximum at the last 20 minutes.</li>
+<li><strong>Xbox Game Bar</strong> (built into Windows). Windows + Alt + G saves the last 30 seconds (the length is adjustable in Game Bar settings) and Windows + Alt + R starts or stops a recording.</li>
+<li><strong>Warcraft Recorder.</strong> A free, open source (GPL-2.0) recorder for Windows that watches the WoW combat log and records encounters by itself. Its README lists Forever as supported for raids and manual recording (checked ${WOW_CHECKED}); Forever's raids open on 9 December 2026, so until then use its manual mode. It does not run on macOS.</li>
+<li><strong>Mac.</strong> Forever runs on macOS as well as Windows. OBS runs there, and Shift-Command-5 opens the built-in screen recorder; whether it can include the game's sound depends on your macOS version, per Apple's page.</li>
+</ul>
+<p>Whatever records it, keep the file: an MP4 or MOV goes straight into
+OpenShorts. If you want your face in the clip, put the webcam in a corner of the
+OBS scene; that is the layout OpenShorts turns into INSET.</p>`,
+  },
+  {
+    q: 'How do I turn a WoW Twitch stream into TikToks or Shorts?',
+    a: 'Paste the twitch.tv/videos/ link of the past broadcast into OpenShorts, or a Twitch clip of 45 seconds or more. It reads what you and your raid said across the whole stream, picks the passages that stand alone, and cuts them into 15 to 60 second vertical clips with captions, and a corner facecam kept below the game.',
+    detail: `${ol(wowSteps.map(([n, t]) => `<strong>${esc(n)}.</strong> ${esc(t)}`))}
+<p>A channel page is the live channel, not a recording; the VOD is under Videos
+on the channel. A raid night of three or four hours is analysed the same way as
+a short stream, because moment picking reads the transcript, but one job returns
+its best handful of moments, so clip a long night in parts. The
+<a href="/platforms/twitch">Twitch clip maker</a> page covers long VODs and chat
+overlays. OpenShorts does not connect to your Twitch account and does not clip
+new streams on its own.</p>`,
+  },
+  {
+    q: 'How do I make a raid boss kill or wipe vertical without losing the UI?',
+    a: 'A whole WoW screen does not fit a 9:16 frame and stay readable. With a facecam in a corner, it renders as INSET: the full width of the game on top, your face enlarged below. Without one, WIDE keeps roughly three quarters of the width, slid toward the motion, so raid frames at the edges can fall outside.',
+    detail: `<p>WIDE zooms about 1.3 times so the fight fills the space between the hook
+and the captions, and it follows where things move: a still action bar or a
+minimap never pulls the crop. That suits the boss and the players around it,
+and it means interface parked at the far left and right edges is the first
+thing to go. Three things help:</p>
+<ul>
+<li><strong>Record a cleaner UI for shorts.</strong> Move what the viewer needs (boss timers, the raid frames if they tell the story) toward the middle, or hide the interface for a cinematic pull with the game's toggle-UI key binding.</li>
+<li><strong>Use the facecam.</strong> INSET keeps the full width of the game, so nothing at the edges is lost; it is just smaller.</li>
+<li><strong>Fix a scene by hand.</strong> The reframe editor lets you draw the crop yourself for one scene, or split it into two stacked regions, and the rest of the clip stays automatic.</li>
+</ul>`,
+  },
+  {
+    q: 'How do I clip a Hardcore death?',
+    a: 'Record with a replay buffer so the death is saved after it happens and upload the file, or paste the VOD and use "clip only part of it" around the death. A death is short and often silent, so the model watches the footage when nobody speaks. Forever\'s Hardcore ruleset is not live yet; Blizzard says it comes after launch.',
+    detail: `<p>Blizzard's launch post says the Hardcore ruleset becomes available
+sometime after launch, and Blizzard developers have said by winter (PC Gamer;
+warcraft.wiki.gg lists winter 2026/2027), checked ${WOW_CHECKED}. Until then
+the same workflow applies to Classic Hardcore characters. Two practical
+points: a source needs at least 45 seconds of material, so save a minute or two
+around the death rather than the last ten seconds; and a clip that should end on
+the death screen can be trimmed or extended in the clip editor.</p>`,
+  },
+  {
+    q: 'What WoW moments work as shorts?',
+    a: 'Moments a stranger understands in a few seconds: a first kill of a new boss, the wipe and the call that caused it, a close world PvP fight, a Hardcore death, a funny exchange on voice chat. A long trash pull or a quiet flight path does not. Commentary and voice chat give the AI the most to work with.',
+    detail: `<p>The default picker reads the transcript and ranks every stretch of it for
+how well it would play to someone who was not there, so a raid that talks
+(callouts, reactions, the argument after a wipe) produces more candidates than a
+silent one. Forever's three raids, Barrow Deeps, Hyjal Summit and Onyxia's Lair,
+open on 9 December 2026 (Blizzard), so first kills on your realm start
+then.</p>`,
+  },
+  {
+    q: 'How long should a WoW clip be for TikTok, Shorts or Reels?',
+    a: 'OpenShorts cuts 15 to 60 seconds by default, which fits most moments that stand alone, and you can raise the maximum to 180 seconds for a full boss kill that needs context. YouTube Shorts and Instagram Reels accept up to 3 minutes, and TikTok accepts longer uploads. Start on the action, not the pull countdown.',
+    detail: `<p>Set the range in the advanced options before the job: the minimum
+anywhere from 5 to 175 seconds and the maximum from 10 to 180. Trimming or
+extending a clip afterwards in the editor does not use minutes. YouTube's
+3-minute Shorts limit is from its help pages (checked 28 October 2026);
+Instagram raised Reels to 3 minutes in January 2025.</p>`,
+  },
+  {
+    q: 'Does it work without commentary?',
+    a: 'Yes. When the recording has no audio track, or its transcript comes back under 8 words in total or under 5 words a minute, OpenShorts switches by itself to a vision pass where Gemini watches the footage and picks the moments. Those clips have no captions, because there is no speech to caption. Layouts work the same.',
+    detail: `<p>Long silent footage is watched in stretches of up to 40 minutes, and the
+picks from every stretch are ranked together. A job watches up to eight
+stretches, a little over five hours; past that only the first five hours are
+clipped. On OpenShorts Cloud minutes are billed on source length, so the pull
+you care about is a cheaper input than the whole evening.</p>`,
+  },
+  {
+    q: 'Can I post and monetize WoW videos?',
+    a: `Blizzard's video policy (checked ${WOW_CHECKED}) limits use of its content to non-commercial purposes, with listed exceptions: partner programs where a video site pays you for views, and hosting on sites with paid tiers as long as viewers can also watch for free. Charging viewers or licensing a video to another company for a fee is not allowed.`,
+    detail: `<p>The <a href="${BLIZZARD_POLICY_URL}" rel="noopener">Blizzard Video
+Policy</a> also caps sponsor promotion at 10 seconds per video, marked
+"Sponsored By", asks that videos stay within a T rating, and says Blizzard can
+end your right to distribute a video at any time. The partner programs it names
+are YouTube's and several older video sites; it does not mention TikTok or
+Instagram by name. It is Blizzard's policy and it can change, so read the
+current version before you rely on it.</p>`,
+  },
+  {
+    q: 'Can I clip someone else\'s WoW stream?',
+    a: 'Only with their permission. The VOD belongs to whoever streamed it, and the platforms remove reuploads when the streamer reports them. Clipping your guild leader\'s stream as the guild\'s editor, or as part of a clipping programme the streamer runs, is fine with their yes. Taking a stranger\'s world-first kill and posting it as yours is not.',
+    detail: '',
+  },
+  {
+    q: 'How much does it cost to clip WoW Forever footage?',
+    a: `Self-hosted OpenShorts is free and open source under MIT, with no meter and no watermark. OpenShorts Cloud clips your first video free up to 60 minutes, then ${CLOUD.freeMinutes} minutes a month with a watermark; paid plans start at $${CLOUD.lowPrice}/month for ${STARTER.monthly.minutes} minutes of source video, and edits on the clips are not counted.`,
+    detail: pricingParagraph('raid'),
+  },
+]
+
+const wowForeverClips = () => ({
+  path: '/wow-forever-clips',
+  title: withBrand('WoW Forever Clips: Turn Raids and Streams Into TikToks'),
+  description:
+    `Record WoW Forever raids with OBS or Warcraft Recorder, then turn kills, wipes and Twitch VODs into TikToks. From $${CLOUD.lowPrice}/month, or self-host free.`,
+  h1: 'WoW Forever clips: turn raids and streams into TikToks, Shorts and Reels',
+  lede: `How to record World of Warcraft: Forever, and how to turn the recording or your Twitch VOD into 15 to 60 second vertical clips for TikTok, YouTube Shorts and Instagram Reels with OpenShorts, facecam kept. Your first video is free up to 60 minutes (watermarked, no card); no watermark from $${CLOUD.lowPrice}/month, or self-host it free under MIT.`,
+  breadcrumb: [{ name: 'Use cases', path: '/use-cases' }, { name: 'WoW Forever clips' }],
+  published: '2026-11-04',
+  updated: '2026-11-04',
+  pasteLink: { placeholder: 'https://www.twitch.tv/videos/...', label: 'Twitch VOD link' },
+  related: ['/platforms/twitch', '/gta-6-clips', '/auto-reframe', '/platforms/kick'],
+  tldr: [
+    `World of Warcraft: Forever is Blizzard's new version of the original game, announced at BlizzCon 2026 and live from 4 November 2026 (5 November in Europe, Taiwan, Korea and Australia/New Zealand). It is included with a World of Warcraft subscription or game time and runs on Windows and macOS. Its three raids open on 9 December.`,
+    'A WoW recording is a busy 16:9 screen: the fight in the middle, raid frames and action bars at the edges, often a webcam in a corner. Below: how to record it, and how OpenShorts makes it vertical without losing the fight.',
+  ],
+  body: `
+${qaSections(wowQa)}
+
+<h2>What it does not do</h2>
+<ul>
+<li><strong>It does not record the game.</strong> Use OBS, your GPU's replay tool, Game Bar or Warcraft Recorder, then bring the file or the VOD.</li>
+<li><strong>It does not clip live</strong> or connect to your Twitch account. Paste the VOD link after the stream.</li>
+<li><strong>It does not read the combat log or know WoW.</strong> It picks moments from what is said or, with no speech, from what is shown.</li>
+<li><strong>It does not keep every edge of the UI</strong> in a WIDE clip; see the raid UI answer above.</li>
+<li><strong>It does not caption silent footage.</strong> No speech means no captions.</li>
+<li><strong>Free clips carry a watermark.</strong> Upgrading removes it from clips already made.</li>
+</ul>
+
+${sources([
+  `Launch times, raids (9 December 2026) and Hardcore after launch: Blizzard News, <a href="${WOW_LAUNCH_URL}" rel="noopener">"World of Warcraft: Forever Goes Live Globally November 4!"</a>; included with a subscription or game time: Blizzard, <a href="${WOW_ANNOUNCE_URL}" rel="noopener">"Carve a New Path with World of Warcraft: Forever"</a> (12 September 2026). Both checked ${WOW_CHECKED}.`,
+  `Platforms (Windows, macOS) and Hardcore in winter 2026/2027: <a href="${WOW_WIKI_URL}" rel="noopener">warcraft.wiki.gg, Forever</a>; Hardcore by winter: <a href="${WOW_HARDCORE_URL}" rel="noopener">PC Gamer</a>; BlizzCon announcement: <a href="${WOW_SHACK_URL}" rel="noopener">Shacknews</a> (12 September 2026). Checked ${WOW_CHECKED}.`,
+  `Video policy: <a href="${BLIZZARD_POLICY_URL}" rel="noopener">Blizzard Video Policy</a>, checked ${WOW_CHECKED}.`,
+  `Recorders: <a href="${WOW_RECORDER_URL}" rel="noopener">Warcraft Recorder README</a> (supported flavours and OS, GPL-2.0); <a href="${OBS_REPLAY_URL}" rel="noopener">OBS forum guide to the replay buffer</a>; <a href="${AMD_REPLAY_URL}" rel="noopener">AMD support article DH3-023</a> (Instant Replay); <a href="${GAME_BAR_URL}" rel="noopener">Microsoft: Xbox Game Bar shortcuts</a>; <a href="${MAC_RECORD_URL}" rel="noopener">Apple: How to record the screen on Mac</a>. All checked ${WOW_CHECKED}.`,
+  `Platform lengths: <a href="${YT_SHORTS_URL}" rel="noopener">YouTube Help: Upload YouTube Shorts</a>, checked 28 October 2026; Instagram Reels up to 3 minutes, reported by <a href="${REELS_URL}" rel="noopener">Social Media Today</a>.`,
+  'Silent-footage thresholds and stretches: <code>main.py</code> and <code>clip_selection.py</code>; inset detection: <code>camera_inset.py</code>; WIDE layout: <code>screencast_layout.py</code>.',
+  `OpenShorts plan minutes: <a href="/pricing">pricing</a>. Source: <a href="${SITE.repo}" rel="noopener">github.com/mutonby/openshorts</a>.`,
+])}
+`,
+  faq: qaFaq(wowQa),
+  extraNodes: [
+    {
+      '@type': 'HowTo',
+      '@id': `${SITE.url}/wow-forever-clips#howto`,
+      name: 'How to turn WoW Forever raids and streams into vertical clips',
+      description:
+        'Turn a World of Warcraft: Forever recording or Twitch VOD into 9:16 clips for TikTok, YouTube Shorts and Instagram Reels, keeping the facecam and the fight.',
+      totalTime: 'PT15M',
+      supply: [{ '@type': 'HowToSupply', name: 'A WoW Forever recording or Twitch VOD you have the rights to' }],
+      tool: [{ '@type': 'HowToTool', name: 'OpenShorts (self-hosted with Docker, or OpenShorts Cloud)' }],
+      step: wowSteps.map(([name, text]) => ({ '@type': 'HowToStep', name, text })),
     },
   ],
 })
@@ -3182,6 +3403,7 @@ export function buildPages() {
     howItWorks(),
     gtaClips(),
     gta6Clips(),
+    wowForeverClips(),
     podcastToShorts(),
     youtubeConverter(),
     mcpAgentsPage(),
@@ -3228,6 +3450,7 @@ export function relatedFor(page, all) {
     '/how-openshorts-works': 'The full pipeline, stage by stage.',
     '/gta-5-clips': 'Stream VODs, webcam inset kept, no per-minute meter.',
     '/gta-6-clips': 'Console captures and stream VODs, facecam kept, silent footage handled.',
+    '/wow-forever-clips': 'Record raids, then turn kills, wipes and Twitch VODs into vertical clips.',
     '/podcast-to-shorts': 'Podcast clips with both speakers kept in frame.',
     '/youtube-to-shorts-converter': 'Paste a link, get 9:16 clips with subtitles.',
     '/mcp': 'Drive the whole pipeline from Claude, ChatGPT or n8n.',

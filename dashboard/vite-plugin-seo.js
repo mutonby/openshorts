@@ -72,6 +72,8 @@ const LLMS_KEY_PATHS = [
   '/use-cases',
   '/podcast-to-shorts',
   '/use-cases/sermons',
+  '/gta-6-clips',
+  '/wow-forever-clips',
   '/auto-reframe',
   '/ai-ugc-video-generator',
   '/alternatives/arcads',

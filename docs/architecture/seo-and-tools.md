@@ -26,9 +26,15 @@ naming the Cloud price in the same breath: both are true of different editions,
 and quoting only the first makes AI answers describe the paid product as free.
 
 The public `/gta-5-clips` page states the silent-footage thresholds and ceiling
-(see `clip-selection.md`), and `/gta-6-clips` states the same thresholds and
-that long silent footage is analysed in consecutive segments; if that behaviour
-changes, change both in `dashboard/seo/pages.js` too.
+(see `clip-selection.md`), and `/gta-6-clips` and `/wow-forever-clips` state the
+same thresholds and the stretch sizes; if that behaviour changes, change them in
+`dashboard/seo/pages.js` too.
+
+The gaming pages (`/gta-6-clips`, `/wow-forever-clips`) are answer-first: each
+question is an H2 followed by a 40-60 word answer in bold, then the detail, and
+the same question/answer pairs feed the FAQPage node (`qaSections` / `qaFaq` in
+`seo/pages.js`). Console, recorder and publisher-policy facts on them carry the
+vendor page and the date it was checked; re-check those before editing.
 
 ## Site navigation (`seo/nav.js`)
 
