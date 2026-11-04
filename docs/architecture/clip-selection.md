@@ -41,14 +41,22 @@ the clips have no subtitles, which is correct.
 
 **This is the one stage that sends Gemini the video instead of frames, on
 purpose**: frames can say what kind of video it is, not which 40 seconds to cut.
-The ceiling: ~300 tokens/second, so an hour is ~1.08M tokens, past a 1M window,
-and **nothing guards the length**. If that needs fixing, add a guard or segment
-the source; do not port the frame trick. Gemini-only: a text-only `LLM_BASE_URL`
-server cannot see footage, and without `GEMINI_API_KEY` the function logs one
-line and returns None, which fails the job.
+Gemini counts video at ~300 tokens/second, so an hour is ~1.08M tokens, past a 1M
+window. A source longer than `VISION_SEGMENT_SECONDS` (2400) is therefore split by
+`clip_selection.vision_segments` into near-equal stretches (no one-minute tail),
+each re-encoded to a 360p / 1 fps proxy (`_vision_proxy`: re-encoded, not
+stream-copied, or every timestamp would be off by up to a GOP), watched on its
+own, offset back to source time, then merged with `dedupe_overlapping` +
+`trim_to_best` to `CLIP_TARGET_MAX`. One failed stretch is logged and skipped.
+`VISION_MAX_SEGMENTS` (8, ~5 h 20) bounds the spend of one job; past it only the
+first stretches are watched. A source that fits one stretch takes the original
+single-upload path, unchanged. Do not port the frame trick here. Gemini-only: a
+text-only `LLM_BASE_URL` server cannot see footage, and without `GEMINI_API_KEY`
+the function logs one line and returns None, which fails the job.
 
-The public `/gta-5-clips` page states these thresholds and this ceiling; if the
-behaviour changes, change `dashboard/seo/pages.js` too.
+The public `/gta-5-clips`, `/gta-6-clips` and `/platforms/twitch` pages state
+these thresholds and the stretch sizes; if the behaviour changes, change
+`dashboard/seo/pages.js` and `dashboard/seo/clip-tools.js` too.
 
 ## Local LLM for the moment picker (`llm_backend.py`)
 

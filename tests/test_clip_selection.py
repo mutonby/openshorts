@@ -13,6 +13,7 @@ from clip_selection import (
     compact_words,
     lookup_model_prices,
     trim_to_best,
+    vision_segments,
 )
 
 
@@ -308,3 +309,28 @@ class TestShortlistTarget:
     def test_degenerate_input_does_not_crash(self):
         assert shortlist_target(None) == 3
         assert shortlist_target("nonsense") == 3
+
+
+# --- vision_segments: silent footage longer than the model window ---------- #
+
+def test_vision_segments_short_source_is_one_stretch():
+    assert vision_segments(1800, 2400, 8) == [(0.0, 1800.0)]
+
+
+def test_vision_segments_split_near_equal_without_a_tiny_tail():
+    segs = vision_segments(2460, 2400, 8)  # 41 min: two halves, not 40 + 1
+    assert len(segs) == 2
+    assert segs[0] == (0.0, 1230.0) and segs[1] == (1230.0, 2460.0)
+
+
+def test_vision_segments_cover_the_whole_source_contiguously():
+    segs = vision_segments(8 * 3600, 2400, 20)
+    assert segs[0][0] == 0.0 and segs[-1][1] == 8 * 3600
+    assert all(a[1] == b[0] for a, b in zip(segs, segs[1:]))
+    assert max(e - s for s, e in segs) <= 2400
+
+
+def test_vision_segments_are_capped():
+    segs = vision_segments(8 * 3600, 2400, 8)  # 12 stretches wanted
+    assert len(segs) == 8
+    assert segs[-1][1] < 8 * 3600

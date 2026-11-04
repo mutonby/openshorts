@@ -2616,7 +2616,7 @@ const gtaClips = () => ({
   tldr: [
     'A GTA 5 stream is four to eight hours of 16:9 gameplay with a webcam box in one corner. OpenShorts reads the whole VOD, picks the moments worth posting out of what was said, and reframes each one so the gameplay keeps its full width and the facecam is enlarged underneath it instead of cropped away.',
     'Length is what makes this expensive everywhere else. Tools in this category bill one credit per minute of source you import, so a single eight-hour stream is 480 minutes: more than the 300 minutes a $29/month Opus Clip Pro plan includes (checked 2026-07-27). Self-hosted OpenShorts has no meter at all; the hosted edition starts at $12/month.',
-    'Gameplay with no commentary is handled too, and it is where most clippers stop: when a stream has no usable speech OpenShorts switches by itself to a vision pass where Gemini watches the footage and picks the moments, instead of failing on an empty transcript. The switch is automatic, with one practical ceiling noted below.',
+    'Gameplay with no commentary is handled too, and it is where most clippers stop: when a stream has no usable speech OpenShorts switches by itself to a vision pass where Gemini watches the footage and picks the moments, instead of failing on an empty transcript. The switch is automatic, and long silent captures are watched in stretches rather than rejected.',
   ],
   body: `
 <h2>Why GTA clips break a normal auto-clipper</h2>
@@ -2700,15 +2700,17 @@ second band as the transcript path. Everything downstream is identical, layouts
 and inset detection included. The one difference is that the clips come out
 without captions, which is correct rather than a bug: there is no speech to
 caption.</p>
-<p class="note"><span class="label">The one ceiling worth knowing</span>
+<p class="note"><span class="label">How long silent footage is handled</span>
 This is the single stage that sends Gemini the footage instead of a handful of
-frames, and Gemini bills video at roughly 300 tokens per second. An hour of
-gameplay is around 1.08 million tokens, which does not fit a 1 million token
-context window, and there is no length guard in front of it: a silent eight-hour
-VOD will fail at the model rather than politely. So for silent footage, hand it
-the session or the segment you care about rather than the full stream. With
-commentary the ceiling does not exist, because the transcript path never uploads
-the video at all.</p>
+frames, and Gemini counts video at roughly 300 tokens per second, so an hour of
+gameplay is already around a million tokens. A long silent capture is therefore
+watched in stretches of up to 40 minutes, each sent as a small low-resolution
+copy, and the picks from every stretch are ranked together into one list. A job
+watches up to eight stretches, a little over five hours; past that only the
+first five hours are clipped. Minutes are billed on the length you import, so
+for silent footage the session or segment you care about is still the cheaper
+input. With commentary none of this applies, because the transcript path never
+uploads the video at all.</p>
 
 <h2>Whose footage can you clip?</h2>
 <p>Yours, and footage you have permission for. Your own streams and recordings,
@@ -2737,7 +2739,7 @@ ${faqBlock([
   },
   {
     q: 'Does it work on gameplay with no commentary?',
-    a: 'Yes, and it switches by itself. Footage with no audio track, or whose transcript comes back under 8 words or under 5 words per minute, goes down a vision pass instead: Gemini watches the footage and returns the same 3 to 15 moments, with the same layouts and inset detection after it. The clips come out without captions, since there is no speech to caption. The practical limit is length, because that pass sends Gemini the video rather than a few frames: give it the session you care about, not a silent eight-hour VOD.',
+    a: 'Yes, and it switches by itself. Footage with no audio track, or whose transcript comes back under 8 words or under 5 words per minute, goes down a vision pass instead: Gemini watches the footage and returns the same 3 to 15 moments, with the same layouts and inset detection after it. The clips come out without captions, since there is no speech to caption. A long silent capture is watched in stretches of up to 40 minutes, up to a little over five hours per job; giving it only the session you care about costs fewer minutes.',
   },
   {
     q: 'Is it free for streamers?',

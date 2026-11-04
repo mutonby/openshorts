@@ -4,6 +4,7 @@ Pure helpers for the Gemini clip-selection pipeline.
 Standard-library only so both main.py and gemini_worker.py can import it and
 the logic stays unit-testable without the heavy video dependencies.
 """
+import math
 
 # USD per 1M tokens (input, output incl. thinking), from ai.google.dev pricing.
 MODEL_PRICES = {
@@ -162,6 +163,30 @@ def trim_to_best(shorts, max_clips):
     indexed = list(enumerate(shorts))
     best = sorted(indexed, key=score, reverse=True)[:max_clips]
     return [item for _, item in sorted(best, key=lambda pair: pair[0])]
+
+
+def vision_segments(video_duration, segment_seconds, max_segments):
+    """Split a silent source into near-equal ``(start, end)`` stretches for
+    the vision pass, each at most ``segment_seconds`` long.
+
+    The vision pass sends Gemini the footage itself at ~300 tokens/second, so
+    an hour (~1.08M tokens) no longer fits a 1M-token window and a silent
+    multi-hour capture failed at the model. Near-equal stretches, not fixed
+    ones: a 41-minute source split at 40 minutes would leave a one-minute
+    tail that the prompt has to fill with 3+ clips. A source that fits in one
+    stretch returns one stretch, so short videos take the single-upload path
+    unchanged. Past ``max_segments`` the source is truncated (the caller logs
+    it) rather than spending without bound on one job.
+    """
+    duration = max(0.0, float(video_duration or 0))
+    seg = max(60.0, float(segment_seconds))
+    if duration <= seg:
+        return [(0.0, round(duration, 3))]
+    n = int(math.ceil(duration / seg))
+    n_kept = max(1, min(n, int(max_segments)))
+    step = duration / n
+    return [(round(i * step, 3), round(min(duration, (i + 1) * step), 3))
+            for i in range(n_kept)]
 
 
 def clip_duration_bounds():

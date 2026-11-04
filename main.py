@@ -32,7 +32,8 @@ import llm_backend
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
                             score_batches, shortlist_target,
-                            snap_clip_to_words, trim_to_best)
+                            snap_clip_to_words, trim_to_best,
+                            vision_segments)
 from ffmpeg_utils import (video_encode_args, audio_encode_args, cut_clip, QUALITY,
                           QUALITY_FAST, METADATA_SCRUB)
 from dotenv import load_dotenv
@@ -2244,10 +2245,103 @@ def speech_is_sparse(transcript, duration):
     return words < MIN_SPEECH_WORDS or words / minutes < MIN_SPEECH_WORDS_PER_MIN
 
 
+# Silent footage is sent to Gemini as video (~300 tokens/s): an hour no longer
+# fits a 1M-token window. Longer sources are analysed in near-equal stretches
+# of at most VISION_SEGMENT_SECONDS, each a low-resolution proxy, and the picks
+# are merged by score. VISION_MAX_SEGMENTS bounds the spend of one job.
+VISION_SEGMENT_SECONDS = float(os.environ.get("VISION_SEGMENT_SECONDS", "2400"))
+VISION_MAX_SEGMENTS = int(os.environ.get("VISION_MAX_SEGMENTS", "8"))
+
+
+def _vision_proxy(video_path, start, end, out_path):
+    """A small re-encode of [start, end] for the vision pass.
+
+    Re-encoded, not stream-copied: a copy snaps the start to the previous
+    keyframe, and every timestamp Gemini returns would then be off by up to a
+    GOP. 360p at 1 fps is what Gemini samples anyway (one frame per second),
+    so the proxy costs the model nothing in detail and keeps the upload far
+    under the Files API size limit; the mono audio stays because a silent
+    gameplay capture still has its explosions and music.
+    """
+    cmd = ["ffmpeg", "-y", "-ss", f"{start:.3f}", "-to", f"{end:.3f}", "-i", video_path,
+           "-vf", "scale=-2:360,fps=1", "-c:v", "libx264", "-preset", "veryfast",
+           "-crf", "30", "-c:a", "aac", "-b:a", "48k", "-ac", "1", out_path]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0 or not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
+        raise RuntimeError(f"vision proxy {start:.0f}-{end:.0f}s failed: "
+                           f"{(res.stderr or '').strip()[-400:]}")
+
+
+def _sum_costs(costs, model_name):
+    costs = [c for c in costs if c]
+    if not costs:
+        return None
+    out = {"model": model_name,
+           "price_estimated": any(c.get("price_estimated") for c in costs)}
+    for key in ("input_tokens", "output_tokens", "thinking_tokens",
+                "input_cost", "output_cost", "total_cost"):
+        out[key] = sum(c.get(key) or 0 for c in costs)
+    return out
+
+
+def _visual_pass(client, model_name, video_path, duration, language,
+                 min_clips, max_clips, min_secs, max_secs):
+    """One vision call over one file. Returns ``(shorts, cost)``; ``shorts``
+    are clamped to ``[0, duration]`` of THAT file. Returns ``(None, None)``
+    when Gemini could not take the file; raises GeminiBlockedError."""
+    file_upload = None
+    try:
+        file_upload = gemini_worker.upload_media(client, video_path)
+        deadline = time.time() + 180
+        while True:
+            info = client.files.get(name=file_upload.name)
+            state = str(getattr(getattr(info, "state", info), "name", "")).upper()
+            if state == "ACTIVE":
+                break
+            if state == "FAILED":
+                print("❌ Gemini could not process the video.")
+                return None, None
+            if time.time() > deadline:
+                print("❌ Gemini video processing timed out.")
+                return None, None
+            time.sleep(2)
+
+        prompt = gemini_worker.VISUAL_PROMPT_TEMPLATE.format(
+            video_duration=duration, language=language,
+            min_clips=min_clips, max_clips=max_clips,
+            min_secs=min_secs, max_secs=max_secs)
+        config = genai_types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=gemini_worker.VisualResponse,
+        )
+        response = client.models.generate_content(
+            model=model_name, contents=[file_upload, prompt], config=config)
+        gemini_worker.raise_if_blocked(response)
+        parsed = json.loads(response.text)
+        clean = []
+        for s in parsed.get("shorts") or []:
+            s["start"] = max(0.0, float(s.get("start", 0)))
+            s["end"] = min(float(duration), float(s.get("end", 0)))
+            if s["end"] - s["start"] >= 1.0:
+                clean.append(s)
+        return clean, gemini_worker._calculate_cost_analysis(response, model_name)
+    finally:
+        if file_upload is not None:
+            try:
+                client.files.delete(name=file_upload.name)
+            except Exception:
+                pass
+
+
 def get_visual_clips(video_path, video_duration, language="en"):
     """Clip a SILENT video by vision: Gemini watches the footage and picks the
     most engaging visual moments (no transcript). Returns the same
-    {"shorts", "cost_analysis"} shape as get_viral_clips, or None."""
+    {"shorts", "cost_analysis"} shape as get_viral_clips, or None.
+
+    A source longer than VISION_SEGMENT_SECONDS is watched stretch by
+    stretch (``vision_segments``), each as a 360p/1 fps proxy, and the picks
+    are merged, de-overlapped and cut to the best ``CLIP_TARGET_MAX`` by
+    score: a silent multi-hour console capture used to fail at the model."""
     print("🎥  Silent video — analyzing with Gemini vision (no transcript)...")
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -2260,60 +2354,70 @@ def get_visual_clips(video_path, video_duration, language="en"):
         return None
     client = genai.Client(api_key=api_key)
     model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
-    print(f"🎥  Model: {model_name} | uploading {os.path.basename(video_path)}…")
 
-    file_upload = None
+    # The vision path has no scoring windows to derive a count from, so the
+    # env targets (user request) apply directly over the classic 3-15.
+    def _env_int(name, default):
+        try:
+            return max(1, int(os.environ.get(name, "")))
+        except ValueError:
+            return default
+    v_min_clips = _env_int("CLIP_TARGET_MIN", 3)
+    v_max_clips = max(v_min_clips, _env_int("CLIP_TARGET_MAX", 15))
+    v_min_secs, v_max_secs = clip_duration_bounds()
+
+    segments = vision_segments(video_duration, VISION_SEGMENT_SECONDS, VISION_MAX_SEGMENTS)
     try:
-        file_upload = gemini_worker.upload_media(client, video_path)
-        deadline = time.time() + 180
-        while True:
-            info = client.files.get(name=file_upload.name)
-            state = str(getattr(getattr(info, "state", info), "name", "")).upper()
-            if state == "ACTIVE":
-                break
-            if state == "FAILED":
-                print("❌ Gemini could not process the video.")
-                return None
-            if time.time() > deadline:
-                print("❌ Gemini video processing timed out.")
-                return None
-            time.sleep(2)
-
-        # The vision path has no scoring windows to derive a count from, so the
-        # env targets (user request) apply directly over the classic 3-15.
-        def _env_int(name, default):
+        if len(segments) == 1:
+            print(f"🎥  Model: {model_name} | uploading {os.path.basename(video_path)}…")
+            clean, cost = _visual_pass(client, model_name, video_path, video_duration,
+                                       language, v_min_clips, v_max_clips,
+                                       v_min_secs, v_max_secs)
+            costs = [cost]
+        else:
+            covered = segments[-1][1]
+            print(f"🎥  Model: {model_name} | {len(segments)} stretches of "
+                  f"~{(segments[0][1] - segments[0][0]) / 60:.0f} min"
+                  + (f" (only the first {covered / 60:.0f} of "
+                     f"{video_duration / 60:.0f} min; VISION_MAX_SEGMENTS)"
+                     if covered < float(video_duration) - 1 else ""))
+            per_min = max(1, math.ceil(v_min_clips / len(segments)))
+            clean, costs = [], []
+            tmp_dir = os.path.join(os.path.dirname(os.path.abspath(video_path)),
+                                   f".vision_{uuid.uuid4().hex[:8]}")
+            os.makedirs(tmp_dir, exist_ok=True)
             try:
-                return max(1, int(os.environ.get(name, "")))
-            except ValueError:
-                return default
-        v_min_clips = _env_int("CLIP_TARGET_MIN", 3)
-        v_max_clips = max(v_min_clips, _env_int("CLIP_TARGET_MAX", 15))
-        v_min_secs, v_max_secs = clip_duration_bounds()
-        prompt = gemini_worker.VISUAL_PROMPT_TEMPLATE.format(
-            video_duration=video_duration, language=language,
-            min_clips=v_min_clips, max_clips=v_max_clips,
-            min_secs=v_min_secs, max_secs=v_max_secs)
-        config = genai_types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=gemini_worker.VisualResponse,
-        )
-        response = client.models.generate_content(
-            model=model_name, contents=[file_upload, prompt], config=config)
-        gemini_worker.raise_if_blocked(response)
-        parsed = json.loads(response.text)
-        shorts = parsed.get("shorts") or []
-        # Clamp to the real duration; drop anything degenerate.
-        clean = []
-        for s in shorts:
-            s["start"] = max(0.0, float(s.get("start", 0)))
-            s["end"] = min(float(video_duration), float(s.get("end", 0)))
-            if s["end"] - s["start"] >= 1.0:
-                clean.append(s)
+                for i, (s0, s1) in enumerate(segments):
+                    proxy = os.path.join(tmp_dir, f"part{i}.mp4")
+                    try:
+                        _vision_proxy(video_path, s0, s1, proxy)
+                        shorts, cost = _visual_pass(
+                            client, model_name, proxy, round(s1 - s0, 3), language,
+                            per_min, v_max_clips, v_min_secs, v_max_secs)
+                    except gemini_worker.GeminiBlockedError:
+                        raise
+                    except Exception as e:
+                        # One bad stretch must not sink the other hours.
+                        print(f"⚠️ Vision stretch {i + 1}/{len(segments)} failed: {e}")
+                        continue
+                    finally:
+                        if os.path.exists(proxy):
+                            os.remove(proxy)
+                    costs.append(cost)
+                    for sh in shorts or []:
+                        sh["start"] = round(sh["start"] + s0, 3)
+                        sh["end"] = round(min(float(video_duration), sh["end"] + s0), 3)
+                        clean.append(sh)
+                    print(f"   stretch {i + 1}/{len(segments)}: {len(shorts or [])} pick(s)")
+            finally:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            clean.sort(key=lambda c: c["start"])
+            clean = trim_to_best(dedupe_overlapping(clean), v_max_clips)
+
         if not clean:
             print("⚠️ Vision pass returned no usable clips.")
             return None
-
-        cost = gemini_worker._calculate_cost_analysis(response, model_name)
+        cost = _sum_costs(costs, model_name)
         if cost:
             print(f"💰 Vision cost ({model_name}): ${cost.get('total_cost', 0):.6f}")
         result = {"shorts": clean}
@@ -2326,13 +2430,6 @@ def get_visual_clips(video_path, video_duration, language="en"):
     except Exception as e:
         print(f"❌ Gemini vision error: {e}")
         return None
-    finally:
-        if file_upload is not None:
-            try:
-                client.files.delete(name=file_upload.name)
-            except Exception:
-                pass
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="AutoCrop-Vertical with Viral Clip Detection.")

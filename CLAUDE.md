@@ -54,7 +54,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 - Keep `seo/landing-fallback.js` in sync with `Landing.jsx`. Never add a static `public/sitemap.xml` back: `vite-plugin-seo.js` generates it.
 - Standalone pages are emitted as flat `.html` files (directories make nginx 301 and break canonicals).
 - When editing pricing anywhere, edit `seo/data.js` too. Never say "OpenShorts is free" without the Cloud price next to it.
-- `/gta-5-clips` states the silent-footage thresholds: change `dashboard/seo/pages.js` if that behaviour changes.
+- `/gta-5-clips`, `/gta-6-clips` and `/platforms/twitch` state the silent-footage thresholds and stretch sizes: change their copy if that behaviour changes.
 
 **Free tools**
 - The youtube-transcript tool uses `STATIC_PROXY_URLS` (or direct) only, **never** `PROXY_URL`. A static route returning zero formats and zero captions is degraded, not "no captions".
@@ -70,7 +70,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 
 **Clip selection**
 - The scoring pass ranks every window (global top N), never "choose up to K per batch". The `min_clips` floor is enforced in code.
-- `get_visual_clips` is the only stage that sends Gemini the video; nothing guards its length.
+- `get_visual_clips` is the only stage that sends Gemini the video; past `VISION_SEGMENT_SECONDS` it watches near-equal stretches (`vision_segments`), never one upload of the whole source.
 
 **Jobs, GPU, deploys**
 - Call `transcribe_backends.release_models()` after any ASR (job processes and in-API transcriptions alike). Size `MAX_CONCURRENT_JOBS` by free VRAM first.

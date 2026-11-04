@@ -831,7 +831,7 @@ const twitchFaq = [
   { q: 'Does it work with a whole Twitch VOD?', a: 'Yes. Paste the twitch.tv/videos/ link of the past broadcast. Moment scoring reads the transcript rather than every frame, so a long VOD is analysed the same way as a short one. One job returns the best 6 to 12 moments of whatever it is given, so for a long stream it usually pays to clip it in parts.' },
   { q: 'Can it clip my stream while I am live?', a: 'No. It works from recordings: paste the VOD once the broadcast has ended, before Twitch removes the past broadcast.' },
   { q: 'Will my facecam stay in the clip?', a: 'Yes, with the vertical layout on auto. A webcam box composited into a corner is detected by its geometry (small, off centre, still) and the clip renders with the gameplay full width on top and the facecam cropped out and enlarged below.' },
-  { q: 'What about gameplay with no commentary?', a: 'When the transcript comes back with under 8 words, or under 5 words a minute, OpenShorts switches to a vision pass where Gemini watches the footage and picks the moments. Those clips have no captions. That pass has a practical ceiling of about an hour of footage, so give it the segment, not an eight-hour silent VOD.' },
+  { q: 'What about gameplay with no commentary?', a: 'When the transcript comes back with under 8 words, or under 5 words a minute, OpenShorts switches to a vision pass where Gemini watches the footage and picks the moments. Those clips have no captions. A long silent VOD is watched in stretches of up to 40 minutes and the best picks of all of them are kept, up to a little over five hours per job.' },
   { q: 'Can I turn Twitch clips into TikToks?', a: 'A Twitch clip of 45 seconds or more can be pasted as a source and comes back reframed to 9:16 with captions. Shorter clips are under the minimum; for those a static crop in the free video to 9:16 converter is the quicker route.' },
   { q: 'How many clips do I get from a stream?', a: 'Each job returns up to about a dozen: for any source longer than 12 minutes the AI is asked for 6 to 12. A four-hour stream clipped in four one-hour parts gives four times as many candidates as the same stream clipped in one job.' },
   { q: 'Does it post to TikTok and YouTube Shorts?', a: 'Yes, from the dashboard: YouTube Shorts and Instagram Reels are published directly, and TikTok receives the clip as a draft in your TikTok inbox to finish in the app.' },
@@ -922,11 +922,13 @@ under 8 words in total, or under 5 words per minute, the video itself is sent to
 Gemini, which watches it and returns moments in the same 15 to 60 second band.
 Layouts and facecam detection work the same; the clips come out without
 captions, because there is no speech to caption.</p>
-<p>That vision pass has one ceiling worth knowing: Gemini counts video at
-roughly 300 tokens a second, so an hour of footage is around a million tokens,
-the edge of its context window, and nothing guards the length in front of it.
-A silent eight-hour VOD will fail rather than clip. Give the vision pass a
-segment, an hour or less, with "clip only part of it".</p>
+<p>That vision pass sends Gemini the footage itself, which it counts at
+roughly 300 tokens a second, so an hour is already around a million tokens. A
+long silent VOD is therefore watched in stretches of up to 40 minutes, each as
+a small low-resolution copy, and the picks from every stretch are ranked
+together. Up to eight stretches are watched per job, a little over five hours;
+past that only the first five hours are clipped, so for a longer silent VOD
+pick the part you care about with "clip only part of it".</p>
 
 <h2>Chat, alerts and overlays</h2>
 <p>A Twitch VOD has no chat in it unless your overlay drew the chat onto the
@@ -948,7 +950,7 @@ algorithm leans on speech, so quiet gameplay gives it little to work with.</p>
 <li><strong>It does not clip live.</strong> It works from the VOD after the stream.</li>
 <li><strong>It does not read Twitch chat</strong> to find hype moments; it reads what is said and, for silent footage, what is shown.</li>
 <li><strong>It does not return dozens of clips from one long job.</strong> Each job returns its best 6 to 12; clip long streams in parts.</li>
-<li><strong>It does not clip a silent VOD longer than about an hour</strong> in one go.</li>
+<li><strong>It does not watch more than about five hours of a silent VOD</strong> in one job; pick the part you want.</li>
 <li><strong>It does not fetch subscriber-only VODs.</strong> Download and upload them instead.</li>
 <li><strong>Free clips carry a watermark.</strong> Upgrading removes it from clips already made.</li>
 </ul>
@@ -965,7 +967,7 @@ ${faqBlock(twitchFaq)}
 
 ${sources([
   `Competitor plans: our comparison data, checked ${longDate(COMPETITORS.klap.checked)}. See <a href="/alternatives/klap">OpenShorts vs Klap</a> and <a href="/alternatives/opus-clip">OpenShorts vs Opus Clip</a>.`,
-  `Silent-footage thresholds (8 words, 5 words per minute), the vision fallback and its length ceiling: <code>main.py</code>; inset detection: <code>camera_inset.py</code>; burned-subtitle trimming: <code>burned_subtitles.py</code>. Source: <a href="${SITE.repo}" rel="noopener">github.com/mutonby/openshorts</a>.`,
+  `Silent-footage thresholds (8 words, 5 words per minute), the vision fallback and its stretches: <code>main.py</code>, <code>clip_selection.vision_segments</code>; inset detection: <code>camera_inset.py</code>; burned-subtitle trimming: <code>burned_subtitles.py</code>. Source: <a href="${SITE.repo}" rel="noopener">github.com/mutonby/openshorts</a>.`,
   `OpenShorts Cloud plan minutes: <a href="/pricing">pricing</a>, checked ${longDate(PRICE_MODELS.openshorts.checked)}.`,
 ])}
 `,
