@@ -137,6 +137,25 @@ def full_width_content_height(orig_w, orig_h, out_w):
     return fg_h + (fg_h % 2)
 
 
+def _wide_crop(input_video, orig_w, orig_h, out_w, out_h, start_f, end_f, focus):
+    """The columns an automatic WIDE scene without a narrow reading area shows
+    (screencast_layout.wide_crop), centred on the scene's motion, else on the
+    shot check's reading area, else on the frame. None keeps the whole width.
+    The motion probe is a refinement: if it fails the scene still renders."""
+    probe = screencast_layout.wide_crop(orig_w, orig_h, out_w, out_h)
+    if not probe:
+        return None
+    centre = None
+    try:
+        centre = screencast_layout.wide_action_centre(
+            input_video, start_f, end_f, probe[1] / float(orig_w))
+    except Exception as e:
+        print(f"   ⚠️ WIDE motion probe failed ({e}); centring the crop.")
+    if centre is None:
+        centre = (focus[0] + focus[1]) / 2.0 if focus else 0.5
+    return screencast_layout.wide_crop(orig_w, orig_h, out_w, out_h, centre)
+
+
 def general_filtergraph(out_w, out_h, content_h=None, orig_w=None, orig_h=None):
     """Blurred-background 'general shot' layout: bg fills the frame (centre-
     cropped, blurred), fg is scaled to a readable share of the height and
@@ -776,6 +795,9 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
                 wide_count += 1
                 crop = screencast_layout.focus_crop(
                     orig_w, orig_h, out_w, out_h, centre)
+                if not crop:
+                    crop = _wide_crop(input_video, orig_w, orig_h, out_w, out_h,
+                                      start_f, end_f, centre)
                 if crop:
                     focus_crops[start_f] = crop
     if screencasts:
@@ -840,6 +862,7 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
         # their per-frame crop boxes for the GPU render and a sendcmd file for
         # the ffmpeg one; every other layout is its filtergraph.
         specs = []
+        bands = {}  # WIDE scene start -> (top, bottom) of its picture
         for idx, (start_f, end_f, strategy) in enumerate(ranges):
             ss = start_f / fps
             dur = (end_f - start_f) / fps
@@ -854,10 +877,13 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
             elif strategy == 'WIDE' and start_f in focus_crops:
                 graph = screencast_layout.focus_filtergraph(
                     orig_w, orig_h, out_w, out_h, focus_crops[start_f])
+                bands[start_f] = screencast_layout.content_band(
+                    out_h, screencast_layout.crop_content_height(
+                        orig_h, out_w, out_h, focus_crops[start_f][1]))
             elif strategy == 'WIDE':
-                graph = general_filtergraph(
-                    out_w, out_h,
-                    full_width_content_height(orig_w, orig_h, out_w))
+                fg_h = full_width_content_height(orig_w, orig_h, out_w)
+                graph = general_filtergraph(out_w, out_h, fg_h)
+                bands[start_f] = screencast_layout.content_band(out_h, fg_h)
             elif strategy == 'SPLIT':
                 left, right = splits[start_f]
                 graph = split_layout.split_filtergraph(
@@ -901,8 +927,10 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
         import shutil
         shutil.rmtree(workdir, ignore_errors=True)
 
-    # Tell the caption pass which stretches are stacked (see layout_ranges).
+    # Tell the caption pass which stretches are stacked, and the hook where a
+    # WIDE picture sits (see layout_ranges).
     layout_ranges.write(final_output_video,
-                        [(s / fps, e / fps, strategy) for s, e, strategy in ranges])
+                        [(s / fps, e / fps, strategy, bands.get(s))
+                         for s, e, strategy in ranges])
     print(f"   ✅ Clip saved to {final_output_video}")
     return True

@@ -65,6 +65,8 @@ def _graphs():
         "wide": reframe_v2.general_filtergraph(
             OW, OH, reframe_v2.full_width_content_height(W, H, OW)),
         "focus": screencast_layout.focus_filtergraph(W, H, OW, OH, (300, 1200)),
+        "wide_zoom": screencast_layout.focus_filtergraph(
+            W, H, OW, OH, screencast_layout.wide_crop(W, H, OW, OH, centre=0.6)),
         "screencast": screencast_layout.screencast_filtergraph(
             W, H, OW, OH, (1500, 400), (0, 1250)),
         "split": split_layout.split_filtergraph(W, H, OW, OH, (500, 450), (1400, 500)),
@@ -72,7 +74,7 @@ def _graphs():
     }
 
 
-@pytest.mark.parametrize("name", ["general", "wide", "focus", "screencast", "split", "inset"])
+@pytest.mark.parametrize("name", ["general", "wide", "wide_zoom", "focus", "screencast", "split", "inset"])
 def test_layout_matches_ffmpeg(source, tmp_path, name):
     graph = _graphs()[name]
     ref, got = str(tmp_path / "ref.mp4"), str(tmp_path / "got.mp4")

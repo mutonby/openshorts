@@ -440,7 +440,11 @@ def _auto_place(video_path, text, target_box_width, hook_filename, font_scale, s
     window_end = float(duration) if duration else hook_placement.DEFAULT_WINDOW
     if ranges is None:
         ranges = _layouts.read(video_path)
-    bands = hook_placement.caption_bands(_layouts.normalise(ranges), 0.0, window_end, has_captions)
+    ranges = _layouts.normalise(ranges)
+    bands = hook_placement.caption_bands(ranges, 0.0, window_end, has_captions)
+    # A WIDE picture floats in blur: keep the hook in the blur when it fits,
+    # and only fall back to the caption-only rule when it does not.
+    pictures = hook_placement.content_bands(ranges, 0.0, window_end)
     frames = hook_placement.detect_faces(video_path, 0.0, window_end)
     if frames is None:
         print("   ℹ️ Hook placement: no frames read, keeping the top spot.")
@@ -456,7 +460,14 @@ def _auto_place(video_path, text, target_box_width, hook_filename, font_scale, s
         w, h = dims[rel]
         return w / video_width, h / video_height
 
-    rel, y, cost = hook_placement.best_scale(measure, frames, bands)
+    y = None
+    if pictures:
+        rel, y, cost = hook_placement.best_scale(measure, frames,
+                                                 sorted(set(bands) | set(pictures)))
+        if y is not None:
+            bands = sorted(set(bands) | set(pictures))
+    if y is None:
+        rel, y, cost = hook_placement.best_scale(measure, frames, bands)
     if y is None:
         print("   ℹ️ Hook placement: no spot clears the captions, keeping the top spot.")
         return None

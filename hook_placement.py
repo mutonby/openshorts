@@ -13,6 +13,9 @@ The rule, kept deliberately simple:
   its bottom UI (``BOTTOM_UI``), but never on a caption band. Captions are
   known without looking: at the bottom on every layout, on the seam
   (mid-frame) on SPLIT stretches (``layout_ranges``, ``subtitles.generate_ass``).
+- On a WIDE stretch the picture floats in blur (its band is in the layout
+  sidecar): the hook stays off it too when it fits above or below it
+  (``content_bands``), and ignores it when it does not.
 - Inside those bounds, every candidate height is scored by how much of the
   faces it would cover, averaged over a few frames of the hook's own time
   window. Faces are MediaPipe boxes grown upwards to include the forehead
@@ -106,6 +109,23 @@ def caption_bands(ranges, window_start, window_end, has_captions=True):
     # Any part of the window no range describes keeps the default captions.
     if covered < (window_end - window_start) - 1e-3:
         bands.add(BOTTOM_CAPTIONS)
+    return sorted(bands)
+
+
+def content_bands(ranges, window_start, window_end):
+    """The pictures of the WIDE stretches inside the hook's window, as
+    (top, bottom) bands. The hook goes in the blur above them when it fits;
+    a WIDE picture is the whole point of the shot, and on gameplay it has no
+    face for the face cost to protect."""
+    bands = set()
+    for r in ranges or []:
+        try:
+            s, e = max(float(r["start"]), window_start), min(float(r["end"]), window_end)
+            top, bottom = (float(v) for v in r["content"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if e > s and 0.0 <= top < bottom <= 1.0:
+            bands.add((top, bottom))
     return sorted(bands)
 
 

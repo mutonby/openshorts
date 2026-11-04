@@ -465,14 +465,146 @@ def focus_filtergraph(orig_w, orig_h, out_w, out_h, crop):
     from ffmpeg_utils import blurred_backdrop
 
     x, w = crop
-    fg_h = min(out_h, int(round(out_w * orig_h / float(w))))
-    fg_h -= fg_h % 2
+    fg_h = crop_content_height(orig_h, out_w, out_h, w)
     return (
         f"[0:v]split=2[bga][fga];"
         f"[bga]{blurred_backdrop(out_w, out_h, 12)}[bg];"
         f"[fga]crop=w={w}:h={orig_h}:x={x}:y=0,scale={out_w}:{fg_h}[fg];"
         f"[bg][fg]overlay=x=0:y=(H-h)/2,setsar=1[v]"
     )
+
+
+def crop_content_height(orig_h, out_w, out_h, crop_w):
+    """Height (even) that ``crop_w`` source columns fill at the output width."""
+    fg_h = min(out_h, int(round(out_w * orig_h / float(crop_w))))
+    return fg_h - fg_h % 2
+
+
+def content_band(out_h, fg_h):
+    """(top, bottom) of a vertically centred foreground, as frame fractions.
+    Recorded in the layout sidecar so the hook can stay off the picture."""
+    top = (out_h - fg_h) / 2.0 / out_h
+    return round(top, 3), round(1.0 - top, 3)
+
+
+# --- WIDE without a reading area ----------------------------------------------
+#
+# A 16:9 screen kept at its full width in a 9:16 frame is 608 px tall out of
+# 1920: 32% of the frame, a strip in a sea of blur. Fine text and small game
+# objects do not survive that on a phone (visual review, 17-oct-2026), and
+# gameplay (chases, heists, pileups) is exactly what lands here.
+#
+# So WIDE trades a little width for size, the way GENERAL does, but sized by
+# where the hook and the captions sit rather than by presence: the default hook
+# spot (top at 20%, a two-line hook ends near 29%) and the bottom captions
+# (from ~75%) leave a centred window of ~41% of the height. Filling it takes a
+# 16:9 screen from 32% to 41% of the frame (x1.3: text and objects 30% larger)
+# and keeps 77% of the width, trimming at most ~11% off each side: the HUD
+# corners, sidebars and browser chrome, not the middle of the action. The
+# horizontal position follows the motion in the shot (wide_action_centre), so
+# a pileup on the right keeps the right edge and loses the left one instead.
+#
+# WIDE_MAX_ZOOM caps it for wider-than-16:9 sources (ultrawide gameplay would
+# otherwise lose half its width); a source that already fills the window
+# (4:3 and narrower) is left whole. WIDE_CONTENT_HEIGHT_RATIO=0.32 restores the
+# old full-width WIDE. The explicit "full frame" framing (force_strategy WIDE)
+# never goes through here: the user asked for the whole width.
+WIDE_CONTENT_HEIGHT_RATIO = float(
+    os.environ.get("WIDE_CONTENT_HEIGHT_RATIO", "0.41"))
+WIDE_MAX_ZOOM = 1.4
+# Below this the crop would only shave slivers: keep the whole width.
+WIDE_MIN_ZOOM = 1.05
+
+# The crop moves off centre only when the moving pixels say so: the best
+# window must hold this much more of the shot's motion than the centred one.
+WIDE_ACTION_MIN_GAIN = 0.1
+# Windows within this share of the best count as tied; the most central wins.
+WIDE_ACTION_TIE = 0.005
+WIDE_ACTION_SAMPLES = 8
+WIDE_ACTION_WIDTH = 160      # columns of the motion profile
+WIDE_ACTION_NOISE = 16       # grey levels of difference ignored (compression)
+
+
+def wide_crop(orig_w, orig_h, out_w, out_h, centre=0.5):
+    """(x, w) of the source columns a WIDE scene shows, or None for the
+    whole width. ``centre`` is the crop centre as a fraction of the width."""
+    full_h = out_w * orig_h / float(orig_w)
+    zoom = min(WIDE_MAX_ZOOM, WIDE_CONTENT_HEIGHT_RATIO * out_h / full_h)
+    if zoom < WIDE_MIN_ZOOM:
+        return None
+    w = int(round(orig_w / zoom))
+    w -= w % 2
+    x = int(round(centre * orig_w - w / 2.0))
+    x = max(0, min(x, orig_w - w))
+    return x - (x % 2), w
+
+
+def action_window_centre(profile, frac):
+    """Centre (fraction of the width) of the window of width ``frac`` that
+    holds the most of ``profile`` (motion per column), or None when the motion
+    gives no reason to leave the centre: no motion at all, or the best window
+    beats the centred one by less than WIDE_ACTION_MIN_GAIN of the total.
+    Among near-ties the window closest to the centre wins, so motion spread
+    over the whole frame (a camera pan, a third-person chase) stays centred."""
+    profile = np.asarray(profile, dtype=np.float64)
+    n = len(profile)
+    total = float(profile.sum())
+    if n == 0 or total <= 0 or frac >= 1.0:
+        return None
+    win = max(1, min(n, int(round(frac * n))))
+    sums = np.convolve(profile, np.ones(win), mode="valid") / total
+    centred = (n - win) // 2
+    best = float(sums.max())
+    if best - float(sums[centred]) < WIDE_ACTION_MIN_GAIN:
+        return None
+    near = np.flatnonzero(sums >= best - WIDE_ACTION_TIE)
+    start = int(near[np.argmin(np.abs(near - centred))])
+    return (start + win / 2.0) / n
+
+
+def wide_action_centre(video_path, start_f, end_f, frac,
+                       samples=WIDE_ACTION_SAMPLES):
+    """Where the action is in a WIDE scene, for wide_crop's ``centre``.
+
+    Motion, not detail: a HUD, a minimap or a pillarbox bar is busy or dark
+    but still, and must not pull the crop; the cars of a pileup move. Each
+    sample differences two frames ~0.1 s apart at low resolution and adds the
+    changed pixels per column. None when nothing can be read or the motion is
+    spread evenly (action_window_centre)."""
+    import cv2
+
+    cap = cv2.VideoCapture(video_path)
+    try:
+        if not cap.isOpened():
+            return None
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        gap = max(1, int(round(fps * 0.1)))
+        last = end_f - 1 - gap
+        if total:
+            last = min(last, total - 1 - gap)
+        if last < start_f:
+            return None
+        profile = None
+        for f_idx in np.linspace(start_f, last, samples):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(round(f_idx)))
+            ok, a = cap.read()
+            for _ in range(gap - 1):
+                ok = ok and cap.grab()
+            ok2, b = cap.read() if ok else (False, None)
+            if not (ok and ok2):
+                continue
+            h = max(1, int(round(a.shape[0] * WIDE_ACTION_WIDTH / a.shape[1])))
+            ga = cv2.cvtColor(cv2.resize(a, (WIDE_ACTION_WIDTH, h)), cv2.COLOR_BGR2GRAY)
+            gb = cv2.cvtColor(cv2.resize(b, (WIDE_ACTION_WIDTH, h)), cv2.COLOR_BGR2GRAY)
+            diff = cv2.absdiff(ga, gb) > WIDE_ACTION_NOISE
+            col = diff.sum(axis=0).astype(np.float64)
+            profile = col if profile is None else profile + col
+        if profile is None:
+            return None
+        return action_window_centre(profile, frac)
+    finally:
+        cap.release()
 
 
 def _filmed_person(cap, m, s_f, last_f, samples=3):
@@ -512,9 +644,11 @@ def detect_screencast_scenes(video_path, scenes, strategies, ranges, samples=6):
         where a presenter is actually found. ``content`` is the (x, w) of the
         columns beside them (content_side); a scene whose presenter leaves no
         such room is not returned at all.
-      - WIDE shows the screen without GENERAL's side crop, for content that
-        fills the frame or has no presenter to stack. ``focus`` is the reading
-        area (left, right) when the shot check found one, else None.
+      - WIDE shows the screen over a blurred backdrop, for content that
+        fills the frame or has no presenter to stack: cut to its reading area
+        (focus_crop) or, without one, slightly zoomed around the action
+        (wide_crop). ``focus`` is the reading area (left, right) when the shot
+        check found one, else None.
     """
     if not ENABLED or not ranges:
         return {}

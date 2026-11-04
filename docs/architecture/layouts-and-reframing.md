@@ -74,7 +74,10 @@ speaker's eyes are and where the top SPLIT speaker's face is. `position="auto"`
 default) samples 6 frames of the hook's window, detects faces with MediaPipe
 (boxes grown to the whole head), and picks the height that covers the least
 face, inside the platform-safe area (6%-80%) and never on a caption band: the
-seam on SPLIT stretches, the bottom elsewhere (`layout_ranges`). Ties go to
+seam on SPLIT stretches, the bottom elsewhere (`layout_ranges`). A WIDE
+stretch records its picture's band in the sidecar (`content`), and the hook
+stays in the blur above or below it when it fits (`content_bands`), else the
+caption-only rule applies. Ties go to
 the old 20% spot, so a clip with no face renders as before; the text shrinks
 (0.85, 0.72) only when every height still covers a face. No frames or no
 MediaPipe means the old spot. An explicit top / center / bottom is drawn
@@ -131,7 +134,17 @@ width, so an explicit GENERAL override on a portrait clip cannot shrink it.
   composited on top of it, and stacking would show it twice) gets WIDE, cropped
   to the reading area when that is narrower than 90% of the frame
   (`focus_crop`, never past 60% of the output height, full source height kept);
-  otherwise the whole width. If the check cannot answer (no key, API error) the
+  otherwise a moderate zoom (`wide_crop`): the whole width of a 16:9 screen
+  was a 608 px strip, 32% of the frame, illegible on a phone (gameplay chases
+  and pileups land here). The picture now fills the window between the hook's
+  default spot and the bottom captions (`WIDE_CONTENT_HEIGHT_RATIO` 0.41: x1.3,
+  77% of the width kept, at most ~11% off each side; capped at x1.4 for
+  ultrawide, untouched for 4:3), and the crop slides toward the shot's motion
+  (`wide_action_centre`: frame differences per column, so a still HUD or a
+  pillarbox never pulls it; it moves only when that gains 10% of the motion,
+  so a pan or a third-person chase stays centred). The editor's explicit
+  "full frame" framing (`force_strategy='WIDE'`) still keeps the whole width.
+  `WIDE_CONTENT_HEIGHT_RATIO=0.32` restores the old full-width WIDE. If the check cannot answer (no key, API error) the
   scenes the classifier sent to GENERAL are taken as the screen
   (`fallback_ranges`), so an explicit choice never silently renders GENERAL. One
   still per scene means a long scene that mixes screen and camera is judged by

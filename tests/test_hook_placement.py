@@ -316,6 +316,29 @@ class TestAddHookToVideo:
                                 mark=("logo.png", lambda *a, **k: "", "wm.mp4"))
         assert "logo.png" not in calls["cmd"]
 
+    def test_auto_keeps_the_hook_off_a_wide_picture(self, fake_ffmpeg, monkeypatch, tmp_path):
+        hooks, calls, video = fake_ffmpeg
+        import hook_placement
+        monkeypatch.setattr(hook_placement, "detect_faces", lambda *a, **k: [[]] * 6)
+        band = [0.295, 0.705]
+        result = hooks.add_hook_to_video(
+            video, "The cops never saw this pileup coming, and neither did we",
+            str(tmp_path / "out.mp4"), position="auto", duration=5,
+            layout_ranges=[{"start": 0, "end": 30, "layout": "wide", "content": band}])
+        y = self._overlay_y(calls["cmd"]) / 1920
+        assert y + result["height"] <= band[0] + 1e-3
+
+    def test_auto_ignores_a_picture_it_cannot_clear(self, fake_ffmpeg, monkeypatch, tmp_path):
+        hooks, calls, video = fake_ffmpeg
+        import hook_placement
+        monkeypatch.setattr(hook_placement, "detect_faces", lambda *a, **k: [[]] * 6)
+        # A picture from the top margin to the captions: nowhere to go, so the
+        # caption-only rule (the old spot) applies.
+        hooks.add_hook_to_video(
+            video, "Hi there", str(tmp_path / "out.mp4"), position="auto", duration=5,
+            layout_ranges=[{"start": 0, "end": 30, "layout": "wide", "content": [0.05, 0.72]}])
+        assert self._overlay_y(calls["cmd"]) == int(round(1920 * 0.20))
+
     def test_auto_without_frames_keeps_the_top_spot(self, fake_ffmpeg, monkeypatch, tmp_path):
         hooks, calls, video = fake_ffmpeg
         import hook_placement

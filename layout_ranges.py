@@ -6,6 +6,10 @@ the two speakers sit one above the other and the seam between the halves is
 the emptiest place in the frame, so that is where the captions go (OpusClip
 does the same). On every other layout they stay at the bottom.
 
+A WIDE stretch also records ``content``: the (top, bottom) frame fractions its
+picture fills over the blurred backdrop, so the auto-placed hook can sit in
+the blur instead of over the action (hook_placement.content_bands).
+
 The ranges travel as a sidecar ``<clip>.layout.json`` written by the render,
 because the render happens in four different places (the job pipeline, the
 recut/rerender, the manual reframe and the v1 fallback, which writes none)
@@ -25,10 +29,20 @@ def sidecar_path(video_path):
 
 
 def write(video_path, ranges):
-    """``ranges``: iterable of (start_s, end_s, strategy). Best effort: a
-    failure here must never fail a render that already succeeded."""
-    payload = [{"start": round(float(s), 3), "end": round(float(e), 3),
-                "layout": str(layout).lower()} for s, e, layout in ranges]
+    """``ranges``: iterable of (start_s, end_s, strategy) or (start_s, end_s,
+    strategy, content), ``content`` being the (top, bottom) frame fractions
+    the picture fills on a layout that floats it over a blurred backdrop
+    (WIDE), or None. Best effort: a failure here must never fail a render that
+    already succeeded."""
+    payload = []
+    for r in ranges:
+        s, e, layout = r[:3]
+        entry = {"start": round(float(s), 3), "end": round(float(e), 3),
+                 "layout": str(layout).lower()}
+        band = _band(r[3] if len(r) > 3 else None)
+        if band:
+            entry["content"] = list(band)
+        payload.append(entry)
     try:
         with open(sidecar_path(video_path), "w") as f:
             json.dump({"ranges": payload}, f)
@@ -48,21 +62,39 @@ def read(video_path):
     return normalise(data.get("ranges"))
 
 
+def _band(value):
+    """A valid (top, bottom) content band in frame fractions, or None."""
+    try:
+        top, bottom = (float(v) for v in value)
+    except (TypeError, ValueError):
+        return None
+    if 0.0 <= top < bottom <= 1.0:
+        return top, bottom
+    return None
+
+
 def normalise(ranges):
     """Accept the sidecar/metadata shape or bare tuples; drop anything odd
-    (an old metadata file, a hand-edited value) instead of raising."""
+    (an old metadata file, a hand-edited value) instead of raising. A
+    ``content`` band is kept when it is valid and dropped otherwise."""
     out = []
     for r in ranges or []:
         try:
             if isinstance(r, dict):
                 s, e, layout = r["start"], r["end"], r.get("layout", "")
+                band = r.get("content")
             else:
-                s, e, layout = r
+                s, e, layout = r[:3]
+                band = r[3] if len(r) > 3 else None
             s, e = float(s), float(e)
         except (KeyError, TypeError, ValueError):
             continue
         if e > s:
-            out.append({"start": s, "end": e, "layout": str(layout).lower()})
+            entry = {"start": s, "end": e, "layout": str(layout).lower()}
+            band = _band(band)
+            if band:
+                entry["content"] = list(band)
+            out.append(entry)
     return out
 
 
@@ -94,8 +126,11 @@ def remap(ranges, segments):
         for r in normalise(ranges):
             s, e = max(r["start"], seg_s), min(r["end"], seg_e)
             if e > s:
-                out.append({"start": round(s - seg_s + offset, 3),
-                            "end": round(e - seg_s + offset, 3),
-                            "layout": r["layout"]})
+                moved = {"start": round(s - seg_s + offset, 3),
+                         "end": round(e - seg_s + offset, 3),
+                         "layout": r["layout"]}
+                if "content" in r:
+                    moved["content"] = r["content"]
+                out.append(moved)
         offset += seg_e - seg_s
     return out
