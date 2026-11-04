@@ -33,6 +33,7 @@ import recut
 import layout_ranges
 import watermarked
 import media_auth
+from jsonfile import write_json_atomic
 
 load_dotenv()
 
@@ -1128,8 +1129,7 @@ def _unmark_local_job(job_id, clip_index, clean_filename):
             shorts = data.get('shorts', [])
             if clip_index < len(shorts):
                 shorts[clip_index]['video_url'] = url
-                with open(meta_path, 'w') as f:
-                    json.dump(data, f, indent=4)
+                write_json_atomic(meta_path, data, indent=4)
         except Exception as e:
             print(f"⚠️ Could not unmark metadata of {job_id}: {e}")
     watermarked.unmark_job(job_dir)
@@ -4608,8 +4608,7 @@ async def edit_clip(
                 if req.clip_index < len(shorts):
                     shorts[req.clip_index]['video_url'] = new_video_url
                     meta['shorts'] = shorts
-                    with open(meta_files[0], 'w') as f:
-                        json.dump(meta, f, indent=4)
+                    write_json_atomic(meta_files[0], meta, indent=4)
         except Exception as e:
             print(f"⚠️ Failed to update metadata.json: {e}")
 
@@ -5024,8 +5023,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
             updates['caption_words'] = None
         clip.update(updates)
         data['shorts'] = clips
-        with open(json_files[0], 'w') as f:
-            json.dump(data, f, indent=2)
+        write_json_atomic(json_files[0], data, indent=2)
         mem_clips = (job.get('result') or {}).get('clips') or []
         if req.clip_index < len(mem_clips):
             mem_clips[req.clip_index].update(updates)
@@ -5379,8 +5377,7 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
         }
         clip.update(updates)
         data['shorts'] = clips
-        with open(json_files[0], 'w') as f:
-            json.dump(data, f, indent=2)
+        write_json_atomic(json_files[0], data, indent=2)
         mem_clips = (job.get('result') or {}).get('clips') or []
         if req.clip_index < len(mem_clips):
             mem_clips[req.clip_index].update(updates)
@@ -5828,9 +5825,8 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
             data['shorts'] = clips
             
             # Write back
-            with open(json_files[0], 'w') as f:
-                json.dump(data, f, indent=4)
-                print(f"✅ Metadata updated with subtitled video for clip {req.clip_index}")
+            write_json_atomic(json_files[0], data, indent=4)
+            print(f"✅ Metadata updated with subtitled video for clip {req.clip_index}")
     except Exception as e:
         print(f"⚠️ Failed to update metadata.json: {e}")
         # Non-critical, but good for persistence
@@ -5897,8 +5893,7 @@ async def remove_subtitles(req: RemoveSubtitlesRequest, request: Request):
     try:
         clips[req.clip_index]['video_url'] = new_url
         data['shorts'] = clips
-        with open(json_files[0], 'w') as f:
-            json.dump(data, f, indent=4)
+        write_json_atomic(json_files[0], data, indent=4)
     except Exception as e:
         print(f"⚠️ Failed to update metadata.json: {e}")
 
@@ -6045,9 +6040,8 @@ async def add_hook(req: HookRequest, request: Request):
         if req.clip_index < len(clips):
             clips[req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
             data['shorts'] = clips
-            with open(json_files[0], 'w') as f:
-                json.dump(data, f, indent=4)
-                print(f"✅ Metadata updated with hook video for clip {req.clip_index}")
+            write_json_atomic(json_files[0], data, indent=4)
+            print(f"✅ Metadata updated with hook video for clip {req.clip_index}")
     except Exception as e:
         print(f"⚠️ Failed to update metadata.json: {e}")
 
@@ -6156,9 +6150,8 @@ async def translate_clip(
         if req.clip_index < len(clips):
             clips[req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
             data['shorts'] = clips
-            with open(json_files[0], 'w') as f:
-                json.dump(data, f, indent=4)
-                print(f"✅ Metadata updated with translated video for clip {req.clip_index}")
+            write_json_atomic(json_files[0], data, indent=4)
+            print(f"✅ Metadata updated with translated video for clip {req.clip_index}")
     except Exception as e:
         print(f"⚠️ Failed to update metadata.json: {e}")
 
