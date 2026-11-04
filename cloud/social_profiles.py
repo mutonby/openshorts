@@ -121,7 +121,10 @@ async def profile_token(username: str):
         resp = await client.post(
             f"{API_BASE}/uploadposts/users/generate-jwt",
             headers=_auth_headers(),
-            json={"username": username},
+            # generate-jwt stores the profile's connect-page platforms; a call
+            # without them resets the list and Twitch (opt-in there) would
+            # vanish from a connect page the user has open.
+            json={"username": username, "platforms": connect_platforms()},
         )
         resp.raise_for_status()
         url = resp.json().get("access_url") or ""
