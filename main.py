@@ -29,6 +29,7 @@ import gemini_worker
 import hook_grounding
 import layout_picker
 import llm_backend
+import twitch_signals
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
                             score_batches, shortlist_target,
@@ -2057,13 +2058,17 @@ def score_batch_size():
     return 3 if llm_backend.active() else 8
 
 
-def get_viral_clips(transcript_result, video_duration):
+def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
     """Two-pass clip selection: score transcript windows, then detail the best.
 
     Windowing gives even coverage on long videos (a single call over the whole
     transcript clusters picks near the start), and the cheap scoring pass keeps
     the expensive detail reasoning focused on the shortlist. Cuts are snapped to
     word boundaries so clips don't start/end mid-word.
+
+    ``viewer_clips`` (``twitch_signals.viewer_clips_for_job``): stretches the
+    stream's own viewers clipped. They are shown to both passes on the windows
+    that hold them, and the hottest windows are guaranteed a shortlist slot.
     """
     language = str(transcript_result.get('language') or 'unknown')
     if llm_backend.active():
@@ -2112,9 +2117,21 @@ def get_viral_clips(transcript_result, video_duration):
         # shortlist at 3 * n_batches, under the target for any source shorter
         # than ~30 min. See clip_selection.score_batches.
         target = shortlist_target(video_duration)
+        heat = twitch_signals.window_heat(windows, viewer_clips) if viewer_clips else {}
+        if heat:
+            print(f"   👀 Viewer clips fall in {len(heat)} window(s).")
 
         def _payload(ws):
-            return [{"id": w["id"], "start": w["start"], "end": w["end"], "text": w["text"]} for w in ws]
+            out = []
+            for w in ws:
+                item = {"id": w["id"], "start": w["start"], "end": w["end"], "text": w["text"]}
+                h = heat.get(w["id"])
+                if h:
+                    item["viewers_clipped"] = h["clips"]
+                    item["viewer_clip_views"] = h["views"]
+                    item["viewer_moments"] = h["spans"][:5]
+                out.append(item)
+            return out
 
         def _score_prompt(ws):
             return gemini_worker.SCORE_PROMPT_TEMPLATE.format(
@@ -2133,6 +2150,13 @@ def get_viral_clips(transcript_result, video_duration):
         shortlist = [by_id[w["id"]] for w in scored[:target] if w.get("id") in by_id]
         if not shortlist:
             shortlist = windows[:target]  # scoring returned nothing usable
+        if heat:
+            before = {w["id"] for w in shortlist}
+            ranked = [by_id[w["id"]] for w in scored if w.get("id") in by_id] or windows
+            shortlist = twitch_signals.promote_hot_windows(shortlist, ranked, heat, target)
+            added = [w["id"] for w in shortlist if w["id"] not in before]
+            if added:
+                print(f"   👀 Promoted {len(added)} window(s) viewers clipped: {added}")
         print(f"   Shortlisted {len(shortlist)} window(s) for detail.")
 
         # --- Pass 2: detailed clip extraction on the shortlist ---
@@ -2284,8 +2308,24 @@ def _sum_costs(costs, model_name):
     return out
 
 
+def _viewer_hint(viewer_clips, offset, duration):
+    """Prompt lines naming what viewers clipped inside [offset, offset+duration],
+    in that file's own seconds, or "" when there is nothing to say."""
+    inside = [c for c in viewer_clips or []
+              if offset <= (c["start"] + c["end"]) / 2 < offset + duration]
+    if not inside:
+        return ""
+    inside = sorted(inside, key=lambda c: -c.get("views", 0))[:15]
+    spans = [[round(c["start"] - offset, 1), round(c["end"] - offset, 1), c.get("views", 0)]
+             for c in inside]
+    return ("\nVIEWER_CLIPS (moments the stream's live viewers clipped themselves, as "
+            "[start, end, views] in seconds of THIS video): " + json.dumps(spans) +
+            "\nTreat them as strong evidence a moment lands and cover the best of them, "
+            "but still judge what you see and keep the time contract.\n")
+
+
 def _visual_pass(client, model_name, video_path, duration, language,
-                 min_clips, max_clips, min_secs, max_secs):
+                 min_clips, max_clips, min_secs, max_secs, hint=""):
     """One vision call over one file. Returns ``(shorts, cost)``; ``shorts``
     are clamped to ``[0, duration]`` of THAT file. Returns ``(None, None)``
     when Gemini could not take the file; raises GeminiBlockedError."""
@@ -2309,7 +2349,7 @@ def _visual_pass(client, model_name, video_path, duration, language,
         prompt = gemini_worker.VISUAL_PROMPT_TEMPLATE.format(
             video_duration=duration, language=language,
             min_clips=min_clips, max_clips=max_clips,
-            min_secs=min_secs, max_secs=max_secs)
+            min_secs=min_secs, max_secs=max_secs) + (hint or "")
         config = genai_types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=gemini_worker.VisualResponse,
@@ -2333,7 +2373,7 @@ def _visual_pass(client, model_name, video_path, duration, language,
                 pass
 
 
-def get_visual_clips(video_path, video_duration, language="en"):
+def get_visual_clips(video_path, video_duration, language="en", viewer_clips=None):
     """Clip a SILENT video by vision: Gemini watches the footage and picks the
     most engaging visual moments (no transcript). Returns the same
     {"shorts", "cost_analysis"} shape as get_viral_clips, or None.
@@ -2372,7 +2412,8 @@ def get_visual_clips(video_path, video_duration, language="en"):
             print(f"🎥  Model: {model_name} | uploading {os.path.basename(video_path)}…")
             clean, cost = _visual_pass(client, model_name, video_path, video_duration,
                                        language, v_min_clips, v_max_clips,
-                                       v_min_secs, v_max_secs)
+                                       v_min_secs, v_max_secs,
+                                       hint=_viewer_hint(viewer_clips, 0.0, float(video_duration)))
             costs = [cost]
         else:
             covered = segments[-1][1]
@@ -2393,7 +2434,8 @@ def get_visual_clips(video_path, video_duration, language="en"):
                         _vision_proxy(video_path, s0, s1, proxy)
                         shorts, cost = _visual_pass(
                             client, model_name, proxy, round(s1 - s0, 3), language,
-                            per_min, v_max_clips, v_min_secs, v_max_secs)
+                            per_min, v_max_clips, v_min_secs, v_max_secs,
+                            hint=_viewer_hint(viewer_clips, s0, s1 - s0))
                     except gemini_worker.GeminiBlockedError:
                         raise
                     except Exception as e:
@@ -2474,6 +2516,13 @@ if __name__ == '__main__':
             os.makedirs(path, exist_ok=True)
         return path
     
+    # What the stream's viewers clipped (Twitch VODs only; [] otherwise or
+    # without TWITCH_CLIENT_ID). A URL call, so it runs before the download and
+    # the early pick below gets it too.
+    viewer_clips = []
+    if args.url and not args.skip_analysis:
+        viewer_clips = twitch_signals.viewer_clips_for_job(args.url, 0)
+
     # 1. Get Input Video
     if args.url:
         # For multi-clip runs, treat --output as an OUTPUT DIRECTORY (create it if needed).
@@ -2504,7 +2553,8 @@ if __name__ == '__main__':
                 t = transcribe_video(audio_path)
                 early["transcript"] = t
                 if audio_duration and not speech_is_sparse(t, audio_duration):
-                    early["clips"] = get_viral_clips(t, audio_duration)
+                    early["clips"] = get_viral_clips(t, audio_duration,
+                                                     viewer_clips=viewer_clips)
             except Exception as e:
                 print(f"   ℹ️ Early transcription skipped ({type(e).__name__}: {e}).")
                 early["transcript"] = early["clips"] = None
@@ -2686,9 +2736,9 @@ if __name__ == '__main__':
             print("♻️ Using the clips Gemini picked while the video downloaded.")
             clips_data = early_clips
         elif transcript is not None:
-            clips_data = get_viral_clips(transcript, duration)
+            clips_data = get_viral_clips(transcript, duration, viewer_clips=viewer_clips)
         else:
-            clips_data = get_visual_clips(input_video, duration)
+            clips_data = get_visual_clips(input_video, duration, viewer_clips=viewer_clips)
 
         if not clips_data or 'shorts' not in clips_data:
             # Deliberately fail instead of reframing the whole video: that path

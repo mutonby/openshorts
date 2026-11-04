@@ -269,6 +269,10 @@ Rules:
   work with prior context score low.
 - Prefer windows with strong hooks, conflict, surprise, outrage, emotion,
   novelty, big numbers, or a clear payoff.
+- A window may carry `viewers_clipped` / `viewer_clip_views`: the stream's own
+  live viewers clipped that stretch themselves. That is strong evidence the
+  moment lands even when the transcript looks thin (a chase, a crash, a scream),
+  so weigh it up; the window still has to make sense to a cold viewer.
 
 TRANSCRIPT_LANGUAGE: {language}
 VIDEO_DURATION_SECONDS: {video_duration}
@@ -300,6 +304,9 @@ CLIP RULES:
 - THE 2-SECOND RULE: the clip MUST open on its strongest moment. If the first
   2 seconds would not stop a cold viewer from scrolling, move the start or skip the clip.
 - Start slightly before the hook and end slightly after the payoff when possible.
+- When a window has `viewer_moments` ([start, end] stretches the stream's
+  viewers clipped), the best clip of that window should cover the strongest
+  of them, opening a few seconds before it so the moment has its setup.
 - Do not cut in the middle of a word or phrase.
 - No generic intros/outros unless they are the hook.
 - STANDS ALONE: the clip must make sense to someone who has seen nothing else.
