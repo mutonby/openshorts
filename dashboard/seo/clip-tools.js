@@ -904,7 +904,7 @@ the map and loses you. With the vertical layout on <strong>auto</strong> (the
 default in advanced options), each clip is laid out by what is in it:</p>
 <ul>
 <li><strong>Gameplay with a webcam box.</strong> The OBS layout most streamers use, gameplay full screen and a camera in a corner, is detected geometrically: a subject that is small, off centre and still between samples. The clip renders as INSET: the gameplay across the full width on top, the webcam box cropped out and enlarged to fill the bottom. Both stay readable on a phone.</li>
-<li><strong>Full-frame action.</strong> When the meaningful content spans the whole width (a chase, a team fight, a map), the clip keeps the full width over a blurred backdrop instead of cropping half of it away.</li>
+<li><strong>Full-frame action.</strong> When the meaningful content spans the whole width (a chase, a team fight, a map), the clip is zoomed around the motion, keeping roughly three quarters of the width instead of cropping half of it away.</li>
 <li><strong>Just chatting and IRL.</strong> A face-filled frame is face-tracked, with a stabiliser that holds the frame still inside a safe zone instead of following every lean towards the mic.</li>
 <li><strong>Two people on camera.</strong> A co-stream or a guest in the same shot is stacked, one person in each half.</li>
 </ul>
@@ -1217,8 +1217,9 @@ stacked under the content columns; a webcam window floating over the screen
 is boxed and enlarged below it.</p>
 <h3>Wide content</h3>
 <p>When what matters spans more of the frame than any crop can keep (a group
-on a stage, a map, a chase), the scene keeps its full width over a blurred
-backdrop instead of being cropped to a random strip.</p>
+on a stage, a map, a chase), the scene is zoomed about 1.3 times around where
+the motion is, keeping roughly three quarters of the width between the hook and
+the captions, instead of a thin full-width strip or a random vertical column.</p>
 <h3>Facecam inset</h3>
 <p>A stream or recording with a webcam composited into a corner is detected by
 geometry: a subject that is small, off centre and still. The clip renders the
@@ -1278,7 +1279,7 @@ beyond a single crop: Klap lists split-screen, screencast and gaming layouts,
 <li><strong>It does not output square or 4:5.</strong> The target is 9:16.</li>
 <li><strong>It does not take sources under 45 seconds.</strong> For a short file, use the free converter.</li>
 <li><strong>It does not track objects or animals</strong> as subjects: tracking is for faces and people.</li>
-<li><strong>It cannot invent picture.</strong> When the content is wider than any crop, it keeps the width over a blurred backdrop rather than guessing.</li>
+<li><strong>It cannot invent picture.</strong> When the content is wider than any crop, it keeps about three quarters of the width, centred on the motion, over a blurred backdrop rather than guessing.</li>
 <li><strong>Free clips carry a watermark.</strong> A paid plan removes it, also from clips already made.</li>
 </ul>
 

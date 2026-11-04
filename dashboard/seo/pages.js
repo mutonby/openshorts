@@ -2664,8 +2664,11 @@ inside it.</p></div>
 five-car pileup means what it means across the whole width of the frame, and
 cropping to a vertical column deletes the half that explains it. OpenShorts
 measures how wide the meaningful content is and routes on that: content spanning
-more than 85% of the frame renders as WIDE, which keeps the full width intact
-over a blurred backdrop rather than side-cropping it. Content that leaves room
+more than 85% of the frame renders as WIDE. A full-width strip in a vertical
+frame is under a third of its height and unreadable on a phone, so WIDE zooms
+about 1.3 times instead: roughly three quarters of the width, the crop slid
+toward where the motion is (a still HUD or minimap never pulls it), with the
+hook above the picture and the captions below it. Content that leaves room
 beside it, a GTA RP scene playing out on one side of the screen for instance,
 gets stacked over the presenter instead.</p>
 <p>Width is the gate rather than coverage because width is what survives
@@ -2815,7 +2818,7 @@ ${sources([
         {
           '@type': 'HowToStep',
           name: 'Review the reframed clips',
-          text: 'Gameplay with a corner webcam renders as gameplay full width on top and the enlarged facecam below; full-frame action keeps its full width over a blurred backdrop. Subtitles are burned in from the word-level transcript.',
+          text: 'Gameplay with a corner webcam renders as gameplay full width on top and the enlarged facecam below; full-frame action is zoomed around the motion, keeping roughly three quarters of the width. Subtitles are burned in from the word-level transcript.',
         },
         {
           '@type': 'HowToStep',
@@ -2924,8 +2927,11 @@ detector was measured.</p>
 <p>A console capture has no face in it at all, and the moment worth posting is
 usually spread across the frame: a chase, a crash, a shootout. Cropping a
 vertical column out of the middle deletes the half that explains it. When the
-meaningful content spans the whole width, the clip renders as WIDE: the full
-width kept intact over a blurred backdrop, rather than cropped from the sides.</p>
+meaningful content spans the whole width, the clip renders as WIDE: zoomed
+about 1.3 times so the picture fills the space between the hook and the
+captions, keeping roughly three quarters of the width, with the crop slid
+toward where the motion is. Edge HUD such as a minimap can fall outside it;
+the action stays in.</p>
 
 <h2>Console captures with nobody talking</h2>
 <p>The default picker reads the transcript, which is what makes it good at
