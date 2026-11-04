@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  Rocket, Youtube, Loader2, RefreshCw, Play, CheckCircle2, AlertTriangle,
+  Rocket, Youtube, Twitch, Loader2, RefreshCw, Play, CheckCircle2, AlertTriangle,
   Clock, Scissors, Send, ExternalLink, FolderOpen, Lock,
 } from 'lucide-react';
 import { apiJson, openQuotaWall } from '../lib/api';
@@ -18,6 +18,8 @@ const ERROR_TEXT = {
   plan_required: 'Autopilot is paused: it needs an active Starter, Creator or Pro plan.',
   youtube_not_connected: 'Connect your YouTube channel so Autopilot can see your new videos.',
   youtube_reauth_required: 'YouTube asked to reconnect your channel. Reconnect it to keep Autopilot running.',
+  twitch_not_connected: 'Connect your Twitch account so Autopilot can see your past broadcasts.',
+  twitch_reauth_required: 'Twitch asked to reconnect your account. Reconnect it to keep Autopilot running.',
   channel_unavailable: 'We could not read your channel on the last check. We will try again shortly.',
 };
 
@@ -32,6 +34,7 @@ const REASON_TEXT = {
   processing_failed: 'processing failed',
   publish_partial: 'some clips could not be scheduled',
   url_ingest_disabled: 'links are disabled on this server',
+  still_live: 'still live: clipped once the broadcast ends',
 };
 
 const fmtDate = (iso) => (iso
@@ -104,7 +107,7 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
       const d = await apiJson('/api/autopilot');
       setData(d);
       setLoadError('');
-      if (d.youtube) {
+      if (d.youtube || d.twitch) {
         const v = await apiJson('/api/autopilot/videos');
         setVideos(v.videos || []);
         setVideosError(v.error || null);
@@ -214,6 +217,8 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
 
   const s = data?.settings || {};
   const yt = data?.youtube;
+  const tw = data?.twitch;
+  const twitchAvailable = !!data?.twitch_available;
   const accounts = data?.accounts || {};
   const eligible = !!data?.eligible;
   const limits = data?.limits || { max_minutes_choices: [10, 20, 30, 45, 60, 90], max_clips_to_publish: 5, platforms: ['tiktok', 'instagram', 'youtube'] };
@@ -279,6 +284,32 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
         {yt?.reauth_required && (
           <p className="text-warn text-sm mt-3 flex items-center gap-2"><AlertTriangle size={14} /> YouTube needs you to reconnect this channel.</p>
         )}
+        {/* Twitch: past broadcasts are a second source. Read-only: nothing is
+            ever posted to Twitch. The stretch viewers clipped most is clipped. */}
+        {twitchAvailable && (
+          <div className="flex flex-wrap items-center justify-between gap-4 mt-5 pt-5 border-t border-rule">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-full bg-paper3 border border-rule flex items-center justify-center shrink-0">
+                <Twitch size={18} className={tw ? 'text-brass' : 'text-muted'} />
+              </div>
+              <div className="min-w-0">
+                {tw ? (
+                  <p className="text-ink truncate">{tw.display_name || tw.handle} <span className="readout ml-1">{tw.handle}</span></p>
+                ) : (
+                  <p className="text-muted text-sm">stream on Twitch? connect it and every past broadcast is clipped once it ends, starting from the part your viewers clipped</p>
+                )}
+              </div>
+            </div>
+            {(!tw || tw.reauth_required) && (
+              <button onClick={connect} className="btn-ghost px-4 py-2 text-sm" disabled={!eligible}>
+                <Twitch size={16} /> {tw ? 'reconnect twitch' : 'connect twitch'}
+              </button>
+            )}
+          </div>
+        )}
+        {tw?.reauth_required && (
+          <p className="text-warn text-sm mt-3 flex items-center gap-2"><AlertTriangle size={14} /> Twitch needs you to reconnect this account.</p>
+        )}
       </div>
 
       {/* 2 · switch */}
@@ -298,7 +329,7 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
           <Switch
             label="autopilot"
             checked={!!s.enabled}
-            disabled={saving || !eligible || !yt}
+            disabled={saving || !eligible || !(yt || tw)}
             onChange={toggleEnabled}
           />
         </div>
@@ -406,7 +437,7 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
       </div>
 
       {/* 4 · channel videos */}
-      {yt && (
+      {(yt || tw) && (
         <div className="card p-6 mb-6">
           <div className="flex items-center justify-between gap-3 mb-4">
             <div>
@@ -429,7 +460,7 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
               const run = v.run;
               // Skipped runs can be retried too: private videos used to be
               // misread as Shorts, and a real Short just skips again.
-              const canRun = eligible && (!run || run.status === 'failed' || run.status === 'skipped');
+              const canRun = eligible && !v.is_live && (!run || run.status === 'failed' || run.status === 'skipped');
               return (
                 <div key={v.id} className="flex items-center gap-3 py-3">
                   {v.thumbnail_url ? (
@@ -442,8 +473,9 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
                       {v.title || v.id} <ExternalLink size={11} className="inline -mt-0.5 text-muted" />
                     </a>
                     <div className="flex flex-wrap items-center gap-2 mt-1">
+                      {v.source === 'twitch' && <Twitch size={12} className="text-muted" aria-label="Twitch broadcast" />}
                       <span className="readout">{fmtDate(v.published_at)}</span>
-                      <StatusBadge run={run} />
+                      {v.is_live && !run ? <span className="badge-warn">live now</span> : <StatusBadge run={run} />}
                     </div>
                   </div>
                   {run?.status === 'completed' && run.job_id ? (

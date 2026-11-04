@@ -19,6 +19,13 @@ API_BASE = "https://api.upload-post.com/api"
 CONNECT_PLATFORMS = ["tiktok", "instagram", "youtube"]
 
 
+def connect_platforms():
+    """Twitch joins the connect page only once Upload-Post supports it
+    (``AUTOPILOT_TWITCH=1``): it is read-only there, an Autopilot source."""
+    from .autopilot import twitch_enabled
+    return CONNECT_PLATFORMS + (["twitch"] if twitch_enabled() else [])
+
+
 def _auth_headers():
     return {"Authorization": f"Apikey {settings.managed_upload_post_key}"}
 
@@ -88,7 +95,7 @@ async def get_connect_url(username: str, return_to: str = "account") -> str:
         "connectDescription": "Link TikTok, Instagram and YouTube to post your shorts directly from OpenShorts.",
         "redirectUrl": f"{settings.frontend_url}{back}",
         "redirectButtonText": "Back to OpenShorts",
-        "platforms": CONNECT_PLATFORMS,
+        "platforms": connect_platforms(),
         "showCalendar": True,  # keep the scheduling calendar available in the page
     }
     async with httpx.AsyncClient(timeout=20) as client:

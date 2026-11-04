@@ -33,3 +33,33 @@ day. Paid plans only (it spends minutes unattended).
   `timeout`.
 - `AUTOPILOT_DISABLED=1` turns the poller off without touching the API.
 - Both tables are in `account.USER_OWNED_TABLES`.
+
+## Twitch as a source (`AUTOPILOT_TWITCH=1`)
+
+Off by default: it needs Upload-Post to serve `platform=twitch` on the media
+endpoint and to offer Twitch on the connect page. With the flag on:
+
+- `fetch_all_videos` reads every connected source (`channel_sources`: YouTube,
+  then Twitch). One broken connection does not stop the other; the error is
+  raised only when no source could be read.
+- Twitch ids are stored as `twitch:<id>` (`normalise_media`), so they never
+  collide with YouTube ids in `autopilot_runs`; the URL is the VOD link.
+- A broadcast still live (`is_live`) is not claimed; a later tick takes it.
+- No private/Short checks. Instead of the first `max_minutes` (usually the
+  "starting soon" screen), the job clips the stretch the stream's viewers
+  clipped most (`twitch_signals.best_stretch`, one minute of lead), sent as
+  `source_start`/`source_end` so only that stretch is billed. Without Twitch
+  credentials or viewer clips it falls back to `max_minutes` from the start.
+- The connect page lists Twitch (`social_profiles.connect_platforms`). It is
+  read-only: Autopilot never publishes to Twitch.
+
+## Viewer clips as a selection signal (`twitch_signals.py`)
+
+Any job whose URL is a Twitch VOD (Autopilot or pasted) asks Helix, with an app
+token from `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET`, for the clips made from
+that VOD (`video_id` + `vod_offset` + `view_count`). They are shifted into the
+file's own time (`SOURCE_START_SECONDS`), shown to the scoring and detail
+prompts on the windows that hold them (`viewers_clipped`, `viewer_moments`),
+and up to a third of the shortlist is reserved for the hottest windows
+(`promote_hot_windows`). The silent-footage vision pass gets them as a hint
+too. Everything is best effort: no credentials or any error means no signal.

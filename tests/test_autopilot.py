@@ -142,3 +142,42 @@ def test_connect_return_targets_are_a_closed_list():
     from cloud import social_profiles
     assert set(social_profiles.RETURN_TARGETS) == {"account", "autopilot"}
     assert all(v.startswith("/#") for v in social_profiles.RETURN_TARGETS.values())
+
+
+class TestTwitchSource:
+    def test_live_broadcasts_wait_for_a_later_tick(self):
+        baseline = NOW - timedelta(days=1)
+        live = dict(_video("twitch:1", 2), is_live=True)
+        done = _video("twitch:2", 3)
+        assert [v["id"] for v in ap.pick_new_videos([live, done], baseline, set(), NOW)] == ["twitch:2"]
+
+    def test_normalise_media_prefixes_twitch_ids_and_keeps_youtube(self):
+        tw = ap.normalise_media([{"id": "2290012345", "title": "GTA heist night",
+                                  "timestamp": "2026-11-20T01:00:00Z"}], "twitch")
+        assert tw[0]["id"] == "twitch:2290012345"
+        assert tw[0]["source_id"] == "2290012345"
+        assert tw[0]["permalink"] == "https://www.twitch.tv/videos/2290012345"
+        assert tw[0]["caption"] == "GTA heist night"
+        assert tw[0]["source"] == "twitch"
+        yt = ap.normalise_media([{"id": "abcDEF12345", "caption": "x"}, {"no": "id"}], "youtube")
+        assert [m["id"] for m in yt] == ["abcDEF12345"] and yt[0]["source"] == "youtube"
+
+    def test_video_url(self):
+        assert ap.video_url({"id": "twitch:9"}) == "https://www.twitch.tv/videos/9"
+        assert ap.video_url({"id": "abc"}) == "https://www.youtube.com/watch?v=abc"
+
+    def test_channel_sources_follow_the_flag(self, monkeypatch):
+        monkeypatch.delenv("AUTOPILOT_TWITCH", raising=False)
+        assert ap.channel_sources({}) == ["youtube"]
+        assert ap.channel_sources({"youtube": {}, "twitch": {}}) == ["youtube"]
+        assert ap.channel_sources({"twitch": {}}) == []
+        monkeypatch.setenv("AUTOPILOT_TWITCH", "1")
+        assert ap.channel_sources({"youtube": {}, "twitch": {}}) == ["youtube", "twitch"]
+        assert ap.channel_sources({"twitch": {}, "tiktok": {}}) == ["twitch"]
+
+    def test_connect_page_offers_twitch_only_with_the_flag(self, monkeypatch):
+        from cloud import social_profiles
+        monkeypatch.delenv("AUTOPILOT_TWITCH", raising=False)
+        assert "twitch" not in social_profiles.connect_platforms()
+        monkeypatch.setenv("AUTOPILOT_TWITCH", "1")
+        assert social_profiles.connect_platforms()[-1] == "twitch"

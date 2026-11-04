@@ -29,6 +29,14 @@ Guard rails, each one a cost that would otherwise scale with the channel:
 - ``max_minutes`` per video (the first N minutes of a long stream), so one
   two-hour live does not empty the month;
 - YouTube Shorts are skipped: they already are short-form.
+
+Twitch (``AUTOPILOT_TWITCH=1``, once Upload-Post lists Twitch broadcasts):
+the same loop also reads the past broadcasts of a Twitch account connected to
+the profile (``platform=twitch``). A broadcast still live is left for a later
+tick, and instead of the first ``max_minutes`` of a stream (usually the
+"starting soon" screen) the job clips the stretch its viewers clipped most
+(``twitch_signals.best_stretch``), when they clipped anything. Twitch video
+ids are stored as ``twitch:<id>`` so they can never collide with YouTube ids.
 """
 import asyncio
 import os
@@ -52,6 +60,26 @@ API_BASE = "https://api.upload-post.com/api"
 
 PAID_PLANS = ("starter", "creator", "pro")
 PUBLISH_PLATFORMS = ("tiktok", "instagram", "youtube")
+TWITCH_PREFIX = "twitch:"
+
+
+def twitch_enabled() -> bool:
+    """Twitch as a source is off until Upload-Post serves ``platform=twitch``."""
+    return os.environ.get("AUTOPILOT_TWITCH", "").strip() == "1"
+
+
+def channel_sources(accounts: dict) -> List[str]:
+    """The source platforms to read for a profile, in a stable order.
+
+    ``accounts`` is ``fetch_social_accounts``; empty means it could not be read,
+    and then only YouTube is tried, exactly as before Twitch existed.
+    """
+    if not accounts:
+        return ["youtube"]
+    out = [p for p in ("youtube",) if p in accounts]
+    if twitch_enabled() and "twitch" in accounts:
+        out.append("twitch")
+    return out
 MAX_MINUTES_CHOICES = (10, 20, 30, 45, 60, 90)
 DEFAULT_MAX_MINUTES = 30
 DEFAULT_CLIPS_TO_PUBLISH = 3
@@ -111,6 +139,8 @@ def pick_new_videos(media: Iterable[dict], baseline: Optional[datetime],
         published = parse_ts((item or {}).get("timestamp"))
         if not vid or published is None or vid in seen_ids:
             continue
+        if item.get("is_live"):
+            continue  # a broadcast still running: its VOD is not finished yet
         if published <= baseline or now - published > max_age:
             continue
         out.append(item)
@@ -218,25 +248,76 @@ def _headers():
     return {"Authorization": f"Apikey {settings.managed_upload_post_key}"}
 
 
-async def fetch_channel_videos(profile: str, limit: int = CHANNEL_LIST_LIMIT) -> List[dict]:
-    """The latest uploads of the YouTube channel connected to ``profile``."""
+def normalise_media(items, platform: str) -> List[dict]:
+    """Tag each listed video with its ``source``; Twitch ids get their prefix.
+
+    Upload-Post returns a Twitch broadcast's title as ``title`` and a YouTube
+    upload's as ``caption``; both end up in ``caption``.
+    """
+    out = []
+    for m in items or []:
+        if not isinstance(m, dict) or not m.get("id"):
+            continue
+        m = dict(m)
+        m["source"] = platform
+        if platform == "twitch":
+            raw = str(m["id"])
+            m["source_id"] = raw[len(TWITCH_PREFIX):] if raw.startswith(TWITCH_PREFIX) else raw
+            m["id"] = TWITCH_PREFIX + m["source_id"]
+            m["permalink"] = m.get("permalink") or f"https://www.twitch.tv/videos/{m['source_id']}"
+        if not m.get("caption") and m.get("title"):
+            m["caption"] = m["title"]
+        out.append(m)
+    return out
+
+
+async def fetch_channel_videos(profile: str, limit: int = CHANNEL_LIST_LIMIT,
+                               platform: str = "youtube") -> List[dict]:
+    """The latest uploads (YouTube) or past broadcasts (Twitch) of the account
+    connected to ``profile``, each tagged with its ``source``."""
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(
             f"{API_BASE}/uploadposts/media", headers=_headers(),
-            params={"platform": "youtube", "user": profile, "limit": limit})
+            params={"platform": platform, "user": profile, "limit": limit})
     try:
         data = resp.json()
     except ValueError:
         data = {}
     if resp.status_code == 200 and data.get("success") is not False:
-        return [m for m in (data.get("media") or []) if isinstance(m, dict)]
+        return normalise_media(data.get("media"), platform)
     message = str(data.get("error") or data.get("message") or "").lower()
-    if "not have a youtube" in message or "not associated" in message:
-        raise ChannelError("youtube_not_connected")
+    if f"not have a {platform}" in message or "not associated" in message:
+        raise ChannelError(f"{platform}_not_connected")
     if "reauth" in message or "expired" in message or "revoked" in message \
             or resp.status_code in (401, 403):
-        raise ChannelError("youtube_reauth_required")
+        raise ChannelError(f"{platform}_reauth_required")
     raise ChannelError("channel_unavailable")
+
+
+async def fetch_all_videos(profile: str, limit: int = CHANNEL_LIST_LIMIT,
+                           accounts: Optional[dict] = None) -> List[dict]:
+    """Videos from every connected source. Raises the first source's error only
+    when no source could be read (one broken connection must not stop the
+    other)."""
+    if accounts is None:
+        try:
+            accounts = await fetch_social_accounts(profile)
+        except Exception:
+            accounts = {}
+    sources = channel_sources(accounts)
+    if not sources:
+        raise ChannelError("youtube_not_connected")
+    media, errors = [], []
+    for platform in sources:
+        try:
+            media.extend(await fetch_channel_videos(profile, limit, platform))
+        except ChannelError as e:
+            errors.append(e)
+    if errors and len(errors) == len(sources):
+        raise errors[0]
+    media.sort(key=lambda m: parse_ts(m.get("timestamp")) or datetime.min.replace(
+        tzinfo=timezone.utc), reverse=True)
+    return media
 
 
 async def fetch_social_accounts(profile: str) -> dict:
@@ -396,7 +477,7 @@ async def _claim(user_id, video: dict, trigger: str) -> Optional[uuid.UUID]:
             async with s.begin():
                 s.add(AutopilotRun(
                     id=run_id, user_id=user_id, video_id=video["id"],
-                    video_url=video.get("permalink") or f"https://www.youtube.com/watch?v={video['id']}",
+                    video_url=video_url(video),
                     video_title=(video.get("caption") or "")[:300] or None,
                     thumbnail_url=video.get("thumbnail_url"),
                     published_at=parse_ts(video.get("timestamp")),
@@ -405,6 +486,14 @@ async def _claim(user_id, video: dict, trigger: str) -> Optional[uuid.UUID]:
     except IntegrityError:
         return None
     return run_id
+
+
+def video_url(video: dict) -> str:
+    if video.get("permalink"):
+        return video["permalink"]
+    if str(video.get("id", "")).startswith(TWITCH_PREFIX):
+        return f"https://www.twitch.tv/videos/{video['id'][len(TWITCH_PREFIX):]}"
+    return f"https://www.youtube.com/watch?v={video['id']}"
 
 
 async def _update_run(run_id, **values):
@@ -422,7 +511,8 @@ async def _drop_run(run_id):
 # --------------------------------------------------------------------------- #
 # Submitting a job through the normal pipeline
 # --------------------------------------------------------------------------- #
-async def _submit(user_id, email, run_id, video_url: str, max_minutes: int) -> dict:
+async def _submit(user_id, email, run_id, video_url: str, max_minutes: int,
+                  source_range=None) -> dict:
     """``POST /api/process`` in-process, as the user, and record the outcome."""
     from .auth import issue_jwt
     if _app is None:
@@ -437,6 +527,10 @@ async def _submit(user_id, email, run_id, video_url: str, max_minutes: int) -> d
         "max_minutes": max_minutes,
         "auto_hook": "1",
     }
+    if source_range:
+        # The stretch viewers clipped most, billed alone (plan_source_range).
+        body.pop("max_minutes", None)
+        body["source_start"], body["source_end"] = source_range
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_app),
                                      base_url=base, timeout=600) as client:
@@ -468,6 +562,13 @@ async def _start_video(user, video: dict, trigger: str, max_minutes: int) -> dic
     run_id = await _claim(user.id, video, trigger)
     if run_id is None:
         return {"status": "duplicate", "reason": "already_picked", "job_id": None}
+    if video.get("source") == "twitch":
+        if video.get("is_live"):
+            await _drop_run(run_id)  # not finished: a later tick takes it
+            return {"status": SKIPPED, "reason": "still_live", "job_id": None}
+        stretch = await twitch_stretch(video, max_minutes)
+        return await _submit(user.id, user.email, run_id, video_url(video), max_minutes,
+                             source_range=stretch)
     if await is_youtube_private(video["id"]):
         if trigger != "manual":
             # Scheduled uploads are often private until they go live: let the
@@ -483,6 +584,26 @@ async def _start_video(user, video: dict, trigger: str, max_minutes: int) -> dic
         return {"status": SKIPPED, "reason": "youtube_short", "job_id": None}
     url = video.get("permalink") or f"https://www.youtube.com/watch?v={video['id']}"
     return await _submit(user.id, user.email, run_id, url, max_minutes)
+
+
+async def twitch_stretch(video: dict, max_minutes: int):
+    """``(start, end)`` of the ``max_minutes`` the stream's viewers clipped most,
+    or None (no signal, no Twitch credentials, or the broadcast fits)."""
+    import twitch_signals
+    total = float(video.get("duration_seconds") or 0)
+    length = float(max_minutes or DEFAULT_MAX_MINUTES) * 60.0
+    if total and total <= length:
+        return None
+    try:
+        clips = await asyncio.to_thread(twitch_signals.fetch_viewer_clips,
+                                        str(video.get("source_id") or ""))
+    except Exception:
+        return None
+    stretch = twitch_signals.best_stretch(clips, total, length)
+    if stretch:
+        print(f"🤖 Autopilot Twitch {video.get('source_id')}: clipping "
+              f"{stretch[0] / 60:.0f}-{stretch[1] / 60:.0f} min ({len(clips)} viewer clips)")
+    return stretch
 
 
 # --------------------------------------------------------------------------- #
@@ -502,7 +623,7 @@ async def check_user(user_id) -> Optional[str]:
         await _set_check_result(user_id, "youtube_not_connected")
         return "youtube_not_connected"
     try:
-        media = await fetch_channel_videos(profile)
+        media = await fetch_all_videos(profile)
     except ChannelError as e:
         await _set_check_result(user_id, e.code)
         return e.code
@@ -737,6 +858,8 @@ async def get_autopilot(request: Request):
         "settings": _settings_view(prefs),
         "accounts": accounts,
         "youtube": accounts.get("youtube"),
+        "twitch": accounts.get("twitch") if twitch_enabled() else None,
+        "twitch_available": twitch_enabled(),
         "limits": {
             "daily_auto": DAILY_AUTO_LIMIT,
             "max_minutes_choices": list(MAX_MINUTES_CHOICES),
@@ -807,7 +930,7 @@ async def list_channel_videos(request: Request):
     if not profile:
         return {"videos": [], "error": "youtube_not_connected"}
     try:
-        media = await fetch_channel_videos(profile)
+        media = await fetch_all_videos(profile)
     except ChannelError as e:
         return {"videos": [], "error": e.code}
     ids = [m.get("id") for m in media if m.get("id")]
@@ -824,6 +947,8 @@ async def list_channel_videos(request: Request):
         "url": m.get("permalink"),
         "thumbnail_url": m.get("thumbnail_url"),
         "published_at": m.get("timestamp"),
+        "source": m.get("source") or "youtube",
+        "is_live": bool(m.get("is_live")),
         "run": runs.get(m.get("id")),
     } for m in media if m.get("id")], "error": None}
 
@@ -847,7 +972,7 @@ async def run_now(payload: ManualRun, request: Request):
         raise HTTPException(status_code=400, detail={"error": "youtube_not_connected",
                                                      "message": "Connect your YouTube channel first."})
     try:
-        media = await fetch_channel_videos(profile, limit=50)
+        media = await fetch_all_videos(profile, limit=50)
     except ChannelError as e:
         raise HTTPException(status_code=400, detail={"error": e.code, "message": "Could not read your channel."})
     video = next((m for m in media if m.get("id") == payload.video_id), None)
