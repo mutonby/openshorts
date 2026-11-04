@@ -26,8 +26,9 @@ naming the Cloud price in the same breath: both are true of different editions,
 and quoting only the first makes AI answers describe the paid product as free.
 
 The public `/gta-5-clips` page states the silent-footage thresholds and ceiling
-(see `clip-selection.md`); if that behaviour changes, change
-`dashboard/seo/pages.js` too.
+(see `clip-selection.md`), and `/gta-6-clips` states the same thresholds and
+that long silent footage is analysed in consecutive segments; if that behaviour
+changes, change both in `dashboard/seo/pages.js` too.
 
 ## Site navigation (`seo/nav.js`)
 

@@ -135,6 +135,14 @@ length costs $0: MIT, Docker, your own keys, no meter, no watermark. On
 ${esc(CLOUD.name)} it is metered by the source minute, like the others, after
 ${FREE_CLOUD}; the largest plan is $${PRO.monthly.price}/month for
 ${PRO.monthly.minutes} minutes, with top-ups of 200 minutes on top.</p>`,
+  console: () => `<p>A console capture is billed like any other source. On
+${esc(CLOUD.name)} the unit is the minute of video you import, after
+${FREE_CLOUD}: a 20-minute capture of the mission you care about uses 20
+minutes, a three-hour session uses 180. Paid plans run from
+$${STARTER.monthly.price}/month for ${STARTER.monthly.minutes} minutes to
+$${PRO.monthly.price}/month for ${PRO.monthly.minutes}, and trims, reframes,
+hooks and captions on the clips are not counted. Self-hosted under MIT there is
+no meter, no watermark and no cap; you supply the machine and the API keys.</p>`,
   es: () => `<p>OpenShorts tiene dos ediciones con precios muy distintos. <strong>Autoalojado</strong>
 es gratuito y de código abierto con licencia MIT: se ejecuta con Docker en tu
 máquina, con tus propias claves de API, sin marca de agua y sin límite de uso.
@@ -2627,7 +2635,8 @@ keeps Los Santos and drops the minimap, the kill feed and the chat. The only
 face is a small webcam box pinned to a corner, so a face tracker either ignores
 it or, worse, latches onto a pedestrian NPC. And the source is not eight minutes
 long, it is eight hours. Those are three different problems and each one has its
-own answer below.</p>
+own answer below. (GTA 6, which launches on consoles only, has its own page:
+<a href="/gta-6-clips">GTA 6 clips</a>.)</p>
 
 <h2>How the webcam inset layout works</h2>
 <p>The OBS layout almost every GTA streamer uses, gameplay full screen with the
@@ -2816,6 +2825,202 @@ ${sources([
   ],
 })
 
+/* /gta-6-clips: written before launch (19 November 2026), so nothing on it is
+ * about GTA 6 gameplay. What is new and true is where the footage comes from:
+ * the game ships on PS5 and Xbox Series X|S only, so a large share of it will
+ * be console captures with no facecam and often no voice, next to the usual
+ * stream VODs. The page is built around how each of those is handled, not
+ * around the GTA 5 page with the number changed. Rockstar facts are cited to
+ * Rockstar; the video policy is stated neutrally with the date it was read.
+ */
+const GTA6_LAUNCH = '19 November 2026'
+const GTA6_CHECKED = '4 November 2026'
+const ROCKSTAR_LAUNCH_URL = 'https://www.rockstargames.com/newswire/article/ak3ak31a49a221/grand-theft-auto-vi-is-now-set-to-launch-november-19-2026'
+const ROCKSTAR_TIMES_URL = 'https://support.rockstargames.com/articles/29jV3Cv2cCgvwM1XgtMO5o/grand-theft-auto-vi-regional-pre-load-and-release-times-on-playstation-5-and-xbox-series-x-or-s'
+const ROCKSTAR_POLICY_URL = 'https://support.rockstargames.com/articles/7bNaeoMFTV0iUDGhStTXvz/policy-on-posting-copyrighted-rockstar-games-material'
+
+const gta6Steps = [
+  ['Bring the footage', 'Paste a Twitch VOD link (twitch.tv/videos/...), a Twitch clip of 45 seconds or more, or a YouTube link, or upload the capture from your console or capture card. Footage needs at least 45 seconds of material.'],
+  ['Pick the stretch', 'For a long session, use "clip only part of it" to set a start and an end. Only that stretch is downloaded, analysed and billed.'],
+  ['Leave the layout on auto', 'With the vertical layout on auto (the default; "layouts": ["auto"] on the API) a facecam in a corner becomes INSET and full-frame action keeps its full width as WIDE.'],
+  ['Let the AI pick the moments', 'With commentary, Gemini ranks the transcript for stretches that stand alone. With almost no speech, Gemini watches the footage instead. Either way the clips are 15 to 60 seconds and 9:16.'],
+  ['Check for spoilers, then post', 'Review each clip, then download it or post it to TikTok, YouTube Shorts and Instagram Reels from the dashboard or the API. The AI does not know what counts as a story spoiler.'],
+]
+
+const gta6Faq = [
+  {
+    q: 'How do I make GTA 6 clips for TikTok?',
+    a: 'Paste the VOD link of your stream into OpenShorts, or upload the capture from your PS5, Xbox or capture card, with the vertical layout on auto. It picks the moments worth posting, cuts each into a 15 to 60 second 9:16 clip, keeps your facecam if the footage has one, and burns in captions when there is speech. Clips download or post to TikTok, YouTube Shorts and Instagram Reels.',
+  },
+  {
+    q: 'Can I clip PS5 or Xbox captures with no commentary?',
+    a: 'Yes. When the footage has no audio track, or its transcript comes back under 8 words in total or under 5 words a minute, OpenShorts switches by itself to a vision pass where Gemini watches the footage and picks the moments. Those clips have no captions, because there is no speech to caption. Long silent captures are analysed in consecutive segments, so they are not rejected, but minutes are billed on source length, so hand it the session you care about.',
+  },
+  {
+    q: 'Does it keep my facecam?',
+    a: 'Yes, with the vertical layout on auto. A webcam box composited into a corner, the usual OBS layout for a console streamed through a capture card, is detected by its geometry (small, off centre, still) and the clip renders as INSET: gameplay full width on top, the facecam cropped out and enlarged below.',
+  },
+  {
+    q: 'Can I paste a Twitch VOD of a GTA 6 stream?',
+    a: 'Yes: the twitch.tv/videos/ link of the past broadcast, or a Twitch clip of 45 seconds or more. OpenShorts does not connect to your Twitch account and does not clip new streams on its own; you paste the link after the stream.',
+  },
+  {
+    q: 'Will GTA RP clips work on GTA 6?',
+    a: 'Roleplay clips are mostly dialogue, which is what the transcript picker reads best, so the clipping side is ready. Whether and when RP servers run on GTA 6 is up to Rockstar and the server communities; nothing has been announced that this page can point to. GTA 5 RP streams can be clipped today.',
+  },
+  {
+    q: 'How much does it cost to clip GTA 6 footage?',
+    a: `Self-hosted OpenShorts is free and open source under MIT, with no meter and no watermark. OpenShorts Cloud clips your first video free up to 60 minutes, then ${CLOUD.freeMinutes} minutes a month with a watermark; paid plans start at $${CLOUD.lowPrice}/month for ${STARTER.monthly.minutes} minutes of source video.`,
+  },
+]
+
+const gta6Clips = () => ({
+  path: '/gta-6-clips',
+  title: withBrand('GTA 6 Clips: Make TikToks From Your Streams'),
+  description:
+    `Turn GTA 6 streams and PS5 or Xbox captures into TikToks, Shorts and Reels: facecam kept, silent gameplay handled. From $${CLOUD.lowPrice}/month, or self-host free.`,
+  h1: 'Make GTA 6 clips: turn your streams and console captures into TikToks',
+  lede: `OpenShorts turns GTA 6 footage into vertical clips: paste your Twitch or YouTube VOD, or upload a console capture, and it picks the moments worth posting and cuts them into 15 to 60 second 9:16 clips for TikTok, YouTube Shorts and Instagram Reels. Your first video is free up to 60 minutes (watermarked, no card); no watermark from $${CLOUD.lowPrice}/month, or self-host it free under MIT.`,
+  breadcrumb: [{ name: 'Use cases', path: '/use-cases' }, { name: 'GTA 6 clips' }],
+  published: '2026-11-04',
+  updated: '2026-11-04',
+  pasteLink: { placeholder: 'https://www.twitch.tv/videos/...', label: 'Twitch or YouTube VOD link' },
+  related: ['/gta-5-clips', '/platforms/twitch', '/platforms/kick', '/auto-reframe'],
+  tldr: [
+    `Rockstar has set Grand Theft Auto VI to launch on ${GTA6_LAUNCH}, on PlayStation 5 and Xbox Series X|S. No PC version has been announced, so when it launches every GTA 6 clip starts on a console: a capture saved with the PS5 Create button or the Xbox capture, a recording through a capture card, or a stream VOD.`,
+    'Those sources look different and OpenShorts handles each one differently. A stream with a facecam in a corner becomes gameplay on top and your enlarged face below. Full-frame action keeps its full width. A capture with nobody talking, which describes many console captures, is watched by the model instead of read from a transcript.',
+  ],
+  body: `
+<h2>What is different about GTA 6 footage</h2>
+<p>GTA 5 has been on PC for years, and a lot of its streamed footage comes
+from one: the game and the webcam captured together in OBS, streamed, and
+clipped from the VOD. At GTA 6's launch there is no PC version, so the footage
+arrives in three shapes:</p>
+<ul>
+<li><strong>Console captures.</strong> The PS5 Create button and the Xbox capture save the game picture and game audio. No facecam, and often no voice: whether your mic or party chat is recorded depends on the console's capture settings.</li>
+<li><strong>Capture card recordings.</strong> The console runs into a PC through a capture card and OBS records it, often with a webcam composited into a corner. It is the usual way to stream a console with a camera.</li>
+<li><strong>Stream VODs.</strong> The past broadcast on Twitch or YouTube, usually several hours long, with your commentary and, if you stream with a camera, a facecam.</li>
+</ul>
+<p>An auto-clipper built for talking heads handles none of the three well. The
+sections below are how OpenShorts deals with each. One thing to be clear about:
+nothing here was measured on GTA 6 footage, because until ${GTA6_LAUNCH} there
+is none. The layouts and thresholds below were measured on GTA 5 and other
+stream footage, and they do not depend on which game is on screen.</p>
+
+<h2>Facecam in a corner: INSET</h2>
+<p>When the footage is a capture card recording or a stream VOD with your
+webcam pinned to a corner, a centre crop to 9:16 keeps a slice of the map and
+throws your face away. With the vertical layout on <strong>auto</strong>,
+OpenShorts looks for that corner box by its geometry: a subject that is small,
+off centre and still between samples. When it finds one, the clip renders as
+INSET: the gameplay across the full width at the top, the webcam box cropped out
+and enlarged underneath. The play and your reaction to it both stay readable on
+a phone. The <a href="/gta-5-clips">GTA 5 clips</a> page explains how that
+detector was measured.</p>
+
+<h2>Full-frame action, no face: WIDE</h2>
+<p>A console capture has no face in it at all, and the moment worth posting is
+usually spread across the frame: a chase, a crash, a shootout. Cropping a
+vertical column out of the middle deletes the half that explains it. When the
+meaningful content spans the whole width, the clip renders as WIDE: the full
+width kept intact over a blurred backdrop, rather than cropped from the sides.</p>
+
+<h2>Console captures with nobody talking</h2>
+<p>The default picker reads the transcript, which is what makes it good at
+commentary and roleplay dialogue. A console capture usually has none: game
+audio, music, no voice. OpenShorts notices and switches paths on its own. When
+the footage has no audio track, or the transcript comes back under 8 words in
+total or under 5 words per minute, the video itself goes to Gemini, which
+watches it and picks the moments in the same 15 to 60 second band. Layouts work
+the same way after that. The clips come out without captions, which is correct:
+there is no speech to caption.</p>
+<p>Long silent footage is analysed in consecutive segments, so a long silent
+capture is not rejected. It is still worth handing it the session you care
+about rather than everything you recorded: on OpenShorts Cloud minutes are
+billed on source length, so three hours of free roam costs three hours whether
+or not anything happened in it. Use <strong>clip only part of it</strong> to set
+a start and an end, or trim the capture on the console before you upload it.</p>
+
+<h2>GTA 6 stream VODs from Twitch and YouTube</h2>
+<p>For a stream, paste the VOD link: the <code>twitch.tv/videos/</code> address
+of the past broadcast, a Twitch clip of 45 seconds or more, or the YouTube link
+of the stream. The channel page is the live channel, not a recording, so the box
+asks for the VOD. With commentary on, moment picking reads the transcript, so a
+four-hour stream is analysed the same way as a forty-minute one. On a long
+stream, clip it in parts (one job per hour, or just the stretch you know was
+good) and you get more candidates for fewer minutes. The
+<a href="/platforms/twitch">Twitch clip maker</a> page covers VODs, chat
+overlays and long streams in more detail.</p>
+<p>OpenShorts works from links you paste. It does not connect to your Twitch
+account and does not clip new streams on its own.</p>
+
+<h2>GTA RP clips</h2>
+<p>GTA RP is where a lot of GTA clips come from: hours of in-character dialogue
+with a few scenes worth posting. That is the case the transcript picker is best
+at, because roleplay is mostly talk. Whether and when roleplay servers run on
+GTA 6 is up to Rockstar and the server communities, and there is nothing
+announced that this page can point to. Until then, GTA RP clips come from GTA 5
+servers, and the <a href="/gta-5-clips">GTA 5 clips</a> page covers them.</p>
+
+<h2>How to make GTA 6 clips, step by step</h2>
+${ol(gta6Steps.map(([n, t]) => `<strong>${esc(n)}.</strong> ${esc(t)}`))}
+
+<h2>What it costs</h2>
+${pricingParagraph('console')}
+
+<h2>Whose footage you can clip, and Rockstar's video policy</h2>
+<p>Two rights questions apply and they have different answers. The
+<strong>recording</strong> belongs to whoever streamed or captured it: your own
+captures and streams, and footage whose owner said yes, such as a streamer you
+edit for. Never clip another streamer without permission; reuploads are what
+the platforms strike.</p>
+<p>The <strong>game footage</strong> is covered by Rockstar Games' and
+Take-Two's
+<a href="${ROCKSTAR_POLICY_URL}" rel="noopener">policy on posting copyrighted
+Rockstar Games material</a>. When we checked it on ${GTA6_CHECKED} it was one
+policy for all Rockstar games rather than one written for GTA VI. It describes
+the use it allows as occasional and non-commercial, asks that videos do not
+spoil the story (an ending, or story cutscenes cut together on their own), and
+says footage from leaked copies posted before the official release is taken
+down. Take-Two decides case by case and can change the policy at any time, so
+read the current version before you post or monetise anything. In launch week
+the spoiler rule is the one most likely to matter, and the AI that picks moments
+does not know what counts as a spoiler: review the clips before you post them.</p>
+
+<h2>What it does not do</h2>
+<ul>
+<li><strong>It does not clip live.</strong> It works from the VOD or the capture after the session.</li>
+<li><strong>It does not connect to your Twitch account</strong> or clip new streams automatically. Paste the VOD link.</li>
+<li><strong>It does not know GTA 6.</strong> It picks moments from what is said or, with no speech, from what is shown; it has no game-specific rules.</li>
+<li><strong>It does not caption silent footage.</strong> No speech means no captions.</li>
+<li><strong>Free clips carry a watermark.</strong> Upgrading removes it from clips already made.</li>
+</ul>
+
+${faqBlock(gta6Faq)}
+
+${sources([
+  `Launch date: Rockstar Games Newswire, <a href="${ROCKSTAR_LAUNCH_URL}" rel="noopener">"Grand Theft Auto VI is Now Set to Launch November 19, 2026"</a>. Platforms: Rockstar Support, <a href="${ROCKSTAR_TIMES_URL}" rel="noopener">GTA VI pre-load and release times on PlayStation 5 and Xbox Series X|S</a>. Both checked ${GTA6_CHECKED}.`,
+  `Video policy: Rockstar Support, <a href="${ROCKSTAR_POLICY_URL}" rel="noopener">Policy on posting copyrighted Rockstar Games material</a>, checked ${GTA6_CHECKED}.`,
+  'Silent-footage thresholds (8 words, 5 words per minute) and the vision pass: <code>main.py</code>; inset detection: <code>camera_inset.py</code>; WIDE layout: <code>screencast_layout.py</code>.',
+  `OpenShorts plan minutes: <a href="/pricing">pricing</a>. Source: <a href="${SITE.repo}" rel="noopener">github.com/mutonby/openshorts</a>.`,
+])}
+`,
+  faq: gta6Faq,
+  extraNodes: [
+    {
+      '@type': 'HowTo',
+      '@id': `${SITE.url}/gta-6-clips#howto`,
+      name: 'How to make GTA 6 clips for TikTok, Shorts and Reels',
+      description:
+        'Turn a GTA 6 stream VOD or a PS5, Xbox or capture card recording into vertical 9:16 clips, keeping the facecam when there is one and handling footage with no commentary.',
+      totalTime: 'PT15M',
+      supply: [{ '@type': 'HowToSupply', name: 'A GTA 6 stream VOD link or console capture you have the rights to' }],
+      tool: [{ '@type': 'HowToTool', name: 'OpenShorts (self-hosted with Docker, or OpenShorts Cloud)' }],
+      step: gta6Steps.map(([name, text]) => ({ '@type': 'HowToStep', name, text })),
+    },
+  ],
+})
+
 /* Hand-picked neighbours for every page in this file, by topic: a review links
  * to its comparison and the hub, a pricing page to the brand page and the
  * comparison, a use case to its sibling use cases. relatedFor shows the first
@@ -2934,7 +3139,7 @@ const RELATED = {
   '/open-source-video-clipper': ['/self-hosted-ai-clip-maker', '/how-openshorts-works', '/open-source-ai-video-generator', '/free-ai-clip-generator'],
   '/open-source-ai-video-generator': ['/platforms/instagram-reels', '/open-source-video-clipper', '/how-openshorts-works', '/free-ai-clip-generator'],
   '/how-openshorts-works': ['/auto-reframe', '/podcast-to-shorts', '/gta-5-clips', '/youtube-to-shorts-converter'],
-  '/gta-5-clips': ['/platforms/twitch', '/platforms/kick', '/podcast-to-shorts', '/how-openshorts-works', '/auto-clip'],
+  '/gta-5-clips': ['/gta-6-clips', '/platforms/twitch', '/platforms/kick', '/podcast-to-shorts', '/how-openshorts-works', '/auto-clip'],
   '/podcast-to-shorts': ['/youtube-to-shorts-converter', '/use-cases/sermons', '/how-openshorts-works', '/platforms/youtube', '/auto-clip'],
   '/youtube-to-shorts-converter': ['/how-to/clip-a-youtube-video', '/platforms/youtube-shorts', '/podcast-to-shorts', '/how-openshorts-works', '/video-aspect-ratio-converter'],
   '/mcp': ['/automate-shorts-api', '/n8n-youtube-shorts-automation', '/youtube-automation'],
@@ -2968,6 +3173,7 @@ export function buildPages() {
     openSourceVideoGenerator(),
     howItWorks(),
     gtaClips(),
+    gta6Clips(),
     podcastToShorts(),
     youtubeConverter(),
     mcpAgentsPage(),
@@ -3013,6 +3219,7 @@ export function relatedFor(page, all) {
     '/open-source-ai-video-generator': 'Text-to-video or clips from your footage: which you want.',
     '/how-openshorts-works': 'The full pipeline, stage by stage.',
     '/gta-5-clips': 'Stream VODs, webcam inset kept, no per-minute meter.',
+    '/gta-6-clips': 'Console captures and stream VODs, facecam kept, silent footage handled.',
     '/podcast-to-shorts': 'Podcast clips with both speakers kept in frame.',
     '/youtube-to-shorts-converter': 'Paste a link, get 9:16 clips with subtitles.',
     '/mcp': 'Drive the whole pipeline from Claude, ChatGPT or n8n.',

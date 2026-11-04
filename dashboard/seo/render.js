@@ -374,6 +374,7 @@ const FOOTER_COLUMNS = [
     ['/podcast-to-shorts', 'Podcast to Shorts'],
     ['/use-cases/sermons', 'Sermon clip maker'],
     ['/gta-5-clips', 'GTA 5 clips'],
+    ['/gta-6-clips', 'GTA 6 clips'],
     ['/auto-reframe', 'Auto reframe'],
     ['/auto-clip', 'Auto clip'],
     ['/youtube-automation', 'YouTube automation'],

@@ -47,6 +47,7 @@ export const NAV_GROUPS = [
       { href: '/podcast-to-shorts', label: 'Podcast clip maker' },
       { href: '/use-cases/sermons', label: 'Sermon clip maker' },
       { href: '/gta-5-clips', label: 'GTA 5 clips', sub: { en: 'Gaming', es: 'Videojuegos' } },
+      { href: '/gta-6-clips', label: 'GTA 6 clips', sub: { en: 'Console captures', es: 'Capturas de consola' } },
       { href: '/auto-reframe', label: 'Auto reframe 9:16' },
       { href: '/auto-clip', label: 'Auto clip', sub: 'Autopilot' },
       { href: '/youtube-automation', label: 'YouTube automation' },

@@ -147,6 +147,7 @@ export const USE_CASE_CHILDREN = [
   { path: '/podcast-to-shorts', name: 'Podcast clip maker', blurb: 'Podcast clips that keep both speakers in frame.' },
   { path: '/use-cases/sermons', name: 'Sermon clip maker', blurb: 'Only the sermon clipped out of a service, with the preacher followed.' },
   { path: '/gta-5-clips', name: 'GTA 5 and gaming clips', blurb: 'Stream VODs with the webcam inset kept, and quiet gameplay still handled.' },
+  { path: '/gta-6-clips', name: 'GTA 6 clips', blurb: 'Console captures and stream VODs into TikToks, facecam kept, silent footage handled.' },
   { path: '/auto-reframe', name: 'Auto reframe 9:16', blurb: 'Horizontal to vertical by tracking the speaker, stacking two, or keeping the screen.' },
   { path: '/auto-clip', name: 'Auto clip', blurb: 'Every new upload on your channel clipped on its own, with your rules.' },
   { path: '/youtube-automation', name: 'YouTube automation', blurb: 'Autopilot, n8n or the API: automate a real channel, not a content farm.' },
