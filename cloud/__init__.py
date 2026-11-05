@@ -49,17 +49,19 @@ def setup_sync(app):
     app.include_router(marketing.router)
 
 
-async def setup_async(app, keep_reservation_ids=None):
+async def setup_async(app, keep_reservation_ids=None, is_job_live=None):
     """Async initialization done inside the FastAPI lifespan.
 
     DB engine, orphaned-reservation cleanup and the metering sweeper live here.
     ``keep_reservation_ids`` belong to jobs being resumed after a restart and
-    must not be refunded (see app._resume_interrupted_jobs).
+    must not be refunded (see app._resume_interrupted_jobs). ``is_job_live``
+    (job_id -> bool) keeps the sweeper off jobs this instance still has queued
+    or running.
     """
     from . import database, digest, metering, videos
     await database.init_engine()
     await metering.release_orphaned_reservations(keep_ids=keep_reservation_ids)
-    metering.start_sweeper()
+    metering.start_sweeper(is_job_live)
     videos.start_sweeper()
     digest.start_digest()
     print("☁️  Cloud billing mode ENABLED (DB ready, metering active).")

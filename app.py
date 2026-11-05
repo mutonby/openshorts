@@ -616,6 +616,16 @@ def _submissions_in_flight(owner_id) -> int:
     return sum(1 for o, _ in _submissions.values() if o == str(owner_id))
 
 
+def _job_is_live(job_id) -> bool:
+    """Whether this instance still has the job queued, running or being
+    submitted: the same jobs the per-user job limit counts. The metering
+    sweeper leaves their reservations alone."""
+    job = jobs.get(str(job_id))
+    if job and job.get('status') in ('queued', 'processing'):
+        return True
+    return str(job_id) in _submissions
+
+
 async def _reserve_after_job_limit(request, user, url, input_path, job_id, max_minutes,
                                    source_range, priority):
     """The rest of reserve_process_minutes, once the job limit admitted it."""
@@ -2670,7 +2680,8 @@ async def lifespan(app: FastAPI):
     worker_task = asyncio.create_task(process_queue())
     cleanup_task = asyncio.create_task(cleanup_jobs())
     if BILLING_ENABLED:
-        await cloud.setup_async(app, keep_reservation_ids=_resumed_reservation_ids)
+        await cloud.setup_async(app, keep_reservation_ids=_resumed_reservation_ids,
+                                is_job_live=_job_is_live)
         # Account erasure lives in cloud/, which can't import app.py; hand it the
         # one thing only this module can do — wipe the local working files.
         cloud.account.register_local_purge(_purge_local_jobs_for_user)

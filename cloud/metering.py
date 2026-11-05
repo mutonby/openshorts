@@ -728,31 +728,46 @@ async def release_orphaned_reservations(keep_ids=None):
         print(f"☁️  Released {released} orphaned reservation(s) at startup.")
 
 
-async def _sweep_once():
+async def _sweep_once(is_job_live=None):
+    """Refund reservations older than STUCK_RESERVATION_HOURS.
+
+    ``is_job_live(job_id)`` says whether this instance still has the job queued
+    or running. Such a reservation is not stuck, only waiting its turn: the job
+    settles it itself when it ends. Releasing it anyway handed the user their
+    minutes back while the job still held their concurrent-job slot ("maximum
+    number of jobs running"), and the clips it delivered later were never
+    charged. A long queue makes that the normal case, not the exception.
+    """
     cutoff = _now() - timedelta(hours=STUCK_RESERVATION_HOURS)
     async with database.session() as session:
-        ids = list((await session.execute(
-            select(UsageLedger.id).where(and_(
+        rows = list((await session.execute(
+            select(UsageLedger.id, UsageLedger.job_id).where(and_(
                 UsageLedger.status == "reserved",
                 UsageLedger.created_at < cutoff,
             ))
-        )).scalars())
-    for lid in ids:
+        )).all())
+    swept = 0
+    for lid, job_id in rows:
+        if is_job_live is not None and is_job_live(job_id):
+            continue
         await release_reservation(str(lid))
-    if ids:
-        print(f"☁️  Swept {len(ids)} stuck reservation(s).")
+        swept += 1
+    if swept:
+        print(f"☁️  Swept {swept} stuck reservation(s).")
+    if len(rows) > swept:
+        print(f"☁️  Kept {len(rows) - swept} old reservation(s) of jobs still queued or running.")
 
 
-async def _sweeper_loop():
+async def _sweeper_loop(is_job_live=None):
     while True:
         try:
             await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
-            await _sweep_once()
+            await _sweep_once(is_job_live)
         except asyncio.CancelledError:
             break
         except Exception as e:  # never let the sweeper die
             print(f"⚠️  Metering sweeper error: {e}")
 
 
-def start_sweeper():
-    asyncio.create_task(_sweeper_loop())
+def start_sweeper(is_job_live=None):
+    asyncio.create_task(_sweeper_loop(is_job_live))
