@@ -117,7 +117,9 @@ def _video(path, n=40, box_x=None, size=(320, 180)):
         cv2.rectangle(frame, (5, 5), (60, 30), (255, 255, 255), -1)  # static HUD
         if box_x is not None:
             x = box_x + int(15 * np.sin(i))
-            cv2.rectangle(frame, (x, 80), (x + 30, 110), (0, 0, 255), -1)
+            # Bright, so its grey level is far from the background's on any
+            # JPEG decoder (pure red is ~76 grey on 90: under the noise floor).
+            cv2.rectangle(frame, (x, 80), (x + 30, 110), (0, 230, 255), -1)
         out.write(frame)
     out.release()
     return str(path)
