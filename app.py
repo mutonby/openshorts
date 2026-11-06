@@ -2630,7 +2630,8 @@ def _purge_local_jobs_for_user(user_id) -> int:
         if not _owned_by(job, uid):
             continue
         out = job.get('output_dir')
-        if out:
+        # Only a SaaSShorts job folder, never a shared one it may have been pointed at.
+        if out and os.path.basename(out).startswith("saas_"):
             _rm_under(OUTPUT_DIR, os.path.basename(out))
         saas_jobs.pop(jid, None)
         removed += 1
@@ -2753,12 +2754,63 @@ def _write_owner_marker(directory: str, user_id) -> None:
     of a directory after a restart has emptied the in-memory stores."""
     if user_id is None:
         return
+    # Callers join a client-influenced id onto OUTPUT_DIR or THUMBNAILS_DIR, so
+    # the marker may only land in a direct child of one of those two: a "../x"
+    # or absolute id must not plant ownership of somebody else's directory.
+    real = os.path.realpath(directory)
+    bases = (os.path.realpath(OUTPUT_DIR), os.path.realpath(THUMBNAILS_DIR))
+    if os.path.dirname(real) not in bases or real in bases:
+        print(f"⚠️ Refusing owner marker outside the output dirs: {os.path.basename(directory)!r}")
+        return
+    # Ownership is set once. A directory that already names another user keeps it.
+    existing = _read_owner_marker(real)
+    if existing is not None and existing != str(user_id):
+        print(f"⚠️ Refusing to change the owner of {os.path.basename(real)}")
+        return
     try:
-        os.makedirs(directory, exist_ok=True)
-        with open(os.path.join(directory, ".owner"), "w") as f:
+        os.makedirs(real, exist_ok=True)
+        with open(os.path.join(real, ".owner"), "w") as f:
             f.write(str(user_id))
     except OSError as e:
         print(f"⚠️ Could not write owner marker in {os.path.basename(directory)}: {e}")
+
+
+def _is_uuid_id(value) -> bool:
+    """Job, SaaSShorts and thumbnail-session ids are lowercase uuid4 strings."""
+    return isinstance(value, str) and bool(_JOB_ID_RE.match(value))
+
+
+async def _assert_disk_job_owner(request, job_id: str) -> None:
+    """Owner check for a job this instance holds no in-memory record of (it
+    finished on the other container during a deploy, or memory was swept):
+    resolve the owner from ``.owner`` / the Project row, like /videos does."""
+    if not BILLING_ENABLED:
+        return
+    owner = await _media_owner("videos", job_id)
+    if owner is None:
+        return
+    user = await _user_from_request(request)
+    if user is None or str(user.id) != owner:
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+async def _claim_thumbnail_session_id(request, session_id) -> str:
+    """The thumbnail session id the caller may use: their own existing one, or
+    a fresh server-minted id when the client sent none or a malformed one (the
+    id becomes a directory name, so only uuid4 strings are accepted)."""
+    session = thumbnail_sessions.get(session_id) if session_id else None
+    if session is not None:
+        await _assert_job_owner(request, session)
+        return session_id
+    if not _is_uuid_id(session_id):
+        return str(uuid.uuid4())
+    if BILLING_ENABLED:
+        disk_owner = _read_owner_marker(os.path.join(THUMBNAILS_DIR, session_id))
+        if disk_owner is not None:
+            caller = await _owner_id(request)
+            if caller is None or str(caller) != disk_owner:
+                raise HTTPException(status_code=404, detail="Not found")
+    return session_id
 
 
 def _read_owner_marker(directory: str) -> Optional[str]:
@@ -4182,8 +4234,12 @@ async def get_source_video(job_id: str, request: Request,
     # preview load and buy nothing.
     if not signed and BILLING_ENABLED:
         record = _job_record(job_id)
-        if record is not None:
+        if record is not None and record.get("user_id") is not None:
             await _assert_job_owner(request, record)
+        else:
+            # The job folder can be gone (size cap, sweep) while uploads/<id>_*
+            # is still there: the owner then comes from .owner / the Project row.
+            await _assert_disk_job_owner(request, job_id)
     source_path = _locate_source(job_id)
     if not source_path:
         raise HTTPException(status_code=404, detail="Source not found")
@@ -4194,8 +4250,10 @@ async def get_source_video(job_id: str, request: Request,
 async def download_all_clips(job_id: str, request: Request):
     """Bundle the current version of every clip of a job into one ZIP."""
     await _ensure_job_files(job_id, request)
-    if job_id in jobs:
+    if job_id in jobs and jobs[job_id].get("user_id") is not None:
         await _assert_job_owner(request, jobs[job_id])
+    else:
+        await _assert_disk_job_owner(request, job_id)
 
     output_dir = os.path.join(OUTPUT_DIR, job_id)
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
@@ -7183,7 +7241,7 @@ async def thumbnail_titles(
 
     # Manual title mode - just create a session with the user's title
     if req.title:
-        session_id = req.session_id or str(uuid.uuid4())
+        session_id = await _claim_thumbnail_session_id(request, req.session_id)
         if session_id not in thumbnail_sessions:
             thumbnail_sessions[session_id] = {
                 "user_id": await _owner_id(request),
@@ -7282,9 +7340,10 @@ async def thumbnail_generate(
             })
     # The session carries someone's transcript, titles and frames: only its
     # owner may generate from it (and be billed for it).
-    _sess = thumbnail_sessions.get(session_id)
-    if _sess is not None:
-        await _assert_job_owner(request, _sess)
+    # The id becomes output/thumbnails/<id>: an unknown or malformed one
+    # ("manual", "../x") gets a fresh id of its own instead of a shared folder.
+    session_id = await _claim_thumbnail_session_id(request, session_id)
+    _write_owner_marker(os.path.join(THUMBNAILS_DIR, session_id), await _owner_id(request))
 
     # Clamp count
     count = min(max(1, count), 6)
@@ -7466,11 +7525,17 @@ async def thumbnail_publish(
     # Resolve thumbnail path from URL — sanitize against path traversal so a
     # crafted thumbnail_url (e.g. "thumbnails/../../.env") can't read server
     # files and exfiltrate them via the Upload-Post multipart body.
-    thumb_relative = thumbnail_url.lstrip("/")
+    # Only an image of THIS session may be attached: resolving under all of
+    # OUTPUT_DIR let "thumbnails/../<other job>/x.jpg" pick another tenant's file.
+    thumb_relative = thumbnail_url.split("?", 1)[0].lstrip("/")
     if thumb_relative.startswith("thumbnails/"):
-        thumb_path = _safe_under(OUTPUT_DIR, thumb_relative)
-    else:
-        thumb_path = _safe_under(THUMBNAILS_DIR, thumb_relative)
+        thumb_relative = thumb_relative[len("thumbnails/"):]
+    session_prefix = f"{session_id}/"
+    thumb_path = None
+    if thumb_relative.startswith(session_prefix) and \
+            thumb_relative.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+        thumb_path = _safe_under(os.path.join(THUMBNAILS_DIR, session_id),
+                                 thumb_relative[len(session_prefix):])
 
     if not thumb_path:
         raise HTTPException(status_code=400, detail="Invalid thumbnail path")
@@ -8161,6 +8226,10 @@ async def saasshorts_generate(
     # Support retry: reuse output_dir so cached assets (image, voice, head, broll) are kept
     reused = False
     if req.retry_job_id:
+        # Retry ids are the uuid4 this endpoint minted. Anything else ("x/../thumbnails")
+        # would resolve to a shared folder with no .owner and hand it to the caller.
+        if not _is_uuid_id(req.retry_job_id):
+            raise HTTPException(status_code=400, detail="Invalid retry_job_id")
         # Check memory first, then disk. _safe_under() blocks a crafted
         # retry_job_id like "../../tmp/x" from escaping OUTPUT_DIR (the listdir
         # below deletes files and the pipeline writes here). A known in-memory
