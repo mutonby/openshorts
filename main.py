@@ -2286,14 +2286,23 @@ def _vision_proxy(video_path, start, end, out_path):
     so the proxy costs the model nothing in detail and keeps the upload far
     under the Files API size limit; the mono audio stays because a silent
     gameplay capture still has its explosions and music.
+
+    A source whose audio cannot be decoded (a broken HLS capture: the same
+    file the ASR could not read, which is why it came here) is retried
+    without audio rather than failing the job.
     """
-    cmd = ["ffmpeg", "-y", "-ss", f"{start:.3f}", "-to", f"{end:.3f}", "-i", video_path,
-           "-vf", "scale=-2:360,fps=1", "-c:v", "libx264", "-preset", "veryfast",
-           "-crf", "30", "-c:a", "aac", "-b:a", "48k", "-ac", "1", out_path]
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode != 0 or not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
-        raise RuntimeError(f"vision proxy {start:.0f}-{end:.0f}s failed: "
-                           f"{(res.stderr or '').strip()[-400:]}")
+    base = ["ffmpeg", "-y", "-ss", f"{start:.3f}", "-to", f"{end:.3f}", "-i", video_path,
+            "-vf", "scale=-2:360,fps=1", "-c:v", "libx264", "-preset", "veryfast",
+            "-crf", "30"]
+    res = None
+    for audio in (["-c:a", "aac", "-b:a", "48k", "-ac", "1"], ["-an"]):
+        res = subprocess.run(base + audio + [out_path], capture_output=True, text=True)
+        if res.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            if audio == ["-an"]:
+                print(f"   ℹ️ Vision proxy {start:.0f}-{end:.0f}s: audio unreadable, sent without it.")
+            return
+    raise RuntimeError(f"vision proxy {start:.0f}-{end:.0f}s failed: "
+                       f"{(res.stderr or '').strip()[-400:]}")
 
 
 def _sum_costs(costs, model_name):
@@ -2378,10 +2387,13 @@ def get_visual_clips(video_path, video_duration, language="en", viewer_clips=Non
     most engaging visual moments (no transcript). Returns the same
     {"shorts", "cost_analysis"} shape as get_viral_clips, or None.
 
-    A source longer than VISION_SEGMENT_SECONDS is watched stretch by
-    stretch (``vision_segments``), each as a 360p/1 fps proxy, and the picks
-    are merged, de-overlapped and cut to the best ``CLIP_TARGET_MAX`` by
-    score: a silent multi-hour console capture used to fail at the model."""
+    Gemini always watches a 360p/1 fps proxy (``_vision_proxy``), never the
+    source file: a broken capture (unreadable audio, MPEG-TS in MP4) made the
+    model answer 400 INVALID_ARGUMENT, and a raw upload runs to hundreds of
+    MB. A source longer than VISION_SEGMENT_SECONDS is watched stretch by
+    stretch (``vision_segments``), and the picks are merged, de-overlapped
+    and cut to the best ``CLIP_TARGET_MAX`` by score: a silent multi-hour
+    console capture used to fail at the model."""
     print("🎥  Silent video — analyzing with Gemini vision (no transcript)...")
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -2408,53 +2420,49 @@ def get_visual_clips(video_path, video_duration, language="en", viewer_clips=Non
 
     segments = vision_segments(video_duration, VISION_SEGMENT_SECONDS, VISION_MAX_SEGMENTS)
     try:
+        covered = segments[-1][1]
         if len(segments) == 1:
-            print(f"🎥  Model: {model_name} | uploading {os.path.basename(video_path)}…")
-            clean, cost = _visual_pass(client, model_name, video_path, video_duration,
-                                       language, v_min_clips, v_max_clips,
-                                       v_min_secs, v_max_secs,
-                                       hint=_viewer_hint(viewer_clips, 0.0, float(video_duration)))
-            costs = [cost]
+            print(f"🎥  Model: {model_name} | watching a 360p/1 fps proxy of "
+                  f"{os.path.basename(video_path)}")
         else:
-            covered = segments[-1][1]
             print(f"🎥  Model: {model_name} | {len(segments)} stretches of "
                   f"~{(segments[0][1] - segments[0][0]) / 60:.0f} min"
                   + (f" (only the first {covered / 60:.0f} of "
                      f"{video_duration / 60:.0f} min; VISION_MAX_SEGMENTS)"
                      if covered < float(video_duration) - 1 else ""))
-            per_min = max(1, math.ceil(v_min_clips / len(segments)))
-            clean, costs = [], []
-            tmp_dir = os.path.join(os.path.dirname(os.path.abspath(video_path)),
-                                   f".vision_{uuid.uuid4().hex[:8]}")
-            os.makedirs(tmp_dir, exist_ok=True)
-            try:
-                for i, (s0, s1) in enumerate(segments):
-                    proxy = os.path.join(tmp_dir, f"part{i}.mp4")
-                    try:
-                        _vision_proxy(video_path, s0, s1, proxy)
-                        shorts, cost = _visual_pass(
-                            client, model_name, proxy, round(s1 - s0, 3), language,
-                            per_min, v_max_clips, v_min_secs, v_max_secs,
-                            hint=_viewer_hint(viewer_clips, s0, s1 - s0))
-                    except gemini_worker.GeminiBlockedError:
-                        raise
-                    except Exception as e:
-                        # One bad stretch must not sink the other hours.
-                        print(f"⚠️ Vision stretch {i + 1}/{len(segments)} failed: {e}")
-                        continue
-                    finally:
-                        if os.path.exists(proxy):
-                            os.remove(proxy)
-                    costs.append(cost)
-                    for sh in shorts or []:
-                        sh["start"] = round(sh["start"] + s0, 3)
-                        sh["end"] = round(min(float(video_duration), sh["end"] + s0), 3)
-                        clean.append(sh)
-                    print(f"   stretch {i + 1}/{len(segments)}: {len(shorts or [])} pick(s)")
-            finally:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-            clean.sort(key=lambda c: c["start"])
-            clean = trim_to_best(dedupe_overlapping(clean), v_max_clips)
+        per_min = max(1, math.ceil(v_min_clips / len(segments)))
+        clean, costs = [], []
+        tmp_dir = os.path.join(os.path.dirname(os.path.abspath(video_path)),
+                               f".vision_{uuid.uuid4().hex[:8]}")
+        os.makedirs(tmp_dir, exist_ok=True)
+        try:
+            for i, (s0, s1) in enumerate(segments):
+                proxy = os.path.join(tmp_dir, f"part{i}.mp4")
+                try:
+                    _vision_proxy(video_path, s0, s1, proxy)
+                    shorts, cost = _visual_pass(
+                        client, model_name, proxy, round(s1 - s0, 3), language,
+                        per_min, v_max_clips, v_min_secs, v_max_secs,
+                        hint=_viewer_hint(viewer_clips, s0, s1 - s0))
+                except gemini_worker.GeminiBlockedError:
+                    raise
+                except Exception as e:
+                    # One bad stretch must not sink the other hours.
+                    print(f"⚠️ Vision stretch {i + 1}/{len(segments)} failed: {e}")
+                    continue
+                finally:
+                    if os.path.exists(proxy):
+                        os.remove(proxy)
+                costs.append(cost)
+                for sh in shorts or []:
+                    sh["start"] = round(sh["start"] + s0, 3)
+                    sh["end"] = round(min(float(video_duration), sh["end"] + s0), 3)
+                    clean.append(sh)
+                print(f"   stretch {i + 1}/{len(segments)}: {len(shorts or [])} pick(s)")
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        clean.sort(key=lambda c: c["start"])
+        clean = trim_to_best(dedupe_overlapping(clean), v_max_clips)
 
         if not clean:
             print("⚠️ Vision pass returned no usable clips.")

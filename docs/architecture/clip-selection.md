@@ -49,8 +49,11 @@ stream-copied, or every timestamp would be off by up to a GOP), watched on its
 own, offset back to source time, then merged with `dedupe_overlapping` +
 `trim_to_best` to `CLIP_TARGET_MAX`. One failed stretch is logged and skipped.
 `VISION_MAX_SEGMENTS` (8, ~5 h 20) bounds the spend of one job; past it only the
-first stretches are watched. A source that fits one stretch takes the original
-single-upload path, unchanged. Do not port the frame trick here. Gemini-only: a
+first stretches are watched. A source that fits one stretch is one stretch: it
+goes through the same proxy, never as the raw file (a broken capture, such as an
+HLS VOD whose audio will not decode, made Gemini answer 400 INVALID_ARGUMENT).
+When the proxy's audio cannot be encoded it is retried without audio. Do not
+port the frame trick here. Gemini-only: a
 text-only `LLM_BASE_URL` server cannot see footage, and without `GEMINI_API_KEY`
 the function logs one line and returns None, which fails the job.
 
