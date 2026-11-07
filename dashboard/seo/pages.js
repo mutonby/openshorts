@@ -2890,6 +2890,59 @@ never posts anything to Twitch. With autopublish on, the best clips of each
 stream go out one a day on TikTok, Instagram and YouTube Shorts. The
 <a href="/auto-clip">auto clip</a> page has the full rules.</p>`
 
+/* Official trailers, embedded from the publishers' own YouTube channels
+ * (uploader checked with YouTube oEmbed, embeddable and not age-gated, 7 Nov
+ * 2026). youtube-nocookie and loading=lazy: nothing loads from YouTube until
+ * the reader scrolls to it. */
+const ytEmbed = (id, title, caption) => `<figure class="video">
+<iframe src="https://www.youtube-nocookie.com/embed/${id}" title="${esc(title)}" loading="lazy"
+  allow="accelerometer; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+  referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+<figcaption>${caption}</figcaption>
+</figure>`
+
+/* How a 16:9 game recording becomes 9:16, drawn to the real geometry on a
+ * 1080x1920 frame: INSET puts the full-width screen (608 px) over the webcam
+ * band (camera_inset.inset_filtergraph, 16:9 webcam = 608 px) on a blurred
+ * backdrop; WIDE keeps ~77% of the width at ~41% of the height, between the
+ * hook and the captions, slid toward the motion (screencast_layout.wide_crop). */
+const gameLayoutDiagram = (caption) => `<figure class="diagram">
+<svg viewBox="0 0 400 605" role="img" aria-labelledby="gld-t gld-d" style="font-family:var(--body)">
+<title id="gld-t">How a 16:9 game recording becomes a vertical clip</title>
+<desc id="gld-d">A 16:9 recording with the action in the middle, a minimap in the bottom left corner and a facecam in the top right. With a facecam, INSET puts the whole game width on top and the face enlarged below. Without one, WIDE keeps about three quarters of the width, zoomed and slid toward the action, so the minimap falls outside.</desc>
+<text x="10" y="18" fill="var(--ink2)" font-size="13">Your 16:9 recording</text>
+<rect x="10" y="28" width="380" height="214" rx="4" fill="var(--paper2)" stroke="var(--rule2)"/>
+<rect x="176" y="81" width="131" height="83" rx="6" fill="var(--brass)" opacity=".85"/>
+<text x="241" y="127" fill="var(--paper)" font-size="13" text-anchor="middle">action</text>
+<rect x="22" y="182" width="47" height="47" rx="3" fill="var(--paper3)" stroke="var(--rule2)"/>
+<text x="45" y="209" fill="var(--muted)" font-size="11" text-anchor="middle">map</text>
+<rect x="309" y="40" width="71" height="40" rx="3" fill="var(--ok)" opacity=".8"/>
+<text x="344" y="64" fill="var(--paper)" font-size="11" text-anchor="middle">facecam</text>
+<rect x="98" y="29" width="291" height="212" fill="none" stroke="var(--brass)" stroke-width="2" stroke-dasharray="7 5"/>
+<text x="10" y="262" fill="var(--muted)" font-size="12">Dashed: the WIDE crop, about three quarters of the width</text>
+<rect x="30" y="290" width="150" height="267" rx="6" fill="var(--paper3)" stroke="var(--rule2)"/>
+<rect x="30" y="339" width="150" height="84" fill="var(--paper2)"/>
+<rect x="95" y="360" width="52" height="33" rx="3" fill="var(--brass)" opacity=".85"/>
+<rect x="35" y="400" width="19" height="19" rx="2" fill="var(--paper3)" stroke="var(--rule2)"/>
+<rect x="148" y="344" width="28" height="16" rx="2" fill="var(--ok)" opacity=".8"/>
+<rect x="30" y="423" width="150" height="84" fill="var(--ok)" opacity=".8"/>
+<text x="105" y="470" fill="var(--paper)" font-size="13" text-anchor="middle">face, enlarged</text>
+<rect x="220" y="290" width="150" height="267" rx="6" fill="var(--paper3)" stroke="var(--rule2)"/>
+<rect x="240" y="334" width="110" height="20" rx="10" fill="var(--rule2)"/>
+<text x="295" y="348" fill="var(--ink2)" font-size="11" text-anchor="middle">hook</text>
+<rect x="220" y="369" width="150" height="109" fill="var(--paper2)"/>
+<rect x="260" y="396" width="67" height="43" rx="4" fill="var(--brass)" opacity=".85"/>
+<text x="293" y="422" fill="var(--paper)" font-size="12" text-anchor="middle">action</text>
+<rect x="245" y="492" width="100" height="18" rx="4" fill="var(--rule2)"/>
+<text x="295" y="505" fill="var(--ink2)" font-size="11" text-anchor="middle">captions</text>
+<text x="105" y="578" fill="var(--ink)" font-size="13" text-anchor="middle">INSET: with a facecam</text>
+<text x="105" y="596" fill="var(--muted)" font-size="11" text-anchor="middle">whole game width, face below</text>
+<text x="295" y="578" fill="var(--ink)" font-size="13" text-anchor="middle">WIDE: no facecam</text>
+<text x="295" y="596" fill="var(--muted)" font-size="11" text-anchor="middle">about 1.3x, slid to the motion</text>
+</svg>
+<figcaption>${caption}</figcaption>
+</figure>`
+
 const GTA6_LAUNCH = '19 November 2026'
 const GTA6_CHECKED = GAMING_CHECKED
 const ROCKSTAR_LAUNCH_URL = 'https://www.rockstargames.com/newswire/article/ak3ak31a49a221/grand-theft-auto-vi-is-now-set-to-launch-november-19-2026'
@@ -2957,7 +3010,8 @@ measured. A console capture has no face at all, and the moment worth posting is
 usually spread across the frame: a chase, a crash, a shootout. WIDE zooms so
 the picture fills the space between the hook and the captions instead of
 sitting in a thin strip, and slides the crop toward the motion. Edge HUD such as
-the minimap can fall outside it; the action stays in.</p>`,
+the minimap can fall outside it; the action stays in.</p>
+${gameLayoutDiagram('The two gameplay layouts, drawn to scale on a 1080 x 1920 frame. A facecam in a corner picks INSET; full-frame action with no face picks WIDE.')}`,
   },
   {
     q: 'What is the best length for a GTA 6 TikTok or Short?',
@@ -3067,6 +3121,7 @@ arrives in three shapes:</p>
 <li><strong>Capture card recordings.</strong> The console runs into a PC through a capture card and OBS records it, often with a webcam composited into a corner. It is the usual way to stream a console with a camera.</li>
 <li><strong>Stream VODs.</strong> The past broadcast on Twitch or YouTube, usually several hours long, with your commentary and, if you stream with a camera, a facecam.</li>
 </ul>
+${ytEmbed('VQRLujxTm3c', 'Grand Theft Auto VI Trailer 2', 'Grand Theft Auto VI Trailer 2, from the <a href="https://www.youtube.com/@RockstarGames" rel="noopener">Rockstar Games</a> YouTube channel. Wide, busy, full-frame scenes like these are what a vertical clip has to fit.')}
 <p>Nothing on this page was measured on GTA 6 footage, because until
 ${GTA6_LAUNCH} there is none. The layouts and thresholds below were measured on
 GTA 5 and other stream footage, and they do not depend on which game is on
@@ -3181,7 +3236,8 @@ thing to go. Three things help:</p>
 <li><strong>Record a cleaner UI for shorts.</strong> Move what the viewer needs (boss timers, the raid frames if they tell the story) toward the middle, or hide the interface for a cinematic pull with the game's toggle-UI key binding.</li>
 <li><strong>Use the facecam.</strong> INSET keeps the full width of the game, so nothing at the edges is lost; it is just smaller.</li>
 <li><strong>Fix a scene by hand.</strong> The reframe editor lets you draw the crop yourself for one scene, or split it into two stacked regions, and the rest of the clip stays automatic.</li>
-</ul>`,
+</ul>
+${gameLayoutDiagram('The two layouts, drawn to scale on a 1080 x 1920 frame. With a facecam, INSET keeps every edge of the UI; without one, WIDE keeps the fight and can lose the far edges.')}`,
   },
   {
     q: 'How do I clip a Hardcore death?',
@@ -3262,6 +3318,8 @@ const wowForeverClips = () => ({
     'A WoW recording is a busy 16:9 screen: the fight in the middle, raid frames and action bars at the edges, often a webcam in a corner. Below: how to record it, and how OpenShorts makes it vertical without losing the fight.',
   ],
   body: `
+${ytEmbed('n2Wg46fwmb0', 'Launch Overview | World of Warcraft: Forever', 'Launch Overview of World of Warcraft: Forever, from the official <a href="https://www.youtube.com/@Warcraft" rel="noopener">World of Warcraft</a> YouTube channel. A WoW screen this busy is what a vertical clip has to fit.')}
+
 ${qaSections(wowQa)}
 
 <h2>What it does not do</h2>

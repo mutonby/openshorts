@@ -59,6 +59,10 @@ p{margin:0 0 1.1rem}
 .shot{margin:1.6rem 0}
 .shot img{width:100%;height:auto;display:block;border:1px solid var(--rule2);border-radius:8px}
 .shot figcaption{font-size:.85rem;color:var(--muted);margin-top:.5rem}
+.video,.diagram{margin:1.6rem 0}
+.video iframe{width:100%;aspect-ratio:16/9;height:auto;border:0;border-radius:8px;display:block;background:var(--paper2)}
+.diagram svg{width:100%;max-width:460px;height:auto;display:block;margin:0 auto}
+.video figcaption,.diagram figcaption{font-size:.85rem;color:var(--muted);margin-top:.5rem}
 .tldr{background:var(--paper2);border:1px solid var(--rule2);border-left:3px solid var(--brass);
   border-radius:10px;padding:1.4rem 1.5rem;margin:0 0 2.5rem}
 .tldr .label{font-family:var(--mono);font-size:.65rem;letter-spacing:.12em;
