@@ -2866,6 +2866,30 @@ const REELS_URL = 'https://www.socialmediatoday.com/news/instagram-officially-ex
  * a console, get the file off it, make it vertical, how long, will Rockstar
  * take it down), each with the vendor's own page cited and dated.
  */
+/* Twitch Autopilot and the viewer-clips signal, shared by the gaming pages.
+ * The rules are cloud/autopilot.py (DAILY_AUTO_LIMIT, MAX_VIDEO_AGE, is_live,
+ * twitch_stretch) and twitch_signals.py (promote_hot_windows: up to a third of
+ * the shortlist); if they change, change these. */
+const TWITCH_AUTOPILOT_UPDATED = '2026-11-07'
+const TWITCH_VIEWER_CLIPS = `When the link is a Twitch VOD, OpenShorts also
+reads the clips your viewers made from that broadcast, when they were made and
+how many views each got, and makes sure the stretches clipped most reach the
+final pick (up to a third of the shortlist). The rest is still chosen from the
+transcript, so a moment nobody clipped can still win.`
+const TWITCH_AUTOPILOT_ANSWER = 'Yes, on the paid plans. Connect Twitch in the Autopilot tab and it checks for new past broadcasts about once an hour, waits until a stream has ended, and clips it: one automatic video a day, only broadcasts from after you switch it on. Instead of the first minutes, it clips the stretch your viewers clipped most.'
+const TWITCH_AUTOPILOT_DETAIL = `<p>Autopilot clips up to the cap you set per
+video (10 to 90 minutes, 30 by default), so a six-hour stream cannot empty your
+plan. Those minutes are not the first ones, which are usually the "starting
+soon" screen: Autopilot asks Twitch for the clips viewers made from the
+broadcast and takes the stretch holding the most clip views, starting a minute
+before the first of them. A stream with no viewer clips is clipped from the
+start. Broadcasts older than 3 days are not picked up automatically, and you can
+still clip up to 5 more a day by hand from the same tab.</p>
+<p>The Twitch connection is read-only: Autopilot lists your past broadcasts and
+never posts anything to Twitch. With autopublish on, the best clips of each
+stream go out one a day on TikTok, Instagram and YouTube Shorts. The
+<a href="/auto-clip">auto clip</a> page has the full rules.</p>`
+
 const GTA6_LAUNCH = '19 November 2026'
 const GTA6_CHECKED = GAMING_CHECKED
 const ROCKSTAR_LAUNCH_URL = 'https://www.rockstargames.com/newswire/article/ak3ak31a49a221/grand-theft-auto-vi-is-now-set-to-launch-november-19-2026'
@@ -2950,10 +2974,24 @@ October 2026); Instagram raised Reels to 3 minutes in January 2025.</p>`,
     detail: `<p>With commentary on, moment picking reads the transcript, so a four-hour
 stream is analysed the same way as a forty-minute one. On a long stream, clip it
 in parts (one job per hour, or just the stretch you know was good) and you get
-more candidates for fewer minutes. OpenShorts works from links you paste: it
-does not connect to your Twitch account and does not clip new streams on its
-own. The <a href="/platforms/twitch">Twitch clip maker</a> page covers VODs,
-chat overlays and long streams in more detail.</p>`,
+more candidates for fewer minutes. ${TWITCH_VIEWER_CLIPS} The
+<a href="/platforms/twitch">Twitch clip maker</a> page covers VODs, chat
+overlays and long streams in more detail.</p>`,
+  },
+  {
+    q: 'Can OpenShorts clip my GTA 6 streams automatically?',
+    a: TWITCH_AUTOPILOT_ANSWER,
+    detail: TWITCH_AUTOPILOT_DETAIL,
+  },
+  {
+    q: 'What GTA 6 moments work as shorts?',
+    a: 'Moments a stranger gets in a few seconds: a chase that ends badly, a heist that goes wrong, a fail, a loud reaction, an argument with the people you play with. A long drive across the map or a menu does not. Commentary gives the AI the most to work with; with none, it judges from what happens on screen.',
+    detail: `<p>Nobody has GTA 6 footage before ${GTA6_LAUNCH}, so that list comes
+from GTA 5 streams, where the clips that travel are the same kinds of moment. The
+picker has no game-specific rules: it ranks every stretch of the transcript for
+how well it would play to someone who was not there, and with no speech it
+watches the footage instead. Story moments are the exception to keep out: see
+the spoiler rule below.</p>`,
   },
   {
     q: 'Does it work with no commentary?',
@@ -2988,6 +3026,14 @@ strike.</p>`,
     detail: '<p>The <a href="/gta-5-clips">GTA 5 clips</a> page covers GTA 5 RP streams, which can be clipped today.</p>',
   },
   {
+    q: 'Can I clip someone else\'s GTA 6 stream?',
+    a: 'Only with their permission. The VOD belongs to whoever streamed it, and the platforms remove reuploads when the streamer reports them. Clipping for a streamer as their editor, or inside a clipping programme the streamer runs, is fine with their yes. Reposting a stranger\'s launch-day stream as your own is not.',
+    detail: `<p>For a clipper working for a streamer, the workflow is the same as for
+your own stream: paste their VOD link, or have them send you the file. On a long
+launch-day stream, split it into parts or pick the stretch that matters, and
+review every clip for story spoilers before it goes out under their name.</p>`,
+  },
+  {
     q: 'How much does it cost to clip GTA 6 footage?',
     a: `Self-hosted OpenShorts is free and open source under MIT, with no meter and no watermark. OpenShorts Cloud clips your first video free up to 60 minutes, then ${CLOUD.freeMinutes} minutes a month with a watermark; paid plans start at $${CLOUD.lowPrice}/month for ${STARTER.monthly.minutes} minutes of source video, and edits on the clips are not counted.`,
     detail: pricingParagraph('console'),
@@ -3003,7 +3049,7 @@ const gta6Clips = () => ({
   lede: `OpenShorts turns GTA 6 footage into vertical clips: paste your Twitch or YouTube VOD, or upload a console capture, and it picks the moments worth posting and cuts them into 15 to 60 second 9:16 clips for TikTok, YouTube Shorts and Instagram Reels. Your first video is free up to 60 minutes (watermarked, no card); no watermark from $${CLOUD.lowPrice}/month, or self-host it free under MIT.`,
   breadcrumb: [{ name: 'Use cases', path: '/use-cases' }, { name: 'GTA 6 clips' }],
   published: '2026-11-04',
-  updated: '2026-11-04',
+  updated: TWITCH_AUTOPILOT_UPDATED,
   pasteLink: { placeholder: 'https://www.twitch.tv/videos/...', label: 'Twitch or YouTube VOD link' },
   related: ['/gta-5-clips', '/wow-forever-clips', '/platforms/twitch', '/platforms/kick', '/auto-reframe'],
   tldr: [
@@ -3031,7 +3077,7 @@ ${qaSections(gta6Qa)}
 <h2>What it does not do</h2>
 <ul>
 <li><strong>It does not clip live.</strong> It works from the VOD or the capture after the session.</li>
-<li><strong>It does not connect to your Twitch account</strong> or clip new streams automatically. Paste the VOD link.</li>
+<li><strong>It does not publish to Twitch.</strong> Connecting Twitch to Autopilot only reads your past broadcasts.</li>
 <li><strong>It does not know GTA 6.</strong> It picks moments from what is said or, with no speech, from what is shown; it has no game-specific rules.</li>
 <li><strong>It does not caption silent footage.</strong> No speech means no captions.</li>
 <li><strong>Free clips carry a watermark.</strong> Upgrading removes it from clips already made.</li>
@@ -3114,10 +3160,14 @@ OBS scene; that is the layout OpenShorts turns into INSET.</p>`,
 <p>A channel page is the live channel, not a recording; the VOD is under Videos
 on the channel. A raid night of three or four hours is analysed the same way as
 a short stream, because moment picking reads the transcript, but one job returns
-its best handful of moments, so clip a long night in parts. The
-<a href="/platforms/twitch">Twitch clip maker</a> page covers long VODs and chat
-overlays. OpenShorts does not connect to your Twitch account and does not clip
-new streams on its own.</p>`,
+its best handful of moments, so clip a long night in parts. ${TWITCH_VIEWER_CLIPS}
+The <a href="/platforms/twitch">Twitch clip maker</a> page covers long VODs and
+chat overlays.</p>`,
+  },
+  {
+    q: 'Can OpenShorts clip my WoW streams automatically?',
+    a: TWITCH_AUTOPILOT_ANSWER,
+    detail: TWITCH_AUTOPILOT_DETAIL,
   },
   {
     q: 'How do I make a raid boss kill or wipe vertical without losing the UI?',
@@ -3204,7 +3254,7 @@ const wowForeverClips = () => ({
   lede: `How to record World of Warcraft: Forever, and how to turn the recording or your Twitch VOD into 15 to 60 second vertical clips for TikTok, YouTube Shorts and Instagram Reels with OpenShorts, facecam kept. Your first video is free up to 60 minutes (watermarked, no card); no watermark from $${CLOUD.lowPrice}/month, or self-host it free under MIT.`,
   breadcrumb: [{ name: 'Use cases', path: '/use-cases' }, { name: 'WoW Forever clips' }],
   published: '2026-11-04',
-  updated: '2026-11-04',
+  updated: TWITCH_AUTOPILOT_UPDATED,
   pasteLink: { placeholder: 'https://www.twitch.tv/videos/...', label: 'Twitch VOD link' },
   related: ['/platforms/twitch', '/gta-6-clips', '/auto-reframe', '/platforms/kick'],
   tldr: [
@@ -3217,7 +3267,7 @@ ${qaSections(wowQa)}
 <h2>What it does not do</h2>
 <ul>
 <li><strong>It does not record the game.</strong> Use OBS, your GPU's replay tool, Game Bar or Warcraft Recorder, then bring the file or the VOD.</li>
-<li><strong>It does not clip live</strong> or connect to your Twitch account. Paste the VOD link after the stream.</li>
+<li><strong>It does not clip live.</strong> It works from the VOD once the stream has ended, pasted by you or picked up by Autopilot.</li>
 <li><strong>It does not read the combat log or know WoW.</strong> It picks moments from what is said or, with no speech, from what is shown.</li>
 <li><strong>It does not keep every edge of the UI</strong> in a WIDE clip; see the raid UI answer above.</li>
 <li><strong>It does not caption silent footage.</strong> No speech means no captions.</li>

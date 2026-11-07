@@ -52,6 +52,9 @@ endpoint and to offer Twitch on the connect page. With the flag on:
   credentials or viewer clips it falls back to `max_minutes` from the start.
 - The connect page lists Twitch (`social_profiles.connect_platforms`). It is
   read-only: Autopilot never publishes to Twitch.
+- `/auto-clip`, `/platforms/twitch`, `/gta-6-clips` and `/wow-forever-clips`
+  state these rules and the viewer-clips signal below (`TWITCH_AUTOPILOT_*` in
+  `dashboard/seo/pages.js`); if they change, change the copy too.
 
 ## Viewer clips as a selection signal (`twitch_signals.py`)
 

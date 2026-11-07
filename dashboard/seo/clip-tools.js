@@ -835,7 +835,9 @@ const twitchFaq = [
   { q: 'Can I turn Twitch clips into TikToks?', a: 'A Twitch clip of 45 seconds or more can be pasted as a source and comes back reframed to 9:16 with captions. Shorter clips are under the minimum; for those a static crop in the free video to 9:16 converter is the quicker route.' },
   { q: 'How many clips do I get from a stream?', a: 'Each job returns up to about a dozen: for any source longer than 12 minutes the AI is asked for 6 to 12. A four-hour stream clipped in four one-hour parts gives four times as many candidates as the same stream clipped in one job.' },
   { q: 'Does it post to TikTok and YouTube Shorts?', a: 'Yes, from the dashboard: YouTube Shorts and Instagram Reels are published directly, and TikTok receives the clip as a draft in your TikTok inbox to finish in the app.' },
-  { q: 'Can it manage the clips in my Twitch account?', a: 'No. OpenShorts does not connect to your Twitch account, so it cannot list, edit or delete the clips under your channel\'s Clips page. It works from links: paste a VOD, or a single Twitch clip of 45 seconds or more, and it makes new vertical clips from it.' },
+  { q: 'Can it clip my new Twitch streams automatically?', a: 'Yes, on the paid plans. Connect Twitch in the Autopilot tab and it checks for new past broadcasts about once an hour, waits until the stream has ended and clips it, one automatic video a day. Instead of the first minutes it clips the stretch your viewers clipped most, up to the per-video cap you set.' },
+  { q: 'Does it use the clips my viewers made?', a: 'Yes, as a signal. For a Twitch VOD link it reads the clips viewers made from that broadcast, with their time and views, and makes sure the stretches clipped most reach the final pick. The rest is chosen from the transcript, so a moment nobody clipped can still win.' },
+  { q: 'Can it manage the clips in my Twitch account?', a: 'No. The Twitch connection Autopilot uses is read-only and only lists your past broadcasts, so it cannot edit or delete the clips under your channel\'s Clips page and never posts to Twitch. It makes new vertical clips from a VOD, or from a single Twitch clip of 45 seconds or more.' },
   { q: 'Is there an editor for the Twitch clips it makes?', a: 'Yes. Each clip opens in a clip editor where you can trim, extend, split or reorder its stretches on word boundaries, move the crop scene by scene, restyle the captions and rewrite the hook. Edits on clips do not use minutes.' },
   { q: 'Can I clip another streamer\'s VOD?', a: 'Only with their permission, for example as an editor or as part of a clipping programme they run. The VOD belongs to whoever streamed it, and the platforms remove reuploads when the streamer reports them.' },
   { q: 'How does it compare with Opus Clip or Klap for Twitch?', a: `Both bill in ways that hurt on long streams: Opus Clip one credit per imported minute, from ${COMPETITORS['opus-clip'].entryPrice}, and Klap per clip, from ${COMPETITORS.klap.entryPrice}, with a speech-reliant picker (checked ${longDate(COMPETITORS.klap.checked)}). OpenShorts Cloud also bills source minutes, but lets you clip just a stretch, and the self-hosted edition has no meter at all.` },
@@ -872,6 +874,16 @@ end: the whole VOD, read from start to finish by a model that has no favourite
 moment, cut into vertical clips sized for TikTok, Shorts and Reels. Making
 clips for Twitch channels that way is the job editors and clippers do by hand,
 scrubbing through hours of VOD; here the model does the scrubbing.</p>
+<p>The two are not exclusive. For a Twitch VOD link, OpenShorts asks Twitch
+for the clips viewers made from that broadcast, with when they were made and
+how many views each got, and makes sure the stretches clipped most reach the
+final pick (up to a third of it). The rest is chosen from the transcript, so the
+ninety minutes nobody clipped still get read.</p>
+<p>With <a href="/auto-clip">Autopilot</a> on a paid plan you do not paste
+anything: connect Twitch once (read-only, nothing is ever posted to Twitch) and
+each new past broadcast is clipped after the stream ends, one automatic video a
+day, from the stretch your viewers clipped most rather than the "starting soon"
+screen.</p>
 <p>That is also why the box asks for the VOD link rather than your channel. A
 <code>twitch.tv/yourname</code> link is the live channel; the recording is at
 <code>twitch.tv/videos/</code> followed by a number, which you find under

@@ -126,7 +126,7 @@ same automation yourself with the
 
 <h2>What it does not do</h2>
 <ul>
-<li>It only watches YouTube. Podcasts, Twitch VODs or files on your drive have to be pasted or sent through <a href="/automate-shorts-api">the API</a>.</li>
+<li>It watches YouTube and Twitch. Twitch is read-only: Autopilot lists your past broadcasts, waits until a stream has ended, clips the stretch your viewers clipped most instead of the first minutes, and never posts to Twitch. Podcasts, Kick VODs or files on your drive have to be pasted or sent through <a href="/automate-shorts-api">the API</a>.</li>
 <li>It does not guarantee views. It picks the moments the model scores highest; some weeks those will be the wrong ones, which is why autopublish is off until you turn it on.</li>
 <li>It is new: Autopilot launched on 22 September 2026.</li>
 </ul>
@@ -152,6 +152,10 @@ ${faqBlock([
     q: 'Will it clip my whole back catalogue and burn my minutes?',
     a: 'No. It only picks up videos published after you switch it on, at most 3 days old, one a day, and only the first 10 to 90 minutes of each.',
   },
+  {
+    q: 'Can Autopilot clip my Twitch streams?',
+    a: 'Yes. Connect Twitch in the Autopilot tab (read-only) and each new past broadcast is clipped once the stream has ended, under the same rules. Instead of the first minutes, it clips the stretch your viewers clipped most, because the start of a stream is usually a "starting soon" screen.',
+  },
 ])}
 
 ${sources([
@@ -164,6 +168,7 @@ ${sources([
     { q: 'Can OpenShorts clip my new YouTube videos automatically?', a: 'Yes. Autopilot checks your connected channel about once an hour and clips each new video: only videos published after you switch it on, at most one a day.' },
     { q: 'Does Autopilot post the clips for me?', a: 'Only if you turn on autopublish. Then it schedules the best 1 to 5 clips of each video one a day on TikTok, Instagram and YouTube Shorts.' },
     { q: 'Is automatic clipping free?', a: 'Clipping a pasted video is free for 20 minutes a month, or unlimited self-hosted. Autopilot is included in the paid plans from $12/month.' },
+    { q: 'Can Autopilot clip my Twitch streams?', a: 'Yes. Connect Twitch in the Autopilot tab (read-only) and each new past broadcast is clipped once the stream has ended, from the stretch your viewers clipped most instead of the first minutes.' },
   ],
 })
 
