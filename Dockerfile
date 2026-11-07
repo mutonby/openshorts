@@ -1,5 +1,7 @@
+# Base images are pinned by digest (@sha256): the tag is only a label.
+# To update one: docker buildx imagetools inspect <tag> and paste the new digest.
 # Multi-stage build for smaller final image
-FROM python:3.11-slim AS builder
+FROM python:3.11-slim@sha256:65bd3d9f1d7fa268dd1909973ba7eb4bdf41f6dcf2cfbe76ba9528b170f3fd79 AS builder
 
 WORKDIR /app
 
@@ -9,39 +11,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install Python dependencies
-COPY requirements.txt requirements-billing.txt ./
+COPY requirements.txt requirements-billing.txt requirements-cpu.lock requirements-gpu.lock ./
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install --upgrade pip
+RUN pip install --no-cache-dir pip==26.3
 # torch from PyPI bundles ~16 CUDA/triton wheels (several GB) even when nothing
 # will ever use a GPU. CPU builds take the same versions from PyTorch's CPU
-# index first; requirements.txt then sees them as already satisfied (keep the
-# two pins in step with requirements.txt).
+# index first (keep the two pins in step with requirements.txt).
 ARG GPU=0
 RUN if [ "$GPU" != "1" ]; then \
       pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
         torch==2.11.0 torchvision==0.26.0; \
     fi
-RUN pip install --no-cache-dir -r requirements.txt
-# Cloud (paid mode) deps: installed always so one image serves both modes; they
-# are only imported when BILLING_ENABLED is set. Harmless/unused in self-host.
-RUN pip install --no-cache-dir -r requirements-billing.txt
-
-# GPU build (--build-arg GPU=1): user-space CUDA libs only — the NVIDIA
-# container runtime injects the driver. cuBLAS 12 + cuDNN 9 for CTranslate2
-# (faster-whisper CUDA), onnx-asr + onnxruntime-gpu for Parakeet. Adds ~2GB,
-# so the default CPU image stays slim.
-RUN if [ "$GPU" = "1" ]; then \
-      pip install --no-cache-dir \
-        "nvidia-cublas-cu12<13" "nvidia-cudnn-cu12>=9,<10" \
-        onnx-asr onnxruntime-gpu; \
-    fi
+# Every other Python package comes from a full lock (direct and transitive
+# deps at exact versions) installed with --no-deps, so nothing unpinned gets
+# in. requirements-gpu.lock adds the user-space CUDA libs (cuBLAS 12 + cuDNN 9
+# for CTranslate2, onnx-asr + onnxruntime-gpu for Parakeet; the NVIDIA runtime
+# injects the driver). pip check fails the build if a lock misses a dependency;
+# the --no-index pass fails it if requirements*.txt lists something the lock
+# does not have. The billing deps are installed always so one image serves
+# both modes; they are only imported when BILLING_ENABLED is set.
+RUN if [ "$GPU" = "1" ]; then LOCK=requirements-gpu.lock; else LOCK=requirements-cpu.lock; fi \
+ && pip install --no-cache-dir --no-deps -r "$LOCK" \
+ && pip check \
+ && pip install --no-index --no-deps -q -r requirements.txt -r requirements-billing.txt
 
 # osrender (osrender/, Rust): renders a reframed clip in one pass on the GPU
 # (gpu_render.py). Only GPU builds compile it; the CPU image ships without it
 # and renders through ffmpeg. It links the same Debian FFmpeg libraries the
 # final stage installs, so both stages must stay on the same Debian release.
-FROM rust:1-slim-trixie AS osrender
+FROM rust:1-slim-trixie@sha256:7eab7ce19273ce785e0ca7578bdf7bc1fcbae621775a8197379a04c9f6e03cd5 AS osrender
 ARG GPU=0
 COPY osrender /src/osrender
 RUN mkdir -p /out && if [ "$GPU" = "1" ]; then \
@@ -54,7 +53,7 @@ RUN mkdir -p /out && if [ "$GPU" = "1" ]; then \
     fi
 
 # Final stage
-FROM python:3.11-slim
+FROM python:3.11-slim@sha256:65bd3d9f1d7fa268dd1909973ba7eb4bdf41f6dcf2cfbe76ba9528b170f3fd79
 
 WORKDIR /app
 
@@ -86,7 +85,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && rm -rf /var/lib/apt/lists/*
 
 # Deno JS runtime — required by yt-dlp for some extractor challenges.
-COPY --from=denoland/deno:bin /deno /usr/local/bin/deno
+COPY --from=denoland/deno:bin@sha256:b507583d3c68ba69f3ed2ce5969ae5b8b70f43421c781279c7aea06435263543 /deno /usr/local/bin/deno
 
 # Helper token provider, baked in as a local Node script (no separate service).
 RUN git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider /opt/bgutil-provider \
