@@ -17,7 +17,7 @@
  */
 
 import { SITE, EDITIONS, COMPETITORS, PRICE_MODELS, COMPARISON_ROWS } from './data.js'
-import { demoBlock, pasteLinkWidget } from './components.js'
+import { demoBlock, pasteLinkWidget, trademarkNote } from './components.js'
 import { esc } from './render.js'
 
 const PUBLISHED = '2026-10-28'
@@ -986,6 +986,7 @@ ${sources([
   `Silent-footage thresholds (8 words, 5 words per minute), the vision fallback and its stretches: <code>main.py</code>, <code>clip_selection.vision_segments</code>; inset detection: <code>camera_inset.py</code>; burned-subtitle trimming: <code>burned_subtitles.py</code>. Source: <a href="${SITE.repo}" rel="noopener">github.com/mutonby/openshorts</a>.`,
   `OpenShorts Cloud plan minutes: <a href="/pricing">pricing</a>, checked ${longDate(PRICE_MODELS.openshorts.checked)}.`,
 ])}
+${trademarkNote('Twitch', 'Twitch Interactive')}
 `,
   faq: twitchFaq,
   extraNodes: [

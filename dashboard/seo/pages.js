@@ -14,7 +14,7 @@
  */
 
 import { SITE, COMPETITORS, COMPARISON_ROWS, EDITIONS, PIPELINE_STEPS, CANONICAL_ANSWERS, PRICE_MODELS, ALT_PICKS } from './data.js'
-import { demoBlock, costCalculator, flowCompare, verdictCards, factTiles } from './components.js'
+import { demoBlock, costCalculator, flowCompare, verdictCards, factTiles, trademarkNote } from './components.js'
 import { esc } from './render.js'
 import { toolPages } from './tools.js'
 import { autopilotPages } from './autopilot-pages.js'
@@ -2775,6 +2775,8 @@ ${sources([
   'Silent-footage thresholds (8 words, 5 words per minute) and the vision fallback are in <code>main.py</code>; Gemini video token rates from Google\'s published pricing.',
   `Inset, WIDE and screencast layout implementations in the project source at <a href="${SITE.repo}" rel="noopener">github.com/mutonby/openshorts</a>.`,
 ])}
+
+${trademarkNote('Grand Theft Auto, GTA, Rockstar Games and Twitch', 'Rockstar Games, Take-Two Interactive or Twitch')}
 `,
   faq: [
     {
@@ -3147,6 +3149,7 @@ ${sources([
   'Silent-footage thresholds (8 words, 5 words per minute) and the stretches of the vision pass: <code>main.py</code> and <code>clip_selection.py</code>; inset detection: <code>camera_inset.py</code>; WIDE layout: <code>screencast_layout.py</code>.',
   `OpenShorts plan minutes: <a href="/pricing">pricing</a>. Source: <a href="${SITE.repo}" rel="noopener">github.com/mutonby/openshorts</a>.`,
 ])}
+${trademarkNote('Grand Theft Auto, GTA, Rockstar Games, PlayStation, Xbox and Twitch', 'Rockstar Games, Take-Two Interactive, Sony, Microsoft or Twitch')}
 `,
   faq: qaFaq(gta6Qa),
   extraNodes: [
@@ -3341,6 +3344,7 @@ ${sources([
   'Silent-footage thresholds and stretches: <code>main.py</code> and <code>clip_selection.py</code>; inset detection: <code>camera_inset.py</code>; WIDE layout: <code>screencast_layout.py</code>.',
   `OpenShorts plan minutes: <a href="/pricing">pricing</a>. Source: <a href="${SITE.repo}" rel="noopener">github.com/mutonby/openshorts</a>.`,
 ])}
+${trademarkNote('World of Warcraft, Warcraft, Blizzard and Twitch', 'Blizzard Entertainment, Microsoft or Twitch')}
 `,
   faq: qaFaq(wowQa),
   extraNodes: [

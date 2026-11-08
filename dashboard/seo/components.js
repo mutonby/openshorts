@@ -92,6 +92,10 @@ export const COMPONENTS_CSS = `
 `
 
 /** The answer at a glance: 3-4 tiles of { k: label, v: value, s: detail }. */
+/** Non-affiliation line for pages that name a game, publisher or platform. */
+export const trademarkNote = (marks, owners) =>
+  `<p class="tm-note">OpenShorts is an independent tool and is not affiliated with, endorsed or sponsored by ${owners}. ${marks} ${marks.includes(',') || marks.includes(' and ') ? 'are trademarks of their respective owners' : 'is a trademark of its owner'}, used here only to say which footage the tool works with.</p>`
+
 export const factTiles = (facts) =>
   `<div class="facts">${facts
     .map((f) => `<div class="fact"><span class="k">${esc(f.k)}</span><span class="v">${esc(f.v)}</span><span class="s">${esc(f.s || '')}</span></div>`)

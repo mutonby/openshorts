@@ -90,6 +90,7 @@ td.os{color:var(--ink)}
 .faq dd{margin:.5rem 0 0}
 .sources{font-size:.85rem;color:var(--muted)}
 .sources li{margin-bottom:.35rem}
+.tm-note{font-size:.8rem;color:var(--muted);margin-top:1.2rem}
 .cluster{display:grid;gap:.75rem;grid-template-columns:1fr;margin:1.25rem 0}
 @media(min-width:40rem){.cluster{grid-template-columns:1fr 1fr}}
 .cluster a{display:block;border:1px solid var(--rule);border-radius:10px;padding:.9rem 1.1rem;
