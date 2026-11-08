@@ -46,7 +46,11 @@ async def _create_remote_profile(username: str):
             return
         text = resp.text.lower()
         # Idempotency: if it already exists, that's fine.
-        if resp.status_code == 400 and ("exist" in text or "already" in text):
+        # Upload-Post answers 409 "Username already in use"; older replies were a
+        # 400 with "exists"/"already". Both mean the profile is there.
+        if resp.status_code == 409 or (
+            resp.status_code == 400 and ("exist" in text or "already" in text)
+        ):
             return
         # Upload-Post plan cap reached — surface a clean, actionable error, not a 500.
         if "profile_limit_reached" in text or "limit of" in text:
