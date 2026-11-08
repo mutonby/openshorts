@@ -560,7 +560,16 @@ async def _upsert_subscription(sub_obj: dict, event_created: datetime):
 
     async with database.session() as s:
         async with s.begin():
-            user_id = await _user_id_for_customer(s, sub_obj.get("customer"))
+            # Lock the user, not just their subscription row: for a first
+            # subscription there is no row yet, so FOR UPDATE on it locks
+            # nothing, and Checkout's created + updated (sent within ms of each
+            # other) both INSERT, the second one hitting the UNIQUE(user_id).
+            # NO KEY UPDATE serializes webhooks of the same user without
+            # blocking inserts elsewhere that only reference users by FK.
+            user_id = (await s.execute(
+                select(User.id).where(User.stripe_customer_id == sub_obj.get("customer"))
+                .with_for_update(key_share=True)
+            )).scalar_one_or_none()
             if not user_id:
                 return
             row = (await s.execute(
