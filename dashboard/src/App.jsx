@@ -31,6 +31,7 @@ import Modal from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError, QUOTA_WALL_EVENT } from './lib/api';
 import { track } from './lib/analytics';
+import { JobPollError, pollFailureAction } from './lib/jobPoll';
 
 // Enhanced "Encryption" using XOR + Base64 with a Salt
 // This is better than plain Base64 but still client-side.
@@ -257,13 +258,13 @@ const readableError = (raw) => {
   return text.replace(/^Error:\s*/, '').slice(0, 300) || 'Something went wrong.';
 };
 // Matches the self-host JOB_RETENTION_SECONDS default. A restore whose job was
-// already purged server-side fails gracefully and clears the saved session.
+// already purged server-side (Cloud keeps it 1 h) gets a 404 from the status
+// poll, which clears the saved session (see lib/jobPoll.js).
 const SESSION_MAX_AGE = 86400000; // 24 hours
 
-// Mock polling function
 const pollJob = async (jobId) => {
   const res = await apiFetch(`/api/status/${jobId}`);
-  if (!res.ok) throw new Error('Status check failed');
+  if (!res.ok) throw new JobPollError(res.status);
   return res.json();
 };
 
@@ -381,6 +382,8 @@ function App() {
   const [noSource, setNoSource] = useState(false);
 
   const [sessionRecovered, setSessionRecovered] = useState(false);
+  // The job a restored session was polling is no longer on the server.
+  const [jobGone, setJobGone] = useState(false);
   const [showScheduleWeek, setShowScheduleWeek] = useState(false);
   // Clip editor overlay: index of the clip being edited, or null.
   const [editingClip, setEditingClip] = useState(null);
@@ -812,12 +815,19 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isManaged, jobId, status, results?.clips?.length]);
 
+  // Read at failure time: the poll effect must not restart when auth settles.
+  const historyAvailableRef = useRef(false);
+  historyAvailableRef.current = billingEnabled && isSignedIn;
+  const handleResetRef = useRef(null);
+
   useEffect(() => {
     let interval;
+    let failures = 0;
     if ((status === 'processing' || status === 'completed') && jobId) {
       interval = setInterval(async () => {
         try {
           const data = await pollJob(jobId);
+          failures = 0;
           console.log("Job status:", data);
 
           // Update results if available (real-time)
@@ -849,6 +859,16 @@ function App() {
           }
         } catch (e) {
           console.error("Polling error", e);
+          failures += 1;
+          if (pollFailureAction(e, failures) === 'gone') {
+            clearInterval(interval);
+            // Back to idle (which drops the saved session) and on to History,
+            // where a finished job's clips are kept.
+            handleResetRef.current();
+            setSessionRecovered(false);
+            setJobGone(true);
+            if (historyAvailableRef.current) setActiveTab('history');
+          }
         }
       }, 2000);
     }
@@ -1263,6 +1283,7 @@ function App() {
   }, [billingEnabled, isSignedIn]);
 
   const handleReset = () => {
+    setJobGone(false);
     // Flush any pending edit-state sync before dropping the project: the clips
     // themselves are already archived to R2 as they were edited.
     flushClipState();
@@ -1280,6 +1301,9 @@ function App() {
     setJobError('');
     localStorage.removeItem(SESSION_KEY);
   };
+  useEffect(() => {
+    handleResetRef.current = handleReset;
+  });
 
   // --- UI Components ---
 
@@ -1630,6 +1654,28 @@ function App() {
             </div>
             <button
               onClick={() => setSessionRecovered(false)}
+              aria-label="dismiss"
+              className="text-muted hover:text-ink transition-colors shrink-0 -m-1 p-1"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
+        {/* The restored job is no longer on the server (purged or not yours). */}
+        {jobGone && (
+          <div role="status" className="mx-3 sm:mx-6 mt-2 px-3.5 sm:px-4 py-3 bg-paper2 border border-rule rounded-card flex items-start justify-between gap-3 animate-fade shrink-0">
+            <div className="flex items-start sm:items-center gap-2 text-sm text-ink2 flex-wrap min-w-0">
+              <History size={16} className="text-brass shrink-0 mt-0.5 sm:mt-0" />
+              <span className="font-medium">That project is no longer open</span>
+              <span className="text-muted text-xs">
+                {billingEnabled && isSignedIn
+                  ? 'If it finished, its clips are saved in History.'
+                  : 'The server has already cleared it. Start a new project to keep going.'}
+              </span>
+            </div>
+            <button
+              onClick={() => setJobGone(false)}
               aria-label="dismiss"
               className="text-muted hover:text-ink transition-colors shrink-0 -m-1 p-1"
             >
