@@ -31,6 +31,7 @@ import Modal from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError, QUOTA_WALL_EVENT } from './lib/api';
 import { track } from './lib/analytics';
+import { rememberTabAfterLogin } from './lib/tabAfterLogin';
 
 // Enhanced "Encryption" using XOR + Base64 with a Salt
 // This is better than plain Base64 but still client-side.
@@ -968,6 +969,13 @@ function App() {
     window.addEventListener('hashchange', apply);
     return () => window.removeEventListener('hashchange', apply);
   }, []);
+
+  // Signed out on a tab that needs a session (the clips-ready email links to
+  // #app?tab=history): remember it, so the sign-in comes back here instead of
+  // to the Clip Generator (lib/tabAfterLogin, read by AuthContext).
+  useEffect(() => {
+    if (billingEnabled && !authLoading && !isSignedIn) rememberTabAfterLogin(activeTab);
+  }, [billingEnabled, authLoading, isSignedIn, activeTab]);
 
   // #app?checkout=cancel: back from a Stripe checkout opened inside the app
   // (cancel_url in cloud/billing.py), so the user lands on their clips again.
@@ -2040,7 +2048,18 @@ function App() {
           {activeTab === 'history' && (
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
               <div className="max-w-6xl mx-auto p-4 sm:p-6 md:p-8">
-                <HistoryTab onReopenProject={restoreProject} />
+                {billingEnabled && !isSignedIn ? (
+                  <div className="max-w-2xl mx-auto card p-8 text-center">
+                    <History size={28} className="mx-auto mb-4 text-brass" />
+                    <h1 className="font-display lowercase text-2xl text-ink mb-2">your clips are saved to your account</h1>
+                    <p className="text-muted text-sm mb-6">
+                      Sign in with the email address you used to create them and they open right here.
+                    </p>
+                    <button onClick={() => setShowLogin(true)} className="btn-primary">sign in</button>
+                  </div>
+                ) : (
+                  <HistoryTab onReopenProject={restoreProject} />
+                )}
               </div>
             </div>
           )}

@@ -10,6 +10,7 @@ import { apiFetch, apiJson, getToken, setToken, clearToken } from '../lib/api';
 import { track, identify, reset as resetAnalytics } from '../lib/analytics';
 import { report as reportAttribution } from '../lib/attribution';
 import { readPendingPlan } from '../lib/pendingPlan';
+import { takeTabAfterLogin } from '../lib/tabAfterLogin';
 import { ensureMediaToken, clearMediaToken } from '../lib/mediaToken';
 
 // Google sign-in: the verifier for the code the callback returns. Kept in
@@ -119,9 +120,14 @@ export function AuthProvider({ children }) {
       const paid = ['starter', 'creator', 'pro'].includes(signedInMe?.plan);
       // A plan picked before signing in: back to pricing, which opens its checkout.
       if (signedInMe?.user && !paid && readPendingPlan()) destination = '#/pricing';
+      // Signed in from a deep link (the clips-ready email → History): back to
+      // that tab, without the first-run tutorial, which would pin the
+      // generator on top of it.
+      const afterLoginTab = signedInMe?.user ? takeTabAfterLogin() : null;
+      if (afterLoginTab && destination === '#app') destination = `#app?tab=${afterLoginTab}`;
       let welcomed = false;
       try { welcomed = localStorage.getItem('os_welcomed') === '1'; } catch (_) { /* ignore */ }
-      if (signedInMe?.user && !paid && !welcomed) {
+      if (signedInMe?.user && !paid && !welcomed && !afterLoginTab) {
         try {
           localStorage.setItem('os_show_clip_tutorial', '1');
           localStorage.setItem('os_welcomed', '1');
