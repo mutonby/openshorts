@@ -3395,6 +3395,24 @@ async def _drop_unstarted_job(reservation_id, job_output_dir):
     shutil.rmtree(job_output_dir, ignore_errors=True)
 
 
+MAX_UPLOAD_NAME_BYTES = 120
+
+
+def _clamp_upload_name(name: str, max_bytes: int = MAX_UPLOAD_NAME_BYTES) -> str:
+    """Shorten a client-supplied file name so "<id>_<name>" fits the 255-byte
+    limit most filesystems put on a name. The limit is in BYTES, not characters,
+    and emoji or math-alphabet letters take 4 each. The extension is kept and
+    the cut never lands inside a multi-byte character."""
+    if len(name.encode("utf-8")) <= max_bytes:
+        return name
+    stem, ext = os.path.splitext(name)
+    if len(ext.encode("utf-8")) > 16:
+        stem, ext = name, ""
+    room = max_bytes - len(ext.encode("utf-8"))
+    stem = stem.encode("utf-8")[:room].decode("utf-8", "ignore").rstrip()
+    return (stem or "upload") + ext
+
+
 def _media_duration_seconds(path: str) -> float:
     """Container duration via ffprobe; 0.0 on any failure (fail-open)."""
     try:
@@ -3469,7 +3487,7 @@ async def create_upload(request: Request):
         body = await request.json()
     except Exception:
         body = {}
-    filename = os.path.basename(str((body or {}).get("filename") or "video.mp4")) or "video.mp4"
+    filename = _clamp_upload_name(os.path.basename(str((body or {}).get("filename") or "video.mp4")) or "video.mp4")
     if BILLING_ENABLED:
         # Each slot can hold MAX_FILE_SIZE_MB on disk until it expires.
         now = time.time()
@@ -3876,7 +3894,7 @@ async def process_endpoint(
         if MIN_SOURCE_SECONDS > 0 and 0 < src_duration < MIN_SOURCE_SECONDS:
             shutil.rmtree(job_output_dir, ignore_errors=True)
             _reject_short_source(src_duration)
-        input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{os.path.basename(src)}")
+        input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{_clamp_upload_name(os.path.basename(src))}")
         try:
             os.link(src, input_path)
         except OSError:
@@ -3905,7 +3923,7 @@ async def process_endpoint(
         # Save uploaded file with size limit check.
         # basename() strips any path components from the client-supplied
         # filename so a name like "../../main.py" can't escape UPLOAD_DIR.
-        safe_name = os.path.basename(file.filename or "upload") or "upload"
+        safe_name = _clamp_upload_name(os.path.basename(file.filename or "upload") or "upload")
         input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{safe_name}")
 
         # Read file in chunks to check size
@@ -6929,7 +6947,7 @@ async def _save_thumbnail_upload(file, session_id):
     is refused (too big, unreadable or too long)."""
     # basename() stops a "../../x" filename from escaping UPLOAD_DIR; the
     # chunked read caps memory so a huge body can't OOM.
-    safe_name = os.path.basename(file.filename or "upload") or "upload"
+    safe_name = _clamp_upload_name(os.path.basename(file.filename or "upload") or "upload")
     video_path = os.path.join(UPLOAD_DIR, f"thumb_{session_id}_{safe_name}")
     size = 0
     limit_bytes = MAX_FILE_SIZE_MB * 1024 * 1024
