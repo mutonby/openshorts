@@ -95,7 +95,8 @@ async def send_clips_ready_email(email: str, job_title: str, clip_count: int,
       <div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto">
         <h2>Your clips are ready 🎬</h2>
         <p><strong>{title}</strong> produced {clip_count} viral-ready
-           clip{'s' if clip_count != 1 else ''}. They're waiting in your dashboard.</p>
+           clip{'s' if clip_count != 1 else ''}. They're waiting in the History tab
+           of your dashboard: sign in with this email address to see them.</p>
         <p><a href="{dashboard_url}" style="display:inline-block;background:#111;color:#fff;
            padding:12px 20px;border-radius:8px;text-decoration:none">View my clips</a></p>
         <p style="color:#666;font-size:13px">Enjoying OpenShorts? A

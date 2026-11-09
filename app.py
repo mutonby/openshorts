@@ -2587,6 +2587,15 @@ async def _autopilot_job_finished(job_id, job):
         print(f"⚠️  Autopilot completion error for {job_id}: {e}")
 
 
+def _clips_ready_url():
+    """Where "View my clips" lands: the History tab, which lists every job's
+    clips. Plain #app opened the Clip Generator, which shows a finished job
+    only in the browser that ran it, so the email opened on a phone showed an
+    empty generator. Signed out, the dashboard asks to sign in and comes back
+    to History afterwards (rememberTabAfterLogin in the dashboard)."""
+    return f"{_cloud_config.settings.frontend_url}/#app?tab=history"
+
+
 async def _notify_clips_ready(job_id):
     """Email the owner when their clips finish — processing takes minutes, so
     this lets them close the tab. Once per job (email_sent flag). Jobs sent
@@ -2612,11 +2621,7 @@ async def _notify_clips_ready(job_id):
         if not user or not user.email:
             return
         title = clips[0].get('video_title_for_youtube_short') or clips[0].get('title') or "Your video"
-        # #app opens the app itself. The bare frontend URL showed the marketing
-        # landing to anyone whose browser had not already set the skip flag,
-        # which is the wrong page for someone clicking "View my clips".
-        await send_clips_ready_email(user.email, title, len(clips),
-                                     f"{_cloud_config.settings.frontend_url}/#app")
+        await send_clips_ready_email(user.email, title, len(clips), _clips_ready_url())
     except Exception as e:
         print(f"⚠️  Clips-ready email error for {job_id}: {e}")
 
