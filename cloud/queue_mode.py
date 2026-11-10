@@ -41,6 +41,7 @@ from .config import _flag, is_enabled
 NORMAL = "normal"
 SLOW = "slow"
 LANES = (NORMAL, SLOW)
+PAID_PRIORITY = 1            # config.PLAN_PRIORITY["starter"]: top-up buyers too
 FREE_PRIORITY = 2            # config.PLAN_PRIORITY["free"]
 SLOW_PRIORITY = 3            # after every free job of the normal lane
 STATE_FILE = ".queue_mode.json"
@@ -151,6 +152,21 @@ def priority_for(plan_priority: int, lane: str) -> int:
 
 def lane_of_priority(priority) -> str:
     return SLOW if int(priority) >= SLOW_PRIORITY else NORMAL
+
+
+def slow_lane_on() -> bool:
+    """Whether the slow lane exists now (Cloud, not killed, a country set).
+    When it does not, a job at SLOW_PRIORITY belongs to the normal lane."""
+    return is_enabled() and not killed() and bool(slow_countries())
+
+
+def effective_priority(priority) -> int:
+    """The priority to queue at now: the slow lane folds into the normal one
+    while it is switched off (kill switch, empty list)."""
+    priority = int(priority)
+    if priority >= SLOW_PRIORITY and not slow_lane_on():
+        return FREE_PRIORITY
+    return priority
 
 
 # --- State ----------------------------------------------------------------------

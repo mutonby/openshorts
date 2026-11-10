@@ -777,15 +777,23 @@ def free_queue_full_error() -> HTTPException:
 def _assign_queue_lane(request, user, balance, priority) -> int:
     """The lane of a new managed job (``request.state.queue_lane``) and its
     queue priority. Slow only for a free-plan account with no top-up credit
-    whose request comes from a slow-lane country (the CDN's geolocation
-    header, ``cloud/queue_mode.py``). While the slow lane's brake is on, such
-    a submission is refused here (``free_queue_full``)."""
+    whose request comes from a slow-lane country (its address in the local
+    country database, ``cloud/geoip.py``). While the slow lane's brake is on, such
+    a submission is refused here (``free_queue_full``).
+
+    With the mode on, a free-plan account with top-up credit has paid: its
+    job queues with the paid plans (``request.state.queue_topup``, kept in the
+    manifest), so neither the newest-first order nor the expiry of starved
+    free jobs, which only exist below the paid priorities, can reach it."""
     request.state.queue_lane = _queue_mode.NORMAL
+    request.state.queue_topup = False
     if not _saturation_on() or user.plan != "free":
         return priority
     if float(balance.get("topup_remaining") or 0) > 0:
-        return priority  # bought minutes: not a free submission
-    country = _queue_mode.request_country(request.headers)
+        request.state.queue_topup = True
+        return min(priority, _queue_mode.PAID_PRIORITY)
+    country = _queue_mode.request_country(
+        request.headers, request.client.host if request.client else None)
     lane = _queue_mode.lane_for(user.plan, country)
     if lane != _queue_mode.SLOW:
         return priority
@@ -1022,8 +1030,31 @@ def _queue_key(priority, arrival) -> float:
 
 
 def _enqueue_job(job_id: str, priority: int = 2):
+    # A slow-lane job folds into the normal lane while the slow lane is off.
+    priority = _queue_mode.effective_priority(priority)
     job_queue.put_nowait((priority, _queue_key(priority, _job_arrival(job_id)), job_id))
     _queue_changed()
+
+
+def _fold_slow_lane() -> int:
+    """With the slow lane switched off (kill switch, empty country list), the
+    jobs already in it join the normal lane by their submission time, live.
+    Loop thread only; their manifests keep their lane, and enqueueing folds
+    them again (``_enqueue_job``). Returns how many moved."""
+    if _queue_mode.slow_lane_on():
+        return 0
+    heap = job_queue._queue
+    moved = 0
+    for i, (prio, key, jid) in enumerate(heap):
+        if prio >= _queue_mode.SLOW_PRIORITY:
+            heap[i] = (_queue_mode.FREE_PRIORITY,
+                       _queue_key(_queue_mode.FREE_PRIORITY, abs(key)), jid)
+            moved += 1
+    if moved:
+        heapq.heapify(heap)
+        _queue_changed()
+        print(f"🚦 Slow lane off: {moved} job(s) moved to the normal free lane.")
+    return moved
 
 
 def _rekey_lanes(lanes=None):
@@ -1932,6 +1963,7 @@ async def _resume_scan():
             continue
         try:
             await _resume_interrupted_jobs_async()
+            _fold_slow_lane()
             await _raise_to_owner_plans()
             await _follow_manifest_priorities()
             await _expire_starved_jobs()
@@ -1995,7 +2027,7 @@ def _install_drain_signal_handler():
 def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, watermark,
                            webhook_url=None, webhook_secret=None, base_url=None,
                            partial=None, source_cap_minutes=None, skip_statics=False,
-                           via_api_key=False, lane=None, submitted_at=None):
+                           via_api_key=False, lane=None, submitted_at=None, topup=False):
     try:
         path = os.path.join(OUTPUT_DIR, job_id, _RESUME_FILE)
         # Atomic like every manifest write: the other instance reads them.
@@ -2024,6 +2056,7 @@ def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, water
                 # (deploy, resume scan) keeps its lane and its place in it.
                 "lane": lane or _queue_mode.NORMAL,
                 "submitted_at": submitted_at,
+                "topup": bool(topup),
         })
     except Exception as e:
         print(f"⚠️ Could not write resume manifest for {job_id}: {e}")
@@ -4837,6 +4870,8 @@ async def process_endpoint(
         # orders the queue; both travel in the resume manifest.
         'lane': getattr(request.state, "queue_lane", _queue_mode.NORMAL),
         'submitted_at': _arrival_now(),
+        # A free-plan job paid with top-up minutes queues with the paid plans.
+        'topup': bool(getattr(request.state, "queue_topup", False)),
     }
 
     # Persist the owner so recovered jobs keep their multi-tenant guard after a
@@ -4857,7 +4892,8 @@ async def process_endpoint(
                            base_url=api_base, partial=partial,
                            source_cap_minutes=source_cap, skip_statics=skip_statics,
                            via_api_key=jobs[job_id]['via_api_key'],
-                           lane=jobs[job_id]['lane'], submitted_at=jobs[job_id]['submitted_at'])
+                           lane=jobs[job_id]['lane'], submitted_at=jobs[job_id]['submitted_at'],
+                           topup=jobs[job_id]['topup'])
 
     _enqueue_job(job_id, priority)
 
