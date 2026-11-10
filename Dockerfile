@@ -35,6 +35,16 @@ RUN if [ "$GPU" = "1" ]; then LOCK=requirements-gpu.lock; else LOCK=requirements
  && pip install --no-cache-dir --no-deps -r "$LOCK" \
  && pip check \
  && pip install --no-index --no-deps -q -r requirements.txt -r requirements-billing.txt
+# onnxruntime (CPU, a faster-whisper dependency) and onnxruntime-gpu install
+# the same `onnxruntime` package directory, and whichever pip writes last wins.
+# With the CPU build on top, Parakeet silently transcribes on the CPU, minutes
+# per job instead of seconds, and the job queue backs up. Put the GPU build
+# back on top (same pinned version) and fail the build if CUDA is missing.
+RUN if [ "$GPU" = "1" ]; then \
+      ORT_GPU=$(grep -E '^onnxruntime-gpu==' requirements-gpu.lock) \
+      && pip install --no-cache-dir --no-deps --force-reinstall "$ORT_GPU" \
+      && python -c "import onnxruntime as o, sys; p = o.get_available_providers(); print('onnxruntime providers:', p); sys.exit('CUDAExecutionProvider' not in p)"; \
+    fi
 
 # osrender (osrender/, Rust): renders a reframed clip in one pass on the GPU
 # (gpu_render.py). Only GPU builds compile it; the CPU image ships without it
