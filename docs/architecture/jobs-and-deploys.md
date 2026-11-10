@@ -255,6 +255,72 @@ Two capacity faults ride the same loop, channel and state file (keys `asr`,
   resolved when it is back over halfway to the usual, or the queue is no
   longer full, for two ticks.
 
+## Saturation mode of the free queue (`cloud/queue_mode.py`, Cloud only)
+
+When more free videos arrive than the card renders, one FIFO makes everyone
+wait the same hours, the person who signed up a minute ago included. Inert
+unless configured: with no slow-lane country and no newest-first threshold the
+queue is the plain priority FIFO. `QUEUE_SATURATION_DISABLED=1` turns all of it
+off.
+
+- **Lanes.** Order: pro (0) → paid plans (1) → free normal lane (2) → free
+  slow lane (3). A job goes to the slow lane only when, at submit, the account
+  is on the free plan with no top-up credit and the request's country is in
+  `FREE_SLOW_LANE_COUNTRIES` (ISO codes, comma-separated, empty by default;
+  the real list lives only in the deployment's env, never in this repo). The
+  country is the CDN's geolocation header, `QUEUE_COUNTRY_HEADER` (default
+  `cf-ipcountry`): no lookup and no call per request. Missing, malformed or
+  "unknown" (`XX`, `T1`) = normal lane. The API host must sit behind a CDN
+  that sets the header (and the origin must not be reachable around it, or a
+  client could send its own). Paid jobs never go to the slow lane; paying
+  moves a slow-lane job up like any free one (`_raise_users_jobs`);
+  `_raise_to_owner_plans` only raises to paid priorities.
+- **Queue key = submission time.** Heap entries are `(priority, key, job_id)`
+  with `key` the job's `submitted_at` (FIFO) or minus it (newest first).
+  `submitted_at` and `lane` travel in the resume manifest, so a job enqueued
+  again after a deploy keeps its place whatever order `os.listdir` gives. A
+  manifest from before these fields takes its `.owner` mtime (written at
+  submit) and the normal lane, and is stamped with it on its first resume.
+- **Newest first under a jam.** Each free lane's wait is what a job joining its
+  back would wait in FIFO (`queue_estimate` over the paid + normal jobs for the
+  normal lane, over every waiting job for the slow one). At
+  `QUEUE_RECENT_FIRST_MINUTES` (0 = off) that lane serves its newest job first;
+  under `QUEUE_RECENT_FIRST_RELEASE_MINUTES` (default half) it is FIFO again,
+  so the backlog's oldest go first as soon as it shrinks (at night). Switching
+  re-keys that lane in place (`app._rekey_lanes`, one heapify).
+- **Brake.** While the slow lane's wait is at least `SLOW_LANE_BRAKE_HOURS`
+  (12; 0 = never) it brakes until it falls under
+  `SLOW_LANE_BRAKE_RELEASE_HOURS` (default half): a slow-lane job dispatched
+  meanwhile renders at most `SLOW_LANE_BRAKE_CLIPS` (3) clips (through
+  `CLIP_TARGET_MIN/MAX`, so the ranking stays global and the floor is the
+  cap; decided at dispatch, so a job resumed after the release gets every
+  clip), and a new slow-lane submission is refused with a 402
+  `free_queue_full` before the probe, the reservation and the first-video
+  grant (see `billing-and-account.md`).
+- **Starved jobs end cleanly.** With the mode on, a free job still queued
+  `ACTIVE_JOB_MAX_SECONDS` (24 h) after submission is ended by the resume scan
+  (`app._expire_starved_jobs`): off the heap, `failed` with a line saying why,
+  manifest dropped, reservation released (the first-video grant survives a
+  released reservation), webhook `job.failed`, no clips-ready email, not a
+  pipeline failure, not counted as output by the queue watch. A draining
+  instance leaves its queue to the next one.
+- **`/api/status`** ranks the real dispatch order (cached per heap change, not
+  per poll) and adds `eta_is_minimum`: true for a job that later arrivals can
+  still pass (slow lane, or a lane serving newest first); the dashboard says
+  "at least N min" then.
+- **Decided by the queue watch.** The modes are decided on the queue watch's
+  tick from its snapshot (no loop of their own; it runs for them even with the
+  alerts off), shared with the other container through `output/.queue_mode.json`
+  under `.queue_watch.lock`, and adopted at boot before the first tick. The
+  non-measuring instance follows the file and hands over the refusals it
+  made. Every queue alert carries one line per lane (order, estimated wait,
+  brake, refusals); the brake switching on or off is an alert of its own. An
+  hour with braked jobs in it (and the hour after the release) is never
+  learnt as the usual output rate.
+- The periodic resume scan reads and rewrites manifests in a worker thread
+  (`_resume_candidates`), and GPU admission counts the other instance's jobs
+  in one too; only records and the heap are touched on the loop.
+
 ## Deploys and running jobs (handover + drain)
 
 Every push to `main` redeploys the API container as a rolling update: the NEW

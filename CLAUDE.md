@@ -100,6 +100,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 
 **Public repo**
 - This repository is public: no hosts, IPs, server paths, production metrics, business figures or customer data in code, comments, docs or commit messages.
+- The free slow lane's countries (`FREE_SLOW_LANE_COUNTRIES`) live only in the deployment env: tests and docs use user-assigned codes (`XA`, `XB`), and no user-facing text names a country or region (`cloud/queue_mode.py`).
 
 ## CI: a green pipeline closes the task, not the push
 
