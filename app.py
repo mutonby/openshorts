@@ -1656,6 +1656,8 @@ def _recover_jobs_from_disk():
             continue
         if os.path.isfile(os.path.join(job_path, _RESUME_FILE)):
             continue  # in flight (interrupted or on the other instance): resume, not recover
+        if os.path.exists(os.path.join(job_path, _EXPIRED_MARKER)):
+            continue  # ended unrun in the queue; /api/status answers from disk
         json_files = glob.glob(os.path.join(job_path, "*_metadata.json"))
         if not json_files:
             continue
@@ -2165,8 +2167,12 @@ def _register_resumed(picked) -> int:
             'webhook_secret': m.get("webhook_secret"),
             'base_url': m.get("base_url"),
             'via_api_key': bool(m.get("via_api_key")),
+            'topup': bool(m.get("topup")),
+            # It ran before (drain-cut, or an instance that died): never a
+            # starved job, whatever its submission time.
+            'ran_before': bool(m.get("run_started") or m.get("heartbeat")),
             # A manifest without a lane predates the lanes: normal lane.
-            'lane': _queue_mode.lane_of_priority(priority),
+            'lane': _queue_mode.lane_of_priority(_queue_mode.effective_priority(priority)),
             'submitted_at': float(m["submitted_at"] if m.get("submitted_at") is not None else time.time()),
         }
         _enqueue_job(job_id, priority)
@@ -2215,23 +2221,58 @@ QUEUE_EXPIRED_LOG = ("❌ The free queue was too busy to start this video in tim
 _EXPIRED_MARKER = ".queue_expired"
 
 
-def _retire_expired_on_disk(job_ids):
-    """Worker thread: drop each expired job's manifest and leave a marker, so
-    /api/status on the other instance (or after a restart) answers "failed,
-    and why" instead of 404 until the dir ages out."""
+def _expired_marker(job_id):
+    return os.path.join(OUTPUT_DIR, job_id, _EXPIRED_MARKER)
+
+
+def _claim_expiry(job_ids):
+    """Worker thread: claim each job's expiry on the shared disk before
+    anything is released, so two instances (the few seconds of a deploy
+    before the old one notices it must drain) never both end it, and a job
+    that started anywhere is never ended. The claim is the marker, created
+    exclusively; it then also makes /api/status answer "failed, and why" on
+    any instance (and after a restart) instead of 404, and dispatch refuses
+    a claimed job. Returns ``(claimed, claimed_elsewhere, keep)``."""
+    claimed, elsewhere, keep = [], [], []
     for jid in job_ids:
-        _clear_resume_manifest(jid)
+        marker = _expired_marker(jid)
         try:
-            with open(os.path.join(OUTPUT_DIR, jid, _EXPIRED_MARKER), "w") as f:
-                f.write(str(int(time.time())))
+            fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            elsewhere.append(jid)
+            continue
         except OSError:
-            pass
+            keep.append(jid)
+            continue
+        with os.fdopen(fd, "w") as f:
+            f.write(str(int(time.time())))
+        m = _read_manifest(jid)
+        if m is not None and (m.get("run_started") or m.get("heartbeat")
+                              or _manifest_busy_elsewhere(m)):
+            # It ran, or runs, somewhere: not a starved job. Hand it back.
+            try:
+                os.remove(marker)
+            except OSError:
+                pass
+            keep.append(jid)
+            continue
+        _clear_resume_manifest(jid)
+        claimed.append(jid)
+    return claimed, elsewhere, keep
+
+
+def _never_ran(job) -> bool:
+    """Only a job that never started anywhere can be a starved one: a run cut
+    by a drain or an auto-retry is resumed, never expired."""
+    return not (job.get('run_started') or job.get('ran_before') or job.get('auto_retries'))
 
 
 async def _expire_starved_jobs(now=None) -> list:
     """End, cleanly, the free jobs that have waited past ``ACTIVE_JOB_MAX_SECONDS``
-    since submission (only with the saturation mode on, where a lane serving
-    its newest first, or the slow lane, can keep an old job waiting).
+    since submission without ever starting (only with the saturation mode on,
+    where a lane serving its newest first, or the slow lane, can keep an old
+    job waiting). Paid jobs, top-up jobs included, sit above the free
+    priorities and are never considered.
 
     The same end as any job that did not complete: off the heap, status
     ``failed`` with a line saying why, resume manifest dropped (so neither
@@ -2244,42 +2285,49 @@ async def _expire_starved_jobs(now=None) -> list:
         return []
     now = time.time() if now is None else now
     heap = job_queue._queue
-    victims = []
+    cand = set()
     for prio, _key, jid in heap:
         if prio < _queue_mode.FREE_PRIORITY:
             continue
         job = jobs.get(jid)
-        if not job or job.get('status') != 'queued' or jid in _running_jobs:
+        if (not job or job.get('status') != 'queued' or jid in _running_jobs
+                or not _never_ran(job)):
             continue
         if now - float(job.get('submitted_at') or now) > ACTIVE_JOB_MAX_SECONDS:
-            victims.append(jid)
-    if not victims:
+            cand.add(jid)
+    if not cand:
         return []
-    gone = set(victims)
-    kept = [e for e in heap if e[2] not in gone]
-    removed = len(heap) - len(kept)
-    heap[:] = kept
+    # Off the heap before the disk is touched, so the worker cannot take one
+    # while its claim is being made; the ones handed back are put again.
+    entries = {e[2]: e for e in heap if e[2] in cand}
+    heap[:] = [e for e in heap if e[2] not in cand]
     heapq.heapify(heap)
-    for _ in range(removed):
+    for _ in entries:
         try:
-            job_queue.task_done()  # each entry was put once and will never be got
+            job_queue.task_done()  # each entry was put once and will not be got
         except ValueError:
             break
     _queue_changed()
-    for jid in victims:
+    claimed, elsewhere, keep = await asyncio.to_thread(_claim_expiry, sorted(entries))
+    for jid in keep:
+        job_queue.put_nowait(entries[jid])
+    if keep:
+        _queue_changed()
+    for jid in claimed + elsewhere:
         job = jobs[jid]
         job['status'] = 'failed'
         job['queue_expired'] = True
         if job.get('logs') is not None:
             job['logs'].append(QUEUE_EXPIRED_LOG)
-    await asyncio.to_thread(_retire_expired_on_disk, victims)
-    for jid in victims:
+    # Only the claimer settles and tells: one release, one job.failed.
+    for jid in claimed:
         await _settle_reservation(jid, jobs[jid])
         await _autopilot_job_finished(jid, jobs[jid])
         await _notify_job_webhook(jid)
-    print(f"⌛ Expired {len(victims)} free job(s) that waited over "
-          f"{ACTIVE_JOB_MAX_SECONDS // 3600} h in the queue.")
-    return victims
+    if claimed:
+        print(f"⌛ Expired {len(claimed)} free job(s) that waited over "
+              f"{ACTIVE_JOB_MAX_SECONDS // 3600} h in the queue without starting.")
+    return claimed
 
 
 def _dir_size(path: str) -> int:
@@ -2627,6 +2675,17 @@ async def process_queue():
             if job_id in jobs:
                 jobs[job_id]['run_started'] = time.time()
             _touch_manifest(job_id, started=True)
+            if os.path.exists(_expired_marker(job_id)):
+                # The other instance of a deploy ended it as starved a moment
+                # ago (and released its reservation): do not run it.
+                _running_jobs.discard(job_id)
+                concurrency_semaphore.release()
+                job_queue.task_done()
+                if job_id in jobs:
+                    jobs[job_id]['status'] = 'failed'
+                    jobs[job_id]['queue_expired'] = True
+                    jobs[job_id]['logs'].append(QUEUE_EXPIRED_LOG)
+                continue
 
             # Process in background task to not block the loop (allowing other slots to fill)
             asyncio.create_task(run_job_wrapper(job_id))
