@@ -364,8 +364,12 @@ def asr_incident(sub: dict, snap: dict, now: float, lim: dict):
     watch = n > 0 and bool(snap.get("gpu")) and not asr_on_purpose()
     recent = devices[-n:] if n else []
     breach = watch and len(recent) == n and all(d == "cpu" for d in recent)
-    clear = (not watch) or (len(devices) >= CLEAR_TICKS
-                            and all(d == "cuda" for d in devices[-CLEAR_TICKS:]))
+    # Closed by evidence (jobs on "cuda") or by configuration (the check off,
+    # CPU on purpose), never by a missing figure: nvidia-smi not answering on
+    # one tick says nothing about where the next jobs transcribe.
+    configured_off = n <= 0 or asr_on_purpose()
+    clear = configured_off or (len(devices) >= CLEAR_TICKS
+                               and all(d == "cuda" for d in devices[-CLEAR_TICKS:]))
     data = {"cpu": devices.count("cpu"), "seen": len(devices)}
     still = bool(devices) and devices[-1] == "cpu"
     return _incident(sub, breach, clear, still, now, lim, False, data)
@@ -567,19 +571,39 @@ def decide_modes(snap: dict, now: float) -> list:
 
 
 def follow_modes():
-    """Non-measuring instance: adopt the shared modes, hand over refusals."""
+    """Non-measuring instance (and every instance at boot): adopt the shared
+    modes, hand over refusals. The file is replaced atomically, so it is read
+    without the lock; the lock is only for adding the refusals made here, and
+    when the other instance holds it they wait for the next tick."""
+    queue_mode.adopt(queue_mode.load(_state_dir))
+    if not queue_mode.has_pending():
+        return
     lock = _try_lock()
     if lock is None:
         return
     try:
-        pending = queue_mode.take_pending()
-        state = queue_mode.fold(queue_mode.load(_state_dir), pending)
-        if pending:
-            queue_mode.save(_state_dir, state)
+        state = queue_mode.fold(queue_mode.load(_state_dir), queue_mode.take_pending())
+        queue_mode.save(_state_dir, state)
         queue_mode.adopt(state)
     finally:
         if lock:
             lock.close()
+
+
+async def _send_mode_alerts(events, m, now, lim) -> list:
+    """The brake's on / off alerts, sent from the decision itself so a busy
+    incident lock cannot lose them. Returns their kinds."""
+    out = []
+    for event in events:
+        if event in ("brake_on", "brake_off"):
+            out.append((event.replace("_", "-"),
+                        mode_message(event, m.get("modes") or {}, m, now, lim)))
+    if out:
+        from .alerts import send_admin_alert
+        for _name, (subject, body) in out:
+            await send_admin_alert(subject, body)
+        print(f"📣 Queue watch: {', '.join(n for n, _ in out)}")
+    return [n for n, _ in out]
 
 
 # --- The tick -----------------------------------------------------------------
@@ -636,9 +660,11 @@ async def tick(now=None):
         _hold_until = max(_hold_until, now + lim["paid_wait"])
     hold = now < _hold_until
 
+    mode_sent = await _send_mode_alerts(mode_events, m, now, lim)
     lock = _try_lock()
     if lock is None:
-        return None  # the other instance is ticking right now
+        # The other instance is ticking right now; the brake's alerts are out.
+        return ",".join(mode_sent) or None
     try:
         state = load_state()
         queue_state = {k: v for k, v in state.items() if k not in SUB_KEYS}
@@ -657,10 +683,6 @@ async def tick(now=None):
         if rate_kind:
             out.append(("rate-" + rate_kind,
                         fault_message("rate", rate_kind, rate_sub, m, now, lim)))
-        for event in mode_events:
-            if event in ("brake_on", "brake_off"):
-                out.append((event.replace("_", "-"),
-                            mode_message(event, m.get("modes") or {}, m, now, lim)))
         if out:
             from .alerts import send_admin_alert
             for name, (subject, body) in out:
@@ -670,8 +692,9 @@ async def tick(now=None):
                   f"{int(m['oldest_free'])} s, done/h {m.get('done_last_hour')})")
         # The queue incident's kind, as before; with a fault or a brake switch
         # too, every kind sent, comma-separated.
-        if any(n != kind for n, _ in out):
-            return ",".join(n for n, _ in out)
+        names = [n for n, _ in out] + mode_sent
+        if any(n != kind for n in names):
+            return ",".join(names)
         return kind
     finally:
         if lock:

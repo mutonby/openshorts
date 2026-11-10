@@ -245,6 +245,10 @@ def note_rejected():
     _pending_rejected += 1
 
 
+def has_pending() -> bool:
+    return _pending_rejected > 0
+
+
 def take_pending() -> int:
     global _pending_rejected
     n, _pending_rejected = _pending_rejected, 0
