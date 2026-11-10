@@ -82,7 +82,8 @@ back later, or skip the line with a plan." (plus the link). It names no
 country or region. The check runs right after the out-of-minutes check and
 before the probe, the reservation and the first-video grant, so a refused
 user keeps their minutes and their first whole video. Accounts with top-up
-credit and paid plans are never refused. The dashboard opens the plan modal
+credit and paid plans are never refused, and with the mode on a free-plan
+account with top-up credit queues with the paid plans (it paid). The dashboard opens the plan modal
 with context and source `queue_full` (its own `QueueFullSeen` /
 `QueueFullCheckout` / `QueueFullDismissed`, plus `CheckoutStarted` /
 `CheckoutRedirected` with that source); the server tracks `FreeQueueFull` for

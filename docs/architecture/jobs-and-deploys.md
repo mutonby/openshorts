@@ -265,16 +265,37 @@ off.
 
 - **Lanes.** Order: pro (0) → paid plans (1) → free normal lane (2) → free
   slow lane (3). A job goes to the slow lane only when, at submit, the account
-  is on the free plan with no top-up credit and the request's country is in
+  is on the free plan with no top-up credit and the client's country is in
   `FREE_SLOW_LANE_COUNTRIES` (ISO codes, comma-separated, empty by default;
-  the real list lives only in the deployment's env, never in this repo). The
-  country is the CDN's geolocation header, `QUEUE_COUNTRY_HEADER` (default
-  `cf-ipcountry`): no lookup and no call per request. Missing, malformed or
-  "unknown" (`XX`, `T1`) = normal lane. The API host must sit behind a CDN
-  that sets the header (and the origin must not be reachable around it, or a
-  client could send its own). Paid jobs never go to the slow lane; paying
-  moves a slow-lane job up like any free one (`_raise_users_jobs`);
-  `_raise_to_owner_plans` only raises to paid priorities.
+  the real list lives only in the deployment's env, never in this repo).
+  Paid jobs never go to the slow lane; paying moves a slow-lane job up like
+  any free one (`_raise_users_jobs`); `_raise_to_owner_plans` only raises to
+  paid priorities.
+- **Top-up buyers queue as paid.** With the mode on, a free-plan account with
+  top-up credit gets priority 1 at submit (`topup` in the record and the
+  manifest): it paid, and newest-first and the expiry below only exist under
+  the paid priorities, so its video can neither lose its turn nor expire.
+- **Country: a local database** (`cloud/geoip.py`). The client address
+  (`request.client.host`, from the reverse proxy we run) is looked up in an
+  in-memory MMDB: microseconds, no call per request. Default data: the
+  `user-country` database of the ip-location-db project (PDDL 1.0, public
+  domain: no attribution, no account, no licence key; rebuilt daily, ~8 MB,
+  IPv4 + IPv6), downloaded from `GEOIP_COUNTRY_DB_URL` to
+  `GEOIP_COUNTRY_DB_PATH` (default `output/.geoip/country.mmdb`, shared by both
+  containers, so a deploy does not download it again), checked against the
+  published SHA-256 (`GEOIP_COUNTRY_DB_SHA256_URL`) and opened before an
+  atomic replace, by one container at a time (flock). Refreshed when older than
+  `GEOIP_REFRESH_HOURS` (72), and only while a slow-lane country is set; each
+  instance reloads the file when it changes. `GEOIP_DISABLED=1` stops the
+  loop. No file, a corrupt one, no `maxminddb`, a private / loopback /
+  reserved address or no match: unknown country = normal lane, never an
+  error. `QUEUE_COUNTRY_HEADER` (empty = off, the default) makes a
+  geolocation header win over the database; set it only behind a proxy or
+  CDN that sets that header and strips any copy a client sends, or anyone can
+  choose their lane.
+- **Off = folded back.** With the kill switch or an empty country list, a job
+  at priority 3 queues at 2 by its submission time: at enqueue, at resume and
+  live (`app._fold_slow_lane`, every resume scan).
 - **Queue key = submission time.** Heap entries are `(priority, key, job_id)`
   with `key` the job's `submitted_at` (FIFO) or minus it (newest first).
   `submitted_at` and `lane` travel in the resume manifest, so a job enqueued
@@ -297,15 +318,21 @@ off.
   clip), and a new slow-lane submission is refused with a 402
   `free_queue_full` before the probe, the reservation and the first-video
   grant (see `billing-and-account.md`).
-- **Starved jobs end cleanly.** With the mode on, a free job still queued
-  `ACTIVE_JOB_MAX_SECONDS` (24 h) after submission is ended by the resume scan
-  (`app._expire_starved_jobs`): off the heap, `failed` with a line saying why,
+- **Starved jobs end cleanly.** With the mode on, a free job that never
+  started anywhere (no `run_started` here, no `run_started`/heartbeat in its
+  manifest, no auto-retry: a drain-cut or retried run is always resumed) and
+  is still queued `ACTIVE_JOB_MAX_SECONDS` (24 h) after submission is ended by
+  the resume scan (`app._expire_starved_jobs`). It is first claimed on the
+  shared disk: the `.queue_expired` marker is created exclusively, the
+  manifest is read again (a run anywhere hands it back), and only the claimer
+  releases and tells, so the two containers of a deploy never both end it; a
+  worker that finds the marker at dispatch does not run it. Then: off the heap, `failed` with a line saying why,
   manifest dropped, reservation released (the first-video grant survives a
   released reservation), webhook `job.failed`, no clips-ready email, not a
-  pipeline failure, not counted as output by the queue watch. A
-  `.queue_expired` marker in its dir makes `/api/status` on the other
-  instance, or after a restart, answer `failed` with the reason (never 404)
-  until the dir ages out. A draining instance leaves its queue to the next
+  pipeline failure, not counted as output by the queue watch. The marker
+  makes `/api/status` on the other instance, or after a restart, answer
+  `failed` with the reason (never 404) until the dir ages out, and the
+  startup recovery never reads that dir as completed. A draining instance leaves its queue to the next
   one. Until then a waiting job is never dropped: resumes that did not run
   count no attempt, the disk sweeps and size caps skip queued jobs (dir and
   upload), and its reservation is live (`now`) for the sweeper.
@@ -316,7 +343,9 @@ off.
 - **Decided by the queue watch.** The modes are decided on the queue watch's
   tick from its snapshot (no loop of their own; it runs for them even with the
   alerts off), shared with the other container through `output/.queue_mode.json`
-  under `.queue_watch.lock`, and adopted at boot before the first tick. The
+  under `.queue_watch.lock` (read without it: it is replaced atomically), and
+  adopted at boot before the first tick. The brake's alerts go out from the
+  decision itself, whatever happens to the incident lock. The
   non-measuring instance follows the file and hands over the refusals it
   made. Every queue alert carries one line per lane (order, estimated wait,
   brake, refusals); the brake switching on or off is an alert of its own. An

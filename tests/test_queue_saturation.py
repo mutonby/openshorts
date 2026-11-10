@@ -15,6 +15,7 @@ import pytest
 app_module = pytest.importorskip("app")
 qm = pytest.importorskip("cloud.queue_mode")
 qw = pytest.importorskip("cloud.queue_watch")
+geoip = pytest.importorskip("cloud.geoip")
 
 H = 3600
 FREE, SLOW = qm.FREE_PRIORITY, qm.SLOW_PRIORITY
@@ -29,8 +30,26 @@ def env(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("BILLING_ENABLED", "1")
     qm.reset()
+    geoip.reset()
+    monkeypatch.setattr(geoip, "_reader", FakeReader())
     yield monkeypatch
     qm.reset()
+    geoip.reset()
+
+
+# Arbitrary public addresses standing for clients in each placeholder country.
+CLIENT = {"XA": "11.0.0.1", "XB": "11.0.0.2", "XC": "12.0.0.1"}
+
+
+class FakeReader:
+    """The in-memory MMDB reader, as maxminddb would answer (both shapes)."""
+
+    def get(self, ip):
+        for code, addr in CLIENT.items():
+            if ip == addr:
+                return ({"country_code": code} if code != "XB"
+                        else {"country": {"iso_code": code}})
+        return None
 
 
 @pytest.fixture
@@ -128,8 +147,10 @@ class TestLaneAssignment:
         assert qm.slow_countries() == {"XA"}          # CDN "unknown" codes never listed
         assert qm.lane_for("free", "") == qm.NORMAL
         assert qm.lane_for("free", None) == qm.NORMAL
+        sat.setenv("QUEUE_COUNTRY_HEADER", "cf-ipcountry")
         for raw in ("", "XX", "T1", "zzz", "1A", None):
             assert qm.request_country({"cf-ipcountry": raw} if raw is not None else {}) == ""
+        assert qm.request_country({}, "13.0.0.1") == ""       # not in the database
 
     def test_paid_plans_never_slow(self, sat):
         for plan in ("starter", "creator", "pro", None):
@@ -139,10 +160,19 @@ class TestLaneAssignment:
         assert qm.priority_for(FREE, qm.SLOW) == SLOW
         assert qm.priority_for(FREE, qm.NORMAL) == FREE
 
-    def test_header_is_configurable(self, sat):
-        assert qm.request_country({"cf-ipcountry": "xa"}) == "XA"
+    def test_country_comes_from_the_client_address(self, sat):
+        assert qm.request_country({}, CLIENT["XA"]) == "XA"
+        assert qm.request_country({}, CLIENT["XB"]) == "XB"           # GeoLite2 shape
+        assert qm.request_country({}, "::ffff:" + CLIENT["XA"]) == "XA"
+
+    def test_header_is_off_unless_configured(self, sat):
+        # Anyone can send it: by default it is ignored.
+        assert qm.request_country({"cf-ipcountry": "XC"}, CLIENT["XA"]) == "XA"
+        assert qm.request_country({"cf-ipcountry": "XA"}, None) == ""
         sat.setenv("QUEUE_COUNTRY_HEADER", "X-Geo-Country")
-        assert qm.request_country({"x-geo-country": "XB"}) == "XB"
+        assert qm.request_country({"x-geo-country": "XB"}, CLIENT["XC"]) == "XB"
+        # Configured but absent: the address decides.
+        assert qm.request_country({}, CLIENT["XA"]) == "XA"
 
     def test_kill_switch(self, sat):
         sat.setenv("QUEUE_SATURATION_DISABLED", "1")
@@ -151,13 +181,11 @@ class TestLaneAssignment:
 
 
 def _request(country=None, api_key=False):
-    headers = {}
-    if country:
-        headers["cf-ipcountry"] = country
+    headers = {"cf-ipcountry": "XC"}   # a forged header never matters by default
     if api_key:
         headers["X-API-Key"] = "osk_x"
     return SimpleNamespace(headers=headers, state=SimpleNamespace(),
-                           client=SimpleNamespace(host="client"))
+                           client=SimpleNamespace(host=CLIENT.get(country, "10.0.0.7")))
 
 
 class FakeMetering:
@@ -236,10 +264,13 @@ class TestSubmit:
         req = _request("XA")
         assert _reserve(req)[1] == 1 and req.state.queue_lane == qm.NORMAL
 
-    def test_topup_credit_is_not_free(self, managed):
+    def test_topup_credit_queues_with_the_paid_plans(self, managed):
         managed.met.balance["topup_remaining"] = 30.0
         req = _request("XA")
-        assert _reserve(req)[1] == FREE
+        assert _reserve(req)[1] == qm.PAID_PRIORITY
+        assert req.state.queue_topup is True and req.state.queue_lane == qm.NORMAL
+        _set_brake(True)
+        assert _reserve(_request("XA"), "j2")[1] == qm.PAID_PRIORITY   # never refused
 
     def test_brake_refuses_without_spending_anything(self, managed):
         _set_brake(True)
