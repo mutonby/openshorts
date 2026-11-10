@@ -2212,6 +2212,22 @@ QUEUE_EXPIRED_LOG = ("❌ The free queue was too busy to start this video in tim
                      "or skip the line with a plan.")
 
 
+_EXPIRED_MARKER = ".queue_expired"
+
+
+def _retire_expired_on_disk(job_ids):
+    """Worker thread: drop each expired job's manifest and leave a marker, so
+    /api/status on the other instance (or after a restart) answers "failed,
+    and why" instead of 404 until the dir ages out."""
+    for jid in job_ids:
+        _clear_resume_manifest(jid)
+        try:
+            with open(os.path.join(OUTPUT_DIR, jid, _EXPIRED_MARKER), "w") as f:
+                f.write(str(int(time.time())))
+        except OSError:
+            pass
+
+
 async def _expire_starved_jobs(now=None) -> list:
     """End, cleanly, the free jobs that have waited past ``ACTIVE_JOB_MAX_SECONDS``
     since submission (only with the saturation mode on, where a lane serving
@@ -2256,7 +2272,7 @@ async def _expire_starved_jobs(now=None) -> list:
         job['queue_expired'] = True
         if job.get('logs') is not None:
             job['logs'].append(QUEUE_EXPIRED_LOG)
-    await asyncio.to_thread(lambda: [_clear_resume_manifest(j) for j in victims])
+    await asyncio.to_thread(_retire_expired_on_disk, victims)
     for jid in victims:
         await _settle_reservation(jid, jobs[jid])
         await _autopilot_job_finished(jid, jobs[jid])
@@ -4796,6 +4812,15 @@ def _job_view_from_disk(job_id):
     if not os.path.isdir(job_path):
         return None
     m = _read_manifest(job_id)
+    if m is None and os.path.exists(os.path.join(job_path, _EXPIRED_MARKER)):
+        owner = None
+        try:
+            with open(os.path.join(job_path, ".owner")) as f:
+                owner = f.read().strip() or None
+        except OSError:
+            pass
+        return {'status': 'failed', 'logs': _TimedLog([QUEUE_EXPIRED_LOG]),
+                'user_id': owner, 'result': None, 'queue_expired': True}
     if m is None:
         if glob.glob(os.path.join(job_path, "*_metadata.json")):
             _recover_jobs_from_disk()

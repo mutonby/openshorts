@@ -302,8 +302,13 @@ off.
   (`app._expire_starved_jobs`): off the heap, `failed` with a line saying why,
   manifest dropped, reservation released (the first-video grant survives a
   released reservation), webhook `job.failed`, no clips-ready email, not a
-  pipeline failure, not counted as output by the queue watch. A draining
-  instance leaves its queue to the next one.
+  pipeline failure, not counted as output by the queue watch. A
+  `.queue_expired` marker in its dir makes `/api/status` on the other
+  instance, or after a restart, answer `failed` with the reason (never 404)
+  until the dir ages out. A draining instance leaves its queue to the next
+  one. Until then a waiting job is never dropped: resumes that did not run
+  count no attempt, the disk sweeps and size caps skip queued jobs (dir and
+  upload), and its reservation is live (`now`) for the sweeper.
 - **`/api/status`** ranks the real dispatch order (cached per heap change, not
   per poll) and adds `eta_is_minimum`: true for a job that later arrivals can
   still pass (slow lane, or a lane serving newest first); the dashboard says

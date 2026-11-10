@@ -805,3 +805,70 @@ class TestVolume:
         assert worst < 0.15, f"loop held {worst * 1000:.0f} ms"
         assert app_module.job_queue.qsize() == self.N - len(gone)
         _assert_heap()
+
+
+# --- A slow-lane video that never gets to run ---------------------------------------
+
+class TestNeverRuns:
+    """Through many deploys it is neither dropped nor swept, its reservation
+    stays live, and past ACTIVE_JOB_MAX_SECONDS it ends with a reason that
+    both instances report (no 404) and its minutes / first video back."""
+
+    def _handover(self, out):
+        """The next container: memory gone, the queue rebuilt from manifests."""
+        app_module.jobs.clear()
+        app_module.job_queue = asyncio.PriorityQueue()
+        return app_module._resume_interrupted_jobs()
+
+    def test_survives_many_handovers_untouched(self, out, sat, monkeypatch):
+        sub = time.time() - 20 * H
+        d = out / "slowold"
+        d.mkdir()
+        (d / ".owner").write_text("u")
+        (d / app_module._RESUME_FILE).write_text(json.dumps(
+            {"cmd": ["python"], "priority": SLOW, "lane": qm.SLOW, "user_id": "u",
+             "reservation_id": "r-old", "submitted_at": sub, "attempts": 0}))
+        upload = out.parent / "uploads"
+        upload.mkdir()
+        (upload / "slowold_src.mp4").write_bytes(b"x" * 10)
+        monkeypatch.setattr(app_module, "UPLOAD_DIR", str(upload))
+        monkeypatch.setattr(app_module, "OUTPUT_MAX_GB", 1e-9)     # disk "full"
+        monkeypatch.setattr(app_module, "UPLOADS_MAX_GB", 1e-9)
+        monkeypatch.setattr(app_module, "JOB_RETENTION_SECONDS", 1)
+        for _ in range(12):
+            keep = self._handover(out)
+            assert keep == {"r-old"}
+            app_module._sweep_expired_job_dirs(time.time() + 10)
+            app_module._enforce_output_size_cap()
+            app_module._enforce_uploads_size_cap()
+            app_module._sweep_expired_uploads(time.time() + 10)
+        m = json.loads((d / app_module._RESUME_FILE).read_text())
+        assert m["attempts"] == 0 and m["submitted_at"] == sub
+        assert (upload / "slowold_src.mp4").exists()
+        assert app_module.jobs["slowold"]["status"] == "queued"
+        live = asyncio.run(app_module._live_reservation_ids())
+        assert live["r-old"] >= time.time() - 5        # queued here: never "hung"
+
+    def test_expires_cleanly_and_both_instances_say_why(self, out, sat, monkeypatch):
+        released = []
+
+        async def settle(jid, job=None):
+            released.append((jid, job["status"]))
+
+        async def noop(*a, **k):
+            return None
+        monkeypatch.setattr(app_module, "_settle_reservation", settle)
+        monkeypatch.setattr(app_module, "_notify_job_webhook", noop)
+        monkeypatch.setattr(app_module, "_autopilot_job_finished", noop)
+        now = time.time()
+        _job(out, "slow_old", SLOW, now - app_module.ACTIVE_JOB_MAX_SECONDS - 1, user="u")
+        (out / "slow_old" / ".owner").write_text("u")
+        asyncio.run(app_module._expire_starved_jobs(now))
+        assert released == [("slow_old", "failed")]      # minutes back, grant kept
+        # The other instance (or this one after a restart) never held it.
+        app_module.jobs.clear()
+        view = app_module._job_view_from_disk("slow_old")
+        assert view["status"] == "failed"
+        assert view["logs"][-1] == app_module.QUEUE_EXPIRED_LOG
+        assert self._handover(out) == set()               # never resumed again
+        assert "slow_old" not in app_module.jobs
