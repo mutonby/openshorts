@@ -437,6 +437,32 @@ async def live_plans(user_ids) -> dict:
     return plans
 
 
+async def topup_owners(user_ids) -> set:
+    """``{str(user_id)}`` of the users among ``user_ids`` with top-up minutes
+    left (the free queue's saturation mode queues their jobs as paid). One
+    query per LIVE_PLANS_CHUNK owners; non-uuid ids are skipped."""
+    import uuid as _uuid
+    ids = []
+    for u in {str(x) for x in (user_ids or ()) if x is not None}:
+        try:
+            ids.append(_uuid.UUID(u))
+        except ValueError:
+            continue
+    out = set()
+    if not ids:
+        return out
+    async with database.session() as session:
+        for i in range(0, len(ids), LIVE_PLANS_CHUNK):
+            rows = (await session.execute(
+                select(CreditTopup.user_id).where(and_(
+                    CreditTopup.user_id.in_(ids[i:i + LIVE_PLANS_CHUNK]),
+                    CreditTopup.minutes_total > CreditTopup.minutes_consumed,
+                )).distinct()
+            )).scalars().all()
+            out.update(str(u) for u in rows)
+    return out
+
+
 def free_plan_eligible(user) -> bool:
     """True if this ``User`` row qualifies for the free monthly allowance.
 

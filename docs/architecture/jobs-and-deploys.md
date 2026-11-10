@@ -273,7 +273,8 @@ off.
   paid priorities.
 - **Top-up buyers queue as paid.** With the mode on, a free-plan account with
   top-up credit gets priority 1 at submit (`topup` in the record and the
-  manifest): it paid, and newest-first and the expiry below only exist under
+  manifest), and jobs enqueued again from a manifest are raised the same way
+  with the plan lookup (`metering.topup_owners`, one batch): it paid, and newest-first and the expiry below only exist under
   the paid priorities, so its video can neither lose its turn nor expire.
 - **Country: a local database** (`cloud/geoip.py`). The client address
   (`request.client.host`, from the reverse proxy we run) is looked up in an
@@ -286,8 +287,10 @@ off.
   published SHA-256 (`GEOIP_COUNTRY_DB_SHA256_URL`) and opened before an
   atomic replace, by one container at a time (flock). Refreshed when older than
   `GEOIP_REFRESH_HOURS` (72), and only while a slow-lane country is set; each
-  instance reloads the file when it changes. `GEOIP_DISABLED=1` stops the
-  loop. No file, a corrupt one, no `maxminddb`, a private / loopback /
+  instance reloads the file when it changes; one without a database looks
+  again every minute. The download is bounded in total time.
+  `GEOIP_DISABLED=1` stops the loop. Dot entries of `output/` (this
+  database, the shared state files, locks) are never swept, capped or purged. No file, a corrupt one, no `maxminddb`, a private / loopback /
   reserved address or no match: unknown country = normal lane, never an
   error. `QUEUE_COUNTRY_HEADER` (empty = off, the default) makes a
   geolocation header win over the database; set it only behind a proxy or
@@ -318,15 +321,21 @@ off.
   clip), and a new slow-lane submission is refused with a 402
   `free_queue_full` before the probe, the reservation and the first-video
   grant (see `billing-and-account.md`).
-- **Starved jobs end cleanly.** With the mode on, a free job that never
-  started anywhere (no `run_started` here, no `run_started`/heartbeat in its
-  manifest, no auto-retry: a drain-cut or retried run is always resumed) and
-  is still queued `ACTIVE_JOB_MAX_SECONDS` (24 h) after submission is ended by
-  the resume scan (`app._expire_starved_jobs`). It is first claimed on the
-  shared disk: the `.queue_expired` marker is created exclusively, the
-  manifest is read again (a run anywhere hands it back), and only the claimer
-  releases and tells, so the two containers of a deploy never both end it; a
-  worker that finds the marker at dispatch does not run it. Then: off the heap, `failed` with a line saying why,
+- **Starved jobs end cleanly.** With the mode on, a free job still queued
+  `ACTIVE_JOB_MAX_SECONDS` (24 h) after the latest of its submission, the
+  mode's activation (`enabled_since` in the shared state, stamped by the
+  first decision and dropped by a boot with the mode off: the jobs already
+  waiting at activation get the whole window) and its last run (a drain-cut
+  or auto-retried video waits from there, and counts as recent under newest
+  first) is ended by the resume scan (`app._expire_starved_jobs`). Nothing
+  expires until the activation time is known. It is first claimed on the
+  shared disk: a job whose manifest is gone is not claimed (dropped here if
+  it finished elsewhere), the `.queue_expired` marker is created exclusively,
+  the manifest is read again (a run that started meanwhile hands it back; a
+  marker that cannot be removed keeps the job out of the queue until a later
+  pass removes it), and only the claimer releases and tells, so the two
+  containers of a deploy never both end it; a worker that finds the marker
+  at dispatch does not run it. Then: off the heap, `failed` with a line saying why,
   manifest dropped, reservation released (the first-video grant survives a
   released reservation), webhook `job.failed`, no clips-ready email, not a
   pipeline failure, not counted as output by the queue watch. The marker

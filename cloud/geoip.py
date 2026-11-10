@@ -38,6 +38,8 @@ DEFAULT_URL = "https://github.com/sapics/ip-location-db/releases/download/latest
 DEFAULT_SHA256_URL = ("https://github.com/sapics/ip-location-db/releases/download/"
                       "checksum/user-country.mmdb.sha256")
 CHECK_EVERY = 3600          # seconds between looks at the file's age / mtime
+RETRY_SOON = 60             # ...while this instance has no database loaded
+DOWNLOAD_TIMEOUT = 180      # whole download, not per read
 MAX_BYTES = 64 * 1024 * 1024
 _CODE = re.compile(r"^[A-Z]{2}$")
 
@@ -155,9 +157,13 @@ def reload_if_changed() -> bool:
     return True
 
 
-def _fetch(url, timeout=120) -> bytes:
+def _fetch(url, timeout=None) -> bytes:
+    """GET ``url`` whole, bounded in size and in total time (httpx timeouts
+    are per operation: a slow trickle would never hit them)."""
     import httpx
-    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+    total = DOWNLOAD_TIMEOUT if timeout is None else timeout
+    deadline = time.monotonic() + total
+    with httpx.Client(timeout=min(30.0, total), follow_redirects=True) as client:
         with client.stream("GET", url) as resp:
             resp.raise_for_status()
             chunks, size = [], 0
@@ -165,6 +171,8 @@ def _fetch(url, timeout=120) -> bytes:
                 size += len(chunk)
                 if size > MAX_BYTES:
                     raise ValueError("database larger than expected")
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"download took over {total:.0f} s")
                 chunks.append(chunk)
     return b"".join(chunks)
 
@@ -240,7 +248,9 @@ async def _loop(wanted):
             return
         except Exception as e:
             print(f"⚠️  GeoIP loop error: {e}")
-        await asyncio.sleep(CHECK_EVERY)
+        # Without a database (the other container holds the download lock, a
+        # failed download): look again soon, not in an hour.
+        await asyncio.sleep(CHECK_EVERY if loaded() or not wanted() else RETRY_SOON)
 
 
 def start(state_dir, wanted):

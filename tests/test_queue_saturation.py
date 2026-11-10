@@ -57,6 +57,10 @@ def sat(env):
     """Saturation mode configured: slow lane XA/XB, newest first past 60 min."""
     env.setenv("FREE_SLOW_LANE_COUNTRIES", "xa, XB")
     env.setenv("QUEUE_RECENT_FIRST_MINUTES", "60")
+    # Switched on long ago: the expiry window counts from each job's own times.
+    s = qm.current()
+    s["enabled_since"] = 0.0
+    qm.adopt(s)
     return env
 
 
@@ -75,6 +79,7 @@ def out(tmp_path, env):
     env.setattr(app_module, "_job_seq", itertools.count())
     env.setattr(app_module, "_seen_priority_gen", app_module._UNSEEN)
     env.setattr(app_module, "_owner_plan_pending", set())
+    env.setattr(app_module, "_unclaim_pending", {})
     from cloud import config as cloud_config
     env.setattr(app_module, "_cloud_config", cloud_config)
     return root
@@ -814,7 +819,7 @@ class TestVolume:
         import random
         rng = random.Random(3)
         for i in range(self.N):
-            _job(out, f"j{i}", rng.choice([FREE, SLOW]), rng.uniform(0, 1e5), manifest=False)
+            _job(out, f"j{i}", rng.choice([FREE, SLOW]), rng.uniform(0, 1e5))
         t0 = time.perf_counter()
         _set_recent(normal=True, slow=True)
         assert time.perf_counter() - t0 < 0.1

@@ -177,6 +177,10 @@ def default_state() -> dict:
         "brake": {"active": False, "since": None, "off_at": None, "rejected": 0},
         "rejected_total": 0,
         "figures": {},
+        # When the mode was switched on (first decision with it configured):
+        # the starved-job expiry counts from here, so the jobs already
+        # waiting at activation get the whole window, not a wave of expiries.
+        "enabled_since": None,
     }
 
 
@@ -191,6 +195,11 @@ def _normalized(state) -> dict:
                          if k in out["brake"]})
     out["rejected_total"] = int(state.get("rejected_total") or 0)
     out["figures"] = dict(state.get("figures") or {})
+    if state.get("enabled_since") is not None:
+        try:
+            out["enabled_since"] = float(state["enabled_since"])
+        except (TypeError, ValueError):
+            pass
     return out
 
 
@@ -227,6 +236,22 @@ def brake_active() -> bool:
     if killed() or not slow_countries():
         return False
     return bool(_state["brake"].get("active"))
+
+
+def enabled_since():
+    """When the mode was switched on, as this instance knows it (None until
+    the first decision or the shared state was adopted: then nothing expires)."""
+    return _state.get("enabled_since")
+
+
+def forget_activation(state_dir):
+    """Boot with the mode off: drop the activation time, so switching it on
+    again later starts a fresh window instead of expiring the queue at once."""
+    s = load(state_dir)
+    if s.get("enabled_since") is None:
+        return
+    s["enabled_since"] = None
+    save(state_dir, s)
 
 
 def reduced_clips_recently(now=None) -> bool:
@@ -292,6 +317,8 @@ def decide(state: dict, figures: dict, now: float, lim: dict = None):
     lim = lim or limits()
     s = _normalized(state)
     events = []
+    if s["enabled_since"] is None and not killed():
+        s["enabled_since"] = now
     on_ok = not killed()
     for lane in LANES:
         cur = s["lanes"][lane]

@@ -171,11 +171,22 @@ class TestExpiryOnlyUnrun:
         assert app_module.jobs["ran"]["status"] == "queued"
         assert hooks["settle"] == []
 
-    def test_auto_retried_job_is_not_expired(self, sat, out, hooks):
+    def test_auto_retried_job_waits_from_its_last_run(self, sat, out, hooks):
         now = time.time()
         _job(out, "retry", FREE, _old(now))
-        app_module.jobs["retry"]["auto_retries"] = 1
+        app_module.jobs["retry"].update(auto_retries=1, run_started=now - 600)
         assert asyncio.run(app_module._expire_starved_jobs(now)) == []
+
+    def test_a_run_long_ago_expires_with_the_finish_message(self, sat, out, hooks):
+        now = time.time()
+        d = _manifest(out, "cut", submitted_at=_old(now) - H, run_started=_old(now),
+                      heartbeat=_old(now) + 30, instance="old", resumed_at=_old(now) + 60)
+        app_module._resume_interrupted_jobs()
+        assert asyncio.run(app_module._expire_starved_jobs(now)) == ["cut"]
+        assert app_module.jobs["cut"]["logs"][-1] == app_module.QUEUE_EXPIRED_RAN_LOG
+        app_module.jobs.clear()
+        assert app_module._job_view_from_disk("cut")["logs"][-1] == app_module.QUEUE_EXPIRED_RAN_LOG
+        assert not (d / app_module._RESUME_FILE).exists()
 
     def test_job_dispatched_here_is_not_expired(self, sat, out, hooks):
         now = time.time()
@@ -456,3 +467,216 @@ class TestStatusOfAnExpiredJob:
         body = r.json()
         assert body["status"] == "failed" and body["queue"] is None
         assert body["logs"][-1] == app_module.QUEUE_EXPIRED_LOG
+
+
+# --- Round 3: activation window, newest-first by last run, claim edges ----------------
+
+class TestActivationWindow:
+    def _activate(self, at):
+        s = qm.current()
+        s["enabled_since"] = at
+        qm.adopt(s)
+
+    def test_jobs_waiting_at_activation_get_the_whole_window(self, sat, out, hooks):
+        now = time.time()
+        self._activate(now - H)                            # switched on an hour ago
+        _job(out, "waited30h", FREE, now - 30 * H)
+        assert asyncio.run(app_module._expire_starved_jobs(now)) == []
+        later = now - H + app_module.ACTIVE_JOB_MAX_SECONDS + 60
+        assert asyncio.run(app_module._expire_starved_jobs(later)) == ["waited30h"]
+
+    def test_unknown_activation_expires_nothing(self, sat, out, hooks):
+        self._activate(None)
+        _job(out, "old", FREE, 0.0)
+        assert asyncio.run(app_module._expire_starved_jobs(time.time())) == []
+
+    def test_first_decision_stamps_activation_and_boot_off_forgets_it(self, sat, tmp_path):
+        s, _ = qm.decide(qm.default_state(), {}, 123.0)
+        assert s["enabled_since"] == 123.0
+        s2, _ = qm.decide(s, {}, 999.0)
+        assert s2["enabled_since"] == 123.0                # not moved by later ticks
+        qm.save(str(tmp_path), s2)
+        qm.forget_activation(str(tmp_path))
+        assert qm.load(str(tmp_path))["enabled_since"] is None
+
+
+class TestNewestFirstByLastRun:
+    def test_drain_cut_job_counts_as_recent_under_newest_first(self, sat, out):
+        now = time.time()
+        _job(out, "cut", FREE, now - 10 * H)
+        app_module.jobs["cut"]["last_run"] = now - 60      # cut a minute ago
+        _job(out, "mid", FREE, now - 5 * H)
+        _job(out, "new", FREE, now - 120)
+        assert _peek_order() == ["cut", "mid", "new"]       # FIFO: by submission
+        s = qm.current()
+        s["lanes"]["normal"]["recent_first"] = True
+        qm.adopt(s)
+        assert _peek_order() == ["cut", "new", "mid"]       # newest first: by last run
+
+
+class TestClaimEdges:
+    def test_manifest_gone_after_finishing_elsewhere_is_not_claimed(self, sat, out, hooks):
+        now = time.time()
+        _job(out, "done", FREE, _old(now))
+        (out / "done" / app_module._RESUME_FILE).unlink()
+        (out / "done" / "x_metadata.json").write_text('{"shorts": []}')
+        assert asyncio.run(app_module._expire_starved_jobs(now)) == []
+        assert not (out / "done" / app_module._EXPIRED_MARKER).exists()
+        assert "done" not in app_module.jobs and hooks["settle"] == []
+
+    def test_manifest_missing_but_not_done_stays_queued(self, sat, out, hooks):
+        now = time.time()
+        _job(out, "nomani", FREE, _old(now))
+        (out / "nomani" / app_module._RESUME_FILE).unlink()
+        assert asyncio.run(app_module._expire_starved_jobs(now)) == []
+        assert app_module.jobs["nomani"]["status"] == "queued"
+        assert _peek_order() == ["nomani"]
+
+    def test_marker_that_cannot_be_removed_is_retried_not_a_zombie(self, sat, out, hooks, monkeypatch):
+        now = time.time()
+        _job(out, "racy", FREE, _old(now))
+        mpath = out / "racy" / app_module._RESUME_FILE
+        real_read = app_module._read_manifest
+        calls = {"n": 0}
+
+        def read(jid):
+            # Second read (after the claim): a run started elsewhere meanwhile.
+            calls["n"] += 1
+            m = real_read(jid)
+            if jid == "racy" and calls["n"] == 2 and m is not None:
+                m.update(instance="other", heartbeat=time.time(), run_started=time.time())
+            return m
+        monkeypatch.setattr(app_module, "_read_manifest", read)
+        monkeypatch.setattr(app_module, "_remove_marker", lambda p, tries=3: False)
+        assert asyncio.run(app_module._expire_starved_jobs(now)) == []
+        assert "racy" in app_module._unclaim_pending and app_module.job_queue.qsize() == 0
+        assert app_module.jobs["racy"]["status"] == "queued" and hooks["settle"] == []
+        # Next pass: the marker goes, the job is back in line.
+        monkeypatch.setattr(app_module, "_remove_marker",
+                            lambda p, tries=3: (os.remove(p), True)[1])
+        monkeypatch.setattr(app_module, "_read_manifest", real_read)
+        m = json.loads(mpath.read_text())
+        m.update(run_started=now, heartbeat=now)           # it did run: not starved
+        mpath.write_text(json.dumps(m))
+        app_module.jobs["racy"]["last_run"] = now
+        asyncio.run(app_module._expire_starved_jobs(now))
+        assert "racy" not in app_module._unclaim_pending
+        assert _peek_order() == ["racy"]
+        assert not (out / "racy" / app_module._EXPIRED_MARKER).exists()
+
+
+class TestTopUpResume:
+    def test_owners_with_topup_are_raised_in_one_batch(self, sat, out, monkeypatch):
+        calls = []
+
+        async def plans(owners):
+            return {}
+
+        async def topups(owners):
+            calls.append(set(owners))
+            return {"buyer"} & set(owners)
+        monkeypatch.setattr(app_module, "_owner_live_plans", plans)
+        monkeypatch.setattr(app_module, "_owner_topups", topups)
+        for i, user in enumerate(("buyer", "other", "buyer")):
+            _manifest(out, f"j{i}", user_id=user, submitted_at=float(i))
+        app_module._resume_interrupted_jobs()
+        assert asyncio.run(app_module._raise_to_owner_plans()) == 2
+        assert calls == [{"buyer", "other"}]
+        assert [e[2] for e in sorted(app_module.job_queue._queue)] == ["j0", "j2", "j1"]
+        assert json.loads((out / "j0" / app_module._RESUME_FILE).read_text())["priority"] == qm.PAID_PRIORITY
+
+    def test_no_topup_lookup_without_the_mode(self, env, out, monkeypatch):
+        async def plans(owners):
+            return {}
+
+        async def topups(owners):
+            raise AssertionError("not with the mode off")
+        monkeypatch.setattr(app_module, "_owner_live_plans", plans)
+        monkeypatch.setattr(app_module, "_owner_topups", topups)
+        _manifest(out, "j", user_id="buyer", submitted_at=1.0)
+        app_module._resume_interrupted_jobs()
+        assert asyncio.run(app_module._raise_to_owner_plans()) == 0
+
+
+class TestSharedStateSurvivesSweeps:
+    def test_dot_entries_are_never_swept_capped_or_purged(self, sat, out, monkeypatch):
+        old = time.time() - 30 * 86400
+        geo = out / ".geoip"
+        geo.mkdir()
+        (geo / "country.mmdb").write_bytes(b"x" * 100)
+        for name in (qm.STATE_FILE, ".queue_watch.json", ".queue_watch.lock", ".priority_gen"):
+            (out / name).write_text("{}")
+        for p in [geo, geo / "country.mmdb"] + [out / n for n in os.listdir(out)]:
+            os.utime(p, (old, old))
+        job = out / "oldjob"
+        job.mkdir()
+        os.utime(job, (old, old))
+        monkeypatch.setattr(app_module, "JOB_RETENTION_SECONDS", 1)
+        monkeypatch.setattr(app_module, "OUTPUT_MAX_GB", 1e-12)
+        app_module._sweep_expired_job_dirs(time.time())
+        app_module._enforce_output_size_cap()
+        app_module._sweep_retained_sources(time.time())
+        assert (geo / "country.mmdb").exists()
+        for name in (qm.STATE_FILE, ".queue_watch.json", ".queue_watch.lock", ".priority_gen"):
+            assert (out / name).exists()
+        assert not job.exists()                             # real jobs still go
+
+
+class TestGeoIPRetry:
+    def test_slow_download_hits_the_total_timeout(self, env, monkeypatch):
+        httpx = pytest.importorskip("httpx")
+
+        class Slow:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def stream(self, method, url):
+                outer = self
+
+                class R:
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *a):
+                        return False
+
+                    def raise_for_status(self):
+                        pass
+
+                    def iter_bytes(self):
+                        while True:
+                            time.sleep(0.02)
+                            yield b"x"
+                return R()
+        monkeypatch.setattr(httpx, "Client", Slow)
+        t0 = time.monotonic()
+        with pytest.raises(TimeoutError):
+            geoip._fetch("https://example.invalid/db", timeout=0.2)
+        assert time.monotonic() - t0 < 2
+
+    def test_no_database_retries_soon(self, env, monkeypatch):
+        sleeps = []
+        monkeypatch.setattr(geoip, "_reader", None)
+        monkeypatch.setattr(geoip, "refresh", lambda: False)
+        monkeypatch.setattr(geoip, "reload_if_changed", lambda: False)
+        real_sleep = asyncio.sleep
+
+        async def fake_sleep(s):
+            sleeps.append(s)
+            raise asyncio.CancelledError
+        monkeypatch.setattr(geoip.asyncio, "sleep", fake_sleep)
+
+        async def run():
+            try:
+                await geoip._loop(lambda: True)
+            except asyncio.CancelledError:
+                pass
+        asyncio.run(run())
+        monkeypatch.setattr(geoip.asyncio, "sleep", real_sleep)
+        assert sleeps == [geoip.RETRY_SOON]
