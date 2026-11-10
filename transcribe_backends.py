@@ -318,8 +318,29 @@ def vad_load_kwargs():
     return {"sess_options": opts, "providers": ["CPUExecutionProvider"]}
 
 
+# Where the last Parakeet load runs: "cuda", "cpu", or None before any load.
+# main.py reports it in the job's JOB_CPU line.
+PARAKEET_DEVICE = None
+
+
+def onnxruntime_device():
+    """"cuda" when the installed onnxruntime build has the CUDA provider.
+
+    onnxruntime and onnxruntime-gpu are two wheels of one import package, and
+    whichever was unpacked last is the build that runs. With the CPU wheel on
+    top, asking for CUDAExecutionProvider only raises a UserWarning and
+    Parakeet silently runs on the CPU: many times slower, on every core.
+    """
+    try:
+        import onnxruntime as rt
+        providers = rt.get_available_providers()
+    except Exception:
+        return "cpu"
+    return "cuda" if "CUDAExecutionProvider" in providers else "cpu"
+
+
 def _get_parakeet_model():
-    global _parakeet_model
+    global _parakeet_model, PARAKEET_DEVICE
     with _parakeet_lock:
         if _parakeet_model is None:
             import onnx_asr
@@ -328,6 +349,10 @@ def _get_parakeet_model():
             vad = onnx_asr.load_vad("silero", **vad_load_kwargs())
             _parakeet_model = model.with_vad(
                 vad, batch_size=PARAKEET_VAD_BATCH).with_timestamps()
+            PARAKEET_DEVICE = onnxruntime_device()
+            if PARAKEET_DEVICE != "cuda":
+                print("⚠️ [ASR] parakeet runs on the CPU: this onnxruntime build "
+                      "has no CUDAExecutionProvider", flush=True)
     return _parakeet_model
 
 
