@@ -2298,6 +2298,8 @@ async def run_job_wrapper(job_id):
         await _settle_reservation(job_id, job)
         # Archive the completed clips to the user's durable R2 library (history).
         await _archive_managed_job(job_id)
+        # Rendered for the free plan but the owner pays now: deliver it clean.
+        await _unmark_if_owner_paid(job_id, job)
         # Autopilot bookkeeping + autopublish (before the generic clips-ready
         # email, which it replaces for its own jobs).
         await _autopilot_job_finished(job_id, job)
@@ -2405,6 +2407,34 @@ async def _archive_managed_job(job_id):
         await cloud.videos.archive_job(job['user_id'], job_id, clips, job['output_dir'])
     except Exception as e:
         print(f"⚠️  R2 archive error for {job_id}: {e}")
+
+
+async def _unmark_if_owner_paid(job_id, job):
+    """A job queued (or running) on the free plan carries the mark; if its owner
+    is on a live paid plan when it lands, the upgrade's promise covers it too.
+
+    The upgrade webhook unmarks only the clips that exist at that moment, so
+    this runs at delivery, after the archive and before the webhook and the
+    clips-ready email: the same re-pointing as an upgrade
+    (``videos.unmark_user_library``) limited to this job. Canonical files were
+    never marked; the twins are re-pointed only when they are in R2, and
+    ``_unmark_local_job`` drops ``.marked`` with them. Never raises: a failure
+    leaves the job marked, as it was.
+    """
+    if not BILLING_ENABLED or not job or job.get('status') != 'completed':
+        return
+    owner = job.get('user_id')
+    job_dir = job.get('output_dir') or os.path.join(OUTPUT_DIR, job_id)
+    if owner is None or not watermarked.job_is_marked(job_dir):
+        return
+    try:
+        if str(owner) not in await _owner_live_plans([str(owner)]):
+            return
+        n = await cloud.videos.unmark_user_library(owner, job_id=job_id)
+        if n:
+            print(f"🏷️ Delivered {job_id} clean: its owner paid while it waited.")
+    except Exception as e:
+        print(f"⚠️ Could not unmark {job_id} for its paying owner: {e}")
 
 
 def _archive_clip_edit_bg(job_id: str, clip_index: int, filename: str):
