@@ -178,6 +178,37 @@ parakeet text.
   owners who paid before the webhook path existed. A failed lookup keeps the
   manifest's priority.
 
+## Queue watch (`cloud/queue_watch.py`, Cloud only)
+
+A saturated queue fails nothing, it only starts jobs hours late, so the
+failure-rate alert stays silent. Every `QUEUE_ALERT_INTERVAL_SECONDS` (180) the
+API measures its queue (`app._queue_watch_snapshot`: waiting jobs paid/free,
+oldest wait of each, running vs `MAX_CONCURRENT_JOBS`, jobs finished in the last
+hour, the `queue_estimate` wait for a new job) and alerts through
+`alerts.send_admin_alert` (the admin Telegram chat, plus `ADMIN_EMAIL` with SMTP)
+when:
+
+- a paid job waits more than `QUEUE_ALERT_PAID_WAIT_MINUTES` (10), or
+- the oldest free job waits more than `QUEUE_ALERT_FREE_WAIT_MINUTES` (30), or
+- more than `QUEUE_ALERT_MAX_QUEUED` (200) jobs wait.
+
+One message on entering, a reminder with the trend at most every
+`QUEUE_ALERT_REMIND_MINUTES` (60), one "recovered" once every figure is under
+half its threshold for two measurements in a row. `QUEUE_ALERTS_DISABLED=1` is
+the kill switch; without `BILLING_ENABLED` or an alert channel it never starts.
+
+With deploys:
+
+- Only the instance that owns `output/.instance` and is not draining measures.
+  The incident lives in `output/.queue_watch.json` (non-blocking flock on
+  `.queue_watch.lock`), so the new container neither repeats the alert nor
+  loses the recovery.
+- A wait is read from disk (`app._queue_wait_started`): the `.owner` mtime
+  (submission) or the manifest heartbeat, whichever is later, so a job resumed
+  after a deploy or auto-retried waits from its last run, not its submission.
+- While another instance still runs jobs, and for one paid threshold after
+  that or after boot, nothing opens or closes: reminders only.
+
 ## Deploys and running jobs (handover + drain)
 
 Every push to `main` redeploys the API container as a rolling update: the NEW
