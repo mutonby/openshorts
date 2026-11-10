@@ -32,7 +32,12 @@ def out(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "jobs", {})
     monkeypatch.setattr(app_module, "job_queue", asyncio.PriorityQueue())
     monkeypatch.setattr(app_module, "_job_seq", itertools.count())
+    monkeypatch.setattr(app_module, "_seen_priority_gen", app_module._UNSEEN)
     return root
+
+
+def _reprio(user_id, priority):
+    return asyncio.run(app_module.reprioritize_user_jobs(user_id, priority))
 
 
 def _manifest(out, job_id, **extra):
@@ -85,14 +90,14 @@ def busy_queue(out):
 
 class TestReprioritize:
     def test_queue_order_after_upgrade_keeps_fifo(self, busy_queue):
-        assert app_module.reprioritize_user_jobs(ALICE, 1) == 2
+        assert _reprio(ALICE, 1) == 2
         # Alice's jobs join the starter line in their arrival order: after the
         # starter job that came before them, before the one that came after.
         assert _drain_order() == ["pro1", "starter1", "alice1", "alice2",
                                   "starter2", "free1", "free2"]
 
     def test_heap_stays_a_heap(self, busy_queue):
-        app_module.reprioritize_user_jobs(ALICE, 0)
+        _reprio(ALICE, 0)
         heap = list(app_module.job_queue._queue)
         for i, e in enumerate(heap):
             for c in (2 * i + 1, 2 * i + 2):
@@ -101,7 +106,7 @@ class TestReprioritize:
         assert _drain_order()[:3] == ["alice1", "alice2", "pro1"]
 
     def test_manifests_follow_running_job_untouched(self, busy_queue):
-        app_module.reprioritize_user_jobs(ALICE, 1)
+        _reprio(ALICE, 1)
         assert _disk_priority(busy_queue, "alice1") == 1
         assert _disk_priority(busy_queue, "alice2") == 1
         # Running: same manifest, same record, not queued again.
@@ -114,7 +119,7 @@ class TestReprioritize:
 
     def test_status_position_moves_up(self, busy_queue):
         before = app_module.queue_snapshot("alice1")
-        app_module.reprioritize_user_jobs(ALICE, 1)
+        _reprio(ALICE, 1)
         after = app_module.queue_snapshot("alice1")
         assert before["position"] == 5   # behind pro, both starters and free1
         assert after["position"] == 3    # pro1, starter1, then alice1
@@ -122,15 +127,15 @@ class TestReprioritize:
         assert any("up the line" in line for line in app_module.jobs["alice1"]["logs"])
 
     def test_never_moves_a_job_down(self, busy_queue):
-        app_module.reprioritize_user_jobs(ALICE, 0)
-        assert app_module.reprioritize_user_jobs(ALICE, 1) == 0  # e.g. pro -> starter
+        _reprio(ALICE, 0)
+        assert _reprio(ALICE, 1) == 0  # e.g. pro -> starter
         assert _disk_priority(busy_queue, "alice1") == 0
         assert _drain_order()[:2] == ["alice1", "alice2"]
 
     def test_uuid_and_str_owner_match(self, out):
         import uuid
         _queue(out, "j", uuid.UUID(ALICE), 2)
-        assert app_module.reprioritize_user_jobs(ALICE, 1) == 1
+        assert _reprio(ALICE, 1) == 1
 
 
 class TestDeployHandover:
@@ -138,7 +143,7 @@ class TestDeployHandover:
         # The old instance left Alice's queued job on disk (no heartbeat); the
         # webhook reaches this (new) instance before its resume scan took it.
         _manifest(out, "left", user_id=ALICE, priority=2)
-        assert app_module.reprioritize_user_jobs(ALICE, 1) == 1
+        assert _reprio(ALICE, 1) == 1
         _queue(out, "free_here", BOB, 2)
         app_module._resume_interrupted_jobs()
         assert app_module.jobs["left"]["status"] == "queued"
@@ -147,7 +152,7 @@ class TestDeployHandover:
     def test_job_running_on_other_instance_is_not_touched(self, out):
         _manifest(out, "theirs", user_id=ALICE, priority=2,
                   instance="other", heartbeat=time.time())
-        assert app_module.reprioritize_user_jobs(ALICE, 1) == 0
+        assert _reprio(ALICE, 1) == 0
         assert _disk_priority(out, "theirs") == 2
 
     def test_queue_follows_manifest_rewritten_by_other_instance(self, out):
@@ -156,8 +161,10 @@ class TestDeployHandover:
         _queue(out, "free1", BOB, 2)
         _queue(out, "alice1", ALICE, 2)
         _queue(out, "starter1", BOB, 1)
+        assert asyncio.run(app_module._follow_manifest_priorities()) == []  # first look
         _manifest(out, "alice1", user_id=ALICE, priority=1)
-        assert app_module._follow_manifest_priorities() == ["alice1"]
+        app_module._bump_priority_generation()   # what the other instance's rewrite does
+        assert asyncio.run(app_module._follow_manifest_priorities()) == ["alice1"]
         assert _drain_order() == ["alice1", "starter1", "free1"]
 
     def test_follow_never_moves_down_and_ignores_missing_manifests(self, out):
@@ -165,7 +172,7 @@ class TestDeployHandover:
         _manifest(out, "pro1", user_id=BOB, priority=2)
         app_module.jobs["nomanifest"] = {"status": "queued", "user_id": BOB, "logs": []}
         app_module._enqueue_job("nomanifest", 2)
-        assert app_module._follow_manifest_priorities() == []
+        assert asyncio.run(app_module._follow_manifest_priorities()) == []
         assert _drain_order() == ["pro1", "nomanifest"]
 
 
@@ -292,3 +299,27 @@ def test_live_plans_batches_and_compiles(monkeypatch):
     plans = asyncio.run(metering.live_plans(owners))
     assert len(seen) == 3            # 5 valid ids in chunks of 2
     assert plans == {ALICE: "creator"}
+
+
+def test_follow_reads_manifests_only_when_the_generation_changes(out, monkeypatch):
+    for i in range(3):
+        _queue(out, f"j{i}", BOB, 2)
+    reads = []
+    real = app_module._manifest_priorities
+    monkeypatch.setattr(app_module, "_manifest_priorities",
+                        lambda ids: reads.append(len(ids)) or real(ids))
+    asyncio.run(app_module._follow_manifest_priorities())     # first look reads
+    asyncio.run(app_module._follow_manifest_priorities())     # nothing changed
+    asyncio.run(app_module._follow_manifest_priorities())
+    assert reads == [3]
+    _reprio(BOB, 1)                                           # a rewrite bumps it
+    asyncio.run(app_module._follow_manifest_priorities())
+    assert reads == [3, 3]
+
+
+def test_loose_files_in_output_dir_are_not_read_as_manifests(out, capsys):
+    for name in (".instance", ".queue_watch.json", ".queue_watch.lock"):
+        (out / name).write_text("x")
+    _queue(out, "j1", ALICE, 2)
+    _reprio(ALICE, 1)
+    assert "Bad resume manifest" not in capsys.readouterr().out

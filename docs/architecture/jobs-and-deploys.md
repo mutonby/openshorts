@@ -173,9 +173,19 @@ parakeet text.
   manifests are rewritten too, except the ones running here or heartbeated
   elsewhere. A webhook that lands on the other instance of a deploy can only
   rewrite the manifests: the resume scan (`_follow_manifest_priorities`) raises
-  queued entries whose manifest says better. Priorities only move up. Running
-  jobs, and the cut of a partial job, are left as they are. Top-ups do not move
-  anything: a pack does not change a new job's priority either.
+  queued entries whose manifest says better, reading them only when the shared
+  stamp `output/.priority_gen` (bumped by every rewrite) changed. Priorities
+  only move up. Running jobs, and the cut of a partial job, are left as they
+  are. Top-ups do not move anything: a pack does not change a new job's
+  priority either. A paid `invoice.paid` after a lapse (past_due/unpaid ->
+  active) moves jobs up and unmarks the library too.
+- **Manifest scans run off the event loop.** With thousands of job dirs,
+  reading every manifest is seconds of open + json.load, and the API, its
+  health check and the queue share the loop: the rewrites, the follow and the
+  sweeper's live set read the disk in `asyncio.to_thread` (with a copy of
+  `_running_jobs`); only the heap is touched on the loop thread. Scans list
+  job dirs with a manifest (`_manifest_names`), never the loose files of
+  `output/`. `tests/test_queue_loop_blocking.py` holds the loop to a bound.
 - **Re-enqueued from a manifest = the owner's plan now.** A job resumed at
   startup or by the resume scan, or re-queued by auto-retry, takes the better
   of its manifest's priority and its owner's current plan
@@ -183,7 +193,8 @@ parakeet text.
   owners, in chunks). That covers a job that was running when its owner paid
   and was cut by a drain, and makes every deploy move up the waiting videos of
   owners who paid before the webhook path existed. A failed lookup keeps the
-  manifest's priority.
+  manifest's priority. At startup the worker starts only after that lookup,
+  so the first job it takes is already ranked by the current plan.
 
 ## Queue watch (`cloud/queue_watch.py`, Cloud only)
 
@@ -219,6 +230,9 @@ With deploys:
   id, attempt and paid-ness).
 - While another instance still runs jobs, and for one paid threshold after
   that or after boot, nothing opens or closes: reminders only.
+- If the state file cannot be written or read (disk full, read-only), the tick
+  goes on from the last state kept in memory, so the incident does not re-open
+  and re-alert on every tick.
 
 ## Deploys and running jobs (handover + drain)
 
@@ -253,13 +267,18 @@ coordinates them:
 - **Reservations of live jobs are never swept.** The metering sweeper
   (`metering._sweep_once`, every 15 min) releases `reserved` rows older than
   `STUCK_RESERVATION_HOURS` (3) only when `app._live_reservation_ids` does not
-  name them: queued/running here, or a resume manifest `_job_is_active` still
-  counts. The disk is shared, so each instance of a deploy keeps the other's
-  jobs too, and a drain-cancelled job's manifest keeps its reservation whatever
-  the old instance's record says. Past `LIVE_RESERVATION_MAX_HOURS` (24, like
-  `ACTIVE_JOB_MAX_SECONDS`) a reservation is released anyway: that job is hung.
-  If the live set cannot be read the pass is skipped. Heartbeats are written
-  atomically, since a half-written manifest reads as no manifest.
+  name them: queued/running here, or any resume manifest on the shared disk
+  (the other instance's running jobs, jobs left for the next instance). A
+  drain-cancelled job's manifest keeps its reservation whatever the old
+  instance's record says. Each live reservation carries when its job last
+  moved: now for a job queued here (a long queue never counts), the start of
+  the run (`run_started`, stamped at dispatch; not the heartbeat, which a hung
+  child keeps beating) for a running one, the last write or heartbeat for a
+  manifest nobody holds. One that has not moved for
+  `LIVE_RESERVATION_MAX_HOURS` (24) is released as hung. A draining instance
+  does not sweep (from there the new one's queue looks like manifests nobody
+  took). If the live set cannot be read the pass is skipped. Every manifest
+  write is atomic, since a half-written manifest reads as no manifest.
 - `main.py` leaves `.transcript_checkpoint.json` in the job dir so a re-run job
   skips the paid transcription (download and Gemini repeat).
 

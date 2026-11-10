@@ -903,12 +903,18 @@ def _enqueue_job(job_id: str, priority: int = 2):
 # The priority is decided at enqueue, so a free user who paid while their video
 # waited kept waiting behind every paid job. ``reprioritize_user_jobs`` re-keys
 # their queued entries and their resume manifests; running jobs are left alone.
+#
+# Whatever reads or rewrites manifests here runs in a worker thread
+# (``asyncio.to_thread``): with thousands of job dirs that is a lot of open() +
+# json.load, and the API and its health check share this event loop. The heap
+# itself is only ever touched on the loop thread.
 def _raise_queued(new_priority_for) -> list:
     """Re-key queued entries in place. ``new_priority_for(job_id, priority)``
     returns the priority the entry should have, or None; an entry only ever
     moves up. Each entry keeps its seq, so inside its new priority a job keeps
     its arrival order. The queue's size and waiters do not change, so editing
-    the heap and re-heapifying is all it takes. Returns the job ids moved."""
+    the heap and re-heapifying is all it takes. Returns the job ids moved.
+    Loop thread only."""
     heap = job_queue._queue
     moved = []
     for i, (prio, seq, jid) in enumerate(heap):
@@ -921,7 +927,67 @@ def _raise_queued(new_priority_for) -> list:
     return moved
 
 
-def reprioritize_user_jobs(user_id, priority) -> int:
+def _manifest_names() -> list:
+    """Job dirs holding a resume manifest. OUTPUT_DIR also has loose files (the
+    instance marker, the queue watch state and lock, lock files): skip them
+    instead of reading ``<file>/.resume.json``."""
+    try:
+        entries = os.listdir(OUTPUT_DIR)
+    except FileNotFoundError:
+        return []
+    return [n for n in entries
+            if not n.startswith(".") and os.path.isfile(_manifest_path(n))]
+
+
+# Changes whenever some instance raises manifest priorities, so the other one
+# reads the manifests of its queue only then (``_follow_manifest_priorities``).
+_PRIORITY_GEN_FILE = ".priority_gen"
+_UNSEEN = object()
+_seen_priority_gen = _UNSEEN
+
+
+def _priority_generation():
+    try:
+        with open(os.path.join(OUTPUT_DIR, _PRIORITY_GEN_FILE)) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _bump_priority_generation():
+    try:
+        write_json_atomic(os.path.join(OUTPUT_DIR, _PRIORITY_GEN_FILE), uuid.uuid4().hex)
+    except Exception as e:
+        print(f"⚠️ Could not stamp the priority generation: {e}")
+
+
+def _rewrite_manifest_priorities(want: dict, running: set, raised_at: float) -> set:
+    """Worker thread: raise the manifests of ``want``'s owners that nobody
+    runs (``running`` is a copy of ``_running_jobs``). Returns the job ids."""
+    rewritten = set()
+    for name in _manifest_names():
+        m = _read_manifest(name)
+        uid = str((m or {}).get("user_id"))
+        if (not m or uid not in want or name in running
+                or _manifest_busy_elsewhere(m)):
+            continue
+        if int(m.get("priority", 2)) <= want[uid]:
+            continue
+        if name in _running_jobs:
+            continue  # dispatched since the copy was taken: its heartbeat wins
+        m["priority"] = want[uid]
+        m["raised_at"] = raised_at
+        try:
+            write_json_atomic(_manifest_path(name), m)
+            rewritten.add(name)
+        except Exception as e:
+            print(f"⚠️ Could not reprioritize manifest for {name}: {e}")
+    if rewritten:
+        _bump_priority_generation()
+    return rewritten
+
+
+async def reprioritize_user_jobs(user_id, priority) -> int:
     """Move every job of ``user_id`` that is still waiting up to ``priority``.
 
     In this instance's queue and in every resume manifest on the shared disk
@@ -930,12 +996,12 @@ def reprioritize_user_jobs(user_id, priority) -> int:
     other instance's own queue follows its manifests (``_follow_manifest_priorities``).
     Running jobs and their manifests are not touched. Returns how many jobs moved.
     """
-    return _raise_users_jobs({str(user_id): int(priority)})
+    return await _raise_users_jobs({str(user_id): int(priority)})
 
 
-def _raise_users_jobs(priority_by_user: dict) -> int:
+async def _raise_users_jobs(priority_by_user: dict) -> int:
     """``reprioritize_user_jobs`` for many owners at once: one pass over the
-    heap and one over the manifests, whatever the number of owners."""
+    heap (here, on the loop) and one over the manifests (in a thread)."""
     want = {str(u): int(p) for u, p in priority_by_user.items()}
     if not want:
         return 0
@@ -950,26 +1016,8 @@ def _raise_users_jobs(priority_by_user: dict) -> int:
         logs = job.get('logs')
         if logs is not None:
             logs.append("⚡ Your plan moved this video up the line.")
-    rewritten = set()
-    try:
-        entries = os.listdir(OUTPUT_DIR)
-    except FileNotFoundError:
-        entries = []
-    for name in entries:
-        m = _read_manifest(name)
-        uid = str((m or {}).get("user_id"))
-        if (not m or uid not in want or name in _running_jobs
-                or _manifest_busy_elsewhere(m)):
-            continue
-        if int(m.get("priority", 2)) <= want[uid]:
-            continue
-        m["priority"] = want[uid]
-        m["raised_at"] = raised_at
-        try:
-            write_json_atomic(_manifest_path(name), m)
-            rewritten.add(name)
-        except Exception as e:
-            print(f"⚠️ Could not reprioritize manifest for {name}: {e}")
+    rewritten = await asyncio.to_thread(
+        _rewrite_manifest_priorities, want, set(_running_jobs), raised_at)
     n = len(set(moved) | rewritten)
     if n:
         print(f"⚡ Moved {n} waiting job(s) of {len(want)} paying user(s) up the line.")
@@ -1007,21 +1055,37 @@ async def _raise_to_owner_plans(job_ids=None) -> int:
     except Exception as e:
         print(f"⚠️ Plan lookup for re-enqueued jobs failed, keeping their priority: {e}")
         return 0
-    return _raise_users_jobs({u: _cloud_config.PLAN_PRIORITY[p] for u, p in plans.items()
-                              if p in _cloud_config.PLAN_PRIORITY})
+    return await _raise_users_jobs({u: _cloud_config.PLAN_PRIORITY[p] for u, p in plans.items()
+                                    if p in _cloud_config.PLAN_PRIORITY})
 
 
-def _follow_manifest_priorities() -> list:
-    """Raise queued entries whose manifest now says a better priority: the
-    webhook that upgraded their owner reached the other instance of a deploy,
-    which can rewrite the manifests on the shared disk but not our heap."""
-    def from_manifest(jid, _p):
+def _manifest_priorities(job_ids) -> dict:
+    """Worker thread: ``{job_id: priority}`` from the manifests of ``job_ids``."""
+    out = {}
+    for jid in job_ids:
         m = _read_manifest(jid) or {}
         try:
-            return int(m["priority"]) if "priority" in m else None
+            if "priority" in m:
+                out[jid] = int(m["priority"])
         except (TypeError, ValueError):
-            return None
-    return _raise_queued(from_manifest)
+            pass
+    return out
+
+
+async def _follow_manifest_priorities() -> list:
+    """Raise queued entries whose manifest now says a better priority: the
+    webhook that upgraded their owner reached the other instance of a deploy,
+    which can rewrite the manifests on the shared disk but not our heap. Reads
+    the manifests only when the generation stamp changed since the last look
+    (it is read first, so a rewrite racing the read is seen next time)."""
+    global _seen_priority_gen
+    gen = await asyncio.to_thread(_priority_generation)
+    if gen == _seen_priority_gen:
+        return []
+    queued = [e[2] for e in job_queue._queue]
+    prios = await asyncio.to_thread(_manifest_priorities, queued)
+    _seen_priority_gen = gen
+    return _raise_queued(lambda jid, _p: prios.get(jid))
 
 def _relocate_root_job_artifacts(job_id: str, job_output_dir: str) -> bool:
     """
@@ -1536,13 +1600,18 @@ def _read_manifest(job_id):
         return None
 
 
-def _touch_manifest(job_id, now=None):
-    """Stamp 'this instance is running it, as of now' into the manifest."""
+def _touch_manifest(job_id, now=None, started=False):
+    """Stamp 'this instance is running it, as of now' into the manifest.
+    ``started`` (at dispatch) also stamps ``run_started``: a heartbeat says the
+    worker is alive, not that the job is moving, so the metering sweeper's
+    hung-job cap counts from the start of the run."""
     m = _read_manifest(job_id)
     if m is None:
         return
     m["heartbeat"] = now if now is not None else time.time()
     m["instance"] = INSTANCE_ID
+    if started:
+        m["run_started"] = m["heartbeat"]
     try:
         # Atomic: the other instance reads it at any time (resume scan, GPU
         # admission, the metering sweeper's live set), and a half-written
@@ -1704,7 +1773,7 @@ async def _resume_scan():
         try:
             _resume_interrupted_jobs()
             await _raise_to_owner_plans()
-            _follow_manifest_priorities()
+            await _follow_manifest_priorities()
         except Exception as e:
             print(f"⚠️ Resume scan failed: {e}")
 
@@ -1957,30 +2026,63 @@ def _job_is_active(job_id, now=None) -> bool:
     return age <= ACTIVE_JOB_MAX_SECONDS
 
 
-def _live_reservation_ids(now=None) -> set:
-    """Reservations of jobs that are not over, for the metering sweeper.
+def _manifest_reservations(running: set, queued: set, now: float) -> dict:
+    """Worker thread: ``{reservation_id: alive_since}`` from every manifest.
 
-    Queued or running here, or with a resume manifest that ``_job_is_active``
-    still counts: the disk is shared, so that covers the other instance of a
-    deploy (its queue and its running jobs both have manifests) and jobs left
-    for the next instance. A manifest is live whatever this instance's record
-    says: a drain-cancelled job can read 'failed' here and still be resumed
-    elsewhere with its reservation (it must never be refunded).
+    Queued here: alive now (the memory pass says so too). Running here or
+    heartbeated by another instance: since the start of that run. Waiting for
+    an instance to resume it: since it was last written or heartbeated.
+    """
+    live = {}
+    for name in _manifest_names():
+        m = _read_manifest(name)
+        rid = (m or {}).get("reservation_id")
+        if not rid:
+            continue
+        if name in queued:
+            since = now
+        elif name in running or _manifest_busy_elsewhere(m, now):
+            since = float(m.get("run_started") or now)
+        else:
+            try:
+                mtime = os.path.getmtime(_manifest_path(name))
+            except OSError:
+                continue
+            since = max(mtime, float(m.get("heartbeat") or 0))
+        live[str(rid)] = max(since, live.get(str(rid), since))
+    return live
+
+
+async def _live_reservation_ids(now=None) -> dict:
+    """Reservations of jobs that are not over, for the metering sweeper, each
+    with the moment it was last known to be moving (``alive_since``; the
+    sweeper frees one alive too long as hung).
+
+    Queued or running here, or with a resume manifest on the shared disk: that
+    covers the other instance of a deploy (its running jobs have manifests)
+    and jobs left for the next instance. A manifest is live whatever this
+    instance's record says: a drain-cancelled job can read 'failed' here and
+    still be resumed elsewhere with its reservation (it must never be
+    refunded). A job queued here is never hung, however long the queue: only
+    a run that does not end, or a manifest nobody takes, gets old. The memory
+    is read here on the loop, the disk in a thread.
     """
     now = time.time() if now is None else now
-    live = set()
+    running = set(_running_jobs)
+    queued, live = set(), {}
     for jid, j in list(jobs.items()):
-        if j.get('reservation_id') and (
-                jid in _running_jobs or j.get('status') in ('queued', 'processing')):
-            live.add(str(j['reservation_id']))
-    try:
-        entries = os.listdir(OUTPUT_DIR)
-    except FileNotFoundError:
-        return live
-    for name in entries:
-        m = _read_manifest(name)
-        if m and m.get("reservation_id") and _job_is_active(name, now):
-            live.add(str(m["reservation_id"]))
+        if jid in running:
+            since = float(j.get('run_started') or now)
+        elif j.get('status') in ('queued', 'processing'):
+            since = now
+            queued.add(jid)
+        else:
+            continue
+        if j.get('reservation_id'):
+            live[str(j['reservation_id'])] = since
+    on_disk = await asyncio.to_thread(_manifest_reservations, running, queued, now)
+    for rid, since in on_disk.items():
+        live[rid] = max(since, live.get(rid, since))
     return live
 
 
@@ -2199,7 +2301,9 @@ async def process_queue():
                 continue
             print(f"🔄 Acquired slot for job: {job_id}")
             _running_jobs.add(job_id)
-            _touch_manifest(job_id)
+            if job_id in jobs:
+                jobs[job_id]['run_started'] = time.time()
+            _touch_manifest(job_id, started=True)
 
             # Process in background task to not block the loop (allowing other slots to fill)
             asyncio.create_task(run_job_wrapper(job_id))
@@ -2930,15 +3034,19 @@ async def lifespan(app: FastAPI):
     _install_drain_signal_handler()
     asyncio.create_task(_handover_watch())
     asyncio.create_task(_resume_scan())
-    # Start worker and cleanup
-    worker_task = asyncio.create_task(process_queue())
     cleanup_task = asyncio.create_task(cleanup_jobs())
     if BILLING_ENABLED:
         await cloud.setup_async(app, keep_reservation_ids=_resumed_reservation_ids,
-                                live_reservation_ids=_live_reservation_ids)
+                                live_reservation_ids=_live_reservation_ids,
+                                sweep_active=lambda: not _draining)
         # The jobs resumed above carry the priority of the plan at submit;
-        # the DB is up now: owners who paid since go first (one lookup).
+        # the DB is up now: owners who paid since go first (one lookup, which
+        # never raises: a failure keeps the manifests' priorities).
         await _raise_to_owner_plans()
+    # The worker starts only now, so the first job it takes off the queue was
+    # already ranked by its owner's current plan.
+    worker_task = asyncio.create_task(process_queue())
+    if BILLING_ENABLED:
         # Account erasure lives in cloud/, which can't import app.py; hand it the
         # one thing only this module can do — wipe the local working files.
         cloud.account.register_local_purge(_purge_local_jobs_for_user)

@@ -34,9 +34,9 @@ from .models import User, Subscription, CreditTopup, UsageLedger, FirstVideoGran
 
 SWEEP_INTERVAL_SECONDS = 15 * 60
 STUCK_RESERVATION_HOURS = 3
-# A reservation whose job is still queued or running outlives the stuck window,
-# but not this (env LIVE_RESERVATION_MAX_HOURS): same bound as app.py's
-# ACTIVE_JOB_MAX_SECONDS, past which a manifest no longer pins its job dir.
+# A reservation whose job is still queued or running outlives the stuck window;
+# one whose job has not MOVED for this long (env LIVE_RESERVATION_MAX_HOURS: a
+# run that never ends, a manifest nobody resumes) is released as hung.
 LIVE_RESERVATION_MAX_HOURS = 24
 
 
@@ -774,36 +774,45 @@ def _live_cap_hours() -> float:
 async def _sweep_once(live_ids=None):
     """Release reservations older than STUCK_RESERVATION_HOURS whose job is over.
 
-    ``live_ids()`` (app.py) names the reservations whose job is still queued,
-    running or waiting in a resume manifest on the shared disk, both instances
-    of a deploy included: a queue longer than the stuck window must not refund
-    a video that will still be delivered (its commit then finds nothing to
-    commit). It is read BEFORE the rows, so a job that ends in between is either
-    committed already or still counted live. If it fails the pass is skipped:
-    not knowing what is alive is no reason to refund everything. Past
-    LIVE_RESERVATION_MAX_HOURS a reservation goes whatever its job says: a job
-    alive that long is hung (the job directories are dropped at that age too).
+    ``live_ids()`` (app.py; may be a coroutine) maps the reservations whose job
+    is still queued, running or waiting in a resume manifest on the shared disk
+    to the moment that job was last known to be moving (``alive_since``, epoch
+    seconds; a plain set counts as "moving now"). A queue longer than the stuck
+    window must not refund a video that will still be delivered: its commit
+    would then find nothing to commit. It is read BEFORE the rows, so a job
+    that ends in between is either committed already or still counted live. If
+    it fails the pass is skipped: not knowing what is alive is no reason to
+    refund everything. A live reservation whose job has not moved for
+    LIVE_RESERVATION_MAX_HOURS is released as hung; that clock is the job's
+    (a run that never ends, a manifest nobody takes), never the reservation's
+    age, so a long wait in the queue does not count.
     """
     live = None
     if live_ids is not None:
         try:
-            live = {str(x) for x in live_ids()}
+            got = live_ids()
+            if asyncio.iscoroutine(got) or isinstance(got, asyncio.Future):
+                got = await got
+            if isinstance(got, dict):
+                live = {str(k): float(v) for k, v in got.items()}
+            else:
+                stamp = _now().timestamp()
+                live = {str(k): stamp for k in got}
         except Exception as e:
             print(f"⚠️  Metering sweep skipped, live jobs unknown: {e}")
             return
     now = _now()
     cutoff = now - timedelta(hours=STUCK_RESERVATION_HOURS)
-    hung_cutoff = now - timedelta(hours=_live_cap_hours())
+    hung_before = now.timestamp() - _live_cap_hours() * 3600
     async with database.session() as session:
         rows = list((await session.execute(
-            select(UsageLedger.id, (UsageLedger.created_at < hung_cutoff).label("hung"))
-            .where(and_(
+            select(UsageLedger.id).where(and_(
                 UsageLedger.status == "reserved",
                 UsageLedger.created_at < cutoff,
             ))
-        )).all())
-    ids = [lid for lid, hung in rows
-           if live is None or str(lid) not in live or hung]
+        )).scalars())
+    ids = [lid for lid in rows
+           if live is None or str(lid) not in live or live[str(lid)] < hung_before]
     for lid in ids:
         await release_reservation(str(lid))
     if ids:
@@ -814,10 +823,14 @@ async def _sweep_once(live_ids=None):
               f"their job is still queued or running.")
 
 
-async def _sweeper_loop(live_ids=None):
+async def _sweeper_loop(live_ids=None, is_active=None):
     while True:
         try:
             await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
+            # A draining instance leaves the sweep to the new one: from here
+            # the new one's queue looks like manifests nobody has taken.
+            if is_active is not None and not is_active():
+                continue
             await _sweep_once(live_ids)
         except asyncio.CancelledError:
             break
@@ -825,6 +838,7 @@ async def _sweeper_loop(live_ids=None):
             print(f"⚠️  Metering sweeper error: {e}")
 
 
-def start_sweeper(live_ids=None):
-    """``live_ids``: callable returning the reservation ids of live jobs."""
-    asyncio.create_task(_sweeper_loop(live_ids))
+def start_sweeper(live_ids=None, is_active=None):
+    """``live_ids``: callable (or coroutine function) returning the live
+    reservations, see ``_sweep_once``. ``is_active``: False while draining."""
+    asyncio.create_task(_sweeper_loop(live_ids, is_active))
