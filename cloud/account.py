@@ -42,7 +42,7 @@ from .models import (
     User, Subscription, CreditTopup, UsageLedger, MagicLinkToken,
     SignupAttribution, ApiKey, UploadPostProfile, UserVideo, ClipExpiryWarning,
     Project, AccountDeletion, OAuthCode, OAuthRefreshToken, AutopilotRun, AutopilotSettings,
-    LifecycleEmail, CancellationFeedback, OnboardingSurvey, LoginCode,
+    LifecycleEmail, CancellationFeedback, OnboardingSurvey, LoginCode, EvidenceEvent,
 )
 
 # Every table that holds rows belonging to a user, child-first (clip_expiry_
@@ -58,7 +58,7 @@ USER_OWNED_TABLES = (
     ClipExpiryWarning, UserVideo, Project, UsageLedger, CreditTopup,
     Subscription, OAuthRefreshToken, ApiKey, SignupAttribution, UploadPostProfile, OAuthCode,
     AutopilotRun, AutopilotSettings, LifecycleEmail, CancellationFeedback,
-    OnboardingSurvey, LoginCode,
+    OnboardingSurvey, LoginCode, EvidenceEvent,
 )
 
 # The optional "why are you leaving" answer, as a closed list. It was a free
@@ -225,7 +225,8 @@ async def _erase_rows(user_id, email, stripe_customer_id, plan, r2_deleted, reas
     All-or-nothing on purpose: a half-erased account is worse than an un-erased
     one, because the user is told they are gone while some of their rows are
     not. Magic-link tokens are keyed by email rather than user id, so they need
-    their own statement on top of [USER_OWNED_TABLES].
+    their own statement on top of [USER_OWNED_TABLES]; so do evidence events,
+    which carry the email next to the user id.
 
     Returns whether this call is the one that removed the account. Two requests
     can race here — a double-click, or two tabs — and everything before this
@@ -241,6 +242,9 @@ async def _erase_rows(user_id, email, stripe_customer_id, plan, r2_deleted, reas
                     delete(model).where(model.user_id == user_id))
             await session.execute(
                 delete(MagicLinkToken).where(MagicLinkToken.email == email))
+            # Evidence rows also carry the address; catch any without a user_id.
+            await session.execute(
+                delete(EvidenceEvent).where(EvidenceEvent.email == email))
             result = await session.execute(delete(User).where(User.id == user_id))
             if result.rowcount == 0:
                 return False

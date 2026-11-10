@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 from .config import (settings, PLAN_MINUTES, TRIAL_DAYS, SUBSCRIPTION_LOOKUP_KEYS,
                      TOPUP_LOOKUP_KEYS, new_subscriber_label)
-from . import analytics, config, database
+from . import analytics, config, database, evidence
 from .models import User, Subscription, CreditTopup, StripeEvent, SignupAttribution
 from .auth import get_current_user_required, get_session_user_required
 
@@ -232,6 +232,9 @@ async def create_checkout(body: CheckoutRequest, request: Request):
     # kept as the documented grandfathering mechanism.
     if mode == "subscription" and TRIAL_DAYS > 0:
         kwargs["subscription_data"] = {"trial_period_days": TRIAL_DAYS}
+    evidence.record_event(
+        user_id=user.id, email=user.email, kind="checkout", method="stripe_checkout",
+        request=request, meta={k: kwargs["metadata"][k] for k in ("plan", "kind", "minutes")})
     consent = dict(
         consent_collection={"terms_of_service": "required"},
         custom_text={"terms_of_service_acceptance": {"message": CONSENT_MESSAGE}},

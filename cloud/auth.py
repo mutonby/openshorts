@@ -20,7 +20,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy import select, func
 
 from .config import settings
-from . import config, database, metering, email_policy, scopes
+from . import config, database, metering, email_policy, scopes, evidence
 from .models import User, MagicLinkToken, UploadPostProfile, SignupAttribution, LoginCode
 
 router = APIRouter()
@@ -293,7 +293,7 @@ async def purge_stale_magic_tokens():
 
 
 @router.post("/api/auth/magic-link/verify")
-async def verify_magic_link(payload: MagicVerifyRequest):
+async def verify_magic_link(payload: MagicVerifyRequest, request: Request = None):
     token_hash = hashlib.sha256(payload.token.encode()).hexdigest()
     async with database.session() as session:
         async with session.begin():
@@ -321,6 +321,8 @@ async def verify_magic_link(payload: MagicVerifyRequest):
 
         token = issue_jwt(user_id, user_email)
         cu = await _load_current_user(session, user_id)
+    evidence.record_event(user_id=user_id, email=user_email, kind="login",
+                          method="magic_link", request=request)
     return {"token": token, "user": {"id": str(user_id), "email": user_email, "entitled": cu.entitled}}
 
 
@@ -418,7 +420,7 @@ async def login_method(payload: LoginMethodRequest):
 
 
 @router.post("/api/auth/review-login")
-async def review_login(payload: ReviewLoginRequest):
+async def review_login(payload: ReviewLoginRequest, request: Request = None):
     """Password sign-in for the single account named by REVIEW_LOGIN_EMAIL.
 
     Directory reviewers test the OAuth connection from their own browser and
@@ -441,6 +443,8 @@ async def review_login(payload: ReviewLoginRequest):
             user_id, user_email = user.id, user.email
         token = issue_jwt(user_id, user_email)
         cu = await _load_current_user(session, user_id)
+    evidence.record_event(user_id=user_id, email=user_email, kind="login",
+                          method="password", request=request)
     return {"token": token, "user": {"id": str(user_id), "email": user_email, "entitled": cu.entitled}}
 
 

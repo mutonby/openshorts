@@ -18,7 +18,7 @@ from starlette.responses import RedirectResponse
 from sqlalchemy import select
 
 from .config import settings
-from . import database, email_policy
+from . import database, email_policy, evidence
 from .models import User
 from .auth import issue_jwt, valid_challenge, create_login_code
 
@@ -137,6 +137,8 @@ async def google_callback(request: Request):
             else:
                 user.last_login_at = _now()
             user_id, user_email = user.id, user.email
+    evidence.record_event(user_id=user_id, email=user_email, kind="login",
+                          method="google", request=request)
 
     challenge = request.session.pop("login_cc", None)
     if valid_challenge(challenge):
