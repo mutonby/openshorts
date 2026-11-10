@@ -1494,8 +1494,10 @@ def _touch_manifest(job_id, now=None):
     m["heartbeat"] = now if now is not None else time.time()
     m["instance"] = INSTANCE_ID
     try:
-        with open(_manifest_path(job_id), "w") as f:
-            json.dump(m, f)
+        # Atomic: the other instance reads it at any time (resume scan, GPU
+        # admission, the metering sweeper's live set), and a half-written
+        # manifest reads as no manifest at all.
+        write_json_atomic(_manifest_path(job_id), m)
     except Exception as e:
         print(f"⚠️ Could not heartbeat manifest for {job_id}: {e}")
 
@@ -1901,6 +1903,33 @@ def _job_is_active(job_id, now=None) -> bool:
     except OSError:
         return False
     return age <= ACTIVE_JOB_MAX_SECONDS
+
+
+def _live_reservation_ids(now=None) -> set:
+    """Reservations of jobs that are not over, for the metering sweeper.
+
+    Queued or running here, or with a resume manifest that ``_job_is_active``
+    still counts: the disk is shared, so that covers the other instance of a
+    deploy (its queue and its running jobs both have manifests) and jobs left
+    for the next instance. A manifest is live whatever this instance's record
+    says: a drain-cancelled job can read 'failed' here and still be resumed
+    elsewhere with its reservation (it must never be refunded).
+    """
+    now = time.time() if now is None else now
+    live = set()
+    for jid, j in list(jobs.items()):
+        if j.get('reservation_id') and (
+                jid in _running_jobs or j.get('status') in ('queued', 'processing')):
+            live.add(str(j['reservation_id']))
+    try:
+        entries = os.listdir(OUTPUT_DIR)
+    except FileNotFoundError:
+        return live
+    for name in entries:
+        m = _read_manifest(name)
+        if m and m.get("reservation_id") and _job_is_active(name, now):
+            live.add(str(m["reservation_id"]))
+    return live
 
 
 def _upload_job_id(filename: str) -> str:
@@ -2748,7 +2777,8 @@ async def lifespan(app: FastAPI):
     worker_task = asyncio.create_task(process_queue())
     cleanup_task = asyncio.create_task(cleanup_jobs())
     if BILLING_ENABLED:
-        await cloud.setup_async(app, keep_reservation_ids=_resumed_reservation_ids)
+        await cloud.setup_async(app, keep_reservation_ids=_resumed_reservation_ids,
+                                live_reservation_ids=_live_reservation_ids)
         # Account erasure lives in cloud/, which can't import app.py; hand it the
         # one thing only this module can do — wipe the local working files.
         cloud.account.register_local_purge(_purge_local_jobs_for_user)

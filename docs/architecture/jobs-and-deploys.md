@@ -200,6 +200,16 @@ coordinates them:
   keep the interpreter alive). `/health` stays a plain liveness probe.
 - `/api/status` answers from disk for a job this instance never held, so a poll
   landing on either container during the handover is fine.
+- **Reservations of live jobs are never swept.** The metering sweeper
+  (`metering._sweep_once`, every 15 min) releases `reserved` rows older than
+  `STUCK_RESERVATION_HOURS` (3) only when `app._live_reservation_ids` does not
+  name them: queued/running here, or a resume manifest `_job_is_active` still
+  counts. The disk is shared, so each instance of a deploy keeps the other's
+  jobs too, and a drain-cancelled job's manifest keeps its reservation whatever
+  the old instance's record says. Past `LIVE_RESERVATION_MAX_HOURS` (24, like
+  `ACTIVE_JOB_MAX_SECONDS`) a reservation is released anyway: that job is hung.
+  If the live set cannot be read the pass is skipped. Heartbeats are written
+  atomically, since a half-written manifest reads as no manifest.
 - `main.py` leaves `.transcript_checkpoint.json` in the job dir so a re-run job
   skips the paid transcription (download and Gemini repeat).
 
