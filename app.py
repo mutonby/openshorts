@@ -930,9 +930,18 @@ def reprioritize_user_jobs(user_id, priority) -> int:
     other instance's own queue follows its manifests (``_follow_manifest_priorities``).
     Running jobs and their manifests are not touched. Returns how many jobs moved.
     """
-    uid, priority = str(user_id), int(priority)
-    mine = {jid for jid, j in jobs.items() if str(j.get('user_id')) == uid}
-    moved = _raise_queued(lambda jid, _p: priority if jid in mine else None)
+    return _raise_users_jobs({str(user_id): int(priority)})
+
+
+def _raise_users_jobs(priority_by_user: dict) -> int:
+    """``reprioritize_user_jobs`` for many owners at once: one pass over the
+    heap and one over the manifests, whatever the number of owners."""
+    want = {str(u): int(p) for u, p in priority_by_user.items()}
+    if not want:
+        return 0
+    owner = {jid: str(j.get('user_id')) for jid, j in jobs.items()
+             if str(j.get('user_id')) in want}
+    moved = _raise_queued(lambda jid, _p: want[owner[jid]] if jid in owner else None)
     for jid in moved:
         logs = (jobs.get(jid) or {}).get('logs')
         if logs is not None:
@@ -944,12 +953,13 @@ def reprioritize_user_jobs(user_id, priority) -> int:
         entries = []
     for name in entries:
         m = _read_manifest(name)
-        if (not m or str(m.get("user_id")) != uid or name in _running_jobs
+        uid = str((m or {}).get("user_id"))
+        if (not m or uid not in want or name in _running_jobs
                 or _manifest_busy_elsewhere(m)):
             continue
-        if int(m.get("priority", 2)) <= priority:
+        if int(m.get("priority", 2)) <= want[uid]:
             continue
-        m["priority"] = priority
+        m["priority"] = want[uid]
         try:
             write_json_atomic(_manifest_path(name), m)
             rewritten.add(name)
@@ -957,8 +967,43 @@ def reprioritize_user_jobs(user_id, priority) -> int:
             print(f"⚠️ Could not reprioritize manifest for {name}: {e}")
     n = len(set(moved) | rewritten)
     if n:
-        print(f"⚡ Moved {n} waiting job(s) of user {uid} up to priority {priority}.")
+        print(f"⚡ Moved {n} waiting job(s) of {len(want)} paying user(s) up the line.")
     return n
+
+
+# Jobs enqueued again from a manifest (startup, resume scan) whose owner's plan
+# has not been looked up yet: the manifest holds the priority of the plan at
+# submit, and the owner may have paid since (while it waited, or while it ran
+# and a deploy's drain cut it).
+_owner_plan_pending: set = set()
+
+
+async def _owner_live_plans(owner_ids) -> dict:
+    """``{owner_id: plan}`` of the owners on a live paid plan (one batch)."""
+    return await _metering.live_plans(owner_ids)
+
+
+async def _raise_to_owner_plans(job_ids=None) -> int:
+    """Give each re-enqueued job the better of its manifest's priority and the
+    one its owner's plan has NOW. ``job_ids`` defaults to (and drains)
+    ``_owner_plan_pending``. One lookup for all the owners; if it fails the
+    jobs keep their manifest's priority."""
+    if job_ids is None:
+        job_ids = set(_owner_plan_pending)
+        _owner_plan_pending.difference_update(job_ids)
+    if not BILLING_ENABLED:
+        return 0
+    owners = {str(jobs[j]['user_id']) for j in job_ids
+              if (jobs.get(j) or {}).get('user_id') is not None}
+    if not owners:
+        return 0
+    try:
+        plans = await _owner_live_plans(owners)
+    except Exception as e:
+        print(f"⚠️ Plan lookup for re-enqueued jobs failed, keeping their priority: {e}")
+        return 0
+    return _raise_users_jobs({u: _cloud_config.PLAN_PRIORITY[p] for u, p in plans.items()
+                              if p in _cloud_config.PLAN_PRIORITY})
 
 
 def _follow_manifest_priorities() -> list:
@@ -1653,6 +1698,7 @@ async def _resume_scan():
             continue
         try:
             _resume_interrupted_jobs()
+            await _raise_to_owner_plans()
             _follow_manifest_priorities()
         except Exception as e:
             print(f"⚠️ Resume scan failed: {e}")
@@ -1863,6 +1909,8 @@ def _resume_interrupted_jobs() -> set:
             'via_api_key': bool(m.get("via_api_key")),
         }
         _enqueue_job(job_id, int(m.get("priority", 2)))
+        if user_id is not None:
+            _owner_plan_pending.add(job_id)  # raised to the owner's plan now
         resumed += 1
     if resumed:
         print(f"♻️  Re-enqueued {resumed} interrupted job(s) after restart.")
@@ -2339,6 +2387,7 @@ def _schedule_auto_retry(job_id, job):
             # Read now, not when scheduled: an upgrade in between rewrote it.
             m = _read_manifest(job_id) or {}
             _enqueue_job(job_id, int(m.get("priority", 1)))
+            await _raise_to_owner_plans([job_id])
 
     asyncio.create_task(_later())
 
@@ -2779,6 +2828,9 @@ async def lifespan(app: FastAPI):
     if BILLING_ENABLED:
         await cloud.setup_async(app, keep_reservation_ids=_resumed_reservation_ids,
                                 live_reservation_ids=_live_reservation_ids)
+        # The jobs resumed above carry the priority of the plan at submit;
+        # the DB is up now: owners who paid since go first (one lookup).
+        await _raise_to_owner_plans()
         # Account erasure lives in cloud/, which can't import app.py; hand it the
         # one thing only this module can do — wipe the local working files.
         cloud.account.register_local_purge(_purge_local_jobs_for_user)

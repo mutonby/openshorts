@@ -169,6 +169,14 @@ parakeet text.
   queued entries whose manifest says better. Priorities only move up. Running
   jobs, and the cut of a partial job, are left as they are. Top-ups do not move
   anything: a pack does not change a new job's priority either.
+- **Re-enqueued from a manifest = the owner's plan now.** A job resumed at
+  startup or by the resume scan, or re-queued by auto-retry, takes the better
+  of its manifest's priority and its owner's current plan
+  (`app._raise_to_owner_plans`, one `metering.live_plans` lookup for all the
+  owners, in chunks). That covers a job that was running when its owner paid
+  and was cut by a drain, and makes every deploy move up the waiting videos of
+  owners who paid before the webhook path existed. A failed lookup keeps the
+  manifest's priority.
 
 ## Deploys and running jobs (handover + drain)
 

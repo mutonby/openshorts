@@ -405,6 +405,38 @@ async def _active_subscription(session, user_id):
     return row if _entitles(row) else None
 
 
+LIVE_PLANS_CHUNK = 500
+
+
+async def live_plans(user_ids) -> dict:
+    """``{str(user_id): plan}`` for the users among ``user_ids`` whose
+    subscription grants its plan right now (the rule of ``_entitles``). For
+    the job queue, which may hold thousands of jobs: one query per
+    LIVE_PLANS_CHUNK owners, never one per job. Ids that are not uuids
+    (self-host, test doubles) are skipped."""
+    import uuid as _uuid
+    ids = []
+    for u in {str(x) for x in (user_ids or ()) if x is not None}:
+        try:
+            ids.append(_uuid.UUID(u))
+        except ValueError:
+            continue
+    plans = {}
+    if not ids:
+        return plans
+    async with database.session() as session:
+        for i in range(0, len(ids), LIVE_PLANS_CHUNK):
+            rows = (await session.execute(
+                select(Subscription.user_id, Subscription.plan).where(and_(
+                    Subscription.user_id.in_(ids[i:i + LIVE_PLANS_CHUNK]),
+                    Subscription.status.in_(("active", "trialing")),
+                    Subscription.current_period_end > _now(),
+                ))
+            )).all()
+            plans.update({str(uid): plan for uid, plan in rows})
+    return plans
+
+
 def free_plan_eligible(user) -> bool:
     """True if this ``User`` row qualifies for the free monthly allowance.
 
