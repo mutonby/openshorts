@@ -1242,6 +1242,14 @@ function App() {
       refreshMe();
 
     } catch (e) {
+      if (e instanceof QuotaError && e.code === 'free_queue_full') {
+        // The free queue is full: nothing was reserved or spent. Same plan
+        // wall, its own copy and source so the funnel is measured apart.
+        setStatus('idle');
+        setTopUpInfo({ context: 'queue_full', source: 'queue_full', highlight: 'starter' });
+        setShowTopUp(true);
+        return;
+      }
       if (e instanceof QuotaError) {
         setStatus('idle');
         refreshMe();
@@ -2219,7 +2227,7 @@ function App() {
                     <p className="text-ink">
                       {queueInfo.ahead === 0
                         ? 'You are next in line. Starting in a moment…'
-                        : <>You are <b>#{queueInfo.position}</b> in line · about <b>{Math.max(1, Math.round(queueInfo.eta_seconds / 60))} min</b></>}
+                        : <>You are <b>#{queueInfo.position}</b> in line · {queueInfo.eta_is_minimum ? 'at least' : 'about'} <b>{Math.max(1, Math.round(queueInfo.eta_seconds / 60))} min</b></>}
                     </p>
                     {billingEnabled && !['starter', 'creator', 'pro'].includes(plan) && queueInfo.ahead > 0 && (
                       <button

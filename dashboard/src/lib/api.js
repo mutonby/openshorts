@@ -17,6 +17,9 @@ export class QuotaError extends Error {
     this.minutesRemaining = detail?.minutes_remaining;
     // Minutes of the source the server offers to clip instead (0 = no offer).
     this.partialMinutes = Number(detail?.partial_minutes) || 0;
+    // The server's reason: 'quota_exceeded', 'no_plan', or 'free_queue_full'
+    // (the free queue's brake refused the submission; nothing was spent).
+    this.code = detail?.error || 'quota_exceeded';
   }
 }
 
