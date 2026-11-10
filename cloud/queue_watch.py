@@ -49,16 +49,24 @@ Two capacity faults ride the same loop, channel and shared state (sub-keys
   shared state; nothing is judged before ``QUEUE_ALERT_THROUGHPUT_MIN_HOURS``
   samples. An empty queue (night), a handover or a fresh boot never count as
   a full hour. Resolved when the rate is back over halfway between the drop
-  threshold and the usual, or when the queue is no longer full.
+  threshold and the usual, or when the queue is no longer full. An hour with
+  braked jobs (fewer clips) in it is never learnt.
 
-``QUEUE_ALERTS_DISABLED=1`` turns it off. It never starts without
-BILLING_ENABLED or without an alert channel configured.
+The saturation mode of the free queue (``cloud/queue_mode.py``) is decided
+from the same snapshot on the same tick: every message carries one line per
+free lane (order, brake, refusals) and the brake switching on or off is an
+alert of its own.
+
+``QUEUE_ALERTS_DISABLED=1`` turns the alerts off. They never start without
+BILLING_ENABLED or without an alert channel configured; the loop still runs
+for the saturation mode when that is configured.
 """
 import asyncio
 import json
 import os
 import time
 
+from . import queue_mode
 from .config import _env_int, _flag, is_enabled, settings
 
 STATE_FILE = ".queue_watch.json"
@@ -131,6 +139,13 @@ def measure(snap: dict, since: dict, now: float, lim: dict) -> dict:
         "done_last_hour": snap.get("done_last_hour"),
         "eta_free": snap.get("eta_free"),
         "eta_paid": snap.get("eta_paid"),
+        # Saturation mode (cloud/queue_mode.py): per-lane figures and modes,
+        # only when it is configured.
+        "lanes": snap.get("lanes"),
+        "modes": snap.get("modes"),
+        # Braked jobs render fewer clips and finish sooner: an hour that
+        # includes them is no baseline for the output rate.
+        "reduced_clips": bool(snap.get("reduced_clips")),
     }
 
 
@@ -224,7 +239,57 @@ def _figures(m: dict, lim: dict) -> list:
         if m["eta_paid"] is not None:
             eta += f" (de pago: {_eta(m['eta_paid'])})"
         lines.append(eta + ".")
-    return lines
+    return lines + mode_lines(m)
+
+
+_LANE_NAMES = {"normal": "Carril gratis normal", "slow": "Carril gratis lento"}
+
+
+def mode_lines(m: dict, now: float = None) -> list:
+    """One line per free lane: queued, estimated wait, order, brake, refusals.
+    Empty when the saturation mode is not configured."""
+    lanes, modes = m.get("lanes"), m.get("modes")
+    if not lanes or not modes:
+        return []
+    now = time.time() if now is None else now
+    out = []
+    for lane in ("normal", "slow"):
+        fig = lanes.get(lane) or {}
+        state = (modes.get("lanes") or {}).get(lane) or {}
+        parts = [f"{int(fig.get('queued') or 0)} en cola",
+                 f"espera estimada {_eta(fig.get('wait'))}",
+                 "el más reciente primero" if state.get("recent_first") else "por orden de llegada"]
+        if lane == "slow":
+            b = modes.get("brake") or {}
+            if b.get("active"):
+                since = fmt_duration(now - float(b.get("since") or now))
+                parts.append(f"FRENO activo desde hace {since} (menos clips, envíos nuevos "
+                             f"rechazados: {int(b.get('rejected') or 0)})")
+            elif b.get("off_at"):
+                parts.append(f"sin freno (el último rechazó {int(b.get('rejected') or 0)} envíos)")
+            else:
+                parts.append("sin freno")
+        out.append(f"{_LANE_NAMES[lane]}: " + ", ".join(parts) + ".")
+    total = int(modes.get("rejected_total") or 0)
+    if total:
+        out.append(f"Envíos gratis rechazados por el freno, en total: {total}.")
+    return out
+
+
+def mode_message(event: str, modes: dict, m: dict, now: float, lim: dict):
+    """(subject, body) when the brake engages or lets go."""
+    b = modes.get("brake") or {}
+    if event == "brake_on":
+        subject = "🧯 Freno del carril gratis lento activado"
+        head = ("La espera estimada del carril lento ha pasado el umbral: sus vídeos salen "
+                "con menos clips y los envíos gratis nuevos de ese carril se rechazan "
+                "con la oferta de planes.")
+    else:
+        lasted = fmt_duration(now - float(b.get("since") or now))
+        subject = "✅ Freno del carril gratis lento desactivado"
+        head = (f"Ha estado activo {lasted} y ha rechazado {int(b.get('rejected') or 0)} envíos. "
+                "El carril vuelve a admitir envíos y a dar todos los clips.")
+    return subject, "\n".join([head] + _figures(m, lim))
 
 
 def _trend(prev: dict, m: dict) -> str:
@@ -339,7 +404,10 @@ def rate_incident(state: dict, m: dict, now: float, lim: dict, hold: bool):
     # under the drop threshold of what has been learnt so far (even before
     # there are enough samples to alert), or a fault would become the usual.
     partial = sum(samples) / len(samples) if samples else None
-    healthy = not (partial and drop > 0 and per_slot is not None and per_slot < partial * drop)
+    # Nor an hour with braked jobs in it (fewer clips each, so they finish
+    # sooner): that would lift the usual and make a normal hour read as a drop.
+    healthy = not m.get("reduced_clips") and not (
+        partial and drop > 0 and per_slot is not None and per_slot < partial * drop)
     if (comparable and healthy and not sub.get("active")
             and now - sampled_at >= RATE_SAMPLE_EVERY):
         samples = (samples + [round(per_slot, 3)])[-RATE_SAMPLES:]
@@ -465,23 +533,82 @@ def _try_lock():
     return fh
 
 
+# --- Saturation mode (cloud/queue_mode.py) ---------------------------------------
+
+def lane_figures(snap: dict) -> dict:
+    """The snapshot's per-lane figures, or zeros."""
+    lanes = snap.get("lanes") or {}
+    return {lane: {"queued": int((lanes.get(lane) or {}).get("queued") or 0),
+                   "wait": float((lanes.get(lane) or {}).get("wait") or 0)}
+            for lane in queue_mode.LANES}
+
+
+def decide_modes(snap: dict, now: float) -> list:
+    """Measuring instance: decide the lanes' modes from this tick's snapshot,
+    fold in the refusals made here, share the result and apply it. Returns the
+    switch events. Under the same lock as the incident state; if the other
+    instance holds it right now, nothing changes this tick."""
+    lock = _try_lock()
+    if lock is None:
+        return []
+    try:
+        state = queue_mode.fold(queue_mode.load(_state_dir), queue_mode.take_pending())
+        new, events = queue_mode.decide(state, lane_figures(snap), now)
+        queue_mode.save(_state_dir, new)
+        queue_mode.adopt(new)
+        for e in events:
+            print(f"🚦 Queue mode: {e} (normal wait {int(new['figures']['normal'].get('wait') or 0)} s, "
+                  f"slow wait {int(new['figures']['slow'].get('wait') or 0)} s)")
+        return events
+    finally:
+        if lock:
+            lock.close()
+
+
+def follow_modes():
+    """Non-measuring instance: adopt the shared modes, hand over refusals."""
+    lock = _try_lock()
+    if lock is None:
+        return
+    try:
+        pending = queue_mode.take_pending()
+        state = queue_mode.fold(queue_mode.load(_state_dir), pending)
+        if pending:
+            queue_mode.save(_state_dir, state)
+        queue_mode.adopt(state)
+    finally:
+        if lock:
+            lock.close()
+
+
 # --- The tick -----------------------------------------------------------------
 
 async def tick(now=None):
     """Measure once and send whatever the state machine says. Returns the kind
     of message sent (or None), for tests and logs."""
     global _hold_until
-    if not enabled() or _snapshot is None:
+    alerting, moding = enabled(), queue_mode.enabled()
+    if not (alerting or moding) or _snapshot is None:
         return None
     if _is_active is not None and not _is_active():
+        # The other container decides; this one only follows the shared modes
+        # (a submission landing here is braked too) and hands over its refusals.
+        if moding:
+            follow_modes()
         return None
     loop = asyncio.get_running_loop()
+    now = time.time() if now is None else now
     snap = _snapshot()
+    mode_events = decide_modes(snap, now) if moding else []
+    if moding:
+        snap["modes"] = queue_mode.current()
+        snap["reduced_clips"] = queue_mode.reduced_clips_recently(now)
+    if not alerting:
+        return None
     elsewhere = 0
     if _busy_elsewhere is not None:
         elsewhere = int(await loop.run_in_executor(None, _busy_elsewhere) or 0)
     snap["running_elsewhere"] = elsewhere
-    now = time.time() if now is None else now
 
     waiting = snap.get("waiting") or []
     # Paid-ness is part of the key: a free job raised to a paid priority (its
@@ -528,6 +655,10 @@ async def tick(now=None):
         if rate_kind:
             out.append(("rate-" + rate_kind,
                         fault_message("rate", rate_kind, rate_sub, m, now, lim)))
+        for event in mode_events:
+            if event in ("brake_on", "brake_off"):
+                out.append((event.replace("_", "-"),
+                            mode_message(event, m.get("modes") or {}, m, now, lim)))
         if out:
             from .alerts import send_admin_alert
             for name, (subject, body) in out:
@@ -535,8 +666,11 @@ async def tick(now=None):
             print(f"📣 Queue watch: {', '.join(n for n, _ in out)} ({m['queued']} queued, "
                   f"oldest paid {int(m['oldest_paid'])} s, oldest free "
                   f"{int(m['oldest_free'])} s, done/h {m.get('done_last_hour')})")
-        # The queue incident's kind, as before; the faults' kinds are logged.
-        return kind if not (asr_kind or rate_kind) else ",".join(n for n, _ in out)
+        # The queue incident's kind, as before; with a fault or a brake switch
+        # too, every kind sent, comma-separated.
+        if any(n != kind for n, _ in out):
+            return ",".join(n for n, _ in out)
+        return kind
     finally:
         if lock:
             lock.close()
@@ -570,13 +704,21 @@ def configure(*, snapshot, wait_started=None, busy_elsewhere=None, state_dir=Non
 
 
 def start(**kwargs):
-    """Start the loop from the app lifespan (cloud mode only)."""
+    """Start the loop from the app lifespan (cloud mode only). The saturation
+    mode rides the same loop, so it runs even with the alerts off."""
     global _task
-    if disabled():
-        print("📣 Queue watch disabled (QUEUE_ALERTS_DISABLED).")
-        return
-    if not enabled():
-        print("📣 Queue watch off: no alert channel configured (TELEGRAM_* or ADMIN_EMAIL + SMTP_*).")
-        return
+    if not queue_mode.enabled():
+        if disabled():
+            print("📣 Queue watch disabled (QUEUE_ALERTS_DISABLED).")
+            return
+        if not enabled():
+            print("📣 Queue watch off: no alert channel configured (TELEGRAM_* or ADMIN_EMAIL + SMTP_*).")
+            return
+    elif not enabled():
+        print("📣 Queue alerts off; the queue is still measured for the saturation mode.")
     configure(**kwargs)
+    if queue_mode.enabled():
+        # Pick up the modes the previous container left at once, not after
+        # STARTUP_DELAY: a deploy must not open the brake or reorder the queue.
+        follow_modes()
     _task = asyncio.create_task(_loop())
