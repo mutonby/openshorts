@@ -341,10 +341,38 @@ def test_app_raise_counts_as_paid_and_restarts_the_wait(tmp_path, monkeypatch):
 
     assert paid() == {"j1": False}
     assert app._queue_wait_started("j1") == 1000
-    app.reprioritize_user_jobs(owner, cloud_config.PLAN_PRIORITY["starter"])
+    monkeypatch.setattr(app, "_seen_priority_gen", app._UNSEEN)
+    asyncio.run(app.reprioritize_user_jobs(owner, cloud_config.PLAN_PRIORITY["starter"]))
     assert paid() == {"j1": True}            # told apart by its queue priority
     started = app._queue_wait_started("j1")
     assert started > 1000                    # the raise, not the submission
     m = json.loads((d / app._RESUME_FILE).read_text())
     assert m["raised_at"] == started and m["priority"] == 1
     assert not [n for n in os.listdir(d) if n.endswith(".tmp")]  # atomic write left no temp
+
+
+def test_state_kept_in_memory_when_the_disk_refuses_it(world, monkeypatch):
+    # Disk full / read-only: every save fails. The incident must not re-open
+    # (and re-alert) on every tick from an empty state.
+    import builtins
+    real_open = builtins.open
+
+    def refusing_open(path, mode="r", *a, **k):
+        if str(path).endswith(qw.STATE_FILE + ".tmp"):
+            raise OSError(28, "No space left on device")
+        return real_open(path, mode, *a, **k)
+    monkeypatch.setattr(builtins, "open", refusing_open)
+    world.add(1, paid=True, since=T0 - 30 * MIN)
+    assert tick(T0) == "alert"
+    for i in range(1, 6):
+        assert tick(T0 + i * 3 * MIN) is None   # no re-alert every 3 min
+    assert len(world.sent) == 1
+
+
+def test_unreadable_state_falls_back_to_memory(world, monkeypatch):
+    world.add(1, paid=True, since=T0 - 30 * MIN)
+    assert tick(T0) == "alert"
+    with open(f"{world.dir}/{qw.STATE_FILE}", "w") as f:
+        f.write("{not json")
+    assert tick(T0 + 3 * MIN) is None
+    assert len(world.sent) == 1

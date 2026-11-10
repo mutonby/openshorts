@@ -11,7 +11,8 @@ never be burned into the canonical reframe: every derivative would inherit it
 and "upgrade to remove the watermark" would be false for clips already made.
 
 - **Upgrade**: `cloud/billing._upsert_subscription` fires
-  `videos.unmark_user_library` on the free→live transition (`became_live`). Per
+  `videos.unmark_user_library` on the free→live transition (`became_live`), and
+  so does a paid `invoice.paid` after a lapse (past_due/unpaid → active). Per
   clip it checks the clean twin exists in R2, moves the history row and the
   project state to it, deletes the marked object and calls back into
   `app._unmark_local_job` so an open dashboard polls the clean URL. No render,

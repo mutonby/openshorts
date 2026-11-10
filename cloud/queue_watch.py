@@ -234,19 +234,39 @@ def _path(name):
     return os.path.join(_state_dir, name) if _state_dir else None
 
 
+# The last state this instance decided, kept in memory: when the shared file
+# cannot be written (disk full, read-only mount) or read, ticks go on from it
+# instead of from an empty state, which re-opened the incident and re-sent
+# the alert on every tick.
+_mem_state = None
+_save_failed = False
+
+
 def load_state() -> dict:
+    global _mem_state
     p = _path(STATE_FILE)
     if not p:
-        return {}
+        return dict(_mem_state or {})
+    if _save_failed and _mem_state is not None:
+        return dict(_mem_state)  # the file is older than what we decided
     try:
         with open(p) as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
+    except FileNotFoundError:
+        return dict(_mem_state or {})
+    except (OSError, ValueError) as e:
+        if _mem_state is not None:
+            return dict(_mem_state)
+        print(f"⚠️  Queue watch could not read its state: {e}")
         return {}
+    data = data if isinstance(data, dict) else {}
+    _mem_state = dict(data)
+    return data
 
 
 def save_state(state: dict):
+    global _mem_state, _save_failed
+    _mem_state = dict(state)
     p = _path(STATE_FILE)
     if not p:
         return
@@ -255,8 +275,11 @@ def save_state(state: dict):
         with open(tmp, "w") as f:
             json.dump(state, f)
         os.replace(tmp, p)
+        _save_failed = False
     except OSError as e:
-        print(f"⚠️  Queue watch could not save its state: {e}")
+        if not _save_failed:
+            print(f"⚠️  Queue watch could not save its state, keeping it in memory: {e}")
+        _save_failed = True
 
 
 def _try_lock():
@@ -357,9 +380,11 @@ def configure(*, snapshot, wait_started=None, busy_elsewhere=None, state_dir=Non
               is_active=None, now=None):
     """Wire the app's callbacks in (cloud/ cannot import app.py)."""
     global _snapshot, _wait_started, _busy_elsewhere, _state_dir, _is_active, _hold_until
+    global _mem_state, _save_failed
     _snapshot, _wait_started, _busy_elsewhere = snapshot, wait_started, busy_elsewhere
     _state_dir, _is_active = state_dir, is_active
     _since_cache.clear()
+    _mem_state, _save_failed = None, False
     # A fresh instance (restart or deploy) gives the jobs it just resumed one
     # paid threshold to start before judging the queue.
     _hold_until = (time.time() if now is None else now) + limits()["paid_wait"]

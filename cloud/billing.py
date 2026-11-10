@@ -558,18 +558,21 @@ def register_local_reprioritize(fn):
     _local_reprioritize = fn
 
 
-def _reprioritize_waiting_jobs(user_id, plan):
+async def _reprioritize_waiting_jobs(user_id, plan):
     """A live plan dispatches at ``PLAN_PRIORITY[plan]``: the videos this user
     already has in the queue get it too ("paid plans skip the line"). Called on
     every live upsert, not only the free -> paid one: it is idempotent and also
     covers an upgrade between paid plans and a renewal that arrives after the
     period had lapsed. Top-ups do not call it: a new job of a pack buyer gets
     no better priority either (``user.plan`` stays free), and packs never
-    promise to skip the queue. Never raises: Stripe must get its 200."""
+    promise to skip the queue. The callback reads and rewrites manifests in a
+    worker thread, off the event loop. Never raises: Stripe must get its 200."""
     if _local_reprioritize is None or plan not in config.PLAN_PRIORITY:
         return
     try:
-        _local_reprioritize(user_id, config.PLAN_PRIORITY[plan])
+        got = _local_reprioritize(user_id, config.PLAN_PRIORITY[plan])
+        if asyncio.iscoroutine(got):
+            await got
     except Exception as e:
         print(f"⚠️  Could not reprioritize the queued jobs of {user_id}: {e}")
 
@@ -666,8 +669,8 @@ async def _upsert_subscription(sub_obj: dict, event_created: datetime):
         # that. Fire-and-forget: Stripe must get its 200 whatever R2 does.
         asyncio.create_task(_unmark_after_upgrade(user_id))
     if now_status in LIVE_STATUSES:
-        _reprioritize_waiting_jobs(user_id, plan)
-    label =new_subscriber_label(now_status) if is_new_sub else None
+        await _reprioritize_waiting_jobs(user_id, plan)
+    label = new_subscriber_label(now_status) if is_new_sub else None
     if label:
         from .alerts import send_admin_alert, user_ref
         await send_admin_alert(
@@ -702,6 +705,8 @@ async def _upsert_subscription(sub_obj: dict, event_created: datetime):
 
 async def _set_subscription_status(sub_obj: dict, status: str, event_created: datetime,
                                    only_from: frozenset | None = None):
+    """Returns ``(user_id, plan, previous_status)`` when it changed the row,
+    else None."""
     async with database.session() as s:
         async with s.begin():
             row = (await s.execute(
@@ -715,8 +720,10 @@ async def _set_subscription_status(sub_obj: dict, status: str, event_created: da
                 return
             if only_from is not None and row.status not in only_from:
                 return
+            prev = row.status
             row.status = status
             row.last_event_at = event_created
+            return row.user_id, row.plan, prev
 
 
 def _invoice_subscription_id(invoice_obj: dict) -> str | None:
@@ -747,8 +754,17 @@ async def _set_subscription_status_by_invoice(invoice_obj: dict, status: str, ev
         return
     if status == "past_due" and invoice_obj.get("billing_reason") == "subscription_create":
         return
-    await _set_subscription_status({"id": sub_id}, status, event_created,
-                                   only_from=_INVOICE_STATUS_FROM[status])
+    changed = await _set_subscription_status({"id": sub_id}, status, event_created,
+                                             only_from=_INVOICE_STATUS_FROM[status])
+    if changed and status in LIVE_STATUSES:
+        # Paying a past_due/unpaid invoice is a renewal after a lapse: while it
+        # lapsed new jobs were queued and rendered as free, so the same promise
+        # as a new subscription applies (subscription.updated may come later,
+        # or not at all for this transition).
+        user_id, plan, prev = changed
+        if became_live(prev, status):
+            asyncio.create_task(_unmark_after_upgrade(user_id))
+        await _reprioritize_waiting_jobs(user_id, plan)
 
 
 async def _notify_invoice_paid(invoice_obj: dict):
