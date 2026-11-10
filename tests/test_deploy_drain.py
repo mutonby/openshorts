@@ -89,11 +89,52 @@ class TestResumeScan:
         assert app_module._read_manifest("j1")["attempts"] == 0
 
     def test_poison_job_is_dropped_and_refundable(self, out):
-        _manifest(out, "bad", attempts=app_module.MAX_RESUME_ATTEMPTS)
+        _manifest(out, "bad", attempts=app_module.MAX_RESUME_ATTEMPTS,
+                  instance="other", heartbeat=time.time() - 600)   # it was running
         keep = app_module._resume_interrupted_jobs()
         assert "bad" not in app_module.jobs
         assert keep == set()
         assert app_module._read_manifest("bad") is None
+
+
+class TestQueuedVideosSurviveDeploys:
+    """A video that only waited in the queue has crashed nothing: resuming it
+    after a deploy must not use up its attempts. Counting every resume
+    dropped long-queued videos once a few deploys had gone by."""
+
+    def test_never_run_job_survives_many_deploys(self, out, monkeypatch):
+        _manifest(out, "waiting")
+        for _ in range(app_module.MAX_RESUME_ATTEMPTS + 3):
+            monkeypatch.setattr(app_module, "job_queue", asyncio.PriorityQueue())
+            app_module.jobs.clear()
+            keep = app_module._resume_interrupted_jobs()
+            assert keep == {"res-waiting"}
+            assert app_module.jobs["waiting"]["status"] == "queued"
+        assert app_module._read_manifest("waiting")["attempts"] == 0
+
+    def test_manifest_already_at_the_limit_but_never_run_is_resumed(self, out):
+        # What production had: attempts used up by deploys alone, no heartbeat.
+        _manifest(out, "w", attempts=app_module.MAX_RESUME_ATTEMPTS)
+        assert app_module._resume_interrupted_jobs() == {"res-w"}
+        assert app_module.jobs["w"]["status"] == "queued"
+
+    def test_a_run_that_keeps_dying_is_still_dropped(self, out, monkeypatch):
+        _manifest(out, "crashy")
+        for i in range(app_module.MAX_RESUME_ATTEMPTS + 1):
+            monkeypatch.setattr(app_module, "job_queue", asyncio.PriorityQueue())
+            app_module.jobs.clear()
+            # Resumed a while ago, it started running, then its instance died
+            # mid-run (heartbeat stale): one more attempt each time.
+            m = app_module._read_manifest("crashy")
+            if m is None:
+                break
+            now = time.time()
+            m.update(resumed_at=now - 1000 if "resumed_at" in m else None,
+                     instance="other", heartbeat=now - 600, run_started=now - 700)
+            (out / "crashy" / app_module._RESUME_FILE).write_text(json.dumps(m))
+            app_module._resume_interrupted_jobs()
+        assert app_module._read_manifest("crashy") is None
+        assert "crashy" not in app_module.jobs
 
 
 class TestDrain:

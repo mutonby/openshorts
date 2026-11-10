@@ -1538,7 +1538,8 @@ def _recover_jobs_from_disk():
 # lose it: the user's clip just stops. We persist a tiny manifest per job and,
 # on startup, re-enqueue any that were interrupted — the user sees it resume
 # instead of vanish. Bounded by MAX_RESUME_ATTEMPTS so a video that reliably
-# crashes the worker can't crashloop the service.
+# crashes the worker can't crashloop the service; only resumes of a run that
+# had started count (a queued video survives any number of deploys).
 _RESUME_FILE = ".resume.json"
 MAX_RESUME_ATTEMPTS = 2
 
@@ -1919,7 +1920,14 @@ def _resume_interrupted_jobs() -> set:
         if _manifest_busy_elsewhere(m):
             continue  # the other instance is on it; we take over if it goes stale
 
-        attempts = int(m.get("attempts", 0)) + 1
+        # Only a run that STARTED since the last resume counts as an attempt:
+        # the limit is there for a video that crashes the worker, and a video
+        # that only waited in the queue through deploys has crashed nothing.
+        # Counting every resume dropped long-queued videos that never ran
+        # once a few deploys had gone by.
+        ran = (float(m.get("run_started") or m.get("heartbeat") or 0)
+               > float(m.get("resumed_at") or 0))
+        attempts = int(m.get("attempts", 0)) + (1 if ran else 0)
         user_id = m.get("user_id")
         reservation_id = m.get("reservation_id")
         if attempts > MAX_RESUME_ATTEMPTS:
@@ -1961,6 +1969,7 @@ def _resume_interrupted_jobs() -> set:
             env.pop("DOWNLOAD_SKIP_STATICS", None)
 
         m["attempts"] = attempts
+        m["resumed_at"] = time.time()
         try:
             write_json_atomic(manifest_path, m)
         except Exception:

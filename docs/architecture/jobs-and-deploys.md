@@ -245,7 +245,10 @@ coordinates them:
   running, starts none, and leaves queued manifests on disk.
 - A running job heartbeats its `.resume.json` every 10 s. The resume scan
   (startup + every 30 s) re-enqueues only manifests nobody heartbeated for 60 s,
-  so no job runs twice and none is lost. Max 2 resume attempts.
+  so no job runs twice and none is lost. Max 2 resume attempts, and only a run
+  that had started since the last resume counts (`run_started`/heartbeat after
+  `resumed_at`): a video that only waited in the queue survives any number of
+  deploys. Counting every resume dropped long-queued videos that never ran.
 - SIGTERM drains too, up to `DRAIN_TIMEOUT_SECONDS` (840), then hands the signal
   to uvicorn. **Keep it below the deployment platform's stop grace period.**
   `--timeout-graceful-shutdown 15` (Dockerfile) caps the wait for in-flight
