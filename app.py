@@ -163,6 +163,14 @@ else:
         # No-op dependency in self-host mode: every request is anonymous / BYOK.
         return None
 
+# The free queue's saturation mode (lanes, newest first, brake). Plain policy
+# with no dependencies, importable with billing off; inert unless configured.
+from cloud import queue_mode as _queue_mode
+
+
+def _saturation_on() -> bool:
+    return BILLING_ENABLED and _queue_mode.enabled()
+
 
 async def _user_from_request(request: Request):
     """Load the authenticated cloud user (or None). Cheap indexed lookup."""
@@ -826,12 +834,15 @@ async def _assert_job_owner(request, record):
         raise HTTPException(status_code=404, detail="Not found")
 
 # Application State
-# PriorityQueue holds (priority, seq, job_id). Lower priority dispatches first:
-# pro=0, starter/creator=1, BYOK/anonymous/self-host=2. The seq counter keeps
-# FIFO order within a priority and makes the tuples always comparable. With
+# PriorityQueue holds (priority, key, job_id). Lower priority dispatches first:
+# pro=0, starter/creator=1, free/BYOK/anonymous/self-host=2, and the free slow
+# lane 3 (cloud/queue_mode.py, off unless configured). The key orders a
+# priority: the job's submission time (``submitted_at``, which travels in the
+# resume manifest, so a job enqueued again after a deploy keeps its place),
+# or minus that time in a free lane that serves its newest job first. With
 # BILLING disabled every job enqueues at priority 2 → plain FIFO as before.
 job_queue = asyncio.PriorityQueue()
-_job_seq = itertools.count()
+_job_seq = itertools.count()  # kept for callers that reset it; keys are times now
 jobs: Dict[str, Dict] = {}
 thumbnail_sessions: Dict[str, Dict] = {}
 publish_jobs: Dict[str, Dict] = {}  # {publish_id: {status, result, error}}
@@ -869,21 +880,62 @@ def queue_estimate(ahead: int, running: int, slots: int, typical_seconds: float)
     return int(max(30, round(typical_seconds * (0.5 + rounds - 1 / slots))))
 
 
+# Every change this module makes to the heap bumps this, so /api/status (polled
+# every 2 s by each open tab) ranks a queue of thousands once per change, not
+# once per poll.
+_queue_version = 0
+_rank_cache = {"key": None, "rank": {}}
+
+
+def _queue_changed():
+    global _queue_version
+    _queue_version += 1
+
+
+def _queue_ranks() -> dict:
+    """``{job_id: (index, priority)}`` of the queued entries in dispatch order.
+    Cached on the heap's identity, version and size, and for one second at
+    most (a status flip nobody announced)."""
+    heap = job_queue._queue
+    key = (id(job_queue), _queue_version, len(heap), int(time.monotonic()))
+    if _rank_cache["key"] != key:
+        rank, i = {}, 0
+        for prio, _k, jid in sorted(heap):
+            if jid in rank or (jobs.get(jid) or {}).get('status') != 'queued':
+                continue
+            rank[jid] = (i, prio)
+            i += 1
+        _rank_cache.update(key=key, rank=rank)
+    return _rank_cache["rank"]
+
+
+def _overtakable(priority) -> bool:
+    """Whether jobs that arrive later can still go in front of this one beyond
+    paid plans: a free lane serving its newest first, or the slow lane (the
+    normal lane goes before it). Its ETA is then a minimum, not an estimate."""
+    if not _saturation_on() or priority is None or priority < _queue_mode.FREE_PRIORITY:
+        return False
+    lane = _queue_mode.lane_of_priority(priority)
+    return lane == _queue_mode.SLOW or _queue_mode.recent_first(lane)
+
+
 def queue_snapshot(job_id):
-    """``{position, ahead, eta_seconds}`` for a queued job, else None."""
+    """``{position, ahead, eta_seconds, eta_is_minimum}`` for a queued job,
+    else None. Position is in the real dispatch order (lanes and newest-first
+    included); ``eta_is_minimum`` says later arrivals can still pass it."""
     job = jobs.get(job_id) or {}
     if job.get('status') != 'queued':
         return None
     try:
-        entries = sorted(job_queue._queue)  # (priority, seq, job_id)
+        ranks = _queue_ranks()
     except Exception:
-        entries = []
-    queued_ids = [e[2] for e in entries
-                  if (jobs.get(e[2]) or {}).get('status') == 'queued']
+        ranks = {}
+    prio = None
     if job_id in _admitting:
         ahead = len([j for j in _admitting if j != job_id])
-    elif job_id in queued_ids:
-        ahead = len(_admitting) + queued_ids.index(job_id)
+    elif job_id in ranks:
+        idx, prio = ranks[job_id]
+        ahead = len(_admitting) + idx
     else:
         return None
     sample = sorted(_recent_job_seconds)
@@ -892,11 +944,68 @@ def queue_snapshot(job_id):
         "position": ahead + 1,
         "ahead": ahead,
         "eta_seconds": queue_estimate(ahead, len(_running_jobs), MAX_CONCURRENT_JOBS, typical),
+        "eta_is_minimum": _overtakable(prio),
     }
 
 
+_last_arrival = 0.0
+
+
+def _arrival_now() -> float:
+    """Now, strictly after the last arrival handed out (equal keys would fall
+    back to comparing job ids)."""
+    global _last_arrival
+    _last_arrival = max(time.time(), _last_arrival + 1e-6)
+    return _last_arrival
+
+
+def _job_arrival(job_id) -> float:
+    """When the job was submitted (stamped on its record the first time)."""
+    job = jobs.get(job_id)
+    if job is None:
+        return _arrival_now()
+    t = job.get('submitted_at')
+    if t is None:
+        t = job['submitted_at'] = _arrival_now()
+    return float(t)
+
+
+def _queue_key(priority, arrival) -> float:
+    """Sort key inside a priority: arrival time (FIFO), or minus it while that
+    free lane serves its newest job first."""
+    if (_saturation_on() and priority >= _queue_mode.FREE_PRIORITY
+            and _queue_mode.recent_first(_queue_mode.lane_of_priority(priority))):
+        return -float(arrival)
+    return float(arrival)
+
+
 def _enqueue_job(job_id: str, priority: int = 2):
-    job_queue.put_nowait((priority, next(_job_seq), job_id))
+    job_queue.put_nowait((priority, _queue_key(priority, _job_arrival(job_id)), job_id))
+    _queue_changed()
+
+
+def _rekey_lanes(lanes=None):
+    """Re-sort the free lanes after their order changed (newest first on or
+    off): each entry's key is its arrival time with the sign of its lane's
+    mode. The queue's size and waiters do not change. Loop thread only."""
+    heap = job_queue._queue
+    changed = False
+    for i, (prio, key, jid) in enumerate(heap):
+        if prio < _queue_mode.FREE_PRIORITY:
+            continue
+        if lanes is not None and _queue_mode.lane_of_priority(prio) not in lanes:
+            continue
+        new = _queue_key(prio, abs(key))
+        if new != key:
+            heap[i] = (prio, new, jid)
+            changed = True
+    if changed:
+        heapq.heapify(heap)
+        _queue_changed()
+    return changed
+
+
+_queue_mode.register_on_change(_rekey_lanes)
 
 
 # --- Paying moves a waiting video up (billing webhook -> here) ---------------
@@ -911,19 +1020,22 @@ def _enqueue_job(job_id: str, priority: int = 2):
 def _raise_queued(new_priority_for) -> list:
     """Re-key queued entries in place. ``new_priority_for(job_id, priority)``
     returns the priority the entry should have, or None; an entry only ever
-    moves up. Each entry keeps its seq, so inside its new priority a job keeps
-    its arrival order. The queue's size and waiters do not change, so editing
-    the heap and re-heapifying is all it takes. Returns the job ids moved.
+    moves up. Each entry keeps its arrival time, so inside its new priority a
+    job keeps its arrival order (keyed the way that priority orders: a job
+    leaving the slow lane while the normal one serves newest first takes that
+    order). The queue's size and waiters do not change, so editing the heap
+    and re-heapifying is all it takes. Returns the job ids moved.
     Loop thread only."""
     heap = job_queue._queue
     moved = []
-    for i, (prio, seq, jid) in enumerate(heap):
+    for i, (prio, key, jid) in enumerate(heap):
         new = new_priority_for(jid, prio)
         if new is not None and int(new) < prio:
-            heap[i] = (int(new), seq, jid)
+            heap[i] = (int(new), _queue_key(int(new), abs(key)), jid)
             moved.append(jid)
     if moved:
         heapq.heapify(heap)
+        _queue_changed()
     return moved
 
 
@@ -1055,8 +1167,10 @@ async def _raise_to_owner_plans(job_ids=None) -> int:
     except Exception as e:
         print(f"⚠️ Plan lookup for re-enqueued jobs failed, keeping their priority: {e}")
         return 0
+    # Paid plans only: a "free" row must never pull a slow-lane job up.
     return await _raise_users_jobs({u: _cloud_config.PLAN_PRIORITY[p] for u, p in plans.items()
-                                    if p in _cloud_config.PLAN_PRIORITY})
+                                    if p in _cloud_config.PLAN_PRIORITY
+                                    and _cloud_config.PLAN_PRIORITY[p] < _queue_mode.FREE_PRIORITY})
 
 
 def _manifest_priorities(job_ids) -> dict:
@@ -1710,7 +1824,8 @@ async def _wait_for_shared_gpu():
     logged = False
     loop = asyncio.get_event_loop()
     while waited < SHARED_GPU_MAX_WAIT:
-        elsewhere = _jobs_busy_elsewhere()
+        # Reads every manifest on the shared disk: off the loop.
+        elsewhere = await loop.run_in_executor(None, _jobs_busy_elsewhere)
         free_mb = await loop.run_in_executor(None, _gpu_free_mb)
         if gpu_has_room(len(_running_jobs), elsewhere, free_mb):
             return
@@ -1772,9 +1887,10 @@ async def _resume_scan():
         if _draining:
             continue
         try:
-            _resume_interrupted_jobs()
+            await _resume_interrupted_jobs_async()
             await _raise_to_owner_plans()
             await _follow_manifest_priorities()
+            await _expire_starved_jobs()
         except Exception as e:
             print(f"⚠️ Resume scan failed: {e}")
 
@@ -1835,7 +1951,7 @@ def _install_drain_signal_handler():
 def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, watermark,
                            webhook_url=None, webhook_secret=None, base_url=None,
                            partial=None, source_cap_minutes=None, skip_statics=False,
-                           via_api_key=False):
+                           via_api_key=False, lane=None, submitted_at=None):
     try:
         path = os.path.join(OUTPUT_DIR, job_id, _RESUME_FILE)
         # Atomic like every manifest write: the other instance reads them.
@@ -1860,6 +1976,10 @@ def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, water
                 # The probe's "statics bot-checked for this video" verdict.
                 "skip_statics": bool(skip_statics),
                 "via_api_key": bool(via_api_key),
+                # Free queue lane and submission time: a job enqueued again
+                # (deploy, resume scan) keeps its lane and its place in it.
+                "lane": lane or _queue_mode.NORMAL,
+                "submitted_at": submitted_at,
         })
     except Exception as e:
         print(f"⚠️ Could not write resume manifest for {job_id}: {e}")
@@ -1876,48 +1996,45 @@ def _clear_resume_manifest(job_id):
         print(f"⚠️ Could not clear resume manifest for {job_id}: {e}")
 
 
-def _resume_interrupted_jobs() -> set:
-    """Re-enqueue jobs that were mid-processing when the server last stopped.
-
-    Runs after _recover_jobs_from_disk: a job whose clips already finished has a
-    metadata JSON and is recovered as 'completed', so we only resume manifests
-    with no metadata yet (analysis never finished). Also called periodically
-    (_resume_scan): a manifest another instance is heartbeating is left alone
-    until that heartbeat goes stale, and a job this instance already holds is
-    never enqueued twice.
-
-    Returns the set of reservation ids for every manifest still on disk —
-    resumed here or alive on the other instance — so the caller can keep them
-    out of the orphaned-reservation refund. Does NO DB work — the DB engine
-    isn't up yet at this point in startup. A poison job (too many attempts) is
-    simply not resumed; its reservation is then refunded as a normal orphan.
-    """
-    keep_reservations: set = set()
+def _legacy_submitted_at(job_id, manifest_mtime=None):
+    """Submission time of a manifest written before ``submitted_at`` existed:
+    the ``.owner`` sidecar is written at submit; else the manifest's own mtime
+    (its last write, the best left); else now."""
     try:
-        entries = os.listdir(OUTPUT_DIR)
-    except FileNotFoundError:
-        return keep_reservations
-    resumed = 0
-    for job_id in entries:
-        job_path = os.path.join(OUTPUT_DIR, job_id)
-        manifest_path = os.path.join(job_path, _RESUME_FILE)
-        if not os.path.isfile(manifest_path):
-            continue
+        return os.path.getmtime(os.path.join(OUTPUT_DIR, job_id, ".owner"))
+    except OSError:
+        pass
+    return manifest_mtime if manifest_mtime else time.time()
+
+
+def _resume_candidates(held: set, now: float):
+    """Disk part of the resume scan (a worker thread on the periodic scan):
+    ``(keep_reservations, [(job_id, manifest)])``. ``held`` is a copy of the
+    ids this instance already has. Each picked manifest is rewritten with its
+    attempt count, ``resumed_at`` and, for one written before it existed, the
+    submission time, so its place in the queue is fixed from now on."""
+    keep_reservations: set = set()
+    picked = []
+    for job_id in _manifest_names():
+        manifest_path = _manifest_path(job_id)
         # A manifest outlives only an interrupted run (the job wrapper drops it
         # at every terminal state), so a metadata file next to it means the job
         # was stopped mid-render, not that it finished: resume it too.
         try:
             with open(manifest_path) as f:
                 m = json.load(f)
+            mtime = os.path.getmtime(manifest_path)
         except Exception as e:
             print(f"⚠️ Bad resume manifest for {job_id}: {e}")
+            continue
+        if not isinstance(m, dict):
             continue
 
         if m.get("reservation_id"):
             keep_reservations.add(str(m["reservation_id"]))
-        if job_id in jobs:
+        if job_id in held:
             continue  # already ours (queued, running or recovered)
-        if _manifest_busy_elsewhere(m):
+        if _manifest_busy_elsewhere(m, now):
             continue  # the other instance is on it; we take over if it goes stale
 
         # Only a run that STARTED since the last resume counts as an attempt:
@@ -1928,7 +2045,6 @@ def _resume_interrupted_jobs() -> set:
         ran = (float(m.get("run_started") or m.get("heartbeat") or 0)
                > float(m.get("resumed_at") or 0))
         attempts = int(m.get("attempts", 0)) + (1 if ran else 0)
-        user_id = m.get("user_id")
         reservation_id = m.get("reservation_id")
         if attempts > MAX_RESUME_ATTEMPTS:
             # Poison job: don't resume. Leaving its reservation out of the keep
@@ -1939,6 +2055,30 @@ def _resume_interrupted_jobs() -> set:
                 keep_reservations.discard(str(reservation_id))  # let the sweep refund it
             continue
 
+        m["attempts"] = attempts
+        m["resumed_at"] = now
+        if m.get("submitted_at") is None:
+            m["submitted_at"] = _legacy_submitted_at(job_id, mtime)
+        try:
+            write_json_atomic(manifest_path, m)
+        except Exception:
+            pass
+        picked.append((job_id, m))
+    return keep_reservations, picked
+
+
+def _register_resumed(picked) -> int:
+    """Loop part of the resume scan: a record and a heap entry per picked
+    manifest. The heap orders them by submission time, whatever order the
+    directory listing gave."""
+    resumed = 0
+    for job_id, m in picked:
+        if job_id in jobs:
+            continue  # registered while the disk was being read
+        user_id = m.get("user_id")
+        reservation_id = m.get("reservation_id")
+        attempts = int(m.get("attempts", 0))
+        job_path = os.path.join(OUTPUT_DIR, job_id)
         # Rebuild env from scratch — the manifest holds no secrets. Managed
         # (cloud) jobs get the server key; self-host falls back to its env key.
         env = child_env()
@@ -1968,13 +2108,7 @@ def _resume_interrupted_jobs() -> set:
         else:
             env.pop("DOWNLOAD_SKIP_STATICS", None)
 
-        m["attempts"] = attempts
-        m["resumed_at"] = time.time()
-        try:
-            write_json_atomic(manifest_path, m)
-        except Exception:
-            pass
-
+        priority = int(m.get("priority", 2))
         jobs[job_id] = {
             'status': 'queued',
             'logs': _TimedLog([f"♻️ Resuming your video after a server update (attempt {attempts})."]),
@@ -1989,14 +2123,105 @@ def _resume_interrupted_jobs() -> set:
             'webhook_secret': m.get("webhook_secret"),
             'base_url': m.get("base_url"),
             'via_api_key': bool(m.get("via_api_key")),
+            # A manifest without a lane predates the lanes: normal lane.
+            'lane': _queue_mode.lane_of_priority(priority),
+            'submitted_at': float(m["submitted_at"] if m.get("submitted_at") is not None else time.time()),
         }
-        _enqueue_job(job_id, int(m.get("priority", 2)))
+        _enqueue_job(job_id, priority)
         if user_id is not None:
             _owner_plan_pending.add(job_id)  # raised to the owner's plan now
         resumed += 1
     if resumed:
         print(f"♻️  Re-enqueued {resumed} interrupted job(s) after restart.")
-    return keep_reservations
+    return resumed
+
+
+def _resume_interrupted_jobs() -> set:
+    """Re-enqueue jobs that were mid-processing when the server last stopped.
+
+    Runs after _recover_jobs_from_disk: a job whose clips already finished has a
+    metadata JSON and is recovered as 'completed', so we only resume manifests
+    with no metadata yet (analysis never finished). Also called periodically
+    (_resume_scan, through ``_resume_interrupted_jobs_async``): a manifest
+    another instance is heartbeating is left alone until that heartbeat goes
+    stale, and a job this instance already holds is never enqueued twice.
+
+    Returns the set of reservation ids for every manifest still on disk —
+    resumed here or alive on the other instance — so the caller can keep them
+    out of the orphaned-reservation refund. Does NO DB work — the DB engine
+    isn't up yet at this point in startup. A poison job (too many attempts) is
+    simply not resumed; its reservation is then refunded as a normal orphan.
+    """
+    keep, picked = _resume_candidates(set(jobs), time.time())
+    _register_resumed(picked)
+    return keep
+
+
+async def _resume_interrupted_jobs_async() -> set:
+    """The periodic resume scan: the manifests are read (and rewritten) in a
+    worker thread, only the records and the heap are touched on the loop."""
+    keep, picked = await asyncio.to_thread(_resume_candidates, set(jobs), time.time())
+    _register_resumed(picked)
+    return keep
+
+
+QUEUE_EXPIRED_LOG = ("❌ The free queue was too busy to start this video in time. "
+                     "No minutes were used: submit it again whenever you like, "
+                     "or skip the line with a plan.")
+
+
+async def _expire_starved_jobs(now=None) -> list:
+    """End, cleanly, the free jobs that have waited past ``ACTIVE_JOB_MAX_SECONDS``
+    since submission (only with the saturation mode on, where a lane serving
+    its newest first, or the slow lane, can keep an old job waiting).
+
+    The same end as any job that did not complete: off the heap, status
+    ``failed`` with a line saying why, resume manifest dropped (so neither
+    instance resumes it and the disk sweeps may age the dir out), reservation
+    released (minutes back; a released reservation keeps the first-video
+    grant for the retry), the caller's webhook told ``job.failed``. No
+    clips-ready email (nothing completed) and not counted as a pipeline
+    failure. A draining instance leaves its queue to the next one."""
+    if not _saturation_on() or _draining:
+        return []
+    now = time.time() if now is None else now
+    heap = job_queue._queue
+    victims = []
+    for prio, _key, jid in heap:
+        if prio < _queue_mode.FREE_PRIORITY:
+            continue
+        job = jobs.get(jid)
+        if not job or job.get('status') != 'queued' or jid in _running_jobs:
+            continue
+        if now - float(job.get('submitted_at') or now) > ACTIVE_JOB_MAX_SECONDS:
+            victims.append(jid)
+    if not victims:
+        return []
+    gone = set(victims)
+    kept = [e for e in heap if e[2] not in gone]
+    removed = len(heap) - len(kept)
+    heap[:] = kept
+    heapq.heapify(heap)
+    for _ in range(removed):
+        try:
+            job_queue.task_done()  # each entry was put once and will never be got
+        except ValueError:
+            break
+    _queue_changed()
+    for jid in victims:
+        job = jobs[jid]
+        job['status'] = 'failed'
+        job['queue_expired'] = True
+        if job.get('logs') is not None:
+            job['logs'].append(QUEUE_EXPIRED_LOG)
+    await asyncio.to_thread(lambda: [_clear_resume_manifest(j) for j in victims])
+    for jid in victims:
+        await _settle_reservation(jid, jobs[jid])
+        await _autopilot_job_finished(jid, jobs[jid])
+        await _notify_job_webhook(jid)
+    print(f"⌛ Expired {len(victims)} free job(s) that waited over "
+          f"{ACTIVE_JOB_MAX_SECONDS // 3600} h in the queue.")
+    return victims
 
 
 def _dir_size(path: str) -> int:
@@ -2284,6 +2509,7 @@ async def process_queue():
         try:
             # Wait for a job (priority, seq, job_id) — lowest priority first.
             _priority, _seq, job_id = await job_queue.get()
+            _queue_changed()
 
             if _draining:
                 # Leave it on disk for the next instance (manifest, no heartbeat).
@@ -3001,6 +3227,8 @@ def _queue_watch_snapshot():
             if p is None:
                 p = plans.get(job.get('user_plan'), free_priority)
         waiting.append({"id": jid, "paid": int(p) < free_priority,
+                        "lane": (_queue_mode.lane_of_priority(p) if int(p) >= free_priority
+                                 else None),
                         "attempt": int(job.get('auto_retries') or 0)})
     # Output rate: finished jobs whose last log line is from the last hour. A
     # job recovered from disk at boot carries a single synthetic line: skip it.
@@ -3009,12 +3237,25 @@ def _queue_watch_snapshot():
     for job in list(jobs.values()):
         if job.get('status') not in ('completed', 'failed'):
             continue
+        if job.get('queue_expired'):
+            continue  # never ran: not output, and a batch of them is no rate
         times = getattr(job.get('logs'), 'times', None)
         if times and len(times) > 1 and times[-1] >= cutoff:
             done += 1
     sample = sorted(_recent_job_seconds)
     typical = sample[len(sample) // 2] if sample else DEFAULT_JOB_SECONDS
     paid = sum(1 for w in waiting if w["paid"])
+    normal = sum(1 for w in waiting if w["lane"] == _queue_mode.NORMAL)
+    slow = sum(1 for w in waiting if w["lane"] == _queue_mode.SLOW)
+    running = len(_running_jobs)
+    # What a job joining the back of each free lane would wait in FIFO: the
+    # normal lane has the paid jobs in front, the slow lane everything.
+    lanes = {
+        _queue_mode.NORMAL: {"queued": normal, "wait": queue_estimate(
+            paid + normal, running, MAX_CONCURRENT_JOBS, typical)},
+        _queue_mode.SLOW: {"queued": slow, "wait": queue_estimate(
+            len(waiting), running, MAX_CONCURRENT_JOBS, typical)},
+    }
     return {
         "waiting": waiting,
         "running": len(_running_jobs),
@@ -3025,6 +3266,7 @@ def _queue_watch_snapshot():
         # nvidia-smi answered at the last admission check (cached, no call here).
         "gpu": _gpu_free_cache["mb"] is not None,
         "asr_devices": list(_recent_asr_devices),
+        "lanes": lanes,
     }
 
 
@@ -4437,6 +4679,10 @@ async def process_endpoint(
         # API callers poll or get the webhook; the clips-ready email is for
         # people who left the dashboard tab.
         'via_api_key': request_uses_api_key(request),
+        # Free queue lane (cloud/queue_mode.py) and the submission time that
+        # orders the queue; both travel in the resume manifest.
+        'lane': getattr(request.state, "queue_lane", _queue_mode.NORMAL),
+        'submitted_at': _arrival_now(),
     }
 
     # Persist the owner so recovered jobs keep their multi-tenant guard after a
@@ -4456,7 +4702,8 @@ async def process_endpoint(
                            webhook_url=webhook_url, webhook_secret=webhook_secret,
                            base_url=api_base, partial=partial,
                            source_cap_minutes=source_cap, skip_statics=skip_statics,
-                           via_api_key=jobs[job_id]['via_api_key'])
+                           via_api_key=jobs[job_id]['via_api_key'],
+                           lane=jobs[job_id]['lane'], submitted_at=jobs[job_id]['submitted_at'])
 
     _enqueue_job(job_id, priority)
 
