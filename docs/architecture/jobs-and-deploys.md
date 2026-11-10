@@ -159,6 +159,16 @@ parakeet text.
 - `/api/status` returns `queue: {position, ahead, eta_seconds}` while queued; the
   dashboard shows it with a "paid plans skip the line" upsell (paid plans do
   dispatch first: `PLAN_PRIORITY`).
+- **Paying moves a waiting video up** (`app.reprioritize_user_jobs`, called by
+  the subscription webhook through `billing.register_local_reprioritize` on
+  every live upsert). The user's queued heap entries take the plan's priority
+  and keep their seq (arrival order inside the new priority); their resume
+  manifests are rewritten too, except the ones running here or heartbeated
+  elsewhere. A webhook that lands on the other instance of a deploy can only
+  rewrite the manifests: the resume scan (`_follow_manifest_priorities`) raises
+  queued entries whose manifest says better. Priorities only move up. Running
+  jobs, and the cut of a partial job, are left as they are. Top-ups do not move
+  anything: a pack does not change a new job's priority either.
 
 ## Deploys and running jobs (handover + drain)
 

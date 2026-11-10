@@ -15,6 +15,7 @@ import zipfile
 import math
 import itertools
 import functools
+import heapq
 import asyncio
 import signal
 import socket
@@ -897,6 +898,81 @@ def queue_snapshot(job_id):
 def _enqueue_job(job_id: str, priority: int = 2):
     job_queue.put_nowait((priority, next(_job_seq), job_id))
 
+
+# --- Paying moves a waiting video up (billing webhook -> here) ---------------
+# The priority is decided at enqueue, so a free user who paid while their video
+# waited kept waiting behind every paid job. ``reprioritize_user_jobs`` re-keys
+# their queued entries and their resume manifests; running jobs are left alone.
+def _raise_queued(new_priority_for) -> list:
+    """Re-key queued entries in place. ``new_priority_for(job_id, priority)``
+    returns the priority the entry should have, or None; an entry only ever
+    moves up. Each entry keeps its seq, so inside its new priority a job keeps
+    its arrival order. The queue's size and waiters do not change, so editing
+    the heap and re-heapifying is all it takes. Returns the job ids moved."""
+    heap = job_queue._queue
+    moved = []
+    for i, (prio, seq, jid) in enumerate(heap):
+        new = new_priority_for(jid, prio)
+        if new is not None and int(new) < prio:
+            heap[i] = (int(new), seq, jid)
+            moved.append(jid)
+    if moved:
+        heapq.heapify(heap)
+    return moved
+
+
+def reprioritize_user_jobs(user_id, priority) -> int:
+    """Move every job of ``user_id`` that is still waiting up to ``priority``.
+
+    In this instance's queue and in every resume manifest on the shared disk
+    that nobody is running, so the job keeps the new priority when the other
+    instance of a deploy (or the next one) enqueues it from its manifest; the
+    other instance's own queue follows its manifests (``_follow_manifest_priorities``).
+    Running jobs and their manifests are not touched. Returns how many jobs moved.
+    """
+    uid, priority = str(user_id), int(priority)
+    mine = {jid for jid, j in jobs.items() if str(j.get('user_id')) == uid}
+    moved = _raise_queued(lambda jid, _p: priority if jid in mine else None)
+    for jid in moved:
+        logs = (jobs.get(jid) or {}).get('logs')
+        if logs is not None:
+            logs.append("⚡ Your plan moved this video up the line.")
+    rewritten = set()
+    try:
+        entries = os.listdir(OUTPUT_DIR)
+    except FileNotFoundError:
+        entries = []
+    for name in entries:
+        m = _read_manifest(name)
+        if (not m or str(m.get("user_id")) != uid or name in _running_jobs
+                or _manifest_busy_elsewhere(m)):
+            continue
+        if int(m.get("priority", 2)) <= priority:
+            continue
+        m["priority"] = priority
+        try:
+            write_json_atomic(_manifest_path(name), m)
+            rewritten.add(name)
+        except Exception as e:
+            print(f"⚠️ Could not reprioritize manifest for {name}: {e}")
+    n = len(set(moved) | rewritten)
+    if n:
+        print(f"⚡ Moved {n} waiting job(s) of user {uid} up to priority {priority}.")
+    return n
+
+
+def _follow_manifest_priorities() -> list:
+    """Raise queued entries whose manifest now says a better priority: the
+    webhook that upgraded their owner reached the other instance of a deploy,
+    which can rewrite the manifests on the shared disk but not our heap."""
+    def from_manifest(jid, _p):
+        m = _read_manifest(jid) or {}
+        try:
+            return int(m["priority"]) if "priority" in m else None
+        except (TypeError, ValueError):
+            return None
+    return _raise_queued(from_manifest)
+
 def _relocate_root_job_artifacts(job_id: str, job_output_dir: str) -> bool:
     """
     Backward-compat rescue:
@@ -1575,6 +1651,7 @@ async def _resume_scan():
             continue
         try:
             _resume_interrupted_jobs()
+            _follow_manifest_priorities()
         except Exception as e:
             print(f"⚠️ Resume scan failed: {e}")
 
@@ -2224,15 +2301,15 @@ def _schedule_auto_retry(job_id, job):
     job['logs'].append("🔁 A temporary server problem interrupted your video. "
                        "Retrying it automatically, no minutes are charged twice.")
     _clean_for_retry(job.get('output_dir') or os.path.join(OUTPUT_DIR, job_id))
-    m = _read_manifest(job_id) or {}
-    priority = int(m.get("priority", 1))
     print(f"🔁 Auto-retry {job['auto_retries']}/{AUTO_RETRY_LIMIT} for {job_id} "
           f"in {AUTO_RETRY_DELAY_SECONDS:.0f}s.")
 
     async def _later():
         await asyncio.sleep(AUTO_RETRY_DELAY_SECONDS)
         if job_id in jobs and jobs[job_id].get('status') == 'queued':
-            _enqueue_job(job_id, priority)
+            # Read now, not when scheduled: an upgrade in between rewrote it.
+            m = _read_manifest(job_id) or {}
+            _enqueue_job(job_id, int(m.get("priority", 1)))
 
     asyncio.create_task(_later())
 
@@ -2679,6 +2756,8 @@ async def lifespan(app: FastAPI):
         # re-points their clips at the clean twins in R2 and hands us each
         # one so the working copy (and an open dashboard) follows.
         cloud.videos.register_local_unmark(_unmark_local_job)
+        # And for the queue: paying moves the user's waiting videos up.
+        cloud.billing.register_local_reprioritize(reprioritize_user_jobs)
         # Autopilot: watch connected YouTube channels for new videos. Paused
         # while this instance drains so only the new container submits jobs.
         cloud.autopilot.start(app, is_active=lambda: not _draining)
