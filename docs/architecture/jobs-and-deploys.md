@@ -159,6 +159,24 @@ parakeet text.
 - `/api/status` returns `queue: {position, ahead, eta_seconds}` while queued; the
   dashboard shows it with a "paid plans skip the line" upsell (paid plans do
   dispatch first: `PLAN_PRIORITY`).
+- **Paying moves a waiting video up** (`app.reprioritize_user_jobs`, called by
+  the subscription webhook through `billing.register_local_reprioritize` on
+  every live upsert). The user's queued heap entries take the plan's priority
+  and keep their seq (arrival order inside the new priority); their resume
+  manifests are rewritten too, except the ones running here or heartbeated
+  elsewhere. A webhook that lands on the other instance of a deploy can only
+  rewrite the manifests: the resume scan (`_follow_manifest_priorities`) raises
+  queued entries whose manifest says better. Priorities only move up. Running
+  jobs, and the cut of a partial job, are left as they are. Top-ups do not move
+  anything: a pack does not change a new job's priority either.
+- **Re-enqueued from a manifest = the owner's plan now.** A job resumed at
+  startup or by the resume scan, or re-queued by auto-retry, takes the better
+  of its manifest's priority and its owner's current plan
+  (`app._raise_to_owner_plans`, one `metering.live_plans` lookup for all the
+  owners, in chunks). That covers a job that was running when its owner paid
+  and was cut by a drain, and makes every deploy move up the waiting videos of
+  owners who paid before the webhook path existed. A failed lookup keeps the
+  manifest's priority.
 
 ## Deploys and running jobs (handover + drain)
 
@@ -190,6 +208,16 @@ coordinates them:
   keep the interpreter alive). `/health` stays a plain liveness probe.
 - `/api/status` answers from disk for a job this instance never held, so a poll
   landing on either container during the handover is fine.
+- **Reservations of live jobs are never swept.** The metering sweeper
+  (`metering._sweep_once`, every 15 min) releases `reserved` rows older than
+  `STUCK_RESERVATION_HOURS` (3) only when `app._live_reservation_ids` does not
+  name them: queued/running here, or a resume manifest `_job_is_active` still
+  counts. The disk is shared, so each instance of a deploy keeps the other's
+  jobs too, and a drain-cancelled job's manifest keeps its reservation whatever
+  the old instance's record says. Past `LIVE_RESERVATION_MAX_HOURS` (24, like
+  `ACTIVE_JOB_MAX_SECONDS`) a reservation is released anyway: that job is hung.
+  If the live set cannot be read the pass is skipped. Heartbeats are written
+  atomically, since a half-written manifest reads as no manifest.
 - `main.py` leaves `.transcript_checkpoint.json` in the job dir so a re-run job
   skips the paid transcription (download and Gemini repeat).
 

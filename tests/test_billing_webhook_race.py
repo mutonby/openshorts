@@ -144,3 +144,35 @@ def test_user_lock_does_not_block_foreign_key_inserts(db):
     t0 = 1794154000
     asyncio.run(billing._upsert_subscription(_sub("incomplete", t0), billing._ts(t0)))
     assert db.user_lock_sql and all("FOR NO KEY UPDATE" in s for s in db.user_lock_sql)
+
+
+@pytest.fixture
+def quiet(monkeypatch):
+    async def _noop(*a, **k):
+        return None
+    from cloud import alerts
+    monkeypatch.setattr(alerts, "send_admin_alert", _noop)
+    monkeypatch.setattr(billing, "_unmark_after_upgrade", _noop)
+
+
+@pytest.mark.parametrize("status, expected", [
+    ("active", [(USER_ID, 1)]),     # starter -> PLAN_PRIORITY["starter"]
+    ("trialing", [(USER_ID, 1)]),
+    ("incomplete", []),             # reached the pay button, nothing paid
+    ("past_due", []),
+])
+def test_live_subscription_moves_queued_jobs_up(db, quiet, monkeypatch, status, expected):
+    calls = []
+    monkeypatch.setattr(billing, "_local_reprioritize", lambda uid, p: calls.append((uid, p)))
+    t0 = 1794154000
+    asyncio.run(billing._upsert_subscription(_sub(status, t0), billing._ts(t0)))
+    assert calls == expected
+
+
+def test_reprioritize_failure_never_fails_the_webhook(db, quiet, monkeypatch):
+    def boom(uid, p):
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(billing, "_local_reprioritize", boom)
+    t0 = 1794154000
+    asyncio.run(billing._upsert_subscription(_sub("active", t0), billing._ts(t0)))
+    assert db.subs[USER_ID].status == "active"

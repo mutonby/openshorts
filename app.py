@@ -15,6 +15,7 @@ import zipfile
 import math
 import itertools
 import functools
+import heapq
 import asyncio
 import signal
 import socket
@@ -897,6 +898,126 @@ def queue_snapshot(job_id):
 def _enqueue_job(job_id: str, priority: int = 2):
     job_queue.put_nowait((priority, next(_job_seq), job_id))
 
+
+# --- Paying moves a waiting video up (billing webhook -> here) ---------------
+# The priority is decided at enqueue, so a free user who paid while their video
+# waited kept waiting behind every paid job. ``reprioritize_user_jobs`` re-keys
+# their queued entries and their resume manifests; running jobs are left alone.
+def _raise_queued(new_priority_for) -> list:
+    """Re-key queued entries in place. ``new_priority_for(job_id, priority)``
+    returns the priority the entry should have, or None; an entry only ever
+    moves up. Each entry keeps its seq, so inside its new priority a job keeps
+    its arrival order. The queue's size and waiters do not change, so editing
+    the heap and re-heapifying is all it takes. Returns the job ids moved."""
+    heap = job_queue._queue
+    moved = []
+    for i, (prio, seq, jid) in enumerate(heap):
+        new = new_priority_for(jid, prio)
+        if new is not None and int(new) < prio:
+            heap[i] = (int(new), seq, jid)
+            moved.append(jid)
+    if moved:
+        heapq.heapify(heap)
+    return moved
+
+
+def reprioritize_user_jobs(user_id, priority) -> int:
+    """Move every job of ``user_id`` that is still waiting up to ``priority``.
+
+    In this instance's queue and in every resume manifest on the shared disk
+    that nobody is running, so the job keeps the new priority when the other
+    instance of a deploy (or the next one) enqueues it from its manifest; the
+    other instance's own queue follows its manifests (``_follow_manifest_priorities``).
+    Running jobs and their manifests are not touched. Returns how many jobs moved.
+    """
+    return _raise_users_jobs({str(user_id): int(priority)})
+
+
+def _raise_users_jobs(priority_by_user: dict) -> int:
+    """``reprioritize_user_jobs`` for many owners at once: one pass over the
+    heap and one over the manifests, whatever the number of owners."""
+    want = {str(u): int(p) for u, p in priority_by_user.items()}
+    if not want:
+        return 0
+    owner = {jid: str(j.get('user_id')) for jid, j in jobs.items()
+             if str(j.get('user_id')) in want}
+    moved = _raise_queued(lambda jid, _p: want[owner[jid]] if jid in owner else None)
+    for jid in moved:
+        logs = (jobs.get(jid) or {}).get('logs')
+        if logs is not None:
+            logs.append("⚡ Your plan moved this video up the line.")
+    rewritten = set()
+    try:
+        entries = os.listdir(OUTPUT_DIR)
+    except FileNotFoundError:
+        entries = []
+    for name in entries:
+        m = _read_manifest(name)
+        uid = str((m or {}).get("user_id"))
+        if (not m or uid not in want or name in _running_jobs
+                or _manifest_busy_elsewhere(m)):
+            continue
+        if int(m.get("priority", 2)) <= want[uid]:
+            continue
+        m["priority"] = want[uid]
+        try:
+            write_json_atomic(_manifest_path(name), m)
+            rewritten.add(name)
+        except Exception as e:
+            print(f"⚠️ Could not reprioritize manifest for {name}: {e}")
+    n = len(set(moved) | rewritten)
+    if n:
+        print(f"⚡ Moved {n} waiting job(s) of {len(want)} paying user(s) up the line.")
+    return n
+
+
+# Jobs enqueued again from a manifest (startup, resume scan) whose owner's plan
+# has not been looked up yet: the manifest holds the priority of the plan at
+# submit, and the owner may have paid since (while it waited, or while it ran
+# and a deploy's drain cut it).
+_owner_plan_pending: set = set()
+
+
+async def _owner_live_plans(owner_ids) -> dict:
+    """``{owner_id: plan}`` of the owners on a live paid plan (one batch)."""
+    return await _metering.live_plans(owner_ids)
+
+
+async def _raise_to_owner_plans(job_ids=None) -> int:
+    """Give each re-enqueued job the better of its manifest's priority and the
+    one its owner's plan has NOW. ``job_ids`` defaults to (and drains)
+    ``_owner_plan_pending``. One lookup for all the owners; if it fails the
+    jobs keep their manifest's priority."""
+    if job_ids is None:
+        job_ids = set(_owner_plan_pending)
+        _owner_plan_pending.difference_update(job_ids)
+    if not BILLING_ENABLED:
+        return 0
+    owners = {str(jobs[j]['user_id']) for j in job_ids
+              if (jobs.get(j) or {}).get('user_id') is not None}
+    if not owners:
+        return 0
+    try:
+        plans = await _owner_live_plans(owners)
+    except Exception as e:
+        print(f"⚠️ Plan lookup for re-enqueued jobs failed, keeping their priority: {e}")
+        return 0
+    return _raise_users_jobs({u: _cloud_config.PLAN_PRIORITY[p] for u, p in plans.items()
+                              if p in _cloud_config.PLAN_PRIORITY})
+
+
+def _follow_manifest_priorities() -> list:
+    """Raise queued entries whose manifest now says a better priority: the
+    webhook that upgraded their owner reached the other instance of a deploy,
+    which can rewrite the manifests on the shared disk but not our heap."""
+    def from_manifest(jid, _p):
+        m = _read_manifest(jid) or {}
+        try:
+            return int(m["priority"]) if "priority" in m else None
+        except (TypeError, ValueError):
+            return None
+    return _raise_queued(from_manifest)
+
 def _relocate_root_job_artifacts(job_id: str, job_output_dir: str) -> bool:
     """
     Backward-compat rescue:
@@ -1418,8 +1539,10 @@ def _touch_manifest(job_id, now=None):
     m["heartbeat"] = now if now is not None else time.time()
     m["instance"] = INSTANCE_ID
     try:
-        with open(_manifest_path(job_id), "w") as f:
-            json.dump(m, f)
+        # Atomic: the other instance reads it at any time (resume scan, GPU
+        # admission, the metering sweeper's live set), and a half-written
+        # manifest reads as no manifest at all.
+        write_json_atomic(_manifest_path(job_id), m)
     except Exception as e:
         print(f"⚠️ Could not heartbeat manifest for {job_id}: {e}")
 
@@ -1575,6 +1698,8 @@ async def _resume_scan():
             continue
         try:
             _resume_interrupted_jobs()
+            await _raise_to_owner_plans()
+            _follow_manifest_priorities()
         except Exception as e:
             print(f"⚠️ Resume scan failed: {e}")
 
@@ -1784,6 +1909,8 @@ def _resume_interrupted_jobs() -> set:
             'via_api_key': bool(m.get("via_api_key")),
         }
         _enqueue_job(job_id, int(m.get("priority", 2)))
+        if user_id is not None:
+            _owner_plan_pending.add(job_id)  # raised to the owner's plan now
         resumed += 1
     if resumed:
         print(f"♻️  Re-enqueued {resumed} interrupted job(s) after restart.")
@@ -1824,6 +1951,33 @@ def _job_is_active(job_id, now=None) -> bool:
     except OSError:
         return False
     return age <= ACTIVE_JOB_MAX_SECONDS
+
+
+def _live_reservation_ids(now=None) -> set:
+    """Reservations of jobs that are not over, for the metering sweeper.
+
+    Queued or running here, or with a resume manifest that ``_job_is_active``
+    still counts: the disk is shared, so that covers the other instance of a
+    deploy (its queue and its running jobs both have manifests) and jobs left
+    for the next instance. A manifest is live whatever this instance's record
+    says: a drain-cancelled job can read 'failed' here and still be resumed
+    elsewhere with its reservation (it must never be refunded).
+    """
+    now = time.time() if now is None else now
+    live = set()
+    for jid, j in list(jobs.items()):
+        if j.get('reservation_id') and (
+                jid in _running_jobs or j.get('status') in ('queued', 'processing')):
+            live.add(str(j['reservation_id']))
+    try:
+        entries = os.listdir(OUTPUT_DIR)
+    except FileNotFoundError:
+        return live
+    for name in entries:
+        m = _read_manifest(name)
+        if m and m.get("reservation_id") and _job_is_active(name, now):
+            live.add(str(m["reservation_id"]))
+    return live
 
 
 def _upload_job_id(filename: str) -> str:
@@ -2144,6 +2298,8 @@ async def run_job_wrapper(job_id):
         await _settle_reservation(job_id, job)
         # Archive the completed clips to the user's durable R2 library (history).
         await _archive_managed_job(job_id)
+        # Rendered for the free plan but the owner pays now: deliver it clean.
+        await _unmark_if_owner_paid(job_id, job)
         # Autopilot bookkeeping + autopublish (before the generic clips-ready
         # email, which it replaces for its own jobs).
         await _autopilot_job_finished(job_id, job)
@@ -2224,15 +2380,16 @@ def _schedule_auto_retry(job_id, job):
     job['logs'].append("🔁 A temporary server problem interrupted your video. "
                        "Retrying it automatically, no minutes are charged twice.")
     _clean_for_retry(job.get('output_dir') or os.path.join(OUTPUT_DIR, job_id))
-    m = _read_manifest(job_id) or {}
-    priority = int(m.get("priority", 1))
     print(f"🔁 Auto-retry {job['auto_retries']}/{AUTO_RETRY_LIMIT} for {job_id} "
           f"in {AUTO_RETRY_DELAY_SECONDS:.0f}s.")
 
     async def _later():
         await asyncio.sleep(AUTO_RETRY_DELAY_SECONDS)
         if job_id in jobs and jobs[job_id].get('status') == 'queued':
-            _enqueue_job(job_id, priority)
+            # Read now, not when scheduled: an upgrade in between rewrote it.
+            m = _read_manifest(job_id) or {}
+            _enqueue_job(job_id, int(m.get("priority", 1)))
+            await _raise_to_owner_plans([job_id])
 
     asyncio.create_task(_later())
 
@@ -2250,6 +2407,34 @@ async def _archive_managed_job(job_id):
         await cloud.videos.archive_job(job['user_id'], job_id, clips, job['output_dir'])
     except Exception as e:
         print(f"⚠️  R2 archive error for {job_id}: {e}")
+
+
+async def _unmark_if_owner_paid(job_id, job):
+    """A job queued (or running) on the free plan carries the mark; if its owner
+    is on a live paid plan when it lands, the upgrade's promise covers it too.
+
+    The upgrade webhook unmarks only the clips that exist at that moment, so
+    this runs at delivery, after the archive and before the webhook and the
+    clips-ready email: the same re-pointing as an upgrade
+    (``videos.unmark_user_library``) limited to this job. Canonical files were
+    never marked; the twins are re-pointed only when they are in R2, and
+    ``_unmark_local_job`` drops ``.marked`` with them. Never raises: a failure
+    leaves the job marked, as it was.
+    """
+    if not BILLING_ENABLED or not job or job.get('status') != 'completed':
+        return
+    owner = job.get('user_id')
+    job_dir = job.get('output_dir') or os.path.join(OUTPUT_DIR, job_id)
+    if owner is None or not watermarked.job_is_marked(job_dir):
+        return
+    try:
+        if str(owner) not in await _owner_live_plans([str(owner)]):
+            return
+        n = await cloud.videos.unmark_user_library(owner, job_id=job_id)
+        if n:
+            print(f"🏷️ Delivered {job_id} clean: its owner paid while it waited.")
+    except Exception as e:
+        print(f"⚠️ Could not unmark {job_id} for its paying owner: {e}")
 
 
 def _archive_clip_edit_bg(job_id: str, clip_index: int, filename: str):
@@ -2671,7 +2856,11 @@ async def lifespan(app: FastAPI):
     worker_task = asyncio.create_task(process_queue())
     cleanup_task = asyncio.create_task(cleanup_jobs())
     if BILLING_ENABLED:
-        await cloud.setup_async(app, keep_reservation_ids=_resumed_reservation_ids)
+        await cloud.setup_async(app, keep_reservation_ids=_resumed_reservation_ids,
+                                live_reservation_ids=_live_reservation_ids)
+        # The jobs resumed above carry the priority of the plan at submit;
+        # the DB is up now: owners who paid since go first (one lookup).
+        await _raise_to_owner_plans()
         # Account erasure lives in cloud/, which can't import app.py; hand it the
         # one thing only this module can do — wipe the local working files.
         cloud.account.register_local_purge(_purge_local_jobs_for_user)
@@ -2679,6 +2868,8 @@ async def lifespan(app: FastAPI):
         # re-points their clips at the clean twins in R2 and hands us each
         # one so the working copy (and an open dashboard) follows.
         cloud.videos.register_local_unmark(_unmark_local_job)
+        # And for the queue: paying moves the user's waiting videos up.
+        cloud.billing.register_local_reprioritize(reprioritize_user_jobs)
         # Autopilot: watch connected YouTube channels for new videos. Paused
         # while this instance drains so only the new container submits jobs.
         cloud.autopilot.start(app, is_active=lambda: not _draining)
