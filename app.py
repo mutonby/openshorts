@@ -2653,6 +2653,77 @@ def _purge_local_jobs_for_user(user_id) -> int:
     return removed
 
 
+# --- Queue watch hooks (cloud/queue_watch.py pages when the queue backs up) ---
+
+def _queue_watch_snapshot():
+    """This instance's queue as the queue watch measures it (in memory, plus
+    the manifest of the one or two jobs already off the queue)."""
+    try:
+        entries = list(job_queue._queue)  # (priority, seq, job_id)
+    except Exception:
+        entries = []
+    prio = {}
+    for p, _seq, jid in entries:
+        prio[jid] = min(p, prio.get(jid, p))
+    plans = getattr(_cloud_config, "PLAN_PRIORITY", None) or {}
+    free_priority = plans.get("free", 2)
+    waiting = []
+    for jid in set(prio) | set(_admitting):
+        job = jobs.get(jid)
+        if not job or job.get('status') != 'queued':
+            continue
+        p = prio.get(jid)
+        if p is None:  # taken off the queue, waiting for a slot
+            p = (_read_manifest(jid) or {}).get("priority")
+            if p is None:
+                p = plans.get(job.get('user_plan'), free_priority)
+        waiting.append({"id": jid, "paid": int(p) < free_priority,
+                        "attempt": int(job.get('auto_retries') or 0)})
+    # Output rate: finished jobs whose last log line is from the last hour. A
+    # job recovered from disk at boot carries a single synthetic line: skip it.
+    cutoff = time.time() - 3600
+    done = 0
+    for job in list(jobs.values()):
+        if job.get('status') not in ('completed', 'failed'):
+            continue
+        times = getattr(job.get('logs'), 'times', None)
+        if times and len(times) > 1 and times[-1] >= cutoff:
+            done += 1
+    sample = sorted(_recent_job_seconds)
+    typical = sample[len(sample) // 2] if sample else DEFAULT_JOB_SECONDS
+    paid = sum(1 for w in waiting if w["paid"])
+    return {
+        "waiting": waiting,
+        "running": len(_running_jobs),
+        "slots": MAX_CONCURRENT_JOBS,
+        "done_last_hour": done,
+        "eta_free": queue_estimate(len(waiting), len(_running_jobs), MAX_CONCURRENT_JOBS, typical),
+        "eta_paid": queue_estimate(paid, len(_running_jobs), MAX_CONCURRENT_JOBS, typical),
+    }
+
+
+def _queue_wait_started(job_id):
+    """When a queued job's current wait began, read from disk so a redeploy
+    does not reset it: its submission (``.owner`` is written at submit) or,
+    if any instance has run it since (resumed after a deploy, auto-retried),
+    the last heartbeat of that run. None when the disk says nothing."""
+    job = jobs.get(job_id) or {}
+    out_dir = job.get('output_dir') or os.path.join(OUTPUT_DIR, job_id)
+    stamps = []
+    try:
+        stamps.append(os.path.getmtime(os.path.join(out_dir, ".owner")))
+    except OSError:
+        pass
+    beat = (_read_manifest(job_id) or {}).get("heartbeat")
+    if beat:
+        stamps.append(float(beat))
+    if not stamps:
+        times = getattr(job.get('logs'), 'times', None)
+        if times:
+            stamps.append(times[-1])
+    return max(stamps) if stamps else None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Rehydrate finished jobs from disk before serving (survives restarts).
@@ -2688,6 +2759,13 @@ async def lifespan(app: FastAPI):
         # a single job-failure alert is easy to miss and ingest stays broken
         # until someone tops the balance up.
         asyncio.create_task(_alerts.proxy_watch_loop())
+        # Page when the render queue backs up (paid job waiting, free backlog).
+        # Only the newest instance measures; state is shared through output/.
+        from cloud import queue_watch as _queue_watch
+        _queue_watch.start(
+            snapshot=_queue_watch_snapshot, wait_started=_queue_wait_started,
+            busy_elsewhere=_jobs_busy_elsewhere, state_dir=OUTPUT_DIR,
+            is_active=lambda: not _draining and _read_instance_marker() in (None, INSTANCE_ID))
     yield
     # Cleanup (optional: cancel worker)
 
