@@ -54,7 +54,7 @@ _busy_elsewhere = None      # () -> int, jobs another instance is running
 _is_active = None           # () -> bool, False while draining / not the newest
 _state_dir = None
 _hold_until = 0.0
-_since_cache = {}           # (job_id, attempt) -> epoch the current wait began
+_since_cache = {}           # (job_id, attempt, paid) -> epoch the current wait began
 _task = None
 
 
@@ -298,7 +298,9 @@ async def tick(now=None):
     now = time.time() if now is None else now
 
     waiting = snap.get("waiting") or []
-    keys = {(w["id"], w.get("attempt", 0)) for w in waiting}
+    # Paid-ness is part of the key: a free job raised to a paid priority (its
+    # owner paid) starts a new wait, read again from disk (its ``raised_at``).
+    keys = {(w["id"], w.get("attempt", 0), bool(w.get("paid"))) for w in waiting}
     for k in [k for k in _since_cache if k not in keys]:
         del _since_cache[k]
     new = [k for k in keys if k not in _since_cache]
@@ -310,7 +312,8 @@ async def tick(now=None):
         for k in new:
             got = starts.get(k)
             _since_cache[k] = min(float(got), now) if got else now
-    since = {w["id"]: _since_cache[(w["id"], w.get("attempt", 0))] for w in waiting}
+    since = {w["id"]: _since_cache[(w["id"], w.get("attempt", 0), bool(w.get("paid")))]
+             for w in waiting}
 
     lim = limits()
     m = measure(snap, since, now, lim)

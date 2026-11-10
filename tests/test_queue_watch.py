@@ -299,3 +299,52 @@ def test_app_snapshot_counts_paid_and_admitting(monkeypatch):
     assert paid == {"a": True, "b": False, "c": True}
     assert snap["running"] == 2 and snap["done_last_hour"] == 1
     assert snap["eta_free"] >= snap["eta_paid"]
+
+
+# --- integration with the paying-moves-up path (app.reprioritize_user_jobs) ---
+
+def test_job_raised_to_paid_waits_from_the_raise(world):
+    # 20 min on the free line (under its threshold); then its owner pays. As a
+    # paid job its wait starts at the raise: keyed on (id, attempt) only, the
+    # cached submission time made it "a paid job waiting 24 min" and paged.
+    world.add(1, paid=False, since=T0 - 20 * MIN)
+    assert tick(T0) is None
+    world.waiting["f0"] = (True, T0 + 1 * MIN)   # raised_at, read from disk
+    assert tick(T0 + 4 * MIN) is None
+    assert [k for k in qw._since_cache if k[0] == "f0"] == [("f0", 0, True)]
+    assert world.sent == []
+
+
+def test_app_raise_counts_as_paid_and_restarts_the_wait(tmp_path, monkeypatch):
+    import itertools
+    import os
+    app = pytest.importorskip("app")
+    from cloud import config as cloud_config
+    monkeypatch.setattr(app, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(app, "_cloud_config", cloud_config)
+    monkeypatch.setattr(app, "jobs", {})
+    monkeypatch.setattr(app, "_running_jobs", set())
+    monkeypatch.setattr(app, "_admitting", set())
+    monkeypatch.setattr(app, "job_queue", asyncio.PriorityQueue())
+    monkeypatch.setattr(app, "_job_seq", itertools.count())
+    owner = "a11ce000-0000-0000-0000-000000000000"
+    d = tmp_path / "j1"
+    d.mkdir()
+    (d / ".owner").write_text(owner)
+    os.utime(d / ".owner", (1000, 1000))
+    (d / app._RESUME_FILE).write_text(json.dumps({"priority": 2, "user_id": owner}))
+    app.jobs["j1"] = {"status": "queued", "user_id": owner, "output_dir": str(d), "logs": []}
+    app._enqueue_job("j1", 2)
+
+    def paid():
+        return {w["id"]: w["paid"] for w in app._queue_watch_snapshot()["waiting"]}
+
+    assert paid() == {"j1": False}
+    assert app._queue_wait_started("j1") == 1000
+    app.reprioritize_user_jobs(owner, cloud_config.PLAN_PRIORITY["starter"])
+    assert paid() == {"j1": True}            # told apart by its queue priority
+    started = app._queue_wait_started("j1")
+    assert started > 1000                    # the raise, not the submission
+    m = json.loads((d / app._RESUME_FILE).read_text())
+    assert m["raised_at"] == started and m["priority"] == 1
+    assert not [n for n in os.listdir(d) if n.endswith(".tmp")]  # atomic write left no temp

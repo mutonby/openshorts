@@ -206,6 +206,10 @@ With deploys:
 - A wait is read from disk (`app._queue_wait_started`): the `.owner` mtime
   (submission) or the manifest heartbeat, whichever is later, so a job resumed
   after a deploy or auto-retried waits from its last run, not its submission.
+  A job raised to a paid priority (its owner paid) is paid from then on, told
+  apart by its queue priority, and its paid wait starts at the raise
+  (`raised_at` in the manifest and the record; the wait cache is keyed on
+  id, attempt and paid-ness).
 - While another instance still runs jobs, and for one paid threshold after
   that or after boot, nothing opens or closes: reminders only.
 

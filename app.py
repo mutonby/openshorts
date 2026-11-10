@@ -942,8 +942,12 @@ def _raise_users_jobs(priority_by_user: dict) -> int:
     owner = {jid: str(j.get('user_id')) for jid, j in jobs.items()
              if str(j.get('user_id')) in want}
     moved = _raise_queued(lambda jid, _p: want[owner[jid]] if jid in owner else None)
+    raised_at = time.time()
     for jid in moved:
-        logs = (jobs.get(jid) or {}).get('logs')
+        job = jobs.get(jid) or {}
+        # The queue watch measures a paid wait from here, not from submission.
+        job['raised_at'] = raised_at
+        logs = job.get('logs')
         if logs is not None:
             logs.append("⚡ Your plan moved this video up the line.")
     rewritten = set()
@@ -960,6 +964,7 @@ def _raise_users_jobs(priority_by_user: dict) -> int:
         if int(m.get("priority", 2)) <= want[uid]:
             continue
         m["priority"] = want[uid]
+        m["raised_at"] = raised_at
         try:
             write_json_atomic(_manifest_path(name), m)
             rewritten.add(name)
@@ -2898,9 +2903,12 @@ def _queue_wait_started(job_id):
         stamps.append(os.path.getmtime(os.path.join(out_dir, ".owner")))
     except OSError:
         pass
-    beat = (_read_manifest(job_id) or {}).get("heartbeat")
-    if beat:
-        stamps.append(float(beat))
+    m = _read_manifest(job_id) or {}
+    # A heartbeat (it ran since) or a raise to a paid priority (its owner paid
+    # while it waited: its wait as a paid job starts there) restarts the clock.
+    for stamp in (m.get("heartbeat"), m.get("raised_at"), job.get('raised_at')):
+        if stamp:
+            stamps.append(float(stamp))
     if not stamps:
         times = getattr(job.get('logs'), 'times', None)
         if times:
