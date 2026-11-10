@@ -641,6 +641,10 @@ async def _reserve_after_job_limit(request, user, url, input_path, job_id, max_m
             "quota_exceeded", "The user is out of OpenShorts processing minutes for this period.",
             minutes_required=1, minutes_remaining=balance["remaining"], partial_minutes=0)
 
+    # Free queue lane, then the brake: before the probe, the reservation and
+    # the first-video grant, so a refused submission spends none of them.
+    priority = _assign_queue_lane(request, user, balance, priority)
+
     # The dashboard's cost line probed this URL a moment ago (/api/process/
     # estimate): reuse it rather than fetching the same metadata twice.
     cached = _cached_probe(user.id, url) if url else None
@@ -757,6 +761,44 @@ async def _reserve_after_job_limit(request, user, url, input_path, job_id, max_m
             partial_minutes=partial_offer(e.required, e.remaining))
 
     return user.id, priority, reservation_id, user.plan, partial
+
+
+FREE_QUEUE_FULL_MESSAGE = ("The free queue is full right now. Come back later, "
+                           "or skip the line with a plan.")
+
+
+def free_queue_full_error() -> HTTPException:
+    """The brake's refusal: the 402 pattern (``upgrade_url`` in the body and
+    in the message) so the dashboard opens its plan wall and an agent can hand
+    the link over. It names no country or region."""
+    return payment_required("free_queue_full", FREE_QUEUE_FULL_MESSAGE, retry_later=True)
+
+
+def _assign_queue_lane(request, user, balance, priority) -> int:
+    """The lane of a new managed job (``request.state.queue_lane``) and its
+    queue priority. Slow only for a free-plan account with no top-up credit
+    whose request comes from a slow-lane country (the CDN's geolocation
+    header, ``cloud/queue_mode.py``). While the slow lane's brake is on, such
+    a submission is refused here (``free_queue_full``)."""
+    request.state.queue_lane = _queue_mode.NORMAL
+    if not _saturation_on() or user.plan != "free":
+        return priority
+    if float(balance.get("topup_remaining") or 0) > 0:
+        return priority  # bought minutes: not a free submission
+    country = _queue_mode.request_country(request.headers)
+    lane = _queue_mode.lane_for(user.plan, country)
+    if lane != _queue_mode.SLOW:
+        return priority
+    if _queue_mode.brake_active():
+        _queue_mode.note_rejected()
+        try:
+            from cloud import analytics as _an
+            _an.track("FreeQueueFull", user_id=user.id, via_api=request_uses_api_key(request))
+        except Exception:
+            pass
+        raise free_queue_full_error()
+    request.state.queue_lane = lane
+    return _queue_mode.priority_for(priority, lane)
 
 
 async def reserve_managed_action(request, minutes, job_id, job_type):
@@ -2502,6 +2544,34 @@ async def cleanup_jobs():
         except Exception as e:
             print(f"⚠️ Cleanup error: {e}")
 
+BRAKE_CLIPS_LOG = ("⏳ The free queue is very busy right now, so this video gets its "
+                   "{n} best clips. Plans get every clip and skip the line.")
+
+
+def _apply_brake_clips(job):
+    """A slow-lane free job dispatched while the brake is on renders at most
+    ``SLOW_LANE_BRAKE_CLIPS`` clips. Through ``CLIP_TARGET_MIN/MAX`` like the
+    user's own ``target_clips``: the scoring pass still ranks every window,
+    the floor stays enforced in code (here equal to the cap) and the extra
+    clips are dropped by score (``trim_to_best``). Decided at dispatch, so a
+    job resumed after the brake let go gets the full set."""
+    if not job or job.get('env') is None:
+        return
+    cap = _queue_mode.limits()["brake_clips"]
+    env = job['env']
+    try:
+        cap = min(cap, int(env["CLIP_TARGET_MAX"])) if env.get("CLIP_TARGET_MAX") else cap
+        low = min(cap, int(env["CLIP_TARGET_MIN"])) if env.get("CLIP_TARGET_MIN") else cap
+    except ValueError:
+        low = cap
+    env["CLIP_TARGET_MAX"] = str(cap)
+    env["CLIP_TARGET_MIN"] = str(low)
+    job['clips_capped'] = cap
+    logs = job.get('logs')
+    if logs is not None:
+        logs.append(BRAKE_CLIPS_LOG.format(n=cap))
+
+
 async def process_queue():
     """Background worker to process jobs from the queue with concurrency limit."""
     print(f"🚀 Job Queue Worker started with {MAX_CONCURRENT_JOBS} concurrent slots.")
@@ -2535,6 +2605,8 @@ async def process_queue():
                 print(f"⏸️ Draining — leaving {job_id} for the next instance.")
                 continue
             print(f"🔄 Acquired slot for job: {job_id}")
+            if _priority >= _queue_mode.SLOW_PRIORITY and _queue_mode.brake_active():
+                _apply_brake_clips(jobs.get(job_id))
             _running_jobs.add(job_id)
             if job_id in jobs:
                 jobs[job_id]['run_started'] = time.time()

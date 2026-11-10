@@ -26,6 +26,8 @@ _RULES = [
     # Worker/job lifecycle + errors: keep, minus any paths.
     (re.compile(r'^(Job started|Process finished|Process failed|'
                 r'Execution error|No metadata|❌)'), None, None),
+    # The free queue's brake capped this video's clips (app._apply_brake_clips).
+    (re.compile(r'^⏳ The free queue is very busy'), None, None),
     (re.compile(r'Download attempt'), '📥 Downloading video…', 'download'),
     (re.compile(r'\[download\]\s+(\d+)(?:\.\d+)?% of'), '📥 Downloading video… {0}%', 'download'),
     (re.compile(r'downloading only the first (\d+) min'),
