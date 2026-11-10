@@ -3437,6 +3437,11 @@ async def lifespan(app: FastAPI):
             snapshot=_queue_watch_snapshot, wait_started=_queue_wait_started,
             busy_elsewhere=_jobs_busy_elsewhere, state_dir=OUTPUT_DIR,
             is_active=lambda: not _draining and _read_instance_marker() in (None, INSTANCE_ID))
+        # Client country for the free slow lane: a local database, kept on
+        # the shared disk and refreshed only while a slow-lane country is set.
+        from cloud import geoip as _geoip
+        _geoip.start(OUTPUT_DIR, wanted=lambda: bool(_queue_mode.slow_countries())
+                     and not _queue_mode.killed())
     yield
     # Cleanup (optional: cancel worker)
 

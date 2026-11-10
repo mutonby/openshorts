@@ -6,8 +6,9 @@ the person who signed up a minute ago and is deciding right now whether to pay.
 This module holds the policy; ``app.py`` applies it to its heap and the queue
 watch (``cloud/queue_watch.py``) feeds it the measurement it already takes.
 
-- **Lanes.** A free job goes to the slow lane when the client's country (the
-  CDN's geolocation header, ``QUEUE_COUNTRY_HEADER``) is in
+- **Lanes.** A free job goes to the slow lane when the client's country (its
+  address in the local country database, ``cloud/geoip.py``; or a trusted
+  proxy's header, ``QUEUE_COUNTRY_HEADER``, off by default) is in
   ``FREE_SLOW_LANE_COUNTRIES`` at submit; anything else, an unknown country
   included, goes to the normal lane. The slow lane is one priority below the
   free one (``SLOW_PRIORITY``), so it moves only when nothing is in front of
@@ -66,7 +67,10 @@ def slow_countries() -> frozenset:
 
 
 def country_header() -> str:
-    return (os.environ.get("QUEUE_COUNTRY_HEADER", "") or "cf-ipcountry").strip().lower()
+    """A geolocation header to trust, or "" (the default: none). Only for an
+    API behind a proxy/CDN that sets it and strips any copy from clients;
+    otherwise anyone can send it."""
+    return os.environ.get("QUEUE_COUNTRY_HEADER", "").strip().lower()
 
 
 def _env_float(name: str, default: float) -> float:
@@ -104,17 +108,29 @@ def enabled() -> bool:
 
 # --- Lanes --------------------------------------------------------------------
 
-def request_country(headers) -> str:
-    """The client's country from the CDN header, or "" when unknown. No lookup,
-    no call: the edge already geolocated the connection."""
+def _code(raw) -> str:
+    code = str(raw or "").strip().upper()
+    return code if _CODE.match(code) and code not in UNKNOWN_COUNTRIES else ""
+
+
+def request_country(headers, client_ip=None) -> str:
+    """The client's country, or "" when unknown. The trusted header when one
+    is configured (``QUEUE_COUNTRY_HEADER``), else the client address looked
+    up in the local country database (``cloud/geoip.py``: in memory, no call).
+    Never raises."""
+    name = country_header()
+    if name:
+        try:
+            code = _code(headers.get(name))
+        except Exception:
+            code = ""
+        if code:
+            return code
     try:
-        raw = headers.get(country_header()) or ""
+        from . import geoip
+        return _code(geoip.country_of(client_ip))
     except Exception:
         return ""
-    code = str(raw).strip().upper()
-    if not _CODE.match(code) or code in UNKNOWN_COUNTRIES:
-        return ""
-    return code
 
 
 def lane_for(plan, country) -> str:
