@@ -157,6 +157,28 @@ def test_nvenc_slot_takes_a_free_lock(monkeypatch, tmp_path):
     busy.close()
 
 
+def test_nvenc_slot_wait_goes_to_the_job_log(monkeypatch, tmp_path):
+    """Same line as bin/ffmpeg: seconds waited, for the job's JOB_CPU."""
+    import fcntl
+    import threading
+    locks = tmp_path / "locks"
+    locks.mkdir()
+    log = tmp_path / "wait.log"
+    monkeypatch.setenv("NVENC_SLOTS", "1")
+    monkeypatch.setenv("NVENC_LOCK_DIR", str(locks))
+    monkeypatch.setenv("NVENC_WAIT_LOG", str(log))
+    with gpu_render.nvenc_slot():
+        pass
+    assert not log.exists()                      # no wait, no line
+    busy = open(locks / ".nvenc-0.lock", "a")
+    fcntl.flock(busy, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    threading.Timer(1.5, busy.close).start()
+    with gpu_render.nvenc_slot():
+        pass
+    waits = [int(x) for x in log.read_text().split()]
+    assert len(waits) == 1 and waits[0] >= 1
+
+
 def test_nvenc_slot_is_a_no_op_without_slots(monkeypatch):
     monkeypatch.delenv("NVENC_SLOTS", raising=False)
     with gpu_render.nvenc_slot():

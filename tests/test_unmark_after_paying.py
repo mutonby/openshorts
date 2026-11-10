@@ -94,11 +94,13 @@ def test_unmarked_or_failed_jobs_are_not_looked_up(marked_job):
 
 
 def test_unmark_runs_before_the_owner_is_told():
-    import inspect
-    src = inspect.getsource(app.run_job_wrapper)
-    i = src.index("_unmark_if_owner_paid(")
-    assert src.index("_archive_managed_job(") < i
-    assert i < src.index("_notify_job_webhook(") and i < src.index("_notify_clips_ready(")
+    # The delivery runs its steps in this order (app._deliver_job), and the
+    # job reads finished only after the unmark.
+    steps = [name for name, _ in app._DELIVERY_STEPS]
+    i = steps.index("unmark")
+    assert steps.index("archive") < i
+    assert i < steps.index("webhook") and i < steps.index("email")
+    assert app._DELIVERY_VISIBLE_AFTER == "unmark"
 
 
 def test_library_unmark_can_be_limited_to_one_job(monkeypatch):

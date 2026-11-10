@@ -334,6 +334,18 @@ class TestHostAsrSlot:
         with tb.host_asr_slot(slots=0, lock_dir=str(tmp_path)) as s:
             assert s._fh is None
 
+    def test_the_wait_for_a_slot_is_counted(self, tmp_path, monkeypatch):
+        """JOB_CPU reports it (asr_wait_s) to size ASR_HOST_SLOTS from data."""
+        import threading, time
+        import transcribe_backends as tb
+        monkeypatch.setattr(tb, "ASR_WAIT", {"s": 0.0})
+        first = tb.host_asr_slot(slots=1, lock_dir=str(tmp_path), poll=0.01)
+        first.__enter__()
+        threading.Timer(0.2, first.__exit__, args=(None, None, None)).start()
+        with tb.host_asr_slot(slots=1, lock_dir=str(tmp_path), poll=0.01):
+            pass
+        assert 0.15 <= tb.ASR_WAIT["s"] < 2
+
 
 class TestParakeetMemorySettings:
     def test_vad_batch_default_is_the_benchmarked_one(self):

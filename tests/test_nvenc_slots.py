@@ -164,3 +164,22 @@ def test_nvenc_probe_never_waits_for_a_slot(monkeypatch):
     monkeypatch.setattr(ffmpeg_utils.subprocess, "run", fake_run)
     assert ffmpeg_utils._probe_nvenc() is True
     assert seen["NVENC_SLOTS"] == "0"
+
+
+@needs_flock
+def test_a_waiting_encode_writes_its_wait_to_the_job_log(host, tmp_path):
+    """main.py sums NVENC_WAIT_LOG into JOB_CPU (nvenc_wait_s, nvenc_waits)."""
+    _, hold = host
+    log = tmp_path / "nvenc-wait"
+    env = {"PATH": os.environ.get("PATH", ""), "FFMPEG_REAL_BIN": "/bin/true",
+           "NVENC_SLOTS": "1", "NVENC_LOCK_DIR": str(tmp_path / "locks"),
+           "NVENC_SLOT_WAIT": "30", "NVENC_WAIT_LOG": str(log)}
+    subprocess.run(["sh", WRAPPER, *NVENC_ARGS], env=env, check=True, timeout=60)
+    assert not log.exists()                      # no wait, no line
+    busy = hold(0)
+    p = subprocess.Popen(["sh", WRAPPER, *NVENC_ARGS], env=env)
+    time.sleep(2.5)
+    busy.close()
+    assert p.wait(timeout=30) == 0
+    waits = [int(x) for x in log.read_text().split()]
+    assert len(waits) == 1 and waits[0] >= 2

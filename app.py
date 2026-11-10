@@ -1172,11 +1172,11 @@ def _rewrite_manifest_priorities(want: dict, running: set, raised_at: float) -> 
         m = _read_manifest(name)
         uid = str((m or {}).get("user_id"))
         if (not m or uid not in want or name in running
-                or _manifest_busy_elsewhere(m)):
-            continue
+                or _manifest_busy_elsewhere(m) or m.get("stage") == "delivering"):
+            continue  # a delivering job is past the queue; its stamps win
         if int(m.get("priority", 2)) <= want[uid]:
             continue
-        if name in _running_jobs:
+        if name in _running_jobs or name in _delivering_jobs:
             continue  # dispatched since the copy was taken: its heartbeat wins
         m["priority"] = want[uid]
         m["raised_at"] = raised_at
@@ -1873,7 +1873,8 @@ def _jobs_busy_elsewhere(now=None) -> int:
         if not os.path.exists(path):
             continue
         m = _read_manifest(name)
-        if m and _manifest_busy_elsewhere(m, now):
+        # A job delivering elsewhere has left the card: it holds no GPU slot.
+        if m and _manifest_busy_elsewhere(m, now) and m.get("stage") != "delivering":
             busy += 1
     return busy
 
@@ -2013,11 +2014,14 @@ async def _drain_then_exit(previous_handler, timeout=None, proxy_grace=None,
     proxy_grace = PROXY_DRAIN_SECONDS if proxy_grace is None else proxy_grace
     hard_exit_after = HARD_EXIT_SECONDS if hard_exit_after is None else hard_exit_after
     deadline = time.time() + timeout
-    while _running_jobs and time.time() < deadline:
+    # A delivery (R2 upload, webhook, emails) runs after its job left the GPU
+    # slot: wait for those too, so a deploy cuts none of them.
+    while (_running_jobs or _delivering_jobs) and time.time() < deadline:
         await asyncio.sleep(1)
-    if _running_jobs:
+    if _running_jobs or _delivering_jobs:
         print(f"⏱️ Drain timeout after {timeout}s with {len(_running_jobs)} job(s) still "
-              f"running — they will resume on the next instance.")
+              f"running and {len(_delivering_jobs)} delivering — they will resume on "
+              f"the next instance.")
     else:
         print("✅ Drained: no running jobs.")
     if proxy_grace > 0:
@@ -2157,7 +2161,9 @@ def _resume_candidates(held: set, now: float):
                > float(m.get("resumed_at") or 0))
         attempts = int(m.get("attempts", 0)) + (1 if ran else 0)
         reservation_id = m.get("reservation_id")
-        if attempts > MAX_RESUME_ATTEMPTS:
+        # A cut delivery runs no main.py again (nothing there can crash the
+        # worker) and its render is done: never dropped as a poison job.
+        if attempts > MAX_RESUME_ATTEMPTS and m.get("stage") != _DELIVERY_STAGE:
             # Poison job: don't resume. Leaving its reservation out of the keep
             # set lets the orphan sweep refund it, and the user can retry by hand.
             print(f"🛑 Job {job_id} exceeded {MAX_RESUME_ATTEMPTS} resume attempts — giving up.")
@@ -2242,6 +2248,14 @@ def _register_resumed(picked) -> int:
             'lane': _queue_mode.lane_of_priority(_queue_mode.effective_priority(priority)),
             'submitted_at': float(m["submitted_at"] if m.get("submitted_at") is not None else time.time()),
         }
+        if m.get("stage") == _DELIVERY_STAGE:
+            # Rendered already, cut during its delivery: finish the delivery
+            # (from the first step not done), never run main.py again.
+            jobs[job_id]['logs'] = _TimedLog(["♻️ Finishing your video after a server update."])
+            _resume_delivery_record(job_id, jobs[job_id], m)
+            _pending_deliveries.append(job_id)
+            resumed += 1
+            continue
         _enqueue_job(job_id, priority)
         if user_id is not None:
             _owner_plan_pending.add(job_id)  # raised to the owner's plan now
@@ -2277,6 +2291,7 @@ async def _resume_interrupted_jobs_async() -> set:
     worker thread, only the records and the heap are touched on the loop."""
     keep, picked = await asyncio.to_thread(_resume_candidates, set(jobs), time.time())
     _register_resumed(picked)
+    _start_pending_deliveries()
     return keep
 
 
@@ -2487,7 +2502,7 @@ def _job_is_active(job_id, now=None) -> bool:
     """True while a job is queued or running here, or its resume manifest says
     it has not reached a terminal state yet (the other instance's jobs during a
     handover included). The disk sweeps must never touch such a job."""
-    if job_id in _running_jobs:
+    if job_id in _running_jobs or job_id in _delivering_jobs:
         return True
     if (jobs.get(job_id) or {}).get('status') in ('queued', 'processing'):
         return True
@@ -2923,35 +2938,198 @@ async def run_job_wrapper(job_id):
             job_queue.task_done()
             print(f"🔁 Released slot for job {job_id} (auto-retry scheduled).")
             return
-        # The subprocess returned (success or genuine failure) — a terminal
-        # state, so drop the resume manifest. It only survives if the container
-        # was killed mid-run, which is exactly when we want to resume.
-        _clear_resume_manifest(job_id)
-        # Settle the minute reservation (managed jobs only): commit on success,
-        # release otherwise so the minutes go back to the user.
-        await _settle_reservation(job_id, job)
-        # Archive the completed clips to the user's durable R2 library (history).
-        await _archive_managed_job(job_id)
-        # Rendered for the free plan but the owner pays now: deliver it clean.
-        await _unmark_if_owner_paid(job_id, job)
-        # Autopilot bookkeeping + autopublish (before the generic clips-ready
-        # email, which it replaces for its own jobs).
-        await _autopilot_job_finished(job_id, job)
-        # Fire the caller's webhook (after archive, so durable links exist).
-        await _notify_job_webhook(job_id)
-        # Operational alerting for managed jobs (proxy out of credits / failures).
-        await _record_job_alert(job_id)
-        # Accumulate proxy bandwidth for the monthly cost alert.
-        await _track_proxy_usage(job_id)
-        # Tell the owner their clips are ready (managed jobs, once per job).
-        await _notify_clips_ready(job_id)
-        # Telegram pulse for high-signal activity (first clip / paid user).
-        await _notify_clip_activity(job_id)
-        # Always release semaphore and mark queue task done
+        # The subprocess returned (success or genuine failure): a terminal
+        # state. What is left (settle, R2 archive, unmark, webhook, emails) is
+        # network I/O that never touches the card, so the GPU slot goes to the
+        # next job now and the delivery runs outside it. The job enters the
+        # delivery stage (manifest stamped, ``_delivering_jobs``) BEFORE it
+        # leaves ``_running_jobs``: a drain or a scan never sees it in neither.
+        if job is not None:
+            _begin_delivery(job_id, job)
         _running_jobs.discard(job_id)
         concurrency_semaphore.release()
         job_queue.task_done()
         print(f"✅ Released slot for job: {job_id}")
+    if job is not None:
+        await _deliver_job(job_id, job)
+    else:
+        _clear_resume_manifest(job_id)
+
+
+# --- Delivery, outside the GPU slot -------------------------------------------
+# A finished job still has to settle its minutes, upload its clips to R2, be
+# unmarked if its owner paid meanwhile and tell the caller (webhook, email).
+# That used to run while the job held its GPU slot, so the card sat idle for it
+# on every job. Now it runs after the slot is released, at most
+# DELIVERY_CONCURRENCY at a time (a slow R2 queues deliveries instead of piling
+# up uploads), and:
+#   * the user sees 'processing' until the clips are archived and unmarked
+#     (``_presented_status``): no finished job with half of its delivery done;
+#   * the resume manifest stays on disk, stamped ``stage: delivering`` with the
+#     outcome and each step done, and is heartbeated, until the last step: a
+#     drain waits for deliveries like for running jobs, and a delivery cut
+#     anyway (drain timeout, killed container) is resumed by the next instance
+#     from the first step not done, without running main.py again.
+def _env_int(name, default, minimum=0):
+    try:
+        return max(minimum, int(os.environ.get(name, str(default)).strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+DELIVERY_CONCURRENCY = _env_int("DELIVERY_CONCURRENCY", 4, minimum=1)
+_delivery_semaphore = asyncio.Semaphore(DELIVERY_CONCURRENCY)
+_delivering_jobs: set = set()        # job ids whose delivery has not ended here
+_pending_deliveries: list = []       # resumed deliveries waiting for the DB (boot)
+_DELIVERY_STAGE = "delivering"
+# Steps in order; the job reads finished to the user after the step named by
+# _DELIVERY_VISIBLE_AFTER, before anything tells the caller (webhook, email),
+# so a caller that polls on the webhook already reads 'completed'.
+_DELIVERY_STEPS = (
+    # Commit the minutes on success, release them otherwise.
+    ("settle", lambda jid, job: _settle_reservation(jid, job)),
+    # The completed clips to the user's durable R2 library (history).
+    ("archive", lambda jid, job: _archive_managed_job(jid)),
+    # Rendered for the free plan but the owner pays now: deliver it clean.
+    ("unmark", lambda jid, job: _unmark_if_owner_paid(jid, job)),
+    # Autopilot bookkeeping + autopublish (before the clips-ready email,
+    # which it replaces for its own jobs).
+    ("autopilot", lambda jid, job: _autopilot_job_finished(jid, job)),
+    # The caller's webhook (after the archive, so durable links exist).
+    ("webhook", lambda jid, job: _notify_job_webhook(jid)),
+    # Operational alerting (proxy out of credits / failures) and analytics.
+    ("alert", lambda jid, job: _record_job_alert(jid)),
+    # Proxy bandwidth for the monthly cost alert.
+    ("proxy", lambda jid, job: _track_proxy_usage(jid)),
+    # Tell the owner their clips are ready (once per job).
+    ("email", lambda jid, job: _notify_clips_ready(jid)),
+    # Telegram pulse for a paid user's clips.
+    ("activity", lambda jid, job: _notify_clip_activity(jid)),
+)
+_DELIVERY_VISIBLE_AFTER = "unmark"
+
+
+def _stamp_delivery(job_id, job, done):
+    """Write the delivery stage into the job's manifest: outcome, the files
+    main.py announced, the error text of a failed job and the steps done, so
+    another instance can finish the delivery. No manifest: nothing to do."""
+    m = _read_manifest(job_id)
+    if m is None:
+        return
+    m["stage"] = _DELIVERY_STAGE
+    m["outcome"] = job.get('status') if job.get('status') in ('completed', 'failed') else 'failed'
+    m["ready_files"] = {str(k): v for k, v in (job.get('ready_files') or {}).items()}
+    if m["outcome"] != 'completed':
+        m["error"] = _job_error_text(list(job.get('logs') or []))[-500:]
+    m["delivered"] = sorted(done)
+    m["heartbeat"] = time.time()
+    m["instance"] = INSTANCE_ID
+    try:
+        write_json_atomic(_manifest_path(job_id), m)
+    except Exception as e:
+        print(f"⚠️ Could not stamp the delivery of {job_id}: {e}")
+
+
+def _begin_delivery(job_id, job):
+    """Enter the delivery stage (on the loop, before the slot is released)."""
+    _delivering_jobs.add(job_id)
+    job['delivering'] = True
+    _stamp_delivery(job_id, job, set(job.get('delivered') or ()))
+
+
+async def _delivery_heartbeat(job_id):
+    while True:
+        await asyncio.sleep(HEARTBEAT_EVERY)
+        _touch_manifest(job_id)
+
+
+async def _deliver_job(job_id, job):
+    """Run the delivery steps not done yet, then drop the manifest. Each step
+    already guards its own errors; one that raises anyway is logged and the
+    delivery goes on. Cancelled (the process is going away): the manifest
+    stays, so the next instance finishes the delivery."""
+    if job_id not in _delivering_jobs:
+        _begin_delivery(job_id, job)
+    done = set(job.get('delivered') or ())
+    heartbeat = asyncio.create_task(_delivery_heartbeat(job_id))
+    cancelled = False
+    try:
+        async with _delivery_semaphore:
+            for name, step in _DELIVERY_STEPS:
+                if name not in done:
+                    try:
+                        await step(job_id, job)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        print(f"⚠️ Delivery step {name} failed for {job_id}: {e}")
+                    done.add(name)
+                    job['delivered'] = sorted(done)
+                    _stamp_delivery(job_id, job, done)
+                if name == _DELIVERY_VISIBLE_AFTER:
+                    job.pop('delivering', None)
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
+    finally:
+        heartbeat.cancel()
+        if not cancelled:
+            _clear_resume_manifest(job_id)
+            job.pop('delivering', None)
+        _delivering_jobs.discard(job_id)
+
+
+def _result_from_disk(job_id, output_dir):
+    """The result of a job whose main.py exited 0, rebuilt from its dir (the
+    clips main.py announced, or the canonical files). None: nothing rendered."""
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        return None
+    with open(json_files[0], 'r') as f:
+        data = json.load(f)
+    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+    rendered, _missing = _clips_actually_rendered(
+        job_id, output_dir, base_name, data.get('shorts', []))
+    if not rendered:
+        return None
+    return {'clips': rendered, 'cost_analysis': data.get('cost_analysis')}
+
+
+def _resume_delivery_record(job_id, job, m):
+    """Turn a resumed record into a delivery: outcome from the manifest, the
+    result from the disk. Called with ``jobs[job_id]`` already set."""
+    job['ready_files'] = {}
+    for k, v in (m.get("ready_files") or {}).items():
+        try:
+            job['ready_files'][int(k)] = v
+        except (TypeError, ValueError):
+            pass
+    job['delivered'] = list(m.get("delivered") or [])
+    job['delivering'] = True
+    status = m.get("outcome") if m.get("outcome") in ('completed', 'failed') else 'failed'
+    if status == 'completed':
+        try:
+            job['result'] = _result_from_disk(job_id, job['output_dir'])
+        except Exception as e:
+            print(f"⚠️ Could not rebuild the result of {job_id}: {e}")
+            job['result'] = None
+        if not job['result']:
+            status = 'failed'
+            job['logs'].append("No clips could be rendered from this video.")
+    elif m.get("error"):
+        job['logs'].append(str(m["error"]))
+    job['status'] = status
+
+
+def _start_pending_deliveries():
+    """Start the deliveries resumed from manifests (the DB is up by now)."""
+    while _pending_deliveries:
+        jid = _pending_deliveries.pop(0)
+        job = jobs.get(jid)
+        if job is not None and jid not in _delivering_jobs:
+            _begin_delivery(jid, job)   # ours now: our instance id, fresh heartbeat
+            print(f"📦 Finishing the delivery of {jid} left by another instance.")
+            asyncio.create_task(_deliver_job(jid, job))
 
 
 # --- Automatic retry of transient failures ----------------------------------
@@ -3611,6 +3789,9 @@ async def lifespan(app: FastAPI):
         # the DB is up now: owners who paid since go first (one lookup, which
         # never raises: a failure keeps the manifests' priorities).
         await _raise_to_owner_plans()
+    # Deliveries cut by the last instance (rendered, not delivered) need the
+    # DB, which is up now.
+    _start_pending_deliveries()
     # The worker starts only now, so the first job it takes off the queue was
     # already ranked by its owner's current plan.
     worker_task = asyncio.create_task(process_queue())
@@ -5051,7 +5232,8 @@ def _job_view_from_disk(job_id):
     alive = time.time() - float(m.get("heartbeat") or 0) < HEARTBEAT_STALE_AFTER
     owner = m.get("user_id")
     return {
-        'status': 'processing' if alive else 'queued',
+        # Rendered, delivery pending: the next instance finishes it, no queue.
+        'status': 'processing' if alive or m.get("stage") == "delivering" else 'queued',
         'logs': _TimedLog(["♻️ The server was updated; your video continues on the new instance."]),
         'user_id': (int(owner) if isinstance(owner, str) and owner.isdigit() else owner),
         'result': None,
@@ -5084,6 +5266,10 @@ def _presented_status(job_id, job):
         m = _read_manifest(job_id)
         if m and _manifest_busy_elsewhere(m):
             return 'processing'
+    if job.get('delivering'):
+        # main.py is done but the clips are not archived/unmarked yet: not
+        # finished for the user until the delivery says so.
+        return 'processing'
     return job['status']
 
 

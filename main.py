@@ -979,6 +979,10 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     def _base_opts(extractor_args, proxy, cookies=True):
         return {
             'quiet': False, 'verbose': True, 'no_warnings': False,
+            # No progress lines: one per update of every download filled the
+            # API log, rotating it away within minutes. The start, the
+            # "Download completed" line, errors and retries still print.
+            'noprogress': True,
             'cookiefile': cookies_path if (cookies and cookies_path) else None,
             'proxy': proxy, 'socket_timeout': 30, 'retries': 10, 'fragment_retries': 10,
             'nocheckcertificate': True, 'cachedir': False,
@@ -2501,6 +2505,34 @@ if __name__ == '__main__':
 
     script_start_time = time.time()
 
+    # Every encode of this job (bin/ffmpeg, gpu_render) that waits for an
+    # NVENC slot appends its seconds here; JOB_CPU reports the sum.
+    try:
+        import tempfile
+        _fd, _nvenc_wait_log = tempfile.mkstemp(prefix="nvenc-wait-")
+        os.close(_fd)
+        os.environ["NVENC_WAIT_LOG"] = _nvenc_wait_log
+    except OSError:
+        _nvenc_wait_log = None
+
+    def _nvenc_waits():
+        """(seconds waited in total, encodes that waited) from the wait log."""
+        if not _nvenc_wait_log:
+            return 0, 0
+        total = n = 0
+        try:
+            with open(_nvenc_wait_log) as f:
+                for line in f:
+                    try:
+                        total += int(line.strip())
+                        n += 1
+                    except ValueError:
+                        pass
+            os.remove(_nvenc_wait_log)
+        except OSError:
+            pass
+        return total, n
+
     def _report_job_cpu():
         """CPU time of the whole job (this process + every ffmpeg it waited
         for) for app.py's log, to compare pipeline versions per job."""
@@ -2512,11 +2544,16 @@ if __name__ == '__main__':
         # Where Parakeet ran (None: this job did not load it). A "cpu" here on
         # a GPU host means the image shipped onnxruntime without CUDA.
         asr = sys.modules.get("transcribe_backends")
+        nvenc_wait_s, nvenc_waits = _nvenc_waits()
         print("JOB_CPU " + json.dumps({
             "wall_s": round(time.time() - script_start_time, 1),
             "cpu_s": round(py_s + children_s, 1), "py_s": round(py_s, 1),
             "children_s": round(children_s, 1), "gpu_decode": dict(gpu_decode.STATS),
             "asr_device": getattr(asr, "PARAKEET_DEVICE", None),
+            # Time spent waiting for the host-wide slots (ASR_HOST_SLOTS,
+            # JOB_NVENC_SLOTS), to size them from data.
+            "asr_wait_s": round(float((getattr(asr, "ASR_WAIT", None) or {}).get("s", 0.0)), 1),
+            "nvenc_wait_s": nvenc_wait_s, "nvenc_waits": nvenc_waits,
         }), flush=True)
 
     import atexit

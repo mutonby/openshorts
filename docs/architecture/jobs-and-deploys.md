@@ -135,6 +135,25 @@ Speed at equal quality:
 - **Per-job CPU** (`JOB_CPU` marker at main.py exit, logged by the API as
   `[job-cpu]`): CPU-seconds of the job process plus every ffmpeg it waited for,
   wall time and the GPU decode counters, to compare pipeline versions per job.
+  It also carries the seconds the job waited for the host-wide slots:
+  `asr_wait_s` (`ASR_HOST_SLOTS`) and `nvenc_wait_s` / `nvenc_waits`
+  (`JOB_NVENC_SLOTS`; each waiting encode of `bin/ffmpeg` or `gpu_render`
+  appends its wait to the job's `NVENC_WAIT_LOG` file), to size those slots
+  from data.
+- **Delivery outside the GPU slot** (`app._deliver_job`): once `main.py` exits,
+  the slot goes to the next job and the delivery (settle the minutes, R2
+  archive, unmark if the owner paid, autopilot, webhook, alerts, clips-ready
+  email) runs after it, at most `DELIVERY_CONCURRENCY` (4) at a time. The job
+  reads `processing` to the user until the archive and the unmark are done
+  (`_presented_status`), so it is never "completed" with its delivery half
+  done; webhook and email come after that. The manifest stays on disk,
+  stamped `stage: delivering` with the outcome, the announced files and every
+  step done, heartbeated, and is dropped after the last step. A delivering
+  job holds no GPU slot for the admission of the other instance
+  (`_jobs_busy_elsewhere`), and its manifest is not reprioritized.
+- **No yt-dlp progress lines** (`noprogress`): one line per progress update of
+  every download filled the API log and rotated it away within minutes. The
+  start, `Download completed`, errors and retries still print.
 
 Tried and dropped: `scale_cuda`/`scale_npp` for the analysis frames (their
 pixels differ from swscale's, so the detectors would see other frames); yt-dlp chunking/concurrent fragments (no
@@ -162,7 +181,12 @@ parakeet text.
 - **Shutdown is not failure**: when the drain timeout cancels a running job, the
   child is killed and the manifest + reservation are kept, so the next instance
   resumes it. A manifest next to a metadata file means "stopped mid-render" and
-  is resumed, not recovered as completed.
+  is resumed, not recovered as completed. The drain also waits for the
+  deliveries in flight; one cut anyway (drain timeout, killed container) has a
+  `stage: delivering` manifest, and the next instance finishes that delivery
+  from its first step not done, without running `main.py` again (result
+  rebuilt from the dir, reservation kept until settled, never dropped as a
+  poison job). Settling and the archive are idempotent.
 - `/api/status` returns `queue: {position, ahead, eta_seconds}` while queued; the
   dashboard shows it with a "paid plans skip the line" upsell (paid plans do
   dispatch first: `PLAN_PRIORITY`).

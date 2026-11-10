@@ -62,6 +62,8 @@ _ASR_GATE = threading.Semaphore(_ASR_SLOTS)
 # once. Peak per transcription is ~4-6 GB on a 20 GB card (prod, 22-sep-2026).
 ASR_HOST_SLOTS = int(os.environ.get("ASR_HOST_SLOTS", "2"))
 ASR_LOCK_DIR = os.environ.get("ASR_LOCK_DIR", "output")
+# Seconds this process waited for a host slot (main.py reports it in JOB_CPU).
+ASR_WAIT = {"s": 0.0}
 
 
 class host_asr_slot:
@@ -87,6 +89,7 @@ class host_asr_slot:
         except Exception:
             return self
         announced = False
+        started = time.monotonic()
         while True:
             for i in range(self.slots):
                 path = os.path.join(self.lock_dir, f".asr-gpu-{i}.lock")
@@ -97,6 +100,7 @@ class host_asr_slot:
                 try:
                     fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     self._fh = fh
+                    ASR_WAIT["s"] += time.monotonic() - started
                     return self
                 except OSError:
                     fh.close()
