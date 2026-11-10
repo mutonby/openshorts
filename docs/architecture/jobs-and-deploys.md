@@ -234,6 +234,27 @@ With deploys:
   goes on from the last state kept in memory, so the incident does not re-open
   and re-alert on every tick.
 
+Two capacity faults ride the same loop, channel and state file (keys `asr`,
+`rate`, `rate_samples`), each with alert, hourly reminder and resolved:
+
+- **Transcription on the CPU.** `app._note_job_asr` reads `asr_device` from
+  each job's `JOB_CPU` line (last 12 jobs that loaded Parakeet). When the last
+  `QUEUE_ALERT_ASR_CPU_JOBS` (3; 0 = off) said `cpu` on a host where
+  nvidia-smi answers, it alerts at once (no deploy hold: those jobs are the
+  new image's). Never with `PARAKEET_DEVICE=cpu` set or without a GPU.
+  Resolved after two jobs in a row on `cuda`; reminders only while jobs keep
+  reporting `cpu`.
+- **Output rate drop.** Only a queue full (every slot busy, jobs waiting, no
+  other instance running jobs, no deploy hold) for a whole hour is judged,
+  since the jobs-finished count looks back one hour and is per instance. The
+  usual rate is learnt per slot: one sample per such hour, mean of the last 24
+  healthy ones (hours under the threshold or during an incident are never
+  learnt), nothing judged before `QUEUE_ALERT_THROUGHPUT_MIN_HOURS` (3)
+  samples. Alert when the rate stays under `QUEUE_ALERT_THROUGHPUT_DROP_PERCENT`
+  (50; 0 = off) of the usual for `QUEUE_ALERT_THROUGHPUT_WINDOW_MINUTES` (30);
+  resolved when it is back over halfway to the usual, or the queue is no
+  longer full, for two ticks.
+
 ## Deploys and running jobs (handover + drain)
 
 Every push to `main` redeploys the API container as a rolling update: the NEW

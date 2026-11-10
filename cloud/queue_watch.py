@@ -32,6 +32,25 @@ container share ``output/`` and may both be up for a while.
   threshold after that, or after boot) the watch holds: no new alert and no
   recovery, only reminders of an incident already open.
 
+Two capacity faults ride the same loop, channel and shared state (sub-keys
+``asr`` and ``rate``), each with its own alert / hourly reminder / resolved:
+
+- **Transcription on the CPU** (``asr_incident``): the last
+  ``QUEUE_ALERT_ASR_CPU_JOBS`` jobs that loaded Parakeet report
+  ``asr_device: "cpu"`` in their JOB_CPU line on a host where nvidia-smi
+  answers. A deploy fault (the image lost CUDA), so it alerts at once,
+  deploy hold or not. Never with ``PARAKEET_DEVICE=cpu`` set on purpose, nor
+  on a host without a GPU. Resolved after two jobs in a row on "cuda".
+- **Output rate drop** (``rate_incident``): with the queue full (every slot
+  busy and jobs waiting) for a whole hour, jobs finished in the last hour per
+  slot fall under ``QUEUE_ALERT_THROUGHPUT_DROP_PERCENT`` of the usual for
+  ``QUEUE_ALERT_THROUGHPUT_WINDOW_MINUTES``. "Usual" is learnt: one sample per
+  full-queue hour, mean of the last ``RATE_SAMPLES`` healthy ones, kept in the
+  shared state; nothing is judged before ``QUEUE_ALERT_THROUGHPUT_MIN_HOURS``
+  samples. An empty queue (night), a handover or a fresh boot never count as
+  a full hour. Resolved when the rate is back over halfway between the drop
+  threshold and the usual, or when the queue is no longer full.
+
 ``QUEUE_ALERTS_DISABLED=1`` turns it off. It never starts without
 BILLING_ENABLED or without an alert channel configured.
 """
@@ -55,6 +74,8 @@ _is_active = None           # () -> bool, False while draining / not the newest
 _state_dir = None
 _hold_until = 0.0
 _since_cache = {}           # (job_id, attempt, paid) -> epoch the current wait began
+_full_since = None          # queue full (all slots busy + jobs waiting) since, this instance
+_low_since = None           # output rate under the drop threshold since, this instance
 _task = None
 
 
@@ -78,6 +99,11 @@ def limits() -> dict:
         "free_wait": max(1, _env_int("QUEUE_ALERT_FREE_WAIT_MINUTES", 30)) * 60,
         "max_queued": max(1, _env_int("QUEUE_ALERT_MAX_QUEUED", 200)),
         "remind": max(1, _env_int("QUEUE_ALERT_REMIND_MINUTES", 60)) * 60,
+        # 0 turns the check off.
+        "asr_cpu_jobs": max(0, _env_int("QUEUE_ALERT_ASR_CPU_JOBS", 3)),
+        "rate_drop": min(100, max(0, _env_int("QUEUE_ALERT_THROUGHPUT_DROP_PERCENT", 50))) / 100,
+        "rate_window": max(1, _env_int("QUEUE_ALERT_THROUGHPUT_WINDOW_MINUTES", 30)) * 60,
+        "rate_min_samples": max(1, _env_int("QUEUE_ALERT_THROUGHPUT_MIN_HOURS", 3)),
     }
 
 
@@ -228,6 +254,143 @@ def message(kind: str, state: dict, m: dict, now: float, lim: dict):
     return subject, "\n".join(body + _figures(m, lim))
 
 
+# --- Capacity faults: transcription on the CPU, output rate drop -----------------
+
+RATE_SAMPLES = 24           # full-queue hours the "usual" rate is the mean of
+RATE_SAMPLE_EVERY = 3600    # one sample per hour (done_last_hour is an hour)
+SUB_KEYS = ("asr", "rate", "rate_samples", "rate_sampled_at")
+
+
+def asr_on_purpose() -> bool:
+    return os.environ.get("PARAKEET_DEVICE", "").strip().lower() == "cpu"
+
+
+def _incident(sub: dict, breach: bool, clear: bool, still: bool, now: float,
+              lim: dict, hold: bool, data: dict):
+    """The alert / reminder / resolved machine shared by the capacity faults.
+
+    ``breach`` opens it (unless ``hold``), ``clear`` for CLEAR_TICKS ticks in a
+    row closes it (never during ``hold``), ``still`` gates the hourly reminder
+    (evidence that it is still happening). ``data`` is kept for the wording."""
+    sub = dict(sub or {})
+    if not sub.get("active"):
+        if breach and not hold:
+            return "alert", {"active": True, "since": now, "last_sent": now,
+                             "calm": 0, "last": data}
+        return None, sub
+    sub["calm"] = int(sub.get("calm") or 0) + 1 if clear else 0
+    if sub["calm"] >= CLEAR_TICKS and not hold:
+        return "recovered", {"active": False, "since": sub.get("since"),
+                             "recovered_at": now, "last": data}
+    if still and now - float(sub.get("last_sent") or 0) >= lim["remind"]:
+        sub["last_sent"] = now
+        sub["prev"] = sub.get("last")
+        sub["last"] = data
+        return "remind", sub
+    return None, sub
+
+
+def asr_incident(sub: dict, snap: dict, now: float, lim: dict):
+    """Jobs transcribing on the CPU on a GPU host. Not held by a deploy: the
+    jobs that report are the new image's own, and the sooner the better."""
+    n = lim["asr_cpu_jobs"]
+    devices = list(snap.get("asr_devices") or [])
+    watch = n > 0 and bool(snap.get("gpu")) and not asr_on_purpose()
+    recent = devices[-n:] if n else []
+    breach = watch and len(recent) == n and all(d == "cpu" for d in recent)
+    clear = (not watch) or (len(devices) >= CLEAR_TICKS
+                            and all(d == "cuda" for d in devices[-CLEAR_TICKS:]))
+    data = {"cpu": devices.count("cpu"), "seen": len(devices)}
+    still = bool(devices) and devices[-1] == "cpu"
+    return _incident(sub, breach, clear, still, now, lim, False, data)
+
+
+def usual_rate(samples, lim):
+    """Mean finished-per-slot-per-hour of the learnt full-queue hours, or None
+    while there are too few of them to judge."""
+    samples = [float(x) for x in (samples or [])]
+    if len(samples) < lim["rate_min_samples"]:
+        return None
+    return sum(samples) / len(samples)
+
+
+def rate_incident(state: dict, m: dict, now: float, lim: dict, hold: bool):
+    """(kind, sub, samples, sampled_at) for the output-rate check."""
+    global _full_since, _low_since
+    sub = state.get("rate") or {}
+    samples = list(state.get("rate_samples") or [])
+    sampled_at = float(state.get("rate_sampled_at") or 0)
+    done, slots = m.get("done_last_hour"), m["slots"]
+    full = (done is not None and slots > 0 and m["running"] >= slots
+            and m["queued"] > 0 and not m["running_elsewhere"] and not hold)
+    _full_since = (_full_since or now) if full else None
+    # done_last_hour looks back one hour: only a queue full for all of it is
+    # a fair comparison (and this instance must have been up for all of it).
+    comparable = full and now - _full_since >= 3600
+    per_slot = (done / slots) if comparable else None
+    usual = usual_rate(samples, lim)
+    drop = lim["rate_drop"]
+    low = bool(comparable and usual and drop > 0 and per_slot < usual * drop)
+    _low_since = (_low_since or now) if low else None
+    breach = low and now - _low_since >= lim["rate_window"]
+    back = drop + (1 - drop) / 2
+    clear = (not full and not hold) or bool(comparable and usual and per_slot >= usual * back)
+    # Learn only healthy hours: never during an incident, and never an hour
+    # under the drop threshold of what has been learnt so far (even before
+    # there are enough samples to alert), or a fault would become the usual.
+    partial = sum(samples) / len(samples) if samples else None
+    healthy = not (partial and drop > 0 and per_slot is not None and per_slot < partial * drop)
+    if (comparable and healthy and not sub.get("active")
+            and now - sampled_at >= RATE_SAMPLE_EVERY):
+        samples = (samples + [round(per_slot, 3)])[-RATE_SAMPLES:]
+        sampled_at = now
+    data = {"done": done, "usual": round(usual * slots, 1) if usual else None,
+            "full": full}
+    kind, sub = _incident(sub, breach, clear, low, now, lim, hold, data)
+    return kind, sub, samples, sampled_at
+
+
+def _pct(done, usual):
+    return f"{round(100 * done / usual)} %" if usual else "?"
+
+
+def fault_message(fault: str, kind: str, sub: dict, m: dict, now: float, lim: dict):
+    """(subject, body) for the capacity faults."""
+    lasted = fmt_duration(now - float(sub.get("since") or now))
+    d = sub.get("last") or {}
+    salida = next(ln for ln in _figures(m, lim) if ln.startswith("Salida:"))
+    if fault == "asr":
+        n = lim["asr_cpu_jobs"]
+        if kind == "alert":
+            return ("⚠️ La transcripción va por CPU, no por GPU",
+                    f"Los últimos {n} vídeos se han transcrito en CPU en una máquina con GPU.\n"
+                    "Es una avería del despliegue (la imagen no ve CUDA), no un atasco: "
+                    "cada vídeo tarda más y cabe menos en la cola.\n" + salida)
+        if kind == "remind":
+            return (f"⚠️ La transcripción sigue yendo por CPU (desde hace {lasted})",
+                    f"De los últimos {d.get('seen', 0)} vídeos, {d.get('cpu', 0)} en CPU.\n" + salida)
+        return ("✅ La transcripción vuelve a ir por GPU",
+                f"Ha ido por CPU durante {lasted}. Los últimos {CLEAR_TICKS} vídeos ya usan la GPU.")
+    done, usual = d.get("done"), d.get("usual")
+    if kind == "alert":
+        return ("⚠️ El ritmo de salida ha caído",
+                f"Con la cola llena salen {done} vídeos por hora; lo habitual es ~{usual:g} "
+                f"({_pct(done, usual)}). Lleva así más de {lim['rate_window'] // 60} min.\n"
+                + "\n".join(_figures(m, lim)))
+    if kind == "remind":
+        before = (sub.get("prev") or {}).get("done")
+        was = f" (en el último aviso {before})" if before is not None else ""
+        return (f"⚠️ El ritmo de salida sigue bajo (desde hace {lasted})",
+                f"Ahora {done} vídeos por hora{was}; lo habitual es ~{usual:g}.\n"
+                + "\n".join(_figures(m, lim)))
+    if not d.get("full"):
+        return ("✅ Ritmo de salida: la cola ya no está llena",
+                f"Ha estado bajo {lasted}. Sin cola llena no hay con qué compararlo; "
+                "si sigue mal, volverá a avisar.")
+    return ("✅ Ritmo de salida normal otra vez",
+            f"Ha estado bajo {lasted}. Ahora {done} vídeos por hora; lo habitual es ~{usual:g}.")
+
+
 # --- Shared state (both containers of a deploy) ----------------------------------
 
 def _path(name):
@@ -349,16 +512,31 @@ async def tick(now=None):
         return None  # the other instance is ticking right now
     try:
         state = load_state()
-        kind, new_state = decide(state, m, now, lim, hold)
+        queue_state = {k: v for k, v in state.items() if k not in SUB_KEYS}
+        kind, new_state = decide(queue_state, m, now, lim, hold)
+        asr_kind, asr_sub = asr_incident(state.get("asr"), snap, now, lim)
+        rate_kind, rate_sub, samples, sampled_at = rate_incident(state, m, now, lim, hold)
+        new_state = dict(new_state, asr=asr_sub, rate=rate_sub,
+                         rate_samples=samples, rate_sampled_at=sampled_at)
         if new_state != state:
             save_state(new_state)
+        out = []
         if kind:
+            out.append((kind, message(kind, new_state, m, now, lim)))
+        if asr_kind:
+            out.append(("asr-" + asr_kind, fault_message("asr", asr_kind, asr_sub, m, now, lim)))
+        if rate_kind:
+            out.append(("rate-" + rate_kind,
+                        fault_message("rate", rate_kind, rate_sub, m, now, lim)))
+        if out:
             from .alerts import send_admin_alert
-            subject, body = message(kind, new_state, m, now, lim)
-            await send_admin_alert(subject, body)
-            print(f"📣 Queue watch: {kind} ({m['queued']} queued, oldest paid "
-                  f"{int(m['oldest_paid'])} s, oldest free {int(m['oldest_free'])} s)")
-        return kind
+            for name, (subject, body) in out:
+                await send_admin_alert(subject, body)
+            print(f"📣 Queue watch: {', '.join(n for n, _ in out)} ({m['queued']} queued, "
+                  f"oldest paid {int(m['oldest_paid'])} s, oldest free "
+                  f"{int(m['oldest_free'])} s, done/h {m.get('done_last_hour')})")
+        # The queue incident's kind, as before; the faults' kinds are logged.
+        return kind if not (asr_kind or rate_kind) else ",".join(n for n, _ in out)
     finally:
         if lock:
             lock.close()
@@ -380,8 +558,9 @@ def configure(*, snapshot, wait_started=None, busy_elsewhere=None, state_dir=Non
               is_active=None, now=None):
     """Wire the app's callbacks in (cloud/ cannot import app.py)."""
     global _snapshot, _wait_started, _busy_elsewhere, _state_dir, _is_active, _hold_until
-    global _mem_state, _save_failed
+    global _mem_state, _save_failed, _full_since, _low_since
     _snapshot, _wait_started, _busy_elsewhere = snapshot, wait_started, busy_elsewhere
+    _full_since = _low_since = None
     _state_dir, _is_active = state_dir, is_active
     _since_cache.clear()
     _mem_state, _save_failed = None, False

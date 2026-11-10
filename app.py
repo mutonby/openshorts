@@ -2962,6 +2962,22 @@ def _purge_local_jobs_for_user(user_id) -> int:
 
 # --- Queue watch hooks (cloud/queue_watch.py pages when the queue backs up) ---
 
+# Where the last jobs' Parakeet ran ("cuda"/"cpu"), oldest first, from each
+# job's JOB_CPU line. A job that never loaded Parakeet (whisper backend, a
+# retry that reused its transcript) reports nothing and is not counted.
+_recent_asr_devices: list = []
+
+
+def _note_job_asr(payload):
+    try:
+        device = json.loads(payload).get("asr_device")
+    except Exception:
+        return
+    if device in ("cuda", "cpu"):
+        _recent_asr_devices.append(device)
+        del _recent_asr_devices[:-12]
+
+
 def _queue_watch_snapshot():
     """This instance's queue as the queue watch measures it (in memory, plus
     the manifest of the one or two jobs already off the queue)."""
@@ -3006,6 +3022,9 @@ def _queue_watch_snapshot():
         "done_last_hour": done,
         "eta_free": queue_estimate(len(waiting), len(_running_jobs), MAX_CONCURRENT_JOBS, typical),
         "eta_paid": queue_estimate(paid, len(_running_jobs), MAX_CONCURRENT_JOBS, typical),
+        # nvidia-smi answered at the last admission check (cached, no call here).
+        "gpu": _gpu_free_cache["mb"] is not None,
+        "asr_devices": list(_recent_asr_devices),
     }
 
 
@@ -3477,6 +3496,7 @@ def enqueue_output(out, job_id):
                 if decoded_line.startswith("JOB_CPU "):
                     # Internal marker: the job's CPU time (main.py, at exit).
                     print(f"📊 [job-cpu] {job_id} {decoded_line[8:]}")
+                    _note_job_asr(decoded_line[8:])
                     continue
                 if decoded_line.startswith("PROXY_BYTES="):
                     try:
