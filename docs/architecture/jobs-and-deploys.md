@@ -25,6 +25,13 @@ Guards that keep the card from filling:
   `kSameAsRequested`, no max cuDNN workspace. Same words, lower peak. Batch 2
   dropped a sentence and int8 was much slower with many words different: both
   rejected.
+- **Parakeet must load the GPU build of onnxruntime.** `onnxruntime` and
+  `onnxruntime-gpu` share one import package and the last wheel unpacked wins;
+  with the CPU one on top, the CUDA request is only a UserWarning and every
+  transcription runs on the CPU, holding its ASR slot many times longer. The
+  GPU Dockerfile writes `onnxruntime-gpu` again after the lock and fails the
+  build without `CUDAExecutionProvider` (`tests/test_dockerfile_onnxruntime.py`);
+  `[job-cpu]` reports `asr_device` (`cuda` / `cpu`) per job.
 - **Host-wide transcription slots** (`transcribe_backends.host_asr_slot`,
   `ASR_HOST_SLOTS`, default 2): flock files `output/.asr-gpu-N.lock`, shared by
   every job process and by both containers of a deploy.

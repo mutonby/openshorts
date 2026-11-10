@@ -2509,10 +2509,14 @@ if __name__ == '__main__':
         kids = resource.getrusage(resource.RUSAGE_CHILDREN)
         py_s = own.ru_utime + own.ru_stime
         children_s = kids.ru_utime + kids.ru_stime
+        # Where Parakeet ran (None: this job did not load it). A "cpu" here on
+        # a GPU host means the image shipped onnxruntime without CUDA.
+        asr = sys.modules.get("transcribe_backends")
         print("JOB_CPU " + json.dumps({
             "wall_s": round(time.time() - script_start_time, 1),
             "cpu_s": round(py_s + children_s, 1), "py_s": round(py_s, 1),
             "children_s": round(children_s, 1), "gpu_decode": dict(gpu_decode.STATS),
+            "asr_device": getattr(asr, "PARAKEET_DEVICE", None),
         }), flush=True)
 
     import atexit
