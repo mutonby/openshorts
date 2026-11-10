@@ -436,3 +436,23 @@ class TestAsrIncident:
         kind, sub = qw.asr_incident(sub, {"gpu": True, "asr_devices": ["cpu"] * 3}, 1, lim)
         kind, sub = qw.asr_incident(sub, {"gpu": True, "asr_devices": ["cpu"] * 3}, 2, lim)
         assert kind == "recovered"
+
+
+class TestStatusOfAnExpiredJob:
+    """With the dashboard's poll (lib/jobPoll.js: a 404 means "gone", anything
+    else is retried), an expired job must answer 200 + failed + the reason on
+    every instance, so the panel stops polling and shows that reason, not the
+    "no longer open" banner."""
+
+    def test_other_instance_answers_failed_with_the_reason(self, sat, out, hooks, monkeypatch):
+        from fastapi.testclient import TestClient
+        now = time.time()
+        _job(out, "gone1", SLOW, _old(now))
+        assert asyncio.run(app_module._expire_starved_jobs(now)) == ["gone1"]
+        app_module.jobs.clear()                         # the instance that never held it
+        monkeypatch.setattr(app_module, "BILLING_ENABLED", False)  # no auth in this test
+        r = TestClient(app_module.app).get("/api/status/gone1")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "failed" and body["queue"] is None
+        assert body["logs"][-1] == app_module.QUEUE_EXPIRED_LOG
