@@ -251,6 +251,7 @@ def mode_lines(m: dict, now: float = None) -> list:
     lanes, modes = m.get("lanes"), m.get("modes")
     if not lanes or not modes:
         return []
+    now = m.get("now") if now is None else now
     now = time.time() if now is None else now
     out = []
     for lane in ("normal", "slow"):
@@ -630,6 +631,7 @@ async def tick(now=None):
 
     lim = limits()
     m = measure(snap, since, now, lim)
+    m["now"] = now
     if elsewhere:
         _hold_until = max(_hold_until, now + lim["paid_wait"])
     hold = now < _hold_until
