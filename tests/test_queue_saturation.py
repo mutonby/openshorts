@@ -157,7 +157,7 @@ def _request(country=None, api_key=False):
     if api_key:
         headers["X-API-Key"] = "osk_x"
     return SimpleNamespace(headers=headers, state=SimpleNamespace(),
-                           client=SimpleNamespace(host="203.0.113.9"))
+                           client=SimpleNamespace(host="client"))
 
 
 class FakeMetering:
