@@ -1763,8 +1763,8 @@ def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, water
                            via_api_key=False):
     try:
         path = os.path.join(OUTPUT_DIR, job_id, _RESUME_FILE)
-        with open(path, "w") as f:
-            json.dump({
+        # Atomic like every manifest write: the other instance reads them.
+        write_json_atomic(path, {
                 "cmd": cmd, "priority": priority,
                 "user_id": None if user_id is None else str(user_id),
                 "reservation_id": reservation_id,
@@ -1785,7 +1785,7 @@ def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, water
                 # The probe's "statics bot-checked for this video" verdict.
                 "skip_statics": bool(skip_statics),
                 "via_api_key": bool(via_api_key),
-            }, f)
+        })
     except Exception as e:
         print(f"⚠️ Could not write resume manifest for {job_id}: {e}")
 
@@ -1888,8 +1888,7 @@ def _resume_interrupted_jobs() -> set:
 
         m["attempts"] = attempts
         try:
-            with open(manifest_path, "w") as f:
-                json.dump(m, f)
+            write_json_atomic(manifest_path, m)
         except Exception:
             pass
 
