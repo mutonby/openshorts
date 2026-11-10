@@ -31,6 +31,7 @@ import Modal from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError, QUOTA_WALL_EVENT } from './lib/api';
 import { track } from './lib/analytics';
+import { readConnectReturn, stripConnectReturn } from './lib/connectReturn';
 
 // Enhanced "Encryption" using XOR + Base64 with a Salt
 // This is better than plain Base64 but still client-side.
@@ -951,7 +952,7 @@ function App() {
   // Deep links into a tab: #app?tab=autopilot (Autopilot emails, the social
   // connect page's return URL). Read once per hash change, then the query is
   // dropped so a reload does not keep forcing the tab.
-  const [autopilotConnected, setAutopilotConnected] = useState(false);
+  const [autopilotConnected, setAutopilotConnected] = useState(null); // connect outcome, see lib/connectReturn.js
   useEffect(() => {
     const DEEP_LINK_TABS = ['autopilot', 'history', 'settings', 'thumbnails', 'dashboard', 'saasshorts'];
     const apply = () => {
@@ -961,8 +962,14 @@ function App() {
       const tab = params.get('tab');
       if (!tab || !DEEP_LINK_TABS.includes(tab)) return;  // e.g. #app?tutorial=1
       setActiveTab(tab);
-      if (tab === 'autopilot' && params.get('connected') === '1') setAutopilotConnected(true);
-      try { window.history.replaceState(null, '', '#app'); } catch (_) { /* ignore */ }
+      // The connect outcome rides in the query string, not in the hash
+      // (lib/connectReturn.js): a cancel also comes back with connected=1.
+      if (tab === 'autopilot' && params.get('connected') === '1') {
+        setAutopilotConnected(readConnectReturn(window.location.search));
+      }
+      try {
+        window.history.replaceState(null, '', `${window.location.pathname}${stripConnectReturn(window.location.search)}#app`);
+      } catch (_) { /* ignore */ }
     };
     apply();
     window.addEventListener('hashchange', apply);

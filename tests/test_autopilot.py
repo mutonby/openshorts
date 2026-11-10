@@ -181,3 +181,48 @@ class TestTwitchSource:
         assert "twitch" not in social_profiles.connect_platforms()
         monkeypatch.setenv("AUTOPILOT_TWITCH", "1")
         assert social_profiles.connect_platforms()[-1] == "twitch"
+
+    def test_connect_page_names_twitch_as_read_only_only_when_offered(self):
+        from cloud import social_profiles
+        without = social_profiles.connect_description(["tiktok", "instagram", "youtube"])
+        assert "Twitch" not in without
+        offered = social_profiles.connect_description(["tiktok", "instagram", "youtube", "twitch"])
+        assert offered.startswith(without)
+        assert "Twitch" in offered and "read-only" in offered
+        assert "—" not in offered
+
+    def test_connect_url_sends_the_description_matching_its_platforms(self, monkeypatch):
+        import asyncio
+        from cloud import social_profiles
+        sent = {}
+
+        class _Resp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"access_url": "https://connect.example/?token=t"}
+
+        class _Client:
+            def __init__(self, *a, **k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, url, headers=None, json=None):
+                sent.update(json)
+                return _Resp()
+
+        monkeypatch.setattr(social_profiles.httpx, "AsyncClient", _Client)
+        monkeypatch.setenv("AUTOPILOT_TWITCH", "1")
+        asyncio.run(social_profiles.get_connect_url("os_x", "autopilot"))
+        assert sent["platforms"][-1] == "twitch"
+        assert "Twitch" in sent["connectDescription"]
+        monkeypatch.delenv("AUTOPILOT_TWITCH")
+        asyncio.run(social_profiles.get_connect_url("os_x", "autopilot"))
+        assert "twitch" not in sent["platforms"]
+        assert "Twitch" not in sent["connectDescription"]

@@ -26,6 +26,15 @@ def connect_platforms():
     return CONNECT_PLATFORMS + (["twitch"] if twitch_enabled() else [])
 
 
+def connect_description(platforms) -> str:
+    """The connect page's subtitle. Twitch is read-only there, so it is named
+    as a source to clip from, never as somewhere shorts get posted."""
+    text = "Link TikTok, Instagram and YouTube to post your shorts directly from OpenShorts."
+    if "twitch" in platforms:
+        text += " Link Twitch so Autopilot can clip your past broadcasts (read-only)."
+    return text
+
+
 def _auth_headers():
     return {"Authorization": f"Apikey {settings.managed_upload_post_key}"}
 
@@ -92,14 +101,15 @@ RETURN_TARGETS = {
 async def get_connect_url(username: str, return_to: str = "account") -> str:
     """Generate a branded, single-use connection URL (~1h) for the user's socials."""
     back = RETURN_TARGETS.get(return_to, RETURN_TARGETS["account"])
+    platforms = connect_platforms()
     payload = {
         "username": username,
         "logoImage": settings.openshorts_logo_url,
         "connectTitle": "Connect your social accounts",
-        "connectDescription": "Link TikTok, Instagram and YouTube to post your shorts directly from OpenShorts.",
+        "connectDescription": connect_description(platforms),
         "redirectUrl": f"{settings.frontend_url}{back}",
         "redirectButtonText": "Back to OpenShorts",
-        "platforms": connect_platforms(),
+        "platforms": platforms,
         "showCalendar": True,  # keep the scheduling calendar available in the page
     }
     async with httpx.AsyncClient(timeout=20) as client:

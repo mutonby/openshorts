@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { apiJson, openQuotaWall } from '../lib/api';
 import { track } from '../lib/analytics';
+import { connectNotice } from '../lib/connectReturn';
 
 // Autopilot: every new video on the user's connected YouTube channel is turned
 // into shorts automatically, and optionally the best ones are scheduled on
@@ -121,11 +122,19 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
 
   useEffect(() => { load(); }, [load]);
 
-  // Coming back from the connect page (#app?tab=autopilot&connected=1).
+  // Coming back from the connect page (#app?tab=autopilot&connected=1). The
+  // outcome decides the notice: a cancel or a failure also comes back here,
+  // and the page's own back button carries no outcome (no notice then).
   useEffect(() => {
-    if (justConnected) {
-      setNotice('Accounts connected.');
-      track('AutopilotChannelConnected');
+    if (!justConnected) return;
+    setNotice(connectNotice(justConnected));
+    const props = { platform: justConnected.platform || 'unknown' };
+    if (justConnected.status === 'success') {
+      track('AutopilotChannelConnected', { props });
+    } else {
+      track('AutopilotConnectFailed', {
+        props: { ...props, status: justConnected.status, error_code: justConnected.errorCode || 'none' },
+      });
     }
   }, [justConnected]);
 
