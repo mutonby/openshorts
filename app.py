@@ -799,6 +799,9 @@ def _assign_queue_lane(request, user, balance, priority) -> int:
         return priority
     if _queue_mode.brake_active():
         _queue_mode.note_rejected()
+        # Who was refused, by account prefix only (no address, no country):
+        # enough to audit refusals against plans and top-ups.
+        print(f"[queue-full] refused {str(user.id).replace('-', '')[:8]}")
         try:
             from cloud import analytics as _an
             _an.track("FreeQueueFull", user_id=user.id, via_api=request_uses_api_key(request))
@@ -5007,6 +5010,9 @@ async def process_endpoint(
                            topup=jobs[job_id]['topup'])
 
     _enqueue_job(job_id, priority)
+    if _saturation_on():
+        print(f"[lane] job={job_id} lane={jobs[job_id]['lane']} priority={priority} "
+              f"topup={int(jobs[job_id]['topup'])}")
 
     return {"job_id": job_id, "status": "queued", "partial": partial,
             "first_video": bool(getattr(request.state, "first_video", False))}
