@@ -50,7 +50,7 @@ def setup_sync(app):
 
 
 async def setup_async(app, keep_reservation_ids=None, live_reservation_ids=None,
-                      sweep_active=None):
+                      sweep_active=None, booted_at=None):
     """Async initialization done inside the FastAPI lifespan.
 
     DB engine, orphaned-reservation cleanup and the metering sweeper live here.
@@ -58,11 +58,13 @@ async def setup_async(app, keep_reservation_ids=None, live_reservation_ids=None,
     must not be refunded (see app._resume_interrupted_jobs).
     ``live_reservation_ids`` is a callable the sweeper asks, every pass, which
     reservations belong to jobs still alive (app._live_reservation_ids);
-    sweep_active is False while the instance drains.
+    ``sweep_active`` is False while the instance drains. ``booted_at``: only
+    reservations created before it can be orphans of this boot.
     """
     from . import database, digest, metering, videos
     await database.init_engine()
-    await metering.release_orphaned_reservations(keep_ids=keep_reservation_ids)
+    await metering.release_orphaned_reservations(keep_ids=keep_reservation_ids,
+                                                 created_before=booted_at)
     metering.start_sweeper(live_ids=live_reservation_ids, is_active=sweep_active)
     videos.start_sweeper()
     digest.start_digest()

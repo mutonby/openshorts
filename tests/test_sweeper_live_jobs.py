@@ -228,3 +228,36 @@ def test_dispatch_stamps_the_start_of_the_run(out):
     app_module._touch_manifest("j", now=1010.0)
     m = json.loads((out / "j" / app_module._RESUME_FILE).read_text())
     assert m["run_started"] == 1000.0 and m["heartbeat"] == 1010.0
+
+
+def test_startup_orphan_release_spares_reservations_made_while_booting(monkeypatch):
+    # During a deploy the old instance keeps accepting jobs; one reserved while
+    # the new instance boots has a manifest its startup scan could not see.
+    from datetime import datetime, timezone
+    from sqlalchemy.dialects import postgresql
+    seen, released = [], []
+
+    class _S:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def execute(self, stmt):
+            seen.append((str(stmt.compile(dialect=postgresql.dialect())),
+                         stmt.compile().params))
+            return _Result(["res-old"])
+
+    async def _release(lid):
+        released.append(lid)
+    monkeypatch.setattr(metering.database, "session", lambda: _S())
+    monkeypatch.setattr(metering, "release_reservation", _release)
+    boot = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    asyncio.run(metering.release_orphaned_reservations(keep_ids=set(), created_before=boot))
+    sql, params = seen[0]
+    assert "usage_ledger.created_at <" in sql
+    cutoff = [v for v in params.values() if isinstance(v, datetime)][0]
+    assert cutoff == boot - __import__("datetime").timedelta(
+        seconds=metering.ORPHAN_GRACE_SECONDS)
+    assert released == ["res-old"]

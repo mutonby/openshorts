@@ -3373,6 +3373,7 @@ async def lifespan(app: FastAPI):
     _recover_jobs_from_disk()
     # Re-enqueue jobs that were mid-processing when we stopped (redeploy). Their
     # reservations must survive the orphan sweep so the resumed run can settle them.
+    _booted_at = datetime.now(timezone.utc)
     _resumed_reservation_ids = _resume_interrupted_jobs()
     # Deploy handover: claim the marker (any older instance sees it and drains),
     # keep watching it in case a newer one appears, keep looking for manifests
@@ -3385,7 +3386,8 @@ async def lifespan(app: FastAPI):
     if BILLING_ENABLED:
         await cloud.setup_async(app, keep_reservation_ids=_resumed_reservation_ids,
                                 live_reservation_ids=_live_reservation_ids,
-                                sweep_active=lambda: not _draining)
+                                sweep_active=lambda: not _draining,
+                                booted_at=_booted_at)
         # The jobs resumed above carry the priority of the plan at submit;
         # the DB is up now: owners who paid since go first (one lookup, which
         # never raises: a failure keeps the manifests' priorities).

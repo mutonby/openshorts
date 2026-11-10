@@ -740,7 +740,13 @@ async def release_reservation(ledger_id: str):
             row.status = "released"
 
 
-async def release_orphaned_reservations(keep_ids=None):
+# A reservation this recent at startup may belong to a job the other instance
+# of a deploy accepted while this one booted, whose manifest the startup scan
+# could not have seen yet: leave it to the sweeper, which checks liveness.
+ORPHAN_GRACE_SECONDS = 120
+
+
+async def release_orphaned_reservations(keep_ids=None, created_before=None):
     """At startup, release every still-``reserved`` row.
 
     Jobs live only in memory, so a restart loses all in-flight jobs; their
@@ -748,12 +754,18 @@ async def release_orphaned_reservations(keep_ids=None):
 
     ``keep_ids`` are reservations for jobs being *resumed* after the restart —
     those keep running and will settle themselves, so they must not be refunded.
+    ``created_before`` (the boot instant) limits it to rows older than that
+    minus ORPHAN_GRACE_SECONDS: during a deploy the old instance keeps taking
+    jobs, and one reserved while this instance booted has a manifest the keep
+    set was computed too early to contain.
     """
     keep = {str(k) for k in (keep_ids or ())}
+    q = select(UsageLedger.id).where(UsageLedger.status == "reserved")
+    if created_before is not None:
+        q = q.where(UsageLedger.created_at
+                    < created_before - timedelta(seconds=ORPHAN_GRACE_SECONDS))
     async with database.session() as session:
-        ids = list((await session.execute(
-            select(UsageLedger.id).where(UsageLedger.status == "reserved")
-        )).scalars())
+        ids = list((await session.execute(q)).scalars())
     released = 0
     for lid in ids:
         if str(lid) in keep:
