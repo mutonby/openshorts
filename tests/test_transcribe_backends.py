@@ -334,6 +334,18 @@ class TestHostAsrSlot:
         with tb.host_asr_slot(slots=0, lock_dir=str(tmp_path)) as s:
             assert s._fh is None
 
+    def test_the_wait_for_a_slot_is_counted(self, tmp_path, monkeypatch):
+        """JOB_CPU reports it (asr_wait_s) to size ASR_HOST_SLOTS from data."""
+        import threading, time
+        import transcribe_backends as tb
+        monkeypatch.setattr(tb, "ASR_WAIT", {"s": 0.0})
+        first = tb.host_asr_slot(slots=1, lock_dir=str(tmp_path), poll=0.01)
+        first.__enter__()
+        threading.Timer(0.2, first.__exit__, args=(None, None, None)).start()
+        with tb.host_asr_slot(slots=1, lock_dir=str(tmp_path), poll=0.01):
+            pass
+        assert 0.15 <= tb.ASR_WAIT["s"] < 2
+
 
 class TestParakeetMemorySettings:
     def test_vad_batch_default_is_the_benchmarked_one(self):
@@ -392,6 +404,57 @@ def test_parakeet_threads_sleep_and_the_vad_runs_on_one_cpu_thread(monkeypatch):
     assert kw["providers"] == ["CPUExecutionProvider"]
     assert kw["sess_options"].entries == no_spin
     assert kw["sess_options"].intra_op_num_threads == 1
+
+
+class TestOnnxruntimeDevice:
+    """A CPU onnxruntime wheel on top of onnxruntime-gpu turns the CUDA request
+    into a warning; the job must still be able to tell where Parakeet ran."""
+
+    def test_cuda_build(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace(
+            get_available_providers=lambda: [
+                "TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]))
+        assert tb.onnxruntime_device() == "cuda"
+
+    def test_cpu_build(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace(
+            get_available_providers=lambda: ["AzureExecutionProvider", "CPUExecutionProvider"]))
+        assert tb.onnxruntime_device() == "cpu"
+
+    def test_broken_import_counts_as_cpu(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "onnxruntime", None)  # import raises
+        assert tb.onnxruntime_device() == "cpu"
+
+    @pytest.mark.parametrize("providers,device,warned", [
+        (["CUDAExecutionProvider", "CPUExecutionProvider"], "cuda", False),
+        (["AzureExecutionProvider", "CPUExecutionProvider"], "cpu", True),
+    ])
+    def test_model_load_records_the_device(self, monkeypatch, capsys,
+                                           providers, device, warned):
+        class FakeOptions:
+            intra_op_num_threads = inter_op_num_threads = 0
+
+            def add_session_config_entry(self, key, value):
+                pass
+
+        class FakeModel:
+            def with_vad(self, vad, batch_size):
+                return self
+
+            def with_timestamps(self):
+                return self
+
+        monkeypatch.setitem(sys.modules, "onnxruntime", SimpleNamespace(
+            SessionOptions=FakeOptions, get_available_providers=lambda: providers))
+        monkeypatch.setitem(sys.modules, "onnx_asr", SimpleNamespace(
+            load_model=lambda *a, **kw: FakeModel(), load_vad=lambda *a, **kw: object()))
+        monkeypatch.setattr(tb, "_parakeet_model", None)
+        monkeypatch.setattr(tb, "PARAKEET_DEVICE", None)
+
+        tb._get_parakeet_model()
+
+        assert tb.PARAKEET_DEVICE == device
+        assert ("parakeet runs on the CPU" in capsys.readouterr().out) is warned
 
 
 # --- script drift repair -----------------------------------------------------

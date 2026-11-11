@@ -62,6 +62,8 @@ _ASR_GATE = threading.Semaphore(_ASR_SLOTS)
 # once. Peak per transcription is ~4-6 GB on a 20 GB card (prod, 22-sep-2026).
 ASR_HOST_SLOTS = int(os.environ.get("ASR_HOST_SLOTS", "2"))
 ASR_LOCK_DIR = os.environ.get("ASR_LOCK_DIR", "output")
+# Seconds this process waited for a host slot (main.py reports it in JOB_CPU).
+ASR_WAIT = {"s": 0.0}
 
 
 class host_asr_slot:
@@ -87,6 +89,7 @@ class host_asr_slot:
         except Exception:
             return self
         announced = False
+        started = time.monotonic()
         while True:
             for i in range(self.slots):
                 path = os.path.join(self.lock_dir, f".asr-gpu-{i}.lock")
@@ -97,6 +100,7 @@ class host_asr_slot:
                 try:
                     fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     self._fh = fh
+                    ASR_WAIT["s"] += time.monotonic() - started
                     return self
                 except OSError:
                     fh.close()
@@ -318,8 +322,29 @@ def vad_load_kwargs():
     return {"sess_options": opts, "providers": ["CPUExecutionProvider"]}
 
 
+# Where the last Parakeet load runs: "cuda", "cpu", or None before any load.
+# main.py reports it in the job's JOB_CPU line.
+PARAKEET_DEVICE = None
+
+
+def onnxruntime_device():
+    """"cuda" when the installed onnxruntime build has the CUDA provider.
+
+    onnxruntime and onnxruntime-gpu are two wheels of one import package, and
+    whichever was unpacked last is the build that runs. With the CPU wheel on
+    top, asking for CUDAExecutionProvider only raises a UserWarning and
+    Parakeet silently runs on the CPU: many times slower, on every core.
+    """
+    try:
+        import onnxruntime as rt
+        providers = rt.get_available_providers()
+    except Exception:
+        return "cpu"
+    return "cuda" if "CUDAExecutionProvider" in providers else "cpu"
+
+
 def _get_parakeet_model():
-    global _parakeet_model
+    global _parakeet_model, PARAKEET_DEVICE
     with _parakeet_lock:
         if _parakeet_model is None:
             import onnx_asr
@@ -328,6 +353,10 @@ def _get_parakeet_model():
             vad = onnx_asr.load_vad("silero", **vad_load_kwargs())
             _parakeet_model = model.with_vad(
                 vad, batch_size=PARAKEET_VAD_BATCH).with_timestamps()
+            PARAKEET_DEVICE = onnxruntime_device()
+            if PARAKEET_DEVICE != "cuda":
+                print("⚠️ [ASR] parakeet runs on the CPU: this onnxruntime build "
+                      "has no CUDAExecutionProvider", flush=True)
     return _parakeet_model
 
 

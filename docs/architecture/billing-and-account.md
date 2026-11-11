@@ -72,9 +72,26 @@ balance, `reserve_process_minutes` decides on its own (the client sends no
   first N minutes as if the user had taken the wall's offer. Tracked
   client-side as `AutoPartial`.
 
+## Free queue full (`free_queue_full`, saturation mode)
+
+While the free slow lane's brake is on (`docs/architecture/jobs-and-deploys.md`,
+`cloud/queue_mode.py`), `/api/process` refuses a slow-lane free submission with
+a 402 through `payment_required`: `error: "free_queue_full"`, `retry_later:
+true`, `upgrade_url`, and the message "The free queue is full right now. Come
+back later, or skip the line with a plan." (plus the link). It names no
+country or region. The check runs right after the out-of-minutes check and
+before the probe, the reservation and the first-video grant, so a refused
+user keeps their minutes and their first whole video. Accounts with top-up
+credit and paid plans are never refused, and with the mode on a free-plan
+account with top-up credit queues with the paid plans (it paid). The dashboard opens the plan modal
+with context and source `queue_full` (its own `QueueFullSeen` /
+`QueueFullCheckout` / `QueueFullDismissed`, plus `CheckoutStarted` /
+`CheckoutRedirected` with that source); the server tracks `FreeQueueFull` for
+every refusal, API and MCP included. Refusals are counted in the queue alerts.
+
 ## Paths to a plan (`TopUpModal.jsx`, `PricingSection.jsx`)
 
-- Every surface that opens the plan modal passes a `source` (`meter`, `menu`, `results_banner`, `partial_banner`, `partial_processing`, `first_video_banner`, `watermark`, `autopilot`, `queue`, `thumbnails`, `clip_editor`, `autopilot_run`); it rides on `UpsellModalSeen`/`QuotaWallSeen` and on the checkout events, so each surface can be measured on its own.
+- Every surface that opens the plan modal passes a `source` (`meter`, `menu`, `results_banner`, `partial_banner`, `partial_processing`, `first_video_banner`, `watermark`, `autopilot`, `queue`, `queue_full`, `thumbnails`, `clip_editor`, `autopilot_run`); it rides on `UpsellModalSeen`/`QuotaWallSeen` and on the checkout events, so each surface can be measured on its own.
 - A 402 outside the main clip flow calls `lib/api.openQuotaWall(err, source)`; the app shell listens for it and opens the quota wall instead of an error string.
 - The wall's "this video is N min long" copy only applies when the user still has at least a minute: the pre-probe 402 sends a floor of 1 for `minutes_required`, which is not a duration.
 - A plan picked while signed out is stashed (`lib/pendingPlan.js`, two-hour TTL). `#/pricing` opens the sign-in at once, AuthContext sends the new session back to `#/pricing`, and the section opens that checkout (`CheckoutStarted` with `resumed=1`).

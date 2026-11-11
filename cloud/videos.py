@@ -101,7 +101,7 @@ def register_local_unmark(fn):
     _local_unmark = fn
 
 
-async def unmark_user_library(user_id) -> int:
+async def unmark_user_library(user_id, job_id=None) -> int:
     """After an upgrade: serve every clip this user has through its clean twin.
 
     The free plan burns the mark into a ``wm_`` copy and archives the clean
@@ -110,14 +110,16 @@ async def unmark_user_library(user_id) -> int:
     the twin, the marked object is deleted, and app.py is told so a dashboard
     that is open on the job follows. A clip whose twin is not in R2 keeps its
     marked file: a dead link would be worse than the mark. Returns the number
-    of clips re-pointed.
+    of clips re-pointed. ``job_id`` limits it to that job (a free job that
+    finished after its owner paid, ``app._unmark_if_owner_paid``).
     """
     if not settings.r2_configured:
         return 0
     async with database.session() as s:
-        projects = list((await s.execute(
-            select(Project).where(Project.user_id == user_id)
-        )).scalars())
+        q = select(Project).where(Project.user_id == user_id)
+        if job_id is not None:
+            q = q.where(Project.job_id == str(job_id))
+        projects = list((await s.execute(q)).scalars())
     done = 0
     for proj in projects:
         new_state, changes = unmarked_clip_state(proj.state)
@@ -640,6 +642,8 @@ async def _sweeper_loop():
             await purge_stale_magic_tokens()
             from .account import purge_stale_deletion_records
             await purge_stale_deletion_records()
+            from .evidence import purge_stale_events
+            await purge_stale_events()
         except asyncio.CancelledError:
             break
         except Exception as e:

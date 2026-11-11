@@ -10,3 +10,6 @@ itsdangerous==2.2.0
 PyJWT==2.10.1
 email-validator==2.2.0
 dnspython==2.7.0
+# Country of the client IP for the free queue's slow lane (cloud/geoip.py):
+# in-memory lookups in a local MMDB file, no network per request.
+maxminddb==3.2.0

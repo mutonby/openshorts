@@ -340,6 +340,18 @@ def encoder_options(tier=QUALITY_FAST):
     return opts
 
 
+def _note_nvenc_wait(seconds):
+    """Append an encode's wait for a slot to NVENC_WAIT_LOG (as bin/ffmpeg
+    does), for the job's JOB_CPU line. Best effort."""
+    path = os.environ.get("NVENC_WAIT_LOG", "")
+    if seconds > 0 and path:
+        try:
+            with open(path, "a") as f:
+                f.write(f"{int(seconds)}\n")
+        except OSError:
+            pass
+
+
 @contextlib.contextmanager
 def nvenc_slot():
     """Hold one of the host-wide NVENC slots (same lock files and wait as
@@ -373,6 +385,7 @@ def nvenc_slot():
         if held is None:
             time.sleep(1)
             waited += 1
+    _note_nvenc_wait(waited)
     try:
         yield
     finally:

@@ -509,3 +509,28 @@ class FirstVideoGrant(Base):
     ip_hash = Column(String(64), nullable=False, index=True)
     job_id = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class EvidenceEvent(Base):
+    """A successful sign-in or a checkout started, with the client IP and user
+    agent it came from: evidence for payment disputes (cloud/evidence.py).
+
+    Written best-effort in the background, never inside the request's own
+    transaction. ``email`` is kept next to ``user_id`` so a dispute can be
+    answered from the address on the charge. Erased with the account and
+    purged after ``evidence.RETENTION_DAYS``.
+    """
+    __tablename__ = "evidence_events"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
+                     nullable=True, index=True)
+    email = Column(CITEXT, nullable=True)
+    kind = Column(Text, nullable=False)       # login | checkout
+    method = Column(Text, nullable=False)     # magic_link | google | password | stripe_checkout
+    ip = Column(Text, nullable=True)
+    user_agent = Column(Text, nullable=True)  # truncated to evidence.USER_AGENT_MAX
+    meta = Column(JSONB, nullable=False, default=dict, server_default="{}")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    __table_args__ = (
+        Index("ix_evidence_email_created", "email", "created_at"),
+    )

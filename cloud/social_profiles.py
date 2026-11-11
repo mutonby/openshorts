@@ -8,6 +8,7 @@ Docs: https://docs.upload-post.com/guides/user-profile-integration
 """
 import httpx
 from fastapi import APIRouter, Request, HTTPException
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from .config import settings
 from . import database
@@ -24,6 +25,15 @@ def connect_platforms():
     (``AUTOPILOT_TWITCH=1``): it is read-only there, an Autopilot source."""
     from .autopilot import twitch_enabled
     return CONNECT_PLATFORMS + (["twitch"] if twitch_enabled() else [])
+
+
+def connect_description(platforms) -> str:
+    """The connect page's subtitle. Twitch is read-only there, so it is named
+    as a source to clip from, never as somewhere shorts get posted."""
+    text = "Link TikTok, Instagram and YouTube to post your shorts directly from OpenShorts."
+    if "twitch" in platforms:
+        text += " Link Twitch so Autopilot can clip your past broadcasts (read-only)."
+    return text
 
 
 def _auth_headers():
@@ -72,13 +82,21 @@ async def ensure_profile(user) -> str:
     username = profile_username_for(user.id)
     await _create_remote_profile(username)
 
+    # Two near-simultaneous connects both get here: the re-check under the
+    # transaction can't see the other's uncommitted row, so a plain INSERT made
+    # the loser hit the primary key and answer 500. ON CONFLICT DO NOTHING makes
+    # the loser a no-op; it then returns whatever row won.
     async with database.session() as s:
         async with s.begin():
-            prof = await s.get(UploadPostProfile, user.id)  # re-check under txn
-            if prof:
-                return prof.profile_username
-            s.add(UploadPostProfile(user_id=user.id, profile_username=username))
-    return username
+            result = await s.execute(
+                pg_insert(UploadPostProfile)
+                .values(user_id=user.id, profile_username=username)
+                .on_conflict_do_nothing()
+            )
+            if result.rowcount:
+                return username
+            prof = await s.get(UploadPostProfile, user.id)
+            return prof.profile_username if prof else username
 
 
 # Where the connect page sends the user back to. A closed list: the value
@@ -92,14 +110,15 @@ RETURN_TARGETS = {
 async def get_connect_url(username: str, return_to: str = "account") -> str:
     """Generate a branded, single-use connection URL (~1h) for the user's socials."""
     back = RETURN_TARGETS.get(return_to, RETURN_TARGETS["account"])
+    platforms = connect_platforms()
     payload = {
         "username": username,
         "logoImage": settings.openshorts_logo_url,
         "connectTitle": "Connect your social accounts",
-        "connectDescription": "Link TikTok, Instagram and YouTube to post your shorts directly from OpenShorts.",
+        "connectDescription": connect_description(platforms),
         "redirectUrl": f"{settings.frontend_url}{back}",
         "redirectButtonText": "Back to OpenShorts",
-        "platforms": connect_platforms(),
+        "platforms": platforms,
         "showCalendar": True,  # keep the scheduling calendar available in the page
     }
     async with httpx.AsyncClient(timeout=20) as client:

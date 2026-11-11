@@ -31,6 +31,9 @@ import Modal from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError, QUOTA_WALL_EVENT } from './lib/api';
 import { track } from './lib/analytics';
+import { readConnectReturn, stripConnectReturn } from './lib/connectReturn';
+import { rememberTabAfterLogin } from './lib/tabAfterLogin';
+import { JobPollError, pollFailureAction } from './lib/jobPoll';
 
 // Enhanced "Encryption" using XOR + Base64 with a Salt
 // This is better than plain Base64 but still client-side.
@@ -257,13 +260,13 @@ const readableError = (raw) => {
   return text.replace(/^Error:\s*/, '').slice(0, 300) || 'Something went wrong.';
 };
 // Matches the self-host JOB_RETENTION_SECONDS default. A restore whose job was
-// already purged server-side fails gracefully and clears the saved session.
+// already purged server-side (Cloud keeps it 1 h) gets a 404 from the status
+// poll, which clears the saved session (see lib/jobPoll.js).
 const SESSION_MAX_AGE = 86400000; // 24 hours
 
-// Mock polling function
 const pollJob = async (jobId) => {
   const res = await apiFetch(`/api/status/${jobId}`);
-  if (!res.ok) throw new Error('Status check failed');
+  if (!res.ok) throw new JobPollError(res.status);
   return res.json();
 };
 
@@ -381,6 +384,8 @@ function App() {
   const [noSource, setNoSource] = useState(false);
 
   const [sessionRecovered, setSessionRecovered] = useState(false);
+  // The job a restored session was polling is no longer on the server.
+  const [jobGone, setJobGone] = useState(false);
   const [showScheduleWeek, setShowScheduleWeek] = useState(false);
   // Clip editor overlay: index of the clip being edited, or null.
   const [editingClip, setEditingClip] = useState(null);
@@ -812,12 +817,19 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isManaged, jobId, status, results?.clips?.length]);
 
+  // Read at failure time: the poll effect must not restart when auth settles.
+  const historyAvailableRef = useRef(false);
+  historyAvailableRef.current = billingEnabled && isSignedIn;
+  const handleResetRef = useRef(null);
+
   useEffect(() => {
     let interval;
+    let failures = 0;
     if ((status === 'processing' || status === 'completed') && jobId) {
       interval = setInterval(async () => {
         try {
           const data = await pollJob(jobId);
+          failures = 0;
           console.log("Job status:", data);
 
           // Update results if available (real-time)
@@ -849,6 +861,16 @@ function App() {
           }
         } catch (e) {
           console.error("Polling error", e);
+          failures += 1;
+          if (pollFailureAction(e, failures) === 'gone') {
+            clearInterval(interval);
+            // Back to idle (which drops the saved session) and on to History,
+            // where a finished job's clips are kept.
+            handleResetRef.current();
+            setSessionRecovered(false);
+            setJobGone(true);
+            if (historyAvailableRef.current) setActiveTab('history');
+          }
         }
       }, 2000);
     }
@@ -951,7 +973,7 @@ function App() {
   // Deep links into a tab: #app?tab=autopilot (Autopilot emails, the social
   // connect page's return URL). Read once per hash change, then the query is
   // dropped so a reload does not keep forcing the tab.
-  const [autopilotConnected, setAutopilotConnected] = useState(false);
+  const [autopilotConnected, setAutopilotConnected] = useState(null); // connect outcome, see lib/connectReturn.js
   useEffect(() => {
     const DEEP_LINK_TABS = ['autopilot', 'history', 'settings', 'thumbnails', 'dashboard', 'saasshorts'];
     const apply = () => {
@@ -961,13 +983,26 @@ function App() {
       const tab = params.get('tab');
       if (!tab || !DEEP_LINK_TABS.includes(tab)) return;  // e.g. #app?tutorial=1
       setActiveTab(tab);
-      if (tab === 'autopilot' && params.get('connected') === '1') setAutopilotConnected(true);
-      try { window.history.replaceState(null, '', '#app'); } catch (_) { /* ignore */ }
+      // The connect outcome rides in the query string, not in the hash
+      // (lib/connectReturn.js): a cancel also comes back with connected=1.
+      if (tab === 'autopilot' && params.get('connected') === '1') {
+        setAutopilotConnected(readConnectReturn(window.location.search));
+      }
+      try {
+        window.history.replaceState(null, '', `${window.location.pathname}${stripConnectReturn(window.location.search)}#app`);
+      } catch (_) { /* ignore */ }
     };
     apply();
     window.addEventListener('hashchange', apply);
     return () => window.removeEventListener('hashchange', apply);
   }, []);
+
+  // Signed out on a tab that needs a session (the clips-ready email links to
+  // #app?tab=history): remember it, so the sign-in comes back here instead of
+  // to the Clip Generator (lib/tabAfterLogin, read by AuthContext).
+  useEffect(() => {
+    if (billingEnabled && !authLoading && !isSignedIn) rememberTabAfterLogin(activeTab);
+  }, [billingEnabled, authLoading, isSignedIn, activeTab]);
 
   // #app?checkout=cancel: back from a Stripe checkout opened inside the app
   // (cancel_url in cloud/billing.py), so the user lands on their clips again.
@@ -1207,6 +1242,14 @@ function App() {
       refreshMe();
 
     } catch (e) {
+      if (e instanceof QuotaError && e.code === 'free_queue_full') {
+        // The free queue is full: nothing was reserved or spent. Same plan
+        // wall, its own copy and source so the funnel is measured apart.
+        setStatus('idle');
+        setTopUpInfo({ context: 'queue_full', source: 'queue_full', highlight: 'starter' });
+        setShowTopUp(true);
+        return;
+      }
       if (e instanceof QuotaError) {
         setStatus('idle');
         refreshMe();
@@ -1263,6 +1306,7 @@ function App() {
   }, [billingEnabled, isSignedIn]);
 
   const handleReset = () => {
+    setJobGone(false);
     // Flush any pending edit-state sync before dropping the project: the clips
     // themselves are already archived to R2 as they were edited.
     flushClipState();
@@ -1280,6 +1324,9 @@ function App() {
     setJobError('');
     localStorage.removeItem(SESSION_KEY);
   };
+  useEffect(() => {
+    handleResetRef.current = handleReset;
+  });
 
   // --- UI Components ---
 
@@ -1630,6 +1677,28 @@ function App() {
             </div>
             <button
               onClick={() => setSessionRecovered(false)}
+              aria-label="dismiss"
+              className="text-muted hover:text-ink transition-colors shrink-0 -m-1 p-1"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
+        {/* The restored job is no longer on the server (purged or not yours). */}
+        {jobGone && (
+          <div role="status" className="mx-3 sm:mx-6 mt-2 px-3.5 sm:px-4 py-3 bg-paper2 border border-rule rounded-card flex items-start justify-between gap-3 animate-fade shrink-0">
+            <div className="flex items-start sm:items-center gap-2 text-sm text-ink2 flex-wrap min-w-0">
+              <History size={16} className="text-brass shrink-0 mt-0.5 sm:mt-0" />
+              <span className="font-medium">That project is no longer open</span>
+              <span className="text-muted text-xs">
+                {billingEnabled && isSignedIn
+                  ? 'If it finished, its clips are saved in History.'
+                  : 'The server has already cleared it. Start a new project to keep going.'}
+              </span>
+            </div>
+            <button
+              onClick={() => setJobGone(false)}
               aria-label="dismiss"
               className="text-muted hover:text-ink transition-colors shrink-0 -m-1 p-1"
             >
@@ -2040,7 +2109,18 @@ function App() {
           {activeTab === 'history' && (
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
               <div className="max-w-6xl mx-auto p-4 sm:p-6 md:p-8">
-                <HistoryTab onReopenProject={restoreProject} />
+                {billingEnabled && !isSignedIn ? (
+                  <div className="max-w-2xl mx-auto card p-8 text-center">
+                    <History size={28} className="mx-auto mb-4 text-brass" />
+                    <h1 className="font-display lowercase text-2xl text-ink mb-2">your clips are saved to your account</h1>
+                    <p className="text-muted text-sm mb-6">
+                      Sign in with the email address you used to create them and they open right here.
+                    </p>
+                    <button onClick={() => setShowLogin(true)} className="btn-primary">sign in</button>
+                  </div>
+                ) : (
+                  <HistoryTab onReopenProject={restoreProject} />
+                )}
               </div>
             </div>
           )}
@@ -2147,7 +2227,7 @@ function App() {
                     <p className="text-ink">
                       {queueInfo.ahead === 0
                         ? 'You are next in line. Starting in a moment…'
-                        : <>You are <b>#{queueInfo.position}</b> in line · about <b>{Math.max(1, Math.round(queueInfo.eta_seconds / 60))} min</b></>}
+                        : <>You are <b>#{queueInfo.position}</b> in line · {queueInfo.eta_is_minimum ? 'at least' : 'about'} <b>{Math.max(1, Math.round(queueInfo.eta_seconds / 60))} min</b></>}
                     </p>
                     {billingEnabled && !['starter', 'creator', 'pro'].includes(plan) && queueInfo.ahead > 0 && (
                       <button

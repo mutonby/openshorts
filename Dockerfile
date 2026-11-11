@@ -31,8 +31,22 @@ RUN if [ "$GPU" != "1" ]; then \
 # the --no-index pass fails it if requirements*.txt lists something the lock
 # does not have. The billing deps are installed always so one image serves
 # both modes; they are only imported when BILLING_ENABLED is set.
+#
+# onnxruntime and onnxruntime-gpu are two distributions of ONE import package:
+# both write onnxruntime/capi/, and whichever pip unpacks last is the one that
+# runs. The GPU lock needs both names (faster-whisper requires "onnxruntime",
+# so pip check fails without it), and inside one pip install the CPU wheel
+# landed last: Parakeet got only the CPU provider and every transcription ran
+# on the CPU. So the GPU build writes onnxruntime-gpu again on top (same
+# version, from the lock) and fails unless the CUDA provider is compiled in.
+# get_available_providers() lists what the build has, no GPU needed at build time.
 RUN if [ "$GPU" = "1" ]; then LOCK=requirements-gpu.lock; else LOCK=requirements-cpu.lock; fi \
  && pip install --no-cache-dir --no-deps -r "$LOCK" \
+ && if [ "$GPU" = "1" ]; then \
+      pip install --no-cache-dir --no-deps --force-reinstall \
+        "$(grep -E '^onnxruntime-gpu==' requirements-gpu.lock)" \
+      && python -c "import onnxruntime as o, sys; p = o.get_available_providers(); print('onnxruntime providers:', p); sys.exit('CUDAExecutionProvider' not in p)"; \
+    fi \
  && pip check \
  && pip install --no-index --no-deps -q -r requirements.txt -r requirements-billing.txt
 

@@ -117,5 +117,5 @@ clips-ready email: the caller polls or gets the webhook. The job records
 
 ## Payment-required errors
 
-Every 402 (`quota_exceeded`, `no_plan`) goes through `app.payment_required`: it adds `upgrade_url` (`/#/pricing?plan=starter&src=api`, which opens the Starter checkout) and repeats the link inside `message`, since MCP clients and SDKs often show only the message. The MCP `get_quota` tool returns the same `upgrade_url` for free or unentitled users, and the server instructions tell the agent to hand that link to the user.
+Every 402 (`quota_exceeded`, `no_plan`, `free_queue_full`) goes through `app.payment_required`: it adds `upgrade_url` (`/#/pricing?plan=starter&src=api`, which opens the Starter checkout) and repeats the link inside `message`, since MCP clients and SDKs often show only the message. The MCP `get_quota` tool returns the same `upgrade_url` for free or unentitled users, and the server instructions tell the agent to hand that link to the user.
 

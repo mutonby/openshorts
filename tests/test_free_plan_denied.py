@@ -145,6 +145,9 @@ class TestMagicLinkSignup:
         monkeypatch.setattr(account, "free_plan_denial_for_signup", _denial)
         monkeypatch.setattr(auth, "_load_current_user", _load)
         monkeypatch.setattr(auth, "issue_jwt", lambda uid, email: "jwt")
+        # The login evidence row would land in this fake session too; it has
+        # its own tests (test_evidence_events.py).
+        monkeypatch.setattr(auth.evidence, "record_event", lambda **k: None)
         asyncio.run(auth.verify_magic_link(auth.MagicVerifyRequest(token="t")))
         return added
 

@@ -47,6 +47,11 @@ const PLAN_BLURBS = {
 // upsell (WatermarkModal passes 'watermark'), so CheckoutStarted can be split
 // by origin. highlight: the plan put forward; the watermark notice asked about
 // the cheapest way out, so it opens on starter instead of creator.
+// context 'queue_full': the free queue's brake refused the submission (402
+// free_queue_full; nothing was reserved or spent). Its own events
+// (QueueFullSeen / QueueFullCheckout / QueueFullDismissed, plus the shared
+// CheckoutStarted/Redirected with source 'queue_full') keep it out of the quota
+// wall's numbers. The copy never says why the queue is full for this user.
 // partialJob: { processed_minutes, total_minutes } of the job on screen when the
 // "clip the whole video" banner opened it, so the copy talks about the rest of
 // that video instead of the watermark.
@@ -59,10 +64,13 @@ export default function TopUpModal({ onClose, required, remaining, partialMinute
   const [busyPrice, setBusyPrice] = useState(null);
   useBackFromStripe(() => setBusyPrice(null));
   const isUpsell = context === 'upsell';
-  const source = sourceOverride || (isUpsell ? 'upsell' : 'wall');
+  const isQueueFull = context === 'queue_full';
+  const source = sourceOverride || (isUpsell ? 'upsell' : isQueueFull ? 'queue_full' : 'wall');
+  const seenEvent = isUpsell ? 'UpsellModalSeen' : isQueueFull ? 'QueueFullSeen' : 'QuotaWallSeen';
+  const checkoutEvent = isUpsell ? 'UpsellModalCheckout' : isQueueFull ? 'QueueFullCheckout' : 'QuotaWallCheckout';
 
   useEffect(() => {
-    track(isUpsell ? 'UpsellModalSeen' : 'QuotaWallSeen',
+    track(seenEvent,
           { props: { required: required ?? null, remaining: remaining ?? null, source } });
     apiJson('/api/billing/plans')
       .then((d) => {
@@ -88,7 +96,7 @@ export default function TopUpModal({ onClose, required, remaining, partialMinute
   const buy = async (entry, kind) => {
     setBusyPrice(entry.price_id);
     const props = { kind, plan: entry.plan || null, minutes: entry.minutes, source };
-    track(isUpsell ? 'UpsellModalCheckout' : 'QuotaWallCheckout', { props });
+    track(checkoutEvent, { props });
     track('CheckoutStarted', { props });
     // Same stash PricingSection sets, so a plan bought from the modal also
     // carries its price into the Subscribed goal (AccountPage reads it back).
@@ -124,18 +132,23 @@ export default function TopUpModal({ onClose, required, remaining, partialMinute
   // so that case reads as "out of minutes", not "this video is 1 min long".
   const blockedByLength = typeof required === 'number' && typeof remaining === 'number'
     && remaining >= 1 && required > remaining;
-  const partialOffer = !isUpsell && partialMinutes > 0 && typeof onPartial === 'function';
+  const partialOffer = !isUpsell && !isQueueFull && partialMinutes > 0 && typeof onPartial === 'function';
   const remainingShown = Math.max(0, Math.round((remaining || 0) * 10) / 10);
 
   return (
     <Modal isOpen onClose={onClose} eyebrow="UPGRADE"
-           title={isUpsell
+           title={isQueueFull ? 'The free queue is full right now'
+             : isUpsell
              ? (partialJob ? 'Clip the whole video' : 'Keep your clips forever')
              : (blockedByLength ? 'Your video is ready to clip' : "You've used this month's minutes")}
            size="xl">
       {/* Goal-gradient framing: they're one step from the thing they came for. */}
       <p className="text-muted text-sm mb-5">
-        {isUpsell
+        {isQueueFull
+          ? <>Come back later, or skip the line with a plan: paid videos go to the{' '}
+              <b className="text-ink font-medium">front of the queue</b>. Nothing was charged and your
+              free minutes are still yours.</>
+          : isUpsell
           ? (partialJob
             ? <>These clips come from the first <b className="text-ink font-medium">{partialJob.processed_minutes} min</b>{' '}
                 of a {partialJob.total_minutes}-min video. A plan gives you the minutes to clip{' '}
@@ -150,6 +163,15 @@ export default function TopUpModal({ onClose, required, remaining, partialMinute
                 clip the whole video.</>
             : <>Your minutes renew next month. Pick a plan to keep clipping now.</>}
       </p>
+
+      {isQueueFull && (
+        <div className="mb-5 flex justify-end">
+          <button onClick={() => { track('QueueFullDismissed', { props: { source } }); onClose(); }}
+                  disabled={busyPrice !== null} className="btn-ghost whitespace-nowrap">
+            I'll come back later
+          </button>
+        </div>
+      )}
 
       {partialOffer && (
         <div className="mb-5 card p-4 flex flex-col sm:flex-row sm:items-center gap-3">

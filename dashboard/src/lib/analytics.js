@@ -14,6 +14,10 @@ import { firstTouchProps } from './attribution';
 //   - UpsellModalSeen    — the voluntary upgrade modal opened
 //   - QuotaWallCheckout  — a plan/top-up clicked inside the wall modal
 //   - UpsellModalCheckout— a plan/top-up clicked inside the upsell modal
+//   - QueueFullSeen      — the "free queue is full" wall opened (402
+//                          free_queue_full; its checkouts carry source 'queue_full')
+//   - QueueFullCheckout  — a plan/top-up clicked inside that wall
+//   - QueueFullDismissed — "I'll come back later" clicked
 //   - CheckoutStarted    — checkout clicked, on ANY surface (see `source` prop:
 //                          'wall' | 'upsell' | 'pricing' | 'watermark')
 //   - CheckoutRedirected — Stripe returned a URL and we are sending them there

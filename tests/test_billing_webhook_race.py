@@ -144,3 +144,70 @@ def test_user_lock_does_not_block_foreign_key_inserts(db):
     t0 = 1794154000
     asyncio.run(billing._upsert_subscription(_sub("incomplete", t0), billing._ts(t0)))
     assert db.user_lock_sql and all("FOR NO KEY UPDATE" in s for s in db.user_lock_sql)
+
+
+@pytest.fixture
+def quiet(monkeypatch):
+    async def _noop(*a, **k):
+        return None
+    from cloud import alerts
+    monkeypatch.setattr(alerts, "send_admin_alert", _noop)
+    monkeypatch.setattr(billing, "_unmark_after_upgrade", _noop)
+
+
+@pytest.mark.parametrize("status, expected", [
+    ("active", [(USER_ID, 1)]),     # starter -> PLAN_PRIORITY["starter"]
+    ("trialing", [(USER_ID, 1)]),
+    ("incomplete", []),             # reached the pay button, nothing paid
+    ("past_due", []),
+])
+def test_live_subscription_moves_queued_jobs_up(db, quiet, monkeypatch, status, expected):
+    calls = []
+    monkeypatch.setattr(billing, "_local_reprioritize", lambda uid, p: calls.append((uid, p)))
+    t0 = 1794154000
+    asyncio.run(billing._upsert_subscription(_sub(status, t0), billing._ts(t0)))
+    assert calls == expected
+
+
+def test_reprioritize_failure_never_fails_the_webhook(db, quiet, monkeypatch):
+    def boom(uid, p):
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(billing, "_local_reprioritize", boom)
+    t0 = 1794154000
+    asyncio.run(billing._upsert_subscription(_sub("active", t0), billing._ts(t0)))
+    assert db.subs[USER_ID].status == "active"
+
+
+def test_paid_invoice_after_a_lapse_moves_jobs_up_and_unmarks(db, quiet, monkeypatch):
+    # past_due -> active through invoice.paid (no subscription.updated needed):
+    # while it lapsed new jobs were queued and rendered as free.
+    calls, unmarked = [], []
+    monkeypatch.setattr(billing, "_local_reprioritize", lambda uid, p: calls.append((uid, p)))
+
+    async def _unmark(uid):
+        unmarked.append(uid)
+    monkeypatch.setattr(billing, "_unmark_after_upgrade", _unmark)
+    t0 = 1794154000
+    asyncio.run(billing._upsert_subscription(_sub("past_due", t0), billing._ts(t0)))
+    assert calls == []
+
+    async def paid():
+        await billing._set_subscription_status_by_invoice(
+            {"subscription": "sub_new"}, "active", billing._ts(t0 + 60))
+        await asyncio.sleep(0)
+    asyncio.run(paid())
+    assert db.subs[USER_ID].status == "active"
+    assert calls == [(USER_ID, 1)]
+    assert unmarked == [USER_ID]
+
+
+def test_async_reprioritize_callback_is_awaited(db, quiet, monkeypatch):
+    calls = []
+
+    async def cb(uid, p):
+        await asyncio.sleep(0)
+        calls.append((uid, p))
+    monkeypatch.setattr(billing, "_local_reprioritize", cb)
+    t0 = 1794154000
+    asyncio.run(billing._upsert_subscription(_sub("active", t0), billing._ts(t0)))
+    assert calls == [(USER_ID, 1)]

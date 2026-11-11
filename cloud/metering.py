@@ -34,6 +34,10 @@ from .models import User, Subscription, CreditTopup, UsageLedger, FirstVideoGran
 
 SWEEP_INTERVAL_SECONDS = 15 * 60
 STUCK_RESERVATION_HOURS = 3
+# A reservation whose job is still queued or running outlives the stuck window;
+# one whose job has not MOVED for this long (env LIVE_RESERVATION_MAX_HOURS: a
+# run that never ends, a manifest nobody resumes) is released as hung.
+LIVE_RESERVATION_MAX_HOURS = 24
 
 
 class QuotaExceeded(Exception):
@@ -401,6 +405,64 @@ async def _active_subscription(session, user_id):
     return row if _entitles(row) else None
 
 
+LIVE_PLANS_CHUNK = 500
+
+
+async def live_plans(user_ids) -> dict:
+    """``{str(user_id): plan}`` for the users among ``user_ids`` whose
+    subscription grants its plan right now (the rule of ``_entitles``). For
+    the job queue, which may hold thousands of jobs: one query per
+    LIVE_PLANS_CHUNK owners, never one per job. Ids that are not uuids
+    (self-host, test doubles) are skipped."""
+    import uuid as _uuid
+    ids = []
+    for u in {str(x) for x in (user_ids or ()) if x is not None}:
+        try:
+            ids.append(_uuid.UUID(u))
+        except ValueError:
+            continue
+    plans = {}
+    if not ids:
+        return plans
+    async with database.session() as session:
+        for i in range(0, len(ids), LIVE_PLANS_CHUNK):
+            rows = (await session.execute(
+                select(Subscription.user_id, Subscription.plan).where(and_(
+                    Subscription.user_id.in_(ids[i:i + LIVE_PLANS_CHUNK]),
+                    Subscription.status.in_(("active", "trialing")),
+                    Subscription.current_period_end > _now(),
+                ))
+            )).all()
+            plans.update({str(uid): plan for uid, plan in rows})
+    return plans
+
+
+async def topup_owners(user_ids) -> set:
+    """``{str(user_id)}`` of the users among ``user_ids`` with top-up minutes
+    left (the free queue's saturation mode queues their jobs as paid). One
+    query per LIVE_PLANS_CHUNK owners; non-uuid ids are skipped."""
+    import uuid as _uuid
+    ids = []
+    for u in {str(x) for x in (user_ids or ()) if x is not None}:
+        try:
+            ids.append(_uuid.UUID(u))
+        except ValueError:
+            continue
+    out = set()
+    if not ids:
+        return out
+    async with database.session() as session:
+        for i in range(0, len(ids), LIVE_PLANS_CHUNK):
+            rows = (await session.execute(
+                select(CreditTopup.user_id).where(and_(
+                    CreditTopup.user_id.in_(ids[i:i + LIVE_PLANS_CHUNK]),
+                    CreditTopup.minutes_total > CreditTopup.minutes_consumed,
+                )).distinct()
+            )).scalars().all()
+            out.update(str(u) for u in rows)
+    return out
+
+
 def free_plan_eligible(user) -> bool:
     """True if this ``User`` row qualifies for the free monthly allowance.
 
@@ -704,7 +766,13 @@ async def release_reservation(ledger_id: str):
             row.status = "released"
 
 
-async def release_orphaned_reservations(keep_ids=None):
+# A reservation this recent at startup may belong to a job the other instance
+# of a deploy accepted while this one booted, whose manifest the startup scan
+# could not have seen yet: leave it to the sweeper, which checks liveness.
+ORPHAN_GRACE_SECONDS = 120
+
+
+async def release_orphaned_reservations(keep_ids=None, created_before=None):
     """At startup, release every still-``reserved`` row.
 
     Jobs live only in memory, so a restart loses all in-flight jobs; their
@@ -712,12 +780,18 @@ async def release_orphaned_reservations(keep_ids=None):
 
     ``keep_ids`` are reservations for jobs being *resumed* after the restart —
     those keep running and will settle themselves, so they must not be refunded.
+    ``created_before`` (the boot instant) limits it to rows older than that
+    minus ORPHAN_GRACE_SECONDS: during a deploy the old instance keeps taking
+    jobs, and one reserved while this instance booted has a manifest the keep
+    set was computed too early to contain.
     """
     keep = {str(k) for k in (keep_ids or ())}
+    q = select(UsageLedger.id).where(UsageLedger.status == "reserved")
+    if created_before is not None:
+        q = q.where(UsageLedger.created_at
+                    < created_before - timedelta(seconds=ORPHAN_GRACE_SECONDS))
     async with database.session() as session:
-        ids = list((await session.execute(
-            select(UsageLedger.id).where(UsageLedger.status == "reserved")
-        )).scalars())
+        ids = list((await session.execute(q)).scalars())
     released = 0
     for lid in ids:
         if str(lid) in keep:
@@ -728,31 +802,81 @@ async def release_orphaned_reservations(keep_ids=None):
         print(f"☁️  Released {released} orphaned reservation(s) at startup.")
 
 
-async def _sweep_once():
-    cutoff = _now() - timedelta(hours=STUCK_RESERVATION_HOURS)
+def _live_cap_hours() -> float:
+    try:
+        return float(os.environ.get("LIVE_RESERVATION_MAX_HOURS") or LIVE_RESERVATION_MAX_HOURS)
+    except ValueError:
+        return float(LIVE_RESERVATION_MAX_HOURS)
+
+
+async def _sweep_once(live_ids=None):
+    """Release reservations older than STUCK_RESERVATION_HOURS whose job is over.
+
+    ``live_ids()`` (app.py; may be a coroutine) maps the reservations whose job
+    is still queued, running or waiting in a resume manifest on the shared disk
+    to the moment that job was last known to be moving (``alive_since``, epoch
+    seconds; a plain set counts as "moving now"). A queue longer than the stuck
+    window must not refund a video that will still be delivered: its commit
+    would then find nothing to commit. It is read BEFORE the rows, so a job
+    that ends in between is either committed already or still counted live. If
+    it fails the pass is skipped: not knowing what is alive is no reason to
+    refund everything. A live reservation whose job has not moved for
+    LIVE_RESERVATION_MAX_HOURS is released as hung; that clock is the job's
+    (a run that never ends, a manifest nobody takes), never the reservation's
+    age, so a long wait in the queue does not count.
+    """
+    live = None
+    if live_ids is not None:
+        try:
+            got = live_ids()
+            if asyncio.iscoroutine(got) or isinstance(got, asyncio.Future):
+                got = await got
+            if isinstance(got, dict):
+                live = {str(k): float(v) for k, v in got.items()}
+            else:
+                stamp = _now().timestamp()
+                live = {str(k): stamp for k in got}
+        except Exception as e:
+            print(f"⚠️  Metering sweep skipped, live jobs unknown: {e}")
+            return
+    now = _now()
+    cutoff = now - timedelta(hours=STUCK_RESERVATION_HOURS)
+    hung_before = now.timestamp() - _live_cap_hours() * 3600
     async with database.session() as session:
-        ids = list((await session.execute(
+        rows = list((await session.execute(
             select(UsageLedger.id).where(and_(
                 UsageLedger.status == "reserved",
                 UsageLedger.created_at < cutoff,
             ))
         )).scalars())
+    ids = [lid for lid in rows
+           if live is None or str(lid) not in live or live[str(lid)] < hung_before]
     for lid in ids:
         await release_reservation(str(lid))
     if ids:
         print(f"☁️  Swept {len(ids)} stuck reservation(s).")
+    kept = len(rows) - len(ids)
+    if kept:
+        print(f"☁️  Kept {kept} reservation(s) older than {STUCK_RESERVATION_HOURS} h: "
+              f"their job is still queued or running.")
 
 
-async def _sweeper_loop():
+async def _sweeper_loop(live_ids=None, is_active=None):
     while True:
         try:
             await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
-            await _sweep_once()
+            # A draining instance leaves the sweep to the new one: from here
+            # the new one's queue looks like manifests nobody has taken.
+            if is_active is not None and not is_active():
+                continue
+            await _sweep_once(live_ids)
         except asyncio.CancelledError:
             break
         except Exception as e:  # never let the sweeper die
             print(f"⚠️  Metering sweeper error: {e}")
 
 
-def start_sweeper():
-    asyncio.create_task(_sweeper_loop())
+def start_sweeper(live_ids=None, is_active=None):
+    """``live_ids``: callable (or coroutine function) returning the live
+    reservations, see ``_sweep_once``. ``is_active``: False while draining."""
+    asyncio.create_task(_sweeper_loop(live_ids, is_active))

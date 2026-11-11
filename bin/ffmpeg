@@ -61,6 +61,11 @@ if [ "$slots" -gt 0 ] && [ -d "$lock_dir" ] && [ -w "$lock_dir" ] \
                 waited=$((waited + 1))
             fi
         done
+        # NVENC_WAIT_LOG (main.py sets it per job): one line per encode that
+        # waited, its seconds, summed into the job's JOB_CPU line.
+        if [ "$waited" -gt 0 ] && [ -n "${NVENC_WAIT_LOG:-}" ]; then
+            echo "$waited" >> "$NVENC_WAIT_LOG" 2>/dev/null || true
+        fi
     fi
 fi
 
