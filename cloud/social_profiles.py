@@ -8,6 +8,7 @@ Docs: https://docs.upload-post.com/guides/user-profile-integration
 """
 import httpx
 from fastapi import APIRouter, Request, HTTPException
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from .config import settings
 from . import database
@@ -81,13 +82,21 @@ async def ensure_profile(user) -> str:
     username = profile_username_for(user.id)
     await _create_remote_profile(username)
 
+    # Two near-simultaneous connects both get here: the re-check under the
+    # transaction can't see the other's uncommitted row, so a plain INSERT made
+    # the loser hit the primary key and answer 500. ON CONFLICT DO NOTHING makes
+    # the loser a no-op; it then returns whatever row won.
     async with database.session() as s:
         async with s.begin():
-            prof = await s.get(UploadPostProfile, user.id)  # re-check under txn
-            if prof:
-                return prof.profile_username
-            s.add(UploadPostProfile(user_id=user.id, profile_username=username))
-    return username
+            result = await s.execute(
+                pg_insert(UploadPostProfile)
+                .values(user_id=user.id, profile_username=username)
+                .on_conflict_do_nothing()
+            )
+            if result.rowcount:
+                return username
+            prof = await s.get(UploadPostProfile, user.id)
+            return prof.profile_username if prof else username
 
 
 # Where the connect page sends the user back to. A closed list: the value
