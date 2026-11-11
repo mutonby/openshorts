@@ -1075,6 +1075,99 @@ def _fold_slow_lane() -> int:
     return moved
 
 
+# --- The backlog follows the slow lane -----------------------------------------
+# A lane is decided at submit, from the request. A job enqueued again from its
+# manifest was submitted to an earlier instance, maybe before the slow lane
+# existed or under another country list: it sits in the normal lane whatever
+# its owner's country, and takes the spare capacity that lane gets from the
+# people the list does not cover. Once per job and per boot, such a job is
+# checked against the list with the country of its owner's last recorded
+# request (``cloud/evidence.py``); unknown = it stays where it is.
+_BOOTED_AT = time.time()
+_lane_rechecked: set = set()
+
+
+async def _owner_countries(owner_ids) -> dict:
+    """``{owner_id: country code or ""}`` from each owner's last recorded
+    address, looked up in the local country database (one batch, no call)."""
+    from cloud import evidence as _evidence
+    ips = await _evidence.last_ips(owner_ids)
+    return {u: _queue_mode.request_country({}, ip) for u, ip in ips.items()}
+
+
+def _rewrite_manifest_lanes(job_ids, running: set) -> set:
+    """Worker thread: the manifests of ``job_ids`` that nobody runs move to
+    the slow lane, so the next instance enqueues them there."""
+    rewritten = set()
+    for name in job_ids:
+        m = _read_manifest(name)
+        if (not m or name in running or _manifest_busy_elsewhere(m)
+                or m.get("stage") == "delivering"):
+            continue
+        try:
+            if int(m.get("priority", _queue_mode.FREE_PRIORITY)) != _queue_mode.FREE_PRIORITY:
+                continue  # raised by a payment meanwhile: the payment wins
+        except (TypeError, ValueError):
+            continue
+        if name in _running_jobs or name in _delivering_jobs:
+            continue
+        m["priority"] = _queue_mode.SLOW_PRIORITY
+        m["lane"] = _queue_mode.SLOW
+        try:
+            write_json_atomic(_manifest_path(name), m)
+            rewritten.add(name)
+        except Exception as e:
+            print(f"⚠️ Could not move the manifest of {name} to the slow lane: {e}")
+    return rewritten
+
+
+async def _move_backlog_to_slow_lane() -> int:
+    """Queued free jobs of the normal lane that this instance did not take at
+    submit go to the slow lane when their owner's country is on the list.
+    Paid and top-up jobs sit above the free priority and are never looked at;
+    a job only ever moves down here once, and paying moves it up as usual.
+    Returns how many moved."""
+    if not _saturation_on() or not _queue_mode.slow_lane_on() or _draining:
+        return 0
+    heap = job_queue._queue
+    _lane_rechecked.intersection_update({e[2] for e in heap})
+    cand = {}
+    for prio, _key, jid in heap:
+        if prio != _queue_mode.FREE_PRIORITY or jid in _lane_rechecked:
+            continue
+        job = jobs.get(jid)
+        if not job or job.get('status') != 'queued' or job.get('user_id') is None:
+            continue
+        if float(job.get('submitted_at') or 0) >= _BOOTED_AT:
+            continue  # submitted here: its lane was decided from its request
+        cand[jid] = str(job['user_id'])
+    if not cand:
+        return 0
+    try:
+        countries = await _owner_countries(set(cand.values()))
+    except Exception as e:
+        print(f"⚠️ Country lookup for the queued backlog failed, lanes kept: {type(e).__name__}")
+        return 0
+    _lane_rechecked.update(cand)
+    slow = {jid for jid, owner in cand.items()
+            if _queue_mode.lane_for("free", countries.get(owner)) == _queue_mode.SLOW}
+    moved = []
+    for i, (prio, key, jid) in enumerate(heap):
+        if (jid in slow and prio == _queue_mode.FREE_PRIORITY
+                and (jobs.get(jid) or {}).get('status') == 'queued'):
+            heap[i] = (_queue_mode.SLOW_PRIORITY,
+                       _entry_key(_queue_mode.SLOW_PRIORITY, jid, key), jid)
+            jobs[jid]['lane'] = _queue_mode.SLOW
+            moved.append(jid)
+    if not moved:
+        return 0
+    heapq.heapify(heap)
+    _queue_changed()
+    await asyncio.to_thread(_rewrite_manifest_lanes, moved, set(_running_jobs))
+    print(f"🚦 Moved {len(moved)} waiting free job(s) of the backlog to the slow lane.")
+    return len(moved)
+
+
 def _rekey_lanes(lanes=None):
     """Re-sort the free lanes after their order changed (newest first on or
     off): each entry's key is its arrival time with the sign of its lane's
@@ -2001,6 +2094,7 @@ async def _resume_scan():
             _fold_slow_lane()
             await _raise_to_owner_plans()
             await _follow_manifest_priorities()
+            await _move_backlog_to_slow_lane()
             await _expire_starved_jobs()
         except Exception as e:
             print(f"⚠️ Resume scan failed: {e}")
@@ -2391,6 +2485,45 @@ def _unstick_markers(job_ids) -> list:
 _unclaim_pending: dict = {}
 
 
+# Seconds between two expiry notices: a jam ends hundreds of jobs in one
+# pass, and the mailbox throttles bursts.
+QUEUE_EXPIRED_EMAIL_GAP = float(os.environ.get("QUEUE_EXPIRED_EMAIL_GAP", "2"))
+_expiry_notices: set = set()   # strong refs to the running notice tasks
+
+
+async def _notify_queue_expired(job_ids) -> int:
+    """Email the owners of free jobs the queue never reached: no minutes
+    used, send it again. A job notice like clips-ready, so not for jobs sent
+    with an API key (the webhook told them), and once per account
+    (``lifecycle.claim``) however many of its videos expired. Returns how
+    many were sent."""
+    if not BILLING_ENABLED:
+        return 0
+    sent = 0
+    for jid in job_ids:
+        job = jobs.get(jid) or {}
+        if not job.get('user_id') or job.get('via_api_key'):
+            continue
+        try:
+            from cloud.database import session as cloud_session
+            from cloud.models import User
+            from cloud.emails import send_queue_expired_email
+            from cloud import lifecycle as _lifecycle
+            async with cloud_session() as s:
+                user = await s.get(User, job['user_id'])
+            if not user or not user.email:
+                continue
+            if not await _lifecycle.claim(user.id, "queue_expired"):
+                continue
+            await send_queue_expired_email(
+                user.email, f"{_cloud_config.settings.frontend_url}/#app")
+            sent += 1
+        except Exception as e:
+            print(f"⚠️  Queue-expired email error for {jid}: {type(e).__name__}")
+        await asyncio.sleep(QUEUE_EXPIRED_EMAIL_GAP)
+    return sent
+
+
 def _expiry_clock(job) -> float:
     """When a queued job's 24 h start: the latest of its submission, the
     switching on of the mode (the jobs already waiting then get the whole
@@ -2471,6 +2604,13 @@ async def _expire_starved_jobs(now=None) -> list:
         await _settle_reservation(jid, jobs[jid])
         await _autopilot_job_finished(jid, jobs[jid])
         await _notify_job_webhook(jid)
+    # The normal lane's owners are told by email (the slow lane's would be
+    # refused again by the brake): most left the tab hours ago.
+    told = [jid for jid in res["claimed"] if entries[jid][0] == _queue_mode.FREE_PRIORITY]
+    if told:
+        task = asyncio.get_running_loop().create_task(_notify_queue_expired(told))
+        _expiry_notices.add(task)
+        task.add_done_callback(_expiry_notices.discard)
     if res["claimed"]:
         print(f"⌛ Expired {len(res['claimed'])} free job(s) that waited over "
               f"{ACTIVE_JOB_MAX_SECONDS // 3600} h in the queue.")

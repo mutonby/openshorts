@@ -320,6 +320,15 @@ off.
   geolocation header win over the database; set it only behind a proxy or
   CDN that sets that header and strips any copy a client sends, or anyone can
   choose their lane.
+- **The backlog follows the list.** A lane is decided at submit, so a job
+  enqueued again from its manifest (submitted to an earlier instance, maybe
+  before the slow lane existed or under another list) would stay in the normal
+  lane whatever its owner's country. Once per job and per boot the resume scan
+  (`app._move_backlog_to_slow_lane`) looks up the country of each such free
+  owner's last recorded request (`evidence.last_ips`, one batch, then the
+  local database) and moves the listed ones to the slow lane, heap and
+  manifest. Unknown country or a failed lookup = it stays; paid and top-up
+  jobs are never looked at, and paying moves a moved job up as usual.
 - **Off = folded back.** With the kill switch or an empty country list, a job
   at priority 3 queues at 2 by its submission time: at enqueue, at resume and
   live (`app._fold_slow_lane`, every resume scan).
@@ -369,6 +378,10 @@ off.
   one. Until then a waiting job is never dropped: resumes that did not run
   count no attempt, the disk sweeps and size caps skip queued jobs (dir and
   upload), and its reservation is live (`now`) for the sweeper.
+  The owners of the normal lane's expired jobs get one email per account
+  (`app._notify_queue_expired`, a job notice like clips-ready: no API-key
+  jobs, spaced `QUEUE_EXPIRED_EMAIL_GAP` seconds apart); the slow lane's are
+  not written to, the brake would refuse them again.
 - **`/api/status`** ranks the real dispatch order (cached per heap change, not
   per poll) and adds `eta_is_minimum`: true for a job that later arrivals can
   still pass (slow lane, or a lane serving newest first); the dashboard says

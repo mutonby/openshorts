@@ -106,6 +106,24 @@ async def send_clips_ready_email(email: str, job_title: str, clip_count: int,
     await send_email(email, f"Your clips are ready — {title}", html)
 
 
+async def send_queue_expired_email(email: str, dashboard_url: str):
+    """Job notice: a free video waited out a jammed queue and was not clipped."""
+    html = f"""
+      <div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto">
+        <h2>We could not get to your video in time</h2>
+        <p>The free queue was far busier than usual and your video waited too
+           long, so we stopped it instead of keeping you waiting. Sorry about
+           that. <strong>No minutes were used.</strong></p>
+        <p>Send it again whenever you like: while the queue is busy, the
+           newest free videos go first.</p>
+        <p><a href="{dashboard_url}" style="display:inline-block;background:#111;color:#fff;
+           padding:12px 20px;border-radius:8px;text-decoration:none">Send it again</a></p>
+        <p style="color:#666;font-size:13px">Paid plans skip the free queue.</p>
+      </div>
+    """
+    await send_email(email, "Your video was not clipped: send it again", html)
+
+
 async def send_autopilot_clips_email(email: str, video_title: str, clip_count: int,
                                      scheduled_count: int, dashboard_url: str):
     """Autopilot finished clipping a new channel video on its own.

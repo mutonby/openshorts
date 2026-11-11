@@ -11,6 +11,11 @@ in the background in its own short transaction, so a slow or broken database
 never delays or fails a sign-in or a checkout; a lost row costs one line of
 evidence, nothing more. Failures are logged without the address or the IP.
 
+One other reader: the free queue asks for an account's last address
+(``last_ips``) to place a job it holds from before its lane was decided
+(``app._move_backlog_to_slow_lane``). The address is looked up in the local
+country database in memory and goes nowhere else.
+
 Rows go with the account on erasure (``account.USER_OWNED_TABLES``) and age
 out after ``RETENTION_DAYS`` (``purge_stale_events``, run by the retention
 sweeper in cloud/videos.py).
@@ -94,3 +99,36 @@ async def purge_stale_events():
         async with session.begin():
             await session.execute(
                 delete(EvidenceEvent).where(EvidenceEvent.created_at < cutoff))
+
+
+
+LAST_IPS_CHUNK = 500
+
+
+async def last_ips(user_ids) -> dict:
+    """``{str(user_id): ip}`` of the latest row with an address for each of
+    ``user_ids`` that has one. One query per LAST_IPS_CHUNK accounts; ids that
+    are not uuids (self-host, test doubles) are skipped."""
+    import uuid as _uuid
+    from sqlalchemy import select
+    from .models import EvidenceEvent
+
+    ids = []
+    for u in {str(x) for x in (user_ids or ()) if x is not None}:
+        try:
+            ids.append(_uuid.UUID(u))
+        except ValueError:
+            continue
+    out = {}
+    if not ids:
+        return out
+    async with database.session() as session:
+        for i in range(0, len(ids), LAST_IPS_CHUNK):
+            rows = (await session.execute(
+                select(EvidenceEvent.user_id, EvidenceEvent.ip)
+                .where(EvidenceEvent.user_id.in_(ids[i:i + LAST_IPS_CHUNK]),
+                       EvidenceEvent.ip.is_not(None))
+                .order_by(EvidenceEvent.created_at)
+            )).all()
+            out.update({str(uid): str(ip) for uid, ip in rows})   # the latest wins
+    return out

@@ -908,3 +908,149 @@ class TestNeverRuns:
         assert view["logs"][-1] == app_module.QUEUE_EXPIRED_LOG
         assert self._handover(out) == set()               # never resumed again
         assert "slow_old" not in app_module.jobs
+
+
+class TestBacklogLanes:
+    """Jobs enqueued again from a manifest are checked against the list once."""
+
+    @pytest.fixture
+    def backlog(self, out, sat, monkeypatch):
+        calls = []
+
+        async def countries(owner_ids):
+            calls.append(set(owner_ids))
+            return {u: c for u, c in {"ua": "XA", "uc": "XC"}.items() if u in owner_ids}
+        monkeypatch.setattr(app_module, "_owner_countries", countries)
+        monkeypatch.setattr(app_module, "_BOOTED_AT", 1000.0)
+        monkeypatch.setattr(app_module, "_lane_rechecked", set())
+        monkeypatch.setattr(app_module, "_delivering_jobs", set(), raising=False)
+        return calls
+
+    def _manifest(self, out, jid):
+        return json.loads((out / jid / app_module._RESUME_FILE).read_text())
+
+    def test_listed_owners_move_down_once(self, out, backlog):
+        _job(out, "listed", FREE, 100.0, user="ua")
+        _job(out, "other", FREE, 200.0, user="uc")
+        _job(out, "unknown", FREE, 300.0, user="ux")
+        _job(out, "paid", 1, 400.0, user="ua")
+        _job(out, "here", FREE, 2000.0, user="ua")     # submitted to this instance
+        assert asyncio.run(app_module._move_backlog_to_slow_lane()) == 1
+        prio = {e[2]: e[0] for e in app_module.job_queue._queue}
+        assert prio == {"listed": SLOW, "other": FREE, "unknown": FREE, "paid": 1, "here": FREE}
+        _assert_heap()
+        assert app_module.jobs["listed"]["lane"] == qm.SLOW
+        m = self._manifest(out, "listed")
+        assert (m["priority"], m["lane"]) == (SLOW, qm.SLOW)
+        assert self._manifest(out, "other")["priority"] == FREE
+        assert self._manifest(out, "paid")["priority"] == 1
+        # Only the free backlog's owners were asked, and only once.
+        assert backlog == [{"ua", "uc", "ux"}]
+        assert asyncio.run(app_module._move_backlog_to_slow_lane()) == 0
+        assert len(backlog) == 1
+
+    def test_moved_jobs_go_after_the_normal_lane(self, out, backlog):
+        _job(out, "listed", FREE, 100.0, user="ua")
+        _job(out, "other", FREE, 200.0, user="uc")
+        asyncio.run(app_module._move_backlog_to_slow_lane())
+        assert _order() == ["other", "listed"]
+
+    def test_failed_lookup_keeps_lanes_and_asks_again(self, out, backlog, monkeypatch):
+        _job(out, "listed", FREE, 100.0, user="ua")
+        good = app_module._owner_countries
+
+        async def broken(owner_ids):
+            raise RuntimeError("db down")
+        monkeypatch.setattr(app_module, "_owner_countries", broken)
+        assert asyncio.run(app_module._move_backlog_to_slow_lane()) == 0
+        assert [e[0] for e in app_module.job_queue._queue] == [FREE]
+        monkeypatch.setattr(app_module, "_owner_countries", good)
+        assert asyncio.run(app_module._move_backlog_to_slow_lane()) == 1
+
+    def test_nothing_without_a_slow_lane_or_while_draining(self, out, backlog, monkeypatch):
+        _job(out, "listed", FREE, 100.0, user="ua")
+        monkeypatch.setattr(app_module, "_draining", True)
+        assert asyncio.run(app_module._move_backlog_to_slow_lane()) == 0
+        monkeypatch.setattr(app_module, "_draining", False)
+        monkeypatch.delenv("FREE_SLOW_LANE_COUNTRIES")
+        assert asyncio.run(app_module._move_backlog_to_slow_lane()) == 0
+        assert backlog == []
+
+    def test_a_manifest_raised_by_a_payment_is_left_alone(self, out, backlog):
+        _job(out, "listed", FREE, 100.0, user="ua")
+        p = out / "listed" / app_module._RESUME_FILE
+        m = json.loads(p.read_text())
+        m["priority"] = 1
+        p.write_text(json.dumps(m))
+        asyncio.run(app_module._move_backlog_to_slow_lane())
+        assert self._manifest(out, "listed")["priority"] == 1
+
+    def test_owner_countries_reads_the_local_database(self, env, monkeypatch):
+        from cloud import evidence
+
+        async def last_ips(owner_ids):
+            return {"ua": CLIENT["XA"], "uz": "10.0.0.1"}
+        monkeypatch.setattr(evidence, "last_ips", last_ips)
+        got = asyncio.run(app_module._owner_countries({"ua", "uz"}))
+        assert got == {"ua": "XA", "uz": ""}
+
+
+class TestExpiryNotice:
+    """The normal lane's owners get one email when their video expires."""
+
+    def test_only_the_normal_lane_is_told(self, out, sat, monkeypatch):
+        told = []
+
+        async def nothing(*a, **k):
+            return None
+
+        async def notify(job_ids):
+            told.extend(job_ids)
+        for name in ("_settle_reservation", "_notify_job_webhook", "_autopilot_job_finished"):
+            monkeypatch.setattr(app_module, name, nothing)
+        monkeypatch.setattr(app_module, "_notify_queue_expired", notify)
+        now = 10 * 86400.0
+        limit = app_module.ACTIVE_JOB_MAX_SECONDS
+        _job(out, "old_slow", SLOW, now - limit - 60)
+        _job(out, "old_free", FREE, now - limit - 1)
+        _job(out, "fresh", FREE, now - 60)
+
+        async def run():
+            gone = await app_module._expire_starved_jobs(now)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            return gone
+        assert sorted(asyncio.run(run())) == ["old_free", "old_slow"]
+        assert told == ["old_free"]
+
+    def test_one_email_per_account_and_none_for_api_jobs(self, out, sat, monkeypatch):
+        from contextlib import asynccontextmanager
+        from cloud import database, emails, lifecycle
+        sent, claimed = [], set()
+
+        class Session:
+            async def get(self, _model, uid):
+                return SimpleNamespace(id=uid, email=f"{uid}@example.com")
+
+        @asynccontextmanager
+        async def session():
+            yield Session()
+
+        async def claim(uid, kind):
+            if (uid, kind) in claimed:
+                return False
+            claimed.add((uid, kind))
+            return True
+
+        async def send(email, url):
+            sent.append(email)
+        monkeypatch.setattr(database, "session", session)
+        monkeypatch.setattr(lifecycle, "claim", claim)
+        monkeypatch.setattr(emails, "send_queue_expired_email", send)
+        monkeypatch.setattr(app_module, "QUEUE_EXPIRED_EMAIL_GAP", 0)
+        app_module.jobs.update({
+            "a1": {"user_id": "ua"}, "a2": {"user_id": "ua"},
+            "api": {"user_id": "ub", "via_api_key": True}, "c": {"user_id": "uc"},
+        })
+        n = asyncio.run(app_module._notify_queue_expired(["a1", "a2", "api", "c", "gone"]))
+        assert (n, sent) == (2, ["ua@example.com", "uc@example.com"])
