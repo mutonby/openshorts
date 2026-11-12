@@ -71,7 +71,12 @@ def main() -> int:
             def error(self, msg):
                 warnings.append(str(msg))
 
-        cookies_path = _find_cookies_path()
+        import contextlib
+        import yt_account
+        # One of the configured accounts; a cookies file next to the script
+        # (self-host) when the environment has none.
+        session = yt_account.Session()
+        cookies_path = session.path or _find_cookies_path()
         base_opts = {
             'quiet': True,
             'no_warnings': False,
@@ -86,8 +91,6 @@ def main() -> int:
         # yt-dlp's default player clients (tv_downgraded/web_safari with
         # cookies, android_vr/web_safari anonymous) are the ones that still
         # serve HD without PO tokens — never override them here.
-        import contextlib
-        import yt_account
         attempts = []
         # Not while YouTube has the account limited (yt_account): the request
         # would fail and count against it again.
@@ -98,11 +101,11 @@ def main() -> int:
         for mode, opts in attempts:
             authed = mode == "cookie-auth"
             try:
-                with (yt_account.request() if authed else contextlib.nullcontext()):
+                with (session.request() if authed else contextlib.nullcontext()):
                     with ssrf_guard.guarded(), yt_dlp.YoutubeDL(opts) as ydl:
                         info = ydl.extract_info(args.url, download=False)
                 if authed:
-                    yt_account.note_ok()
+                    session.ok()
                 formats = info.get('formats') or []
                 heights = [
                     f.get('height') or 0
@@ -121,7 +124,7 @@ def main() -> int:
                     break
             except Exception as e:
                 if authed and yt_account.is_rate_limit(str(e)):
-                    yt_account.note_rate_limited()
+                    session.limited()
                 continue
 
         result["cookies_invalid"] = any("no longer valid" in w for w in warnings)

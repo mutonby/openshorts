@@ -910,22 +910,15 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     print("📥 Downloading video from YouTube...")
     step_start_time = time.time()
 
-    cookies_path = '/app/cookies.txt'
-    cookies_env = os.environ.get("YOUTUBE_COOKIES")
-    if cookies_env:
-        print("🍪 Found YOUTUBE_COOKIES env var, creating cookies file inside container...")
-        try:
-            with open(cookies_path, 'w') as f:
-                f.write(cookies_env)
-            if os.path.exists(cookies_path):
-                 # Never print file CONTENT here: with a headerless cookies
-                 # blob this would leak live YouTube session cookies to logs.
-                 print(f"   Debug: Cookies file created. Size: {os.path.getsize(cookies_path)} bytes")
-        except Exception as e:
-            print(f"⚠️ Failed to write cookies file: {e}")
-            cookies_path = None
+    # The account this video uses (one of YOUTUBE_COOKIES, YOUTUBE_COOKIES_2,
+    # ...), as a private cookie file. Never print its CONTENT: it is a live
+    # YouTube session.
+    yt_session = yt_account.Session()
+    cookies_path = yt_session.path
+    if cookies_path:
+        print(f"🍪 Using YouTube account {yt_session.account + 1} of "
+              f"{len(yt_account.accounts())}.")
     else:
-        cookies_path = None
         print("⚠️ YOUTUBE_COOKIES env var not found.")
     
     # Optional HTTP proxy. Set PROXY_URL to route downloads through it; unset
@@ -1076,7 +1069,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         # An extraction that sends the account's cookies takes one of the
         # account's slots and keeps its distance from the previous one
         # (yt_account): the account's request budget is shared by every job.
-        with (yt_account.request() if (cookies and cookies_path) else contextlib.nullcontext()):
+        with (yt_session.request() if (cookies and cookies_path) else contextlib.nullcontext()):
             with yt_dlp.YoutubeDL(_base_opts(extractor_args, proxy, cookies)) as ydl:
                 info = ydl.extract_info(url, download=False, process=False)
         # Media URLs another program will fetch (ffmpeg on a ranged or HLS
@@ -1165,11 +1158,9 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     # proxy (the container log rotates within the hour; see cloud/proxy_ledger).
     attempt_log = []
     account_limited = False
-    limit_answers = 0
     skip_told = False
     for label, ea, fmt, proxy, cookies in attempts:
-        if cookies and cookies_path and (limit_answers >= yt_account.ANSWERS_PER_VIDEO
-                                         or yt_account.cooling_down() > 0):
+        if cookies and cookies_path and yt_session.spent:
             # YouTube said twice for this video (or, during a cooldown, to
             # everybody) that the account is limited: one more request with
             # its cookies gets the same answer and counts against the account
@@ -1192,7 +1183,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                 print(f"📥 Download attempt: {label}" + (f" (retry {retry})" if retry else ""))
                 sanitized_title = _attempt(ea, fmt, proxy, cookies)
                 if cookies and cookies_path:
-                    yt_account.note_ok()
+                    yt_session.ok()
                 # Only bytes through the PER-GB proxy cost money; direct and
                 # the flat-rate static proxies are free bandwidth for the
                 # monthly counter's purposes.
@@ -1211,8 +1202,9 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                 print(f"⚠️  Download attempt '{label}' failed: {str(e)[:200]}")
                 if cookies and yt_account.is_rate_limit(str(e)):
                     account_limited = True
-                    limit_answers += 1
-                    yt_account.note_rate_limited()
+                    if yt_session.limited():
+                        print(f"🔁 Moving this video to YouTube account "
+                              f"{yt_session.account + 1}.")
                     break       # not again on this route; the next one may differ
                 retryable = '403' in str(e) or 'Forbidden' in str(e)
                 if not retryable or retry == 1:

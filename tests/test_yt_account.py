@@ -334,3 +334,130 @@ def test_it_waits_a_few_times_then_fails_for_real(api):
     job["yt_limited"] = True
     job["yt_retries"] = m.YT_LIMIT_RETRIES
     assert not m._should_auto_retry(job)
+
+
+# --- several accounts --------------------------------------------------------
+
+SECOND = NETSCAPE.replace("SID\t", "SID\tsecond-")
+
+
+@pytest.fixture
+def two_accounts(monkeypatch):
+    monkeypatch.setenv("YOUTUBE_COOKIES", NETSCAPE)
+    monkeypatch.setenv("YOUTUBE_COOKIES_2", SECOND)
+    monkeypatch.setattr(yt_account, "REST_SECONDS", 900.0)
+    monkeypatch.setattr(yt_account, "REST_STRIKES", 2)
+
+
+def test_one_account_behaves_as_it_always_did(monkeypatch):
+    monkeypatch.setenv("YOUTUBE_COOKIES", NETSCAPE)
+    monkeypatch.delenv("YOUTUBE_COOKIES_2", raising=False)
+    s = yt_account.Session()
+    try:
+        assert s.account == 0 and open(s.path).read().strip() == NETSCAPE.strip()
+        assert s.limited() is False and s.answers == 1 and not s.spent
+        assert s.limited() is False and s.spent
+    finally:
+        s.close()
+    assert not os.path.exists(s.path or "/nonexistent") and s.path is None
+
+
+def test_no_account_means_no_cookie_file(monkeypatch):
+    monkeypatch.delenv("YOUTUBE_COOKIES", raising=False)
+    s = yt_account.Session()
+    assert s.path is None and s.account is None and not s.spent
+
+
+def test_consecutive_videos_take_consecutive_accounts(two_accounts):
+    used = []
+    for _ in range(4):
+        s = yt_account.Session()
+        used.append(s.account)
+        s.close()
+    assert sorted(used) == [0, 0, 1, 1] and used[0] != used[1]
+
+
+def test_a_limited_video_moves_to_the_other_account(two_accounts):
+    s = yt_account.Session()
+    try:
+        first, path = s.account, s.path
+        assert s.limited() is True                       # moved
+        assert s.account == 1 - first and s.path == path and s.answers == 0
+        expected = SECOND if s.account == 1 else NETSCAPE
+        assert open(path).read().strip() == expected.strip()
+        assert s.limited() is False and s.limited() is False and s.spent   # nowhere left to go
+    finally:
+        s.close()
+
+
+def test_an_account_that_keeps_being_limited_rests_and_the_other_carries_on(two_accounts):
+    assert yt_account.note_account_limited(0) == 0       # one answer: routine
+    assert yt_account.note_account_limited(0) == 900.0   # two in a row: rest
+    assert yt_account.resting(0) > 0 and yt_account.resting(1) == 0
+    for _ in range(3):
+        s = yt_account.Session()
+        assert s.account == 1
+        assert s.limited() is False                      # not onto the resting one
+        s.close()
+        yt_account.note_account_ok(1)
+    assert yt_account.resting(0, now=time.time() + 901) == 0
+
+
+def test_a_success_forgets_the_strikes_of_that_account(two_accounts):
+    yt_account.note_account_limited(0)
+    yt_account.note_account_ok(0)
+    assert yt_account.note_account_limited(0) == 0
+    assert yt_account.resting(0) == 0
+
+
+def test_with_every_account_resting_one_is_still_used(two_accounts):
+    """No cookies at all is worse than a limited account: the anonymous
+    attempts are bot-checked."""
+    now = time.time()
+    for a in (0, 1):
+        yt_account.note_account_limited(a, now=now + a)
+        yt_account.note_account_limited(a, now=now + a)
+    assert yt_account.resting(0) > 0 and yt_account.resting(1) > 0
+    s = yt_account.Session()
+    try:
+        assert s.account == 0 and s.path                  # the one that wakes first
+    finally:
+        s.close()
+
+
+def test_each_account_has_its_own_slots(two_accounts, monkeypatch):
+    monkeypatch.setattr(yt_account, "SLOTS", 1)
+    monkeypatch.setattr(yt_account, "MAX_WAIT", 0.3)
+    with yt_account.request(0):
+        t = time.time()
+        with yt_account.request(1):                       # not behind account 0
+            assert time.time() - t < 0.2
+
+
+def test_the_probe_moves_to_the_second_account(probe_env, two_accounts, monkeypatch):
+    calls = []
+
+    class _YDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            ck = self.opts.get("cookiefile")
+            text = open(ck).read() if ck else ""
+            calls.append((self.opts.get("proxy"), "second-" in text if ck else None))
+            if ck and len([c for c in calls if c[1] is not None]) == 1:
+                raise RuntimeError(LIMITED)               # whichever account went first
+            if not ck:
+                raise RuntimeError("Sign in to confirm you’re not a bot")
+            return {"extractor": "youtube", "duration": 600}
+
+    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=_YDL))
+    assert metering.probe_url_minutes(URL) == 10.0
+    authed = [c for c in calls if c[1] is not None]
+    assert len(authed) == 2 and authed[0][1] != authed[1][1]     # the other account answered

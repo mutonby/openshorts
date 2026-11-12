@@ -24,9 +24,18 @@ output directory (the job processes, the API, both containers of a deploy):
 * ``is_rate_limit()``: the error text, so a job that failed only because of
   this is retried after the cooldown instead of reported as a broken video.
 
+Several accounts (``YOUTUBE_COOKIES``, ``YOUTUBE_COOKIES_2``, ...) share the
+load: each video takes the next account in turn (``Session``), every account
+has its own slots and pacing, and an account that YouTube keeps answering
+"rate-limited" rests for ``YT_ACCOUNT_REST_SECONDS`` while the others carry
+on. A video whose account is limited moves to another one that is not resting
+before it gives up. With every account resting the one closest to waking is
+used: no cookies at all is worse than a limited account.
+
 Fail-open everywhere: a state directory that cannot be written, a lock that
 never frees, a clock that jumped: the request goes ahead as it always did.
 """
+import atexit
 import contextlib
 import fcntl
 import json
@@ -70,7 +79,16 @@ ANSWERS_PER_VIDEO = _int_env("YT_ACCOUNT_ANSWERS_PER_VIDEO", 2)
 # How long a request waits for its turn before going ahead anyway.
 MAX_WAIT = _float_env("YT_ACCOUNT_MAX_WAIT", 90)
 
+# An account that got REST_STRIKES "rate-limited" answers in a row (no request
+# of its own succeeding in between, within STRIKE_WINDOW) rests this long.
+# Only ever applied with more than one account configured.
+REST_SECONDS = _float_env("YT_ACCOUNT_REST_SECONDS", 900)
+REST_STRIKES = _int_env("YT_ACCOUNT_REST_STRIKES", 3)
+MAX_ACCOUNTS = 9
+
 _COOLDOWN_FILE = ".yt-account.cooldown"
+_REST_FILE = ".yt-account-rest-{}"
+_TURN_FILE = ".yt-account.turn"
 _STRIKES_FILE = ".yt-account.strikes"
 _PACE_FILE = ".yt-account.pace"
 _SLOT_FILE = ".yt-account-{}.lock"
@@ -174,7 +192,13 @@ def note_ok():
         pass
 
 
-def _take_slot(deadline):
+def _tag(account):
+    """File name part of one account: nothing for the first, so a host with a
+    single account keeps the files it always had."""
+    return f"a{int(account)}-" if account else ""
+
+
+def _take_slot(deadline, account=0):
     """An open, locked slot file descriptor, or None (no slots configured, or
     none freed in time: go ahead without one)."""
     if SLOTS <= 0:
@@ -183,7 +207,7 @@ def _take_slot(deadline):
     while True:
         for i in range(SLOTS):
             try:
-                fd = os.open(os.path.join(d, _SLOT_FILE.format(i)),
+                fd = os.open(os.path.join(d, _SLOT_FILE.format(f"{_tag(account)}{i}")),
                              os.O_CREAT | os.O_RDWR, 0o600)
             except OSError:
                 return None
@@ -197,13 +221,15 @@ def _take_slot(deadline):
         time.sleep(0.25)
 
 
-def _pace(deadline):
-    """Wait until MIN_INTERVAL after the last authenticated request started,
-    then stamp this one. One process at a time reads and writes the stamp."""
+def _pace(deadline, account=0):
+    """Wait until MIN_INTERVAL after the last authenticated request of this
+    account started, then stamp this one. One process at a time reads and
+    writes the stamp."""
     if MIN_INTERVAL <= 0:
         return
     try:
-        fd = os.open(os.path.join(state_dir(), _PACE_FILE), os.O_CREAT | os.O_RDWR, 0o600)
+        fd = os.open(os.path.join(state_dir(), _PACE_FILE + (f".{_tag(account)[:-1]}" if account else "")),
+                     os.O_CREAT | os.O_RDWR, 0o600)
     except OSError:
         return
     try:
@@ -226,14 +252,234 @@ def _pace(deadline):
 
 
 @contextlib.contextmanager
-def request():
+def request(account=0):
     """Hold one of the account's slots for one authenticated extraction, and
-    start it no sooner than MIN_INTERVAL after the previous one."""
+    start it no sooner than MIN_INTERVAL after the account's previous one."""
     deadline = time.time() + MAX_WAIT
-    fd = _take_slot(deadline)
+    fd = _take_slot(deadline, account)
     try:
-        _pace(deadline)
+        _pace(deadline, account)
         yield
     finally:
         if fd is not None:
             os.close(fd)
+
+
+# --- several accounts ------------------------------------------------------
+
+def accounts(env=None):
+    """The cookie files configured, in order: YOUTUBE_COOKIES, then
+    YOUTUBE_COOKIES_2 .. _9. Empty ones are skipped."""
+    env = os.environ if env is None else env
+    names = ["YOUTUBE_COOKIES"] + [f"YOUTUBE_COOKIES_{i}" for i in range(2, MAX_ACCOUNTS + 1)]
+    out = []
+    for name in names:
+        text = str(env.get(name) or "").strip()
+        if text:
+            out.append(text + "\n")
+    return out
+
+
+def _rest_state(fd):
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        data = json.loads(os.read(fd, 256).decode() or "{}")
+        return (int(data.get("n") or 0), float(data.get("first") or 0),
+                float(data.get("until") or 0))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0, 0.0, 0.0
+
+
+def _write_rest(fd, n, first, until):
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.ftruncate(fd, 0)
+        os.write(fd, json.dumps({"n": n, "first": first, "until": until}).encode())
+    except OSError:
+        pass
+
+
+def resting(account, now=None) -> float:
+    """Seconds this account still rests (0: use it)."""
+    if REST_SECONDS <= 0 or account is None:
+        return 0.0
+    now = time.time() if now is None else now
+    try:
+        with open(os.path.join(state_dir(), _REST_FILE.format(int(account)))) as f:
+            until = float(json.load(f).get("until") or 0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0.0
+    left = until - now
+    return left if 0 < left <= REST_SECONDS + 60 else 0.0
+
+
+def note_account_limited(account, now=None) -> float:
+    """One "rate-limited" answer for this account. Enough of them in a row
+    put it to rest; returns the seconds it now rests (0: still in use)."""
+    if REST_SECONDS <= 0 or account is None:
+        return 0.0
+    now = time.time() if now is None else now
+    try:
+        fd = os.open(os.path.join(state_dir(), _REST_FILE.format(int(account))),
+                     os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError:
+        return 0.0
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        n, first, until = _rest_state(fd)
+        if 0 < until - now <= REST_SECONDS + 60:
+            return until - now            # already resting: do not extend it
+        if not n or now - first > STRIKE_WINDOW or now < first:
+            n, first = 0, now
+        n += 1
+        if n < max(1, REST_STRIKES):
+            _write_rest(fd, n, first, 0.0)
+            return 0.0
+        _write_rest(fd, 0, 0.0, now + REST_SECONDS)
+        return REST_SECONDS
+    except OSError:
+        return 0.0
+    finally:
+        os.close(fd)
+
+
+def note_account_ok(account):
+    """A request with this account worked: forget its strikes."""
+    if account is None:
+        return
+    try:
+        path = os.path.join(state_dir(), _REST_FILE.format(int(account)))
+        if os.path.getsize(path) > 0:
+            fd = os.open(path, os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                n, _first, until = _rest_state(fd)
+                if n:
+                    _write_rest(fd, 0, 0.0, until)
+            finally:
+                os.close(fd)
+    except OSError:
+        pass
+
+
+def _turn():
+    """A counter shared by every process of the host, so consecutive videos
+    take consecutive accounts."""
+    try:
+        fd = os.open(os.path.join(state_dir(), _TURN_FILE), os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError:
+        return os.getpid()
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            n = int(os.read(fd, 32).decode().strip() or 0)
+        except ValueError:
+            n = 0
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.ftruncate(fd, 0)
+        os.write(fd, str((n + 1) % 1_000_000).encode())
+        return n
+    except OSError:
+        return os.getpid()
+    finally:
+        os.close(fd)
+
+
+def pick(exclude=(), awake_only=False, count=None, now=None):
+    """Which account the next video uses: the next in turn among those not
+    resting. With all of them resting, the one closest to waking (or None
+    with ``awake_only``). None when there is no account left to pick."""
+    count = len(accounts()) if count is None else count
+    candidates = [i for i in range(count) if i not in exclude]
+    if not candidates:
+        return None
+    left = {i: resting(i, now) for i in candidates}
+    awake = [i for i in candidates if left[i] <= 0]
+    if not awake:
+        return None if awake_only else min(candidates, key=lambda i: left[i])
+    return awake[_turn() % len(awake)] if len(awake) > 1 else awake[0]
+
+
+class Session:
+    """The account one video uses, as a cookie file yt-dlp can read, and the
+    move to another account when YouTube limits this one.
+
+    ``path`` is None without any account configured (self-host without
+    cookies, the remote worker): callers then run anonymous, as before."""
+
+    _live = {}      # cookie file path -> its Session, in this process
+
+    @classmethod
+    def of(cls, path):
+        """The session that owns this cookie file; for a file somebody else
+        wrote, one that only counts the answers (no account to move to)."""
+        found = cls._live.get(path)
+        if found is None:
+            found = cls.__new__(cls)
+            found._texts, found._tried = [], set()
+            found.account, found.path, found.answers = None, path, 0
+        return found
+
+    def __init__(self):
+        self._texts = accounts()
+        self._tried = set()
+        self.account = None
+        self.path = None
+        self.answers = 0
+        self._use(pick(count=len(self._texts)))
+        if self.path:
+            Session._live[self.path] = self
+            atexit.register(self.close)
+
+    def _use(self, account):
+        if account is None:
+            return False
+        try:
+            if self.path is None:
+                fd, self.path = tempfile.mkstemp(prefix="yt_ck_", suffix=".txt")
+                os.close(fd)
+            # Rewritten in place: the path is already inside the options of
+            # the caller's next attempt.
+            with open(self.path, "w") as f:
+                f.write(self._texts[account])
+            os.chmod(self.path, 0o600)
+        except OSError:
+            if self.account is None:
+                self.path = None
+            return False
+        self.account = account
+        self._tried.add(account)
+        self.answers = 0
+        return True
+
+    @property
+    def spent(self):
+        """No more requests with the cookies for this video."""
+        return self.path is not None and (
+            self.answers >= ANSWERS_PER_VIDEO or cooling_down() > 0)
+
+    def request(self):
+        return request(self.account or 0)
+
+    def ok(self):
+        note_ok()
+        note_account_ok(self.account)
+
+    def limited(self) -> bool:
+        """YouTube answered "rate-limited". True when the video moved to
+        another account (its next attempt uses it)."""
+        note_rate_limited()
+        note_account_limited(self.account)
+        if self._use(pick(exclude=self._tried, awake_only=True, count=len(self._texts))):
+            return True
+        self.answers += 1
+        return False
+
+    def close(self):
+        path, self.path = self.path, None
+        if path:
+            Session._live.pop(path, None)
+            try:
+                os.remove(path)
+            except OSError:
+                pass

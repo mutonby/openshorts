@@ -246,22 +246,13 @@ def probe_url_minutes(url: str, allow_paid: bool = True) -> float:
     # "Sign in to confirm you're not a bot" from the static IPs (4-sep-2026,
     # all three, ~10 probes/day paying 1.8 MB each on the per-GB proxy)
     # while the authenticated download sails through the same IPs.
-    cookies_env = os.environ.get("YOUTUBE_COOKIES")
-    ck_path = None
-    if cookies_env:
-        import tempfile
-        fd, ck_path = tempfile.mkstemp(prefix="probe_ck_", suffix=".txt")
-        with os.fdopen(fd, "w") as f:
-            f.write(cookies_env)
+    # One of the configured accounts (yt_account.Session), as a private file.
+    session = yt_account.Session()
     try:
         return _probe_with_proxies(url, proxies, strategies, static_errors,
-                                   paid, ck_path)
+                                   paid, session.path)
     finally:
-        if ck_path:
-            try:
-                os.remove(ck_path)
-            except OSError:
-                pass
+        session.close()
 
 
 # What the last probes learned about each URL, for the quality gate that runs
@@ -318,7 +309,7 @@ def _probe_with_proxies(url, proxies, strategies, static_errors, paid, ck_path):
         def error(self, msg): pass
 
     last_err = None
-    limit_answers = 0
+    session = yt_account.Session.of(ck_path)
     for proxy in proxies:
         is_paid = bool(paid) and proxy == paid
         # Every attempt's error on this route, not just the last one. The
@@ -348,8 +339,7 @@ def _probe_with_proxies(url, proxies, strategies, static_errors, paid, ck_path):
                     "noplaylist": True,
                     "logger": _QuietLogger(), "extractor_args": extractor_args}
             authed = bool(ck_path and use_cookies)
-            if authed and (limit_answers >= yt_account.ANSWERS_PER_VIDEO
-                           or yt_account.cooling_down() > 0):
+            if authed and session.spent:
                 # YouTube said twice for this video (or, during a cooldown,
                 # to everybody) that the account is limited: asking again
                 # with its cookies gets the same answer and counts against
@@ -365,11 +355,11 @@ def _probe_with_proxies(url, proxies, strategies, static_errors, paid, ck_path):
                 import ssrf_guard
                 # With the cookies: one of the account's slots, spaced from
                 # the previous request (yt_account), like the download.
-                with (yt_account.request() if authed else contextlib.nullcontext()):
+                with (session.request() if authed else contextlib.nullcontext()):
                     with ssrf_guard.guarded(), yt_dlp.YoutubeDL(opts) as ydl:
                         info = ydl.extract_info(url, download=False)
                 if authed:
-                    yt_account.note_ok()
+                    session.ok()
                 duration = info.get("duration")
                 if duration:
                     _remember_probe(url, info)
@@ -390,8 +380,7 @@ def _probe_with_proxies(url, proxies, strategies, static_errors, paid, ck_path):
                 last_err = e
                 route_errors.append(str(e)[:300])
                 if authed and yt_account.is_rate_limit(str(e)):
-                    limit_answers += 1
-                    yt_account.note_rate_limited()
+                    session.limited()   # moves to another account if one is awake
         else:
             if not is_paid:
                 static_errors[_route_name(proxy, proxies)] = (

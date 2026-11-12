@@ -111,6 +111,16 @@ outright.
   bot-checked on every IP, so a cooldown stopped every download (12-nov-2026:
   a half-limited account went to one success in a hundred). Turn it on only
   with a route that works anonymously.
+- **Several accounts.** `YOUTUBE_COOKIES_2` .. `YOUTUBE_COOKIES_9` add
+  accounts next to `YOUTUBE_COOKIES`. Each video takes the next one in turn
+  (`yt_account.Session`, one private cookie file per probe or download), and
+  every account has its own slots and pacing. When YouTube answers
+  "rate-limited" the video moves to another account that is not resting
+  before it counts the answer against `YT_ACCOUNT_ANSWERS_PER_VIDEO`. An
+  account with `YT_ACCOUNT_REST_STRIKES` (3) such answers in a row rests
+  `YT_ACCOUNT_REST_SECONDS` (900) while the others carry the load; with every
+  account resting, the one closest to waking is used, never none. The session
+  watcher (`cloud/alerts.py`) only checks the first account.
 - **One probe per submission.** The quality gate reuses what the metering
   probe just learned (`metering.probe_facts`) instead of asking again.
 - **Wait, not fail.** A download that failed only because of the limit prints
