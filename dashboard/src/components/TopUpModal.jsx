@@ -65,6 +65,9 @@ export default function TopUpModal({ onClose, required, remaining, partialMinute
   useBackFromStripe(() => setBusyPrice(null));
   const isUpsell = context === 'upsell';
   const isQueueFull = context === 'queue_full';
+  // Opened from a video waiting in line (App's queue notice): the reason to
+  // pay here is the wait, not the watermark.
+  const fromQueue = isUpsell && sourceOverride === 'queue';
   const source = sourceOverride || (isUpsell ? 'upsell' : isQueueFull ? 'queue_full' : 'wall');
   const seenEvent = isUpsell ? 'UpsellModalSeen' : isQueueFull ? 'QueueFullSeen' : 'QuotaWallSeen';
   const checkoutEvent = isUpsell ? 'UpsellModalCheckout' : isQueueFull ? 'QueueFullCheckout' : 'QuotaWallCheckout';
@@ -139,7 +142,7 @@ export default function TopUpModal({ onClose, required, remaining, partialMinute
     <Modal isOpen onClose={onClose} eyebrow="UPGRADE"
            title={isQueueFull ? 'The free queue is full right now'
              : isUpsell
-             ? (partialJob ? 'Clip the whole video' : 'Keep your clips forever')
+             ? (partialJob ? 'Clip the whole video' : fromQueue ? 'Skip the line' : 'Keep your clips forever')
              : (blockedByLength ? 'Your video is ready to clip' : "You've used this month's minutes")}
            size="xl">
       {/* Goal-gradient framing: they're one step from the thing they came for. */}
@@ -154,6 +157,10 @@ export default function TopUpModal({ onClose, required, remaining, partialMinute
                 of a {partialJob.total_minutes}-min video. A plan gives you the minutes to clip{' '}
                 <b className="text-ink font-medium">all of it</b>, with no watermark, and the clips you already
                 made lose the mark on the spot.</>
+            : fromQueue
+            ? <>Paid videos go to the <b className="text-ink font-medium">front of the queue</b> and are
+                usually ready in minutes. Subscribe and the video you have in line{' '}
+                <b className="text-ink font-medium">moves up right away</b>, with no watermark.</>
             : <>Every clip comes out <b className="text-ink font-medium">ready to post</b> and stays in your
                 library for good. On the free plan they carry a watermark and are deleted after 7 days;
                 upgrade now and the clips you already made <b className="text-ink font-medium">lose the mark on the spot</b>.</>)

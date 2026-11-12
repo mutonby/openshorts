@@ -1054,21 +1054,3 @@ class TestExpiryNotice:
         })
         n = asyncio.run(app_module._notify_queue_expired(["a1", "a2", "api", "c", "gone"]))
         assert (n, sent) == (2, ["ua@example.com", "uc@example.com"])
-
-
-def test_config_says_when_the_free_queue_is_busy(monkeypatch):
-    """The landing notice follows the queue: on while the normal lane serves
-    its newest first or the brake holds, off otherwise and in self-host."""
-    import app as m
-    qm = m._queue_mode
-    monkeypatch.setattr(m, "_saturation_on", lambda: True)
-    monkeypatch.setattr(qm, "recent_first", lambda lane: False)
-    monkeypatch.setattr(qm, "brake_active", lambda: False)
-    assert m._free_queue_busy() is False
-    monkeypatch.setattr(qm, "recent_first", lambda lane: lane == qm.NORMAL)
-    assert m._free_queue_busy() is True
-    monkeypatch.setattr(qm, "recent_first", lambda lane: False)
-    monkeypatch.setattr(qm, "brake_active", lambda: True)
-    assert m._free_queue_busy() is True
-    monkeypatch.setattr(m, "_saturation_on", lambda: False)
-    assert m._free_queue_busy() is False

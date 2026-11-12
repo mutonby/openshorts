@@ -2,7 +2,6 @@ import React from 'react';
 import { Sparkles, Zap, Globe, FileVideo, Subtitles, Youtube, Instagram, Shield, Github, ArrowRight, Check, ChevronDown, Monitor, Cpu, Languages, Type, Upload, Scissors, Link2, Bot } from 'lucide-react';
 import PricingSection from './components/PricingSection';
 import SiteNav from './components/SiteNav';
-import QueueNotice from './components/QueueNotice';
 import { useAuth } from './contexts/AuthContext';
 import './landing.css';
 
@@ -591,8 +590,6 @@ export default function Landing({ onLaunchApp }) {
             {/* The hero CTA is the product itself: paste a link and land in the
                 app with it loaded. Sign-in is asked for at generate time, not
                 before the user has seen anything. */}
-            <QueueNotice className="max-w-2xl mb-4" />
-
             <form onSubmit={handleHeroSubmit} className="mb-5">
               <div className="hero-input-row flex flex-col sm:flex-row items-stretch gap-3">
                 <div className="relative flex-1 min-w-0">

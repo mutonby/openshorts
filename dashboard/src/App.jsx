@@ -289,6 +289,22 @@ function App() {
   const [firstVideoJob, setFirstVideoJob] = useState(false);
   // {position, ahead, eta_seconds} while the job waits in line, else null.
   const [queueInfo, setQueueInfo] = useState(null);
+  // A free video far back in a saturated queue: the server says later
+  // arrivals can still pass it (eta_is_minimum) and its minimum wait is long.
+  // The first seconds of a new video are never this (it enters at the front
+  // of a lane that serves its newest first), so nobody is told "hours" for a
+  // video that starts in ten minutes.
+  const queueSlow = Boolean(billingEnabled && queueInfo && queueInfo.eta_is_minimum
+    && queueInfo.ahead > 0 && queueInfo.eta_seconds >= 20 * 60
+    && !['starter', 'creator', 'pro'].includes(plan));
+  const queueSlowSeenRef = useRef(false);
+  useEffect(() => {
+    if (!queueInfo) { queueSlowSeenRef.current = false; return; }
+    if (queueSlow && !queueSlowSeenRef.current) {
+      queueSlowSeenRef.current = true;
+      track('QueueSlowSeen', { props: { position: String(queueInfo.position) } });
+    }
+  }, [queueSlow, queueInfo]);
   // Why the last job could not start or failed, in plain words (or '').
   const [jobError, setJobError] = useState('');
   // Durable R2 URLs (per clip index) for the current job — used as a fallback when
@@ -2229,7 +2245,30 @@ function App() {
                         ? 'You are next in line. Starting in a moment…'
                         : <>You are <b>#{queueInfo.position}</b> in line · {queueInfo.eta_is_minimum ? 'at least' : 'about'} <b>{Math.max(1, Math.round(queueInfo.eta_seconds / 60))} min</b></>}
                     </p>
-                    {billingEnabled && !['starter', 'creator', 'pro'].includes(plan) && queueInfo.ahead > 0 && (
+                    {queueSlow ? (
+                      /* The free queue is saturated and this video is far
+                         back in it: later arrivals can still pass it
+                         (eta_is_minimum), so the wait is hours, not minutes.
+                         Said here, when it is this user's wait, with the one
+                         thing that changes it. All of it is how the queue
+                         works: plan priority, and paying re-keys the video
+                         already in line. */
+                      <>
+                        <p className="mt-1 text-muted">
+                          High demand right now: free videos wait behind paid ones and this can take hours.
+                          We are adding capacity.
+                        </p>
+                        <button
+                          onClick={() => { track('QueueUpsellClick', { props: { position: String(queueInfo.position), slow: '1' } }); if (isManaged) openUpsell({ source: 'queue' }); else setShowPlanChoice(true); }}
+                          className="btn-primary mt-3"
+                        >
+                          Skip the line with a plan
+                        </button>
+                        <p className="mt-2 text-xs text-muted">
+                          Paid videos are usually ready in minutes, and this one moves to the front as soon as you subscribe.
+                        </p>
+                      </>
+                    ) : billingEnabled && !['starter', 'creator', 'pro'].includes(plan) && queueInfo.ahead > 0 && (
                       <button
                         onClick={() => { track('QueueUpsellClick', { props: { position: String(queueInfo.position) } }); if (isManaged) openUpsell({ source: 'queue' }); else setShowPlanChoice(true); }}
                         className="mt-2 text-xs lowercase text-brass hover:underline"
