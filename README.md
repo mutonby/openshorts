@@ -109,6 +109,7 @@ All generated videos and avatars are saved to a public gallery with SEO pages fo
 - **Auto Subtitles**: faster-whisper with word-level timestamps, styled and burned into clips
 - **AI Voice Dubbing**: ElevenLabs integration for 30+ languages with voice cloning (bring your own ElevenLabs key, on the cloud too)
 - **Hook Text Overlays**: AI-generated attention-grabbing text overlays
+- **Privacy blur** (off unless you turn it on): blurs faces, license plates, QR codes and on-screen emails, phone numbers and card numbers. Leave it off for talking-head videos. The switch is in advanced options, and on the API as `blur_sensitive`.
 - **AI Video Effects**: Gemini-generated FFmpeg filters for professional effects
 
 ### AI Shorts Pipeline

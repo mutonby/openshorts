@@ -169,3 +169,61 @@ def test_auto_hook_false_opts_out(dirs, monkeypatch):
     monkeypatch.setattr(app_module.job_queue, "put", fake_put)
     payload = _tool_payload(_mcp("process_video", {"upload_id": slot["upload_id"], "confirm_rights": True, "auto_hook": False}))
     assert "AUTO_HOOK" not in app_module.jobs[payload["job_id"]]["env"]
+
+
+def _ready_upload():
+    slot = _tool_payload(_mcp("create_upload", {}))
+
+    async def _put():
+        async with _client() as c:
+            return await c.put(f"/api/uploads/{slot['upload_id']}", content=b"x" * 100)
+    assert asyncio.run(_put()).status_code == 200
+    return slot["upload_id"]
+
+
+def test_privacy_blur_schema_defaults_off():
+    tool = next(t for t in __import__("mcp_server").TOOLS if t["name"] == "process_video")
+    prop = tool["inputSchema"]["properties"]["blur_sensitive"]
+    assert prop["type"] == "boolean"
+    assert prop.get("default", False) is False
+
+
+def test_privacy_blur_stays_off_unless_this_request_asks(dirs, monkeypatch):
+    # A value exported on the API host must not hide faces in every job.
+    monkeypatch.setenv("BLUR_SENSITIVE", "1")
+
+    async def fake_put(item):
+        pass
+    monkeypatch.setattr(app_module.job_queue, "put", fake_put)
+
+    payload = _tool_payload(_mcp("process_video", {
+        "upload_id": _ready_upload(), "confirm_rights": True}))
+    assert "BLUR_SENSITIVE" not in app_module.jobs[payload["job_id"]]["env"]
+
+    payload = _tool_payload(_mcp("process_video", {
+        "upload_id": _ready_upload(), "confirm_rights": True, "blur_sensitive": False}))
+    assert "BLUR_SENSITIVE" not in app_module.jobs[payload["job_id"]]["env"]
+
+    payload = _tool_payload(_mcp("process_video", {
+        "upload_id": _ready_upload(), "confirm_rights": True, "blur_sensitive": True}))
+    assert app_module.jobs[payload["job_id"]]["env"]["BLUR_SENSITIVE"] == "1"
+
+    async def _post(body):
+        async with _client() as c:
+            return await c.post("/api/process", json=body)
+
+    for body in (
+        {"upload_id": _ready_upload(), "acknowledged": True},
+        {"upload_id": _ready_upload(), "acknowledged": True, "blur_sensitive": False},
+        {"upload_id": _ready_upload(), "acknowledged": True, "blur_sensitive": "0"},
+        {"upload_id": _ready_upload(), "acknowledged": True, "blur_sensitive": "no"},
+    ):
+        resp = asyncio.run(_post(body))
+        assert resp.status_code == 200, resp.text
+        env = app_module.jobs[resp.json()["job_id"]]["env"]
+        assert "BLUR_SENSITIVE" not in env
+
+    resp = asyncio.run(_post({
+        "upload_id": _ready_upload(), "acknowledged": True, "blur_sensitive": "yes"}))
+    assert resp.status_code == 200, resp.text
+    assert app_module.jobs[resp.json()["job_id"]]["env"]["BLUR_SENSITIVE"] == "1"

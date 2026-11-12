@@ -302,6 +302,40 @@ class TestPerformRecut:
             output_dir=str(tmp_path), clean_name="t_clip_1.mp4",
             reframe=True, runner=self._touching_runner, subtitle_band=0.79)
         assert seen["subtitle_band"] == 0.79
+        # The default is off. A source re-render states the choice explicitly
+        # so an API-process environment cannot turn the blur on by itself.
+        assert seen["blur_sensitive"] is False
+
+    def test_source_path_forwards_privacy_blur(self, tmp_path, monkeypatch):
+        seen = {}
+
+        def fake_render_clip(i, o, f, **kwargs):
+            seen.update(kwargs)
+            with open(o, "wb") as fh:
+                fh.write(b"x")
+            return True
+
+        monkeypatch.setattr(recut, "_main_attr", lambda name: fake_render_clip)
+        recut.perform_recut(
+            input_path="source.mp4", segments=[_seg(5, 15)],
+            output_dir=str(tmp_path), clean_name="t_clip_1.mp4",
+            reframe=True, blur_sensitive=True, runner=self._touching_runner)
+        assert seen["blur_sensitive"] is True
+
+    def test_injected_renderer_stays_three_arguments(self, tmp_path):
+        # Editor tests and the fast path inject a 3-arg renderer. Privacy blur
+        # is an extra keyword on the real renderer only.
+        def fake_renderer(work, out, output_format):
+            with open(out, "wb") as fh:
+                fh.write(b"x")
+            return True
+
+        served, clean = recut.perform_recut(
+            input_path="source.mp4", segments=[_seg(5, 15)],
+            output_dir=str(tmp_path), clean_name="t_clip_1.mp4",
+            reframe=True, blur_sensitive=True, runner=self._touching_runner,
+            renderer=fake_renderer)
+        assert served == clean
 
     def test_renderer_failure_raises_and_cleans_up(self, tmp_path):
         with pytest.raises(RuntimeError):

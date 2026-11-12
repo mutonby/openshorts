@@ -266,7 +266,8 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
                   reframe=False, output_format="auto", watermark=False,
                   captions_transcript=None, force_strategy=None,
                   crop_overrides=None, runner=None, renderer=None,
-                  watermarker=None, captioner=None, subtitle_band=None):
+                  watermarker=None, captioner=None, subtitle_band=None,
+                  blur_sensitive=False):
     """Render a recut clip. Returns (served_filename, clean_filename).
 
     - ``input_path``/``segments``: the file to cut from and the times ON THAT
@@ -283,6 +284,9 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
       source width, for scenes the user framed by hand. Source path only, for
       the same reason as ``reframe``: the canonical file is already cropped, so
       its framing can no longer be changed.
+    - ``blur_sensitive``: the job asked for privacy blur. The fast path cuts
+      the already-blurred canonical file, so it does not run again. The source
+      path reframes new pixels and must blur them before captions.
 
     The renderer/watermarker/captioner hooks default to main.py's
     implementations, imported lazily so this module stays importable without
@@ -309,7 +313,8 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
                 def render(i, o, f):
                     return main_render(i, o, f, force_strategy=force_strategy,
                                        crop_overrides=crop_overrides,
-                                       subtitle_band=subtitle_band)
+                                       subtitle_band=subtitle_band,
+                                       blur_sensitive=bool(blur_sensitive))
             if not render(work_path, out_path, output_format):
                 raise RuntimeError("reframe failed on the recut clip")
         else:

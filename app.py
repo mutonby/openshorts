@@ -32,6 +32,7 @@ from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 import recut
 import layout_ranges
+import privacy_blur
 import watermarked
 import media_auth
 import remote_worker
@@ -2216,7 +2217,8 @@ def _install_drain_signal_handler():
 def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, watermark,
                            webhook_url=None, webhook_secret=None, base_url=None,
                            partial=None, source_cap_minutes=None, skip_statics=False,
-                           via_api_key=False, lane=None, submitted_at=None, topup=False):
+                           via_api_key=False, lane=None, submitted_at=None, topup=False,
+                           blur_sensitive=False):
     try:
         path = os.path.join(OUTPUT_DIR, job_id, _RESUME_FILE)
         # Atomic like every manifest write: the other instance reads them.
@@ -2246,6 +2248,9 @@ def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, water
                 "lane": lane or _queue_mode.NORMAL,
                 "submitted_at": submitted_at,
                 "topup": bool(topup),
+                # Per job. A resume rebuilds env from the server environment,
+                # which must not turn privacy blur on — or drop a request for it.
+                "blur_sensitive": bool(blur_sensitive),
         })
     except Exception as e:
         print(f"⚠️ Could not write resume manifest for {job_id}: {e}")
@@ -2375,6 +2380,9 @@ def _register_resumed(picked) -> int:
             env["DOWNLOAD_SKIP_STATICS"] = "1"
         else:
             env.pop("DOWNLOAD_SKIP_STATICS", None)
+        env.pop(privacy_blur.ENV_NAME, None)
+        if m.get("blur_sensitive") is True:
+            env[privacy_blur.ENV_NAME] = "1"
 
         priority = int(m.get("priority", 2))
         # Whatever a remote worker was doing for the instance that held this
@@ -5414,6 +5422,7 @@ async def process_endpoint(
     clip_max_seconds: Optional[str] = Form(None),
     auto_hook: Optional[str] = Form(None),
     auto_hook_style: Optional[str] = Form(None),
+    blur_sensitive: Optional[str] = Form(None),
     thumbnail_session_id: Optional[str] = Form(None),
     captions: Optional[str] = Form(None),
     upload_id: Optional[str] = Form(None),
@@ -5448,6 +5457,7 @@ async def process_endpoint(
         clip_max_seconds = body.get("clip_max_seconds")
         auto_hook = body.get("auto_hook")
         auto_hook_style = body.get("auto_hook_style")
+        blur_sensitive = body.get("blur_sensitive")
         thumbnail_session_id = body.get("thumbnail_session_id")
         captions = body.get("captions")
         upload_id = body.get("upload_id")
@@ -5603,6 +5613,14 @@ async def process_endpoint(
     if captions is not None and str(captions).lower() in ("0", "false", "no"):
         env["AUTO_CAPTIONS"] = "0"
         print(f"[captions] job={job_id} auto-captions off")
+
+    # Privacy blur is per request and off unless this request asks. A value
+    # inherited from the server environment must not turn it on for every job;
+    # the user turns it on from the dashboard, the API or MCP.
+    env.pop(privacy_blur.ENV_NAME, None)
+    if privacy_blur.job_env_value(blur_sensitive):
+        env[privacy_blur.ENV_NAME] = "1"
+        print(f"[privacy] job={job_id} sensitive blur on")
 
     input_path = None
     if url:
@@ -5789,7 +5807,8 @@ async def process_endpoint(
                            source_cap_minutes=source_cap, skip_statics=skip_statics,
                            via_api_key=jobs[job_id]['via_api_key'],
                            lane=jobs[job_id]['lane'], submitted_at=jobs[job_id]['submitted_at'],
-                           topup=jobs[job_id]['topup'])
+                           topup=jobs[job_id]['topup'],
+                           blur_sensitive=env.get(privacy_blur.ENV_NAME) == "1")
 
     _enqueue_job(job_id, priority)
     if _saturation_on():
@@ -6818,7 +6837,8 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
             captioner=_recut_captioner(clip),
             # Trim the source's own subtitles only when ours go back on.
             subtitle_band=(data.get('source_subtitle_band')
-                           if v_transcript else None))
+                           if v_transcript else None),
+            blur_sensitive=privacy_blur.from_job(job.get("env"), data))
 
     try:
         loop = asyncio.get_event_loop()
@@ -7188,7 +7208,8 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
             captioner=_recut_captioner(clip),
             # Trim the source's own subtitles only when ours go back on.
             subtitle_band=(data.get('source_subtitle_band')
-                           if v_transcript else None))
+                           if v_transcript else None),
+            blur_sensitive=privacy_blur.from_job(job.get("env"), data))
 
     try:
         loop = asyncio.get_event_loop()

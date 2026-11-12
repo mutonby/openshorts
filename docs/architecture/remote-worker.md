@@ -65,7 +65,7 @@ the API host.
 - It holds its own `GEMINI_API_KEY` and the worker token. No database,
   storage, mail, billing, proxy or cookie credential ever reaches it. Job
   settings cross by name from a closed list (`remote_worker.allowed_option`:
-  `WATERMARK`, the source caps, `AUTO_*`, `CLIP_*`), checked on both sides, and
+  `WATERMARK`, `BLUR_SENSITIVE`, the source caps, `AUTO_*`, `CLIP_*`), checked on both sides, and
   the command is `--format <choice>` or nothing (`worker_args`, `safe_args`).
 - It can read one thing: the source of a job it holds a live claim for.
 - It can write only render outputs into that job's directory
