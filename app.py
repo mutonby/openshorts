@@ -4594,6 +4594,14 @@ async def health_ready():
         return JSONResponse({"status": "stopping"}, status_code=503)
     return {"status": "ready"}
 
+def _free_queue_busy() -> bool:
+    try:
+        return bool(_saturation_on() and (
+            _queue_mode.recent_first(_queue_mode.NORMAL) or _queue_mode.brake_active()))
+    except Exception:
+        return False
+
+
 @app.get("/api/config")
 async def get_config():
     return {
@@ -4601,6 +4609,9 @@ async def get_config():
         "billingEnabled": BILLING_ENABLED,
         "googleAuthEnabled": bool(BILLING_ENABLED and cloud.settings.google_auth_enabled),
         "jobRetentionSeconds": JOB_RETENTION_SECONDS,
+        # The free queue is saturated right now (it serves its newest first,
+        # or the slow lane's brake is on): the landing says so while it lasts.
+        "freeQueueBusy": _free_queue_busy(),
         # Self-host only: tells the dashboard the Gemini key is optional
         # because the moment picker runs on an OpenAI-compatible server.
         "localLlm": None if BILLING_ENABLED else llm_backend.describe(),
