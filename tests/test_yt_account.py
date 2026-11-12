@@ -76,6 +76,20 @@ def test_a_cooldown_starts_lasts_and_ends():
     assert yt_account.cooling_down(now=1000.0) == 0
 
 
+def test_the_cooldown_is_off_unless_configured(monkeypatch):
+    """Without a route that works anonymously a cooldown stops every download,
+    so it is opt-in: strikes are counted, the cookies keep going out."""
+    monkeypatch.setattr(yt_account, "COOLDOWN_SECONDS", 0.0)
+    assert _shut(now=1000.0) == 0
+    assert yt_account.cooling_down(now=1001.0) == 0
+    # A stamp left on disk by an earlier setting means nothing either.
+    monkeypatch.setattr(yt_account, "COOLDOWN_SECONDS", 900.0)
+    _shut(now=2000.0)
+    monkeypatch.setattr(yt_account, "COOLDOWN_SECONDS", 0.0)
+    assert yt_account.cooling_down(now=2003.0) == 0
+    assert yt_account._float_env("YT_ACCOUNT_COOLDOWN_SECONDS_UNSET_NAME", 0) == 0
+
+
 def test_no_state_directory_never_blocks_a_request(monkeypatch):
     monkeypatch.setenv("YT_ACCOUNT_STATE_DIR", "/nonexistent/dir")
     with yt_account.request():

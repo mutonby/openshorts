@@ -103,8 +103,12 @@ outright.
   requests that work are routine (hours of them on 12-nov-2026 with every
   download succeeding). `YT_ACCOUNT_STRIKES` (6) in a row within
   `YT_ACCOUNT_STRIKE_WINDOW` (180 s), with no authenticated success in
-  between, start `YT_ACCOUNT_COOLDOWN_SECONDS` (600) during which nobody sends
-  the cookies at all.
+  between, start `YT_ACCOUNT_COOLDOWN_SECONDS` during which nobody sends the
+  cookies at all. **Off by default (0)**: it only helps where a download can
+  succeed without the account, and in production the anonymous attempts are
+  bot-checked on every IP, so a cooldown stopped every download (12-nov-2026:
+  a half-limited account went to one success in a hundred). Turn it on only
+  with a route that works anonymously.
 - **One probe per submission.** The quality gate reuses what the metering
   probe just learned (`metering.probe_facts`) instead of asking again.
 - **Wait, not fail.** A download that failed only because of the limit prints

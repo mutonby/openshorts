@@ -17,8 +17,9 @@ output directory (the job processes, the API, both containers of a deploy):
   work is routine (the caller just stops using the cookies for that one
   video). ``YT_ACCOUNT_STRIKES`` of them in a row within
   ``YT_ACCOUNT_STRIKE_WINDOW`` seconds, with no authenticated request
-  succeeding in between, is the account shut: nobody sends the cookies again
-  for ``YT_ACCOUNT_COOLDOWN_SECONDS``, and callers run only their anonymous
+  succeeding in between, is the account shut: with
+  ``YT_ACCOUNT_COOLDOWN_SECONDS`` set (it is 0, off, by default) nobody sends
+  the cookies again for that long, and callers run only their anonymous
   attempts meanwhile.
 * ``is_rate_limit()``: the error text, so a job that failed only because of
   this is retried after the cooldown instead of reported as a broken video.
@@ -48,7 +49,13 @@ def _int_env(name, default):
         return int(default)
 
 
-COOLDOWN_SECONDS = _float_env("YT_ACCOUNT_COOLDOWN_SECONDS", 600)
+# Off by default. A cooldown only helps where a download can succeed without
+# the account; in production the anonymous attempts are bot-checked on every
+# IP, so "nobody sends the cookies" meant "nothing downloads": on 12-nov-2026
+# a 10-minute cooldown took a half-limited account (about half of the
+# downloads still working) to one success in a hundred. Set it only with a
+# route that works anonymously.
+COOLDOWN_SECONDS = _float_env("YT_ACCOUNT_COOLDOWN_SECONDS", 0)
 STRIKES = _int_env("YT_ACCOUNT_STRIKES", 6)
 STRIKE_WINDOW = _float_env("YT_ACCOUNT_STRIKE_WINDOW", 180)
 MIN_INTERVAL = _float_env("YT_ACCOUNT_MIN_INTERVAL", 2.0)
@@ -78,6 +85,8 @@ def state_dir():
 
 def cooling_down(now=None) -> float:
     """Seconds left before the account may be used again (0: use it)."""
+    if COOLDOWN_SECONDS <= 0:
+        return 0.0            # switched off: a stamp left on disk means nothing
     now = time.time() if now is None else now
     try:
         with open(os.path.join(state_dir(), _COOLDOWN_FILE)) as f:
