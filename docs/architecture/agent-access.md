@@ -3,7 +3,9 @@
 ## Main endpoints
 
 - `POST /api/process`: submit a video for processing. Optional `source_start` /
-  `source_end` (seconds) clip and bill only that stretch.
+  `source_end` (seconds) clip and bill only that stretch. Optional
+  `blur_sensitive` (default off) blurs faces, plates and on-screen personal
+  details; see `docs/architecture/privacy-blur.md`.
 - `GET /api/status/{job_id}`: poll job status and logs.
 - `POST /api/edit`: apply AI video effects.
 - `POST /api/subtitle`: generate and apply subtitles (auto-transcribes dubbed videos).

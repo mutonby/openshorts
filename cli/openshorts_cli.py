@@ -87,6 +87,8 @@ def cmd_process(args):
         body["webhook_url"] = args.webhook
     if args.webhook_secret:
         body["webhook_secret"] = args.webhook_secret
+    if args.blur_sensitive:
+        body["blur_sensitive"] = True
     status, payload = _request("POST", "/api/process", body)
     if status >= 400:
         _die(status, payload)
@@ -204,6 +206,8 @@ def main(argv=None):
     p.add_argument("--webhook", help="webhook URL fired once when the job ends")
     p.add_argument("--webhook-secret", help="HMAC secret for X-OpenShorts-Signature")
     p.add_argument("--wait", action="store_true", help="stream logs until the job ends")
+    p.add_argument("--blur-sensitive", action="store_true",
+                   help="blur faces, license plates and on-screen personal details (off unless passed)")
     p.set_defaults(func=cmd_process)
 
     p = sub.add_parser("status", help="job status and last log line")

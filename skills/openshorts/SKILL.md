@@ -69,6 +69,12 @@ handful plus filler.
 which is what the platforms reward. The max must sit at least 5 seconds above
 the min.
 
+**Privacy blur.** Off unless the user asks. `blur_sensitive: true` blurs
+faces, license plates, QR codes and on-screen emails, phone numbers and card
+numbers. Leave it off for talking-head videos: the crop is built around the
+speaker's face, and hiding that face is the wrong default. Do not turn it on
+because the footage might contain a plate. Detection stays on the server.
+
 **Aspect.** `output_format` is `auto` (vertical 9:16, what shorts want),
 `vertical`, `horizontal` or `square`. It is not a resolution.
 

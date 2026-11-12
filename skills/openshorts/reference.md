@@ -40,13 +40,17 @@ a `file` part to upload a local video instead):
   "target_clips": 4,
   "clip_min_seconds": 15,
   "clip_max_seconds": 60,
+  "blur_sensitive": false,
   "webhook_url": "https://example.com/hooks/openshorts",
   "webhook_secret": "change-me",
   "force_low_quality": false
 }
 ```
 
-`acknowledged: true` is the rights attestation and is required. `layouts`
+`acknowledged: true` is the rights attestation and is required.
+`blur_sensitive` defaults to false. Set it true only when the user wants
+faces, license plates, QR codes and on-screen emails, phone numbers and card
+numbers blurred. Talking-head videos should leave it false. `layouts`
 accepts a JSON list or a comma separated string of `auto`, `split`,
 `screencast`, `speaker_cut`, `punch_in`. `output_format` is one of `auto`,
 `vertical`, `horizontal`, `square`. `target_clips` is 1 to 15;

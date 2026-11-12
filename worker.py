@@ -104,6 +104,10 @@ def job_env(options):
     closed list of names the API sends (``remote_worker.allowed_option``):
     never a path, an endpoint or a credential."""
     env = dict(os.environ)
+    # Per job, never a host default. The API sends BLUR_SENSITIVE only when
+    # the user turned privacy blur on; a value exported on this machine must
+    # not hide faces in every remote job.
+    env.pop("BLUR_SENSITIVE", None)
     for name, value in (options or {}).items():
         if remote_worker.allowed_option(name, value):
             env[name] = str(value)

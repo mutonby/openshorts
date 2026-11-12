@@ -1487,7 +1487,7 @@ def trim_subtitle_band(input_video, band):
 
 def render_clip(input_video, final_output_video, output_format="auto",
                 force_strategy=None, crop_overrides=None, watermark=False,
-                subtitle_band=None):
+                subtitle_band=None, blur_sensitive=None):
     """Route a cut clip through the right renderer for the chosen output format.
     vertical/auto -> 9:16 reframe, square -> 1:1 reframe, horizontal -> keep.
     ``force_strategy`` (e.g. 'WIDE'/'TRACK') pins every scene's layout — the
@@ -1499,14 +1499,28 @@ def render_clip(input_video, final_output_video, output_format="auto",
     ``subtitle_band`` (the job metadata's ``source_subtitle_band``) trims the
     source's own burned-in subtitles off the bottom first, so our captions are
     the only text layer. Every render from the source passes it: the job, the
-    recut and the editor's re-render."""
+    recut and the editor's re-render.
+    ``blur_sensitive`` (None reads the job env) runs the opt-in privacy blur
+    after the reframe, on the canonical pixels. A failure deletes the output
+    and returns False: the unblurred picture is not delivered."""
     trimmed = trim_subtitle_band(input_video, subtitle_band)
     try:
-        return _render_clip(trimmed, final_output_video, output_format,
-                            force_strategy, crop_overrides, watermark)
+        ok = _render_clip(trimmed, final_output_video, output_format,
+                          force_strategy, crop_overrides, watermark)
     finally:
         if trimmed != input_video and os.path.exists(trimmed):
             os.remove(trimmed)
+    if not ok:
+        return ok
+    import privacy_blur
+    if not privacy_blur.wanted(blur_sensitive):
+        return ok
+    if privacy_blur.apply(final_output_video, yolo=model, detect_lock=DETECT_LOCK):
+        return True
+    print("   ⚠️ Privacy blur failed — this clip is not delivered.")
+    if os.path.isfile(final_output_video):
+        os.remove(final_output_video)
+    return False
 
 
 def _render_clip(input_video, final_output_video, output_format,
@@ -2730,7 +2744,12 @@ if __name__ == '__main__':
         if (not output_file or os.path.isdir(output_file)
                 or output_file.endswith(("/", os.sep))):
             output_file = os.path.join(output_dir, f"{video_title}_vertical.mp4")
-        render_clip(input_video, output_file, output_format)
+        if not render_clip(input_video, output_file, output_format):
+            import privacy_blur
+            if privacy_blur.wanted():
+                raise RuntimeError(
+                    "Privacy blur was on and the video could not be blurred, "
+                    "so it was not delivered.")
     else:
         # Get duration (needed by both the transcript and the vision path).
         cap = cv2.VideoCapture(input_video)
@@ -2818,6 +2837,8 @@ if __name__ == '__main__':
             # --keep-original) or in uploads/ (upload jobs).
             clips_data['source_video'] = os.path.basename(input_video)
             clips_data['output_format'] = output_format
+            if os.environ.get("BLUR_SENSITIVE", "").strip() == "1":
+                clips_data['blur_sensitive'] = True
             if source_subtitle_band:
                 clips_data['source_subtitle_band'] = source_subtitle_band
             metadata_file = os.path.join(output_dir, f"{video_title}_metadata.json")
@@ -2841,8 +2862,10 @@ if __name__ == '__main__':
                     # ffmpeg cut — re-encoding for precision on strict seconds
                     cut_clip(input_video, clip_temp_path, start, end, i + 1)
 
-                    # Layer order: the canonical reframe stays CLEAN, the hook
-                    # is a derived hooked_ file, captions go last on top of
+                    # Layer order: when the job asked, privacy blur is baked
+                    # into the canonical pixels (it is the picture, not a
+                    # delivery mark — see privacy_blur.py). The hook is a
+                    # derived hooked_ file, captions go last on top of
                     # whichever is current, and on the free plan the served
                     # file is a wm_ copy of that final (mark_delivery). The
                     # mark used to ride the reframe encode, which made it
@@ -2907,6 +2930,7 @@ if __name__ == '__main__':
             clip_workers = max(int(os.environ.get("CLIP_WORKERS", "6")), 1)
             shorts = clips_data['shorts']
             failed = []
+            delivered = set()
             if os.environ.get("WATERMARK") == "1":
                 # Tells the /videos guard that the clean twins in this
                 # directory are not for serving (watermarked.MARKER_FILE).
@@ -2921,7 +2945,9 @@ if __name__ == '__main__':
                 for future in as_completed(futures):
                     i = futures[future]
                     try:
-                        if not future.result():
+                        if future.result():
+                            delivered.add(i)
+                        else:
                             failed.append(i)
                     except Exception as e:
                         print(f"   ❌ Clip {i+1} failed: {type(e).__name__}: {e}")
@@ -2936,10 +2962,18 @@ if __name__ == '__main__':
                 time.sleep(CLIP_RETRY_PAUSE_SECONDS)
                 _free_gpu_cache()
                 try:
-                    if not _process_one_clip(i, shorts[i]):
+                    if _process_one_clip(i, shorts[i]):
+                        delivered.add(i)
+                    else:
                         print(f"   ❌ Clip {i+1} failed again.")
                 except Exception as e:
                     print(f"   ❌ Clip {i+1} failed again: {type(e).__name__}: {e}")
+
+            if (os.environ.get("BLUR_SENSITIVE", "").strip() == "1"
+                    and shorts and not delivered):
+                raise RuntimeError(
+                    "Privacy blur was on and no clip could be blurred, "
+                    "so nothing was delivered.")
 
             # Persist per-clip render results added by the workers (auto_hook)
             # so the editor can see what is already burned into each clip.

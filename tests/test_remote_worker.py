@@ -343,6 +343,24 @@ def test_worker_env_never_takes_code_paths_or_credentials(monkeypatch):
     assert "LD_PRELOAD" not in env and "PROXY_URL" not in env and "WORKER_TOKEN" not in env
 
 
+def test_worker_env_does_not_inherit_a_host_wide_privacy_blur(monkeypatch):
+    worker = pytest.importorskip("worker")
+    monkeypatch.setenv("BLUR_SENSITIVE", "1")
+    env = worker.job_env({"WATERMARK": "1"})
+    assert "BLUR_SENSITIVE" not in env
+    env = worker.job_env({"BLUR_SENSITIVE": "1", "WATERMARK": "1"})
+    assert env["BLUR_SENSITIVE"] == "1" and env["WATERMARK"] == "1"
+
+
+def test_blur_sensitive_is_an_allowed_worker_option():
+    assert rw.allowed_option("BLUR_SENSITIVE", "1") is True
+    assert rw.allowed_option("BLUR_SENSITIVE", "yes") is True
+    assert rw.allowed_option("BLUR_SENSITIVE", "1\n2") is False
+    assert rw.job_options({"BLUR_SENSITIVE": "1"}, {}) == {"BLUR_SENSITIVE": "1"}
+    # Identical to this host: not repeated on the wire.
+    assert rw.job_options({"BLUR_SENSITIVE": "1"}, {"BLUR_SENSITIVE": "1"}) == {}
+
+
 # --- inside the API -----------------------------------------------------------
 
 app_module = pytest.importorskip("app")

@@ -23,14 +23,14 @@ pytest tests/ -v                 # CI runs this without the heavy ML stack
 
 ## Pipeline
 
-Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detection → Gemini picks moments (15-60 s) → FFmpeg cut → vertical reframing → effects/subtitles → hook overlay → optional ElevenLabs dubbing → S3/R2 backup → optional social posting via Upload-Post.
+Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detection → Gemini picks moments (15-60 s) → FFmpeg cut → vertical reframing → optional privacy blur → effects/subtitles → hook overlay → optional ElevenLabs dubbing → S3/R2 backup → optional social posting via Upload-Post.
 
 ## Key Files
 
 - `main.py`: core processing (transcription, scene detection, clip extraction, reframing). Runs as a child process per job.
 - `app.py`: FastAPI server, job queue, REST endpoints, deploy handover/drain.
 - `clip_selection.py`, `layout_picker.py`, `reframe_v2.py`, `split_layout.py`, `screencast_layout.py`, `camera_inset.py`: moment picking and layouts.
-- `editor.py` (Gemini FFmpeg effects), `hooks.py` (hook overlays), `subtitles.py` (SRT/ASS, burning), `translate.py` (ElevenLabs dubbing), `thumbnail.py`.
+- `editor.py` (Gemini FFmpeg effects), `hooks.py` (hook overlays), `subtitles.py` (SRT/ASS, burning), `privacy_blur.py` (opt-in face/plate/text blur), `translate.py` (ElevenLabs dubbing), `thumbnail.py`.
 - `mcp_server.py`, `mcp_stdio.py`: MCP over HTTP and stdio.
 - `cloud/`: auth, API keys, metering, billing, lifecycle emails, account erasure, autopilot, proxy ledger, alerts, queue watch.
 - `dashboard/src/App.jsx`: main React component. `dashboard/vite-plugin-seo.js` + `dashboard/seo/`: build-time SEO pages, sitemap, llms.txt. `dashboard/seo/data.js`: single source of truth for pricing/pipeline/competitor facts.
@@ -48,6 +48,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 - Concurrency/VRAM, auto-retry, deploy handover and drain → `docs/architecture/jobs-and-deploys.md`
 - Download routing, yt-dlp clients, paid proxy ledger → `docs/architecture/proxy-routing.md`
 - Remote CPU worker (second host renders free jobs) → `docs/architecture/remote-worker.md`
+- Privacy blur (opt-in faces, plates, on-screen personal details) → `docs/architecture/privacy-blur.md`
 
 ## Hard rules
 
@@ -67,7 +68,13 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 - SPLIT captions need ASS with `{\an5}` per word event on the seam; SRT cannot do per-stretch alignment. Preserve `layout_ranges` through recut (`layout_ranges.remap`).
 - Mouth activity is normalised per speaker before comparing (`normalise_activity`).
 - The reframe render runs in one GPU pass (`gpu_render` + `osrender/`) built from the scenes' own filtergraphs: a layout graph that `gpu_render.layers_from_graph` cannot read silently renders through ffmpeg, so keep new layouts to crop/scale/gblur/overlay/vstack/pad and run `tests/test_gpu_render_equivalence.py` on a GPU. After editing `osrender/src/kernels.cu`, regenerate `kernels.ptx` (see `osrender/README.md`).
-- Canonical files are always clean; the free-plan mark exists only on the served `wm_` copy (`main.mark_delivery` / `app._deliver`). While a job has `.marked`, `/videos` refuses its clean deliverables.
+- Canonical files are always clean of the free-plan mark; that mark exists only on the served `wm_` copy (`main.mark_delivery` / `app._deliver`). While a job has `.marked`, `/videos` refuses its clean deliverables. Privacy blur is the opposite: when the user turned it on it is baked into the canonical pixels (`privacy_blur.py`), because the clean file is still a download.
+
+**Privacy blur**
+- Off unless the request asks (`BLUR_SENSITIVE=1`). A value in the server environment is popped and does not turn it on for every job. The dashboard, API, MCP and Autopilot default to off.
+- It runs after reframing (the crop still needs the faces) and before captions and hooks. Detection is local: frames are never sent to a model to find the regions.
+- A failed blur refuses the clip. Do not fall open and deliver the unblurred picture. Regions are computed in process and drawn in pixels; they are never read back as an ffmpeg filter string.
+- A source re-render (recut, hand framing) must pass the job's choice through. The fast recut cuts the already-blurred canonical file.
 
 **Clip selection**
 - The scoring pass ranks every window (global top N), never "choose up to K per batch". The `min_clips` floor is enforced in code.

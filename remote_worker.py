@@ -63,7 +63,10 @@ _IMAGE_FILE_BYTES = 32 * 1024 * 1024
 # never do. The worker has its own model key and needs no proxy, cookie or
 # storage secret: this host downloads the source and delivers the result.
 _OPTION_NAMES = frozenset({
-    "WATERMARK", "MAX_SOURCE_MINUTES", "SOURCE_CAP_MINUTES", "HOOK_LAZY"})
+    "WATERMARK", "MAX_SOURCE_MINUTES", "SOURCE_CAP_MINUTES", "HOOK_LAZY",
+    # Opt-in privacy blur. Only the value "1" is useful; anything else still
+    # has to match _OPTION_VALUE or it does not cross.
+    "BLUR_SENSITIVE"})
 _OPTION_PREFIXES = ("AUTO_", "CLIP_")
 _OPTION_VALUE = re.compile(r"^[A-Za-z0-9 _.,:+-]{0,120}$")
 _FORMATS = frozenset({"auto", "vertical", "horizontal", "square"})

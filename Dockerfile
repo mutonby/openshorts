@@ -77,6 +77,8 @@ WORKDIR /app
 # fonts-noto-core (~42 MB) is the glyph fallback for every other script:
 # Arabic, Hebrew, Devanagari, Bengali, Thai... burned as tofu boxes without it
 # (issue #89). libass shapes and orders RTL text itself once a font has the glyphs.
+# tesseract-ocr reads emails, phone numbers and card numbers for the opt-in
+# privacy blur. Faces, plates and QR codes do not need it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
@@ -90,6 +92,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation \
     fonts-noto-core \
     fonts-noto-color-emoji \
+    tesseract-ocr \
+    tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js 22 from NodeSource: Debian's nodejs package is Node 20, which no

@@ -70,6 +70,8 @@ TOOLS = [
             "source itself, transcribes it, finds the most viral moments with AI "
             "and renders vertical (9:16) clips. Captions and the AI hook line are "
             "burned by default; pass captions=false or auto_hook=false to skip either. "
+            "blur_sensitive defaults to false and blurs faces, license plates and "
+            "on-screen personal details — set it only when the user asks. "
             "Takes the URL as the user gave it; the video does not need to be "
             "opened or transcribed beforehand. Returns a job_id immediately — the work takes minutes; "
             "poll get_job_status or pass webhook_url to be called back. The "
@@ -149,6 +151,13 @@ TOOLS = [
                 "clip_max_seconds": {
                     "type": "number", "minimum": 10, "maximum": 180,
                     "description": "Maximum clip length in seconds (default 60). Must be ≥ 5s above the minimum.",
+                },
+                "blur_sensitive": {
+                    "type": "boolean",
+                    "description": "Default false. Blur faces, license plates, QR codes and "
+                                   "on-screen emails, phone numbers and card numbers in each "
+                                   "clip. Leave false unless the user asked: talking-head "
+                                   "clips need the faces. Detection stays on the server.",
                 },
             },
             "required": ["confirm_rights"],
@@ -404,6 +413,11 @@ async def _tool_process_video(client, args):
         body["auto_hook"] = True
         if args.get("hook_style"):
             body["auto_hook_style"] = args["hook_style"]
+    # Off unless the caller opts in. Unlike the hook, this must not default
+    # to the dashboard's "remembered" choice: an agent turns it on only when
+    # the user asked for faces and plates to be hidden.
+    if args.get("blur_sensitive") is True:
+        body["blur_sensitive"] = True
     resp = await client.post("/api/process", json=body)
     if resp.status_code >= 400:
         return _api_error(resp), True
