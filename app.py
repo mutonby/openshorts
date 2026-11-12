@@ -35,6 +35,7 @@ import layout_ranges
 import watermarked
 import media_auth
 import remote_worker
+import yt_account
 from jsonfile import write_json_atomic
 
 load_dotenv()
@@ -3373,9 +3374,14 @@ def is_transient_failure(logs) -> bool:
 def _should_auto_retry(job) -> bool:
     # A run on the remote worker that did not complete is always run again
     # here, whatever it printed: this host decides what a video's failure is.
-    return bool(job and job.get('status') == 'failed' and not _draining
-                and int(job.get('auto_retries') or 0) < AUTO_RETRY_LIMIT
-                and job.get('cmd')
+    if not (job and job.get('status') == 'failed' and not _draining and job.get('cmd')):
+        return False
+    # YouTube limiting the account is neither the video's fault nor a server
+    # fault: the job waits out the cooldown, a few times at most, on its own
+    # counter (it has not used its one retry for real failures).
+    if job.get('yt_limited'):
+        return int(job.get('yt_retries') or 0) < YT_LIMIT_RETRIES
+    return bool(int(job.get('auto_retries') or 0) < AUTO_RETRY_LIMIT
                 and (job.get('remote_failed') or is_transient_failure(job.get('logs'))))
 
 
@@ -3395,20 +3401,35 @@ def _clean_for_retry(output_dir):
                 pass
 
 
+YT_LIMIT_RETRIES = _int_env("YT_LIMIT_RETRIES", 3)
+YT_LIMITED_LOG = ("⏳ YouTube is limiting downloads right now. Your video keeps its place "
+                  "and starts again in about {n} min, no minutes are charged twice.")
+
+
 def _schedule_auto_retry(job_id, job):
-    job['auto_retries'] = int(job.get('auto_retries') or 0) + 1
+    delay = AUTO_RETRY_DELAY_SECONDS
+    if job.pop('yt_limited', None):
+        # Back in line for when the account's cooldown is over (plus a spread,
+        # so the videos that waited do not all ask YouTube in the same second).
+        job['yt_retries'] = int(job.get('yt_retries') or 0) + 1
+        delay = max(delay, yt_account.cooling_down()) + 20 + (hash(job_id) % 120)
+        job['logs'].append(YT_LIMITED_LOG.format(n=max(1, round(delay / 60))))
+        print(f"⏳ {job_id} waits {delay:.0f}s for the YouTube account "
+              f"({job['yt_retries']}/{YT_LIMIT_RETRIES}).")
+    else:
+        job['auto_retries'] = int(job.get('auto_retries') or 0) + 1
+        job['logs'].append("🔁 A temporary server problem interrupted your video. "
+                           "Retrying it automatically, no minutes are charged twice.")
+        print(f"🔁 Auto-retry {job['auto_retries']}/{AUTO_RETRY_LIMIT} for {job_id} "
+              f"in {AUTO_RETRY_DELAY_SECONDS:.0f}s.")
     job.pop('remote_failed', None)
     job['status'] = 'queued'
     job['result'] = None
     job['ready_files'] = {}
-    job['logs'].append("🔁 A temporary server problem interrupted your video. "
-                       "Retrying it automatically, no minutes are charged twice.")
     _clean_for_retry(job.get('output_dir') or os.path.join(OUTPUT_DIR, job_id))
-    print(f"🔁 Auto-retry {job['auto_retries']}/{AUTO_RETRY_LIMIT} for {job_id} "
-          f"in {AUTO_RETRY_DELAY_SECONDS:.0f}s.")
 
     async def _later():
-        await asyncio.sleep(AUTO_RETRY_DELAY_SECONDS)
+        await asyncio.sleep(delay)
         if job_id in jobs and jobs[job_id].get('status') == 'queued':
             # Read now, not when scheduled: an upgrade in between rewrote it.
             m = _read_manifest(job_id) or {}
@@ -4443,12 +4464,20 @@ def _handle_job_line(job_id, line, remote=False):
             # jobs say whether the GPU build of onnxruntime is the one loaded.
             _note_job_asr(decoded_line[8:])
         return
-    if remote and decoded_line.startswith(("SOURCE_READY ", "PROXY_BYTES=", "PROXY_ROUTE=")):
+    if remote and decoded_line.startswith(("SOURCE_READY ", "PROXY_BYTES=", "PROXY_ROUTE=",
+                                           "YT_ACCOUNT_LIMITED")):
         return        # this host's own markers: the worker has no say in them
     if decoded_line.startswith("SOURCE_READY "):
         # Internal marker of ``main.py --prepare-only``: where the source is.
         if job_id in jobs:
             jobs[job_id]['remote_source'] = decoded_line.split(" ", 1)[1].strip()
+        return
+    if decoded_line.startswith("YT_ACCOUNT_LIMITED"):
+        # Internal marker from main.py's downloader: the download failed only
+        # because YouTube is limiting the account (yt_account). The job goes
+        # back in line for when the cooldown is over (_schedule_auto_retry).
+        if job_id in jobs:
+            jobs[job_id]['yt_limited'] = True
         return
     if decoded_line.startswith("PROXY_BYTES="):
         # Internal marker from main.py's downloader, not a log line.
@@ -5050,7 +5079,18 @@ async def get_config():
     }
 
 async def _probe_youtube_quality(url: str) -> dict:
-    """Run quality_probe.py in a worker thread; {} on any failure (fail-open)."""
+    """What the source offers ({max_height, duration, ...}); {} on any failure
+    (fail-open). The metering probe a moment ago already asked YouTube for
+    this very video: its answer is reused, so a submission costs the account
+    one request here instead of two. Otherwise quality_probe.py runs in a
+    worker thread."""
+    try:
+        facts = _metering.probe_facts(url) if BILLING_ENABLED else None
+    except Exception:
+        facts = None
+    if facts:
+        return facts
+
     def _run():
         try:
             proc = subprocess.run(

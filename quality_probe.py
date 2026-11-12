@@ -86,15 +86,23 @@ def main() -> int:
         # yt-dlp's default player clients (tv_downgraded/web_safari with
         # cookies, android_vr/web_safari anonymous) are the ones that still
         # serve HD without PO tokens — never override them here.
+        import contextlib
+        import yt_account
         attempts = []
-        if cookies_path:
+        # Not while YouTube has the account limited (yt_account): the request
+        # would fail and count against it again.
+        if cookies_path and yt_account.cooling_down() <= 0:
             attempts.append(("cookie-auth", {**base_opts, 'cookiefile': cookies_path}))
         attempts.append(("anonymous", {**base_opts, 'cookiefile': None}))
 
         for mode, opts in attempts:
+            authed = mode == "cookie-auth"
             try:
-                with ssrf_guard.guarded(), yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(args.url, download=False)
+                with (yt_account.request() if authed else contextlib.nullcontext()):
+                    with ssrf_guard.guarded(), yt_dlp.YoutubeDL(opts) as ydl:
+                        info = ydl.extract_info(args.url, download=False)
+                if authed:
+                    yt_account.note_ok()
                 formats = info.get('formats') or []
                 heights = [
                     f.get('height') or 0
@@ -111,7 +119,9 @@ def main() -> int:
                     result["duration"] = int(info.get('duration') or 0)
                 if result["max_height"] >= 1080:
                     break
-            except Exception:
+            except Exception as e:
+                if authed and yt_account.is_rate_limit(str(e)):
+                    yt_account.note_rate_limited()
                 continue
 
         result["cookies_invalid"] = any("no longer valid" in w for w in warnings)

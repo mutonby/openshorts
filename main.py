@@ -5,6 +5,7 @@ import shutil
 import argparse
 import re
 import sys
+import contextlib
 import threading
 import unicodedata
 import uuid
@@ -29,6 +30,7 @@ import gemini_worker
 import hook_grounding
 import layout_picker
 import llm_backend
+import yt_account
 import twitch_signals
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
@@ -1071,8 +1073,12 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         # Extracted ONCE, unprocessed, and handed to the download below: a
         # plain ydl.download([url]) ran the whole extraction again (player
         # clients, API JSON, m3u8), 4-9 s of round trips per attempt.
-        with yt_dlp.YoutubeDL(_base_opts(extractor_args, proxy, cookies)) as ydl:
-            info = ydl.extract_info(url, download=False, process=False)
+        # An extraction that sends the account's cookies takes one of the
+        # account's slots and keeps its distance from the previous one
+        # (yt_account): the account's request budget is shared by every job.
+        with (yt_account.request() if (cookies and cookies_path) else contextlib.nullcontext()):
+            with yt_dlp.YoutubeDL(_base_opts(extractor_args, proxy, cookies)) as ydl:
+                info = ydl.extract_info(url, download=False, process=False)
         # Media URLs another program will fetch (ffmpeg on a ranged or HLS
         # download) resolve outside the Python guard: check them here. YouTube's
         # own CDN hosts are skipped (dozens of them, never internal).
@@ -1158,7 +1164,21 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     # below so app.py can keep a durable trail of WHY a job reached the paid
     # proxy (the container log rotates within the hour; see cloud/proxy_ledger).
     attempt_log = []
+    account_limited = False
     for label, ea, fmt, proxy, cookies in attempts:
+        if cookies and cookies_path and (account_limited or yt_account.cooling_down() > 0):
+            # YouTube answered this video (or, during a cooldown, everybody)
+            # that the account is limited: another request with its cookies
+            # gets the same answer on every route and counts against the
+            # account again. Only the anonymous attempts run.
+            if not account_limited:
+                print(f"⏳ The YouTube account is limited for another "
+                      f"{yt_account.cooling_down() / 60:.0f} min: skipping the "
+                      f"attempts that use it.")
+            account_limited = True
+            attempt_log.append({"label": label, "ok": False, "bytes": 0, "paid": False,
+                                "error": "skipped: the YouTube account is cooling down"})
+            continue
         # A 403 on the media fetch is usually transient: the googlevideo URL is
         # bound to the IP that extracted it, and the residential proxy rotates
         # its exit IP between requests. Retrying re-extracts and usually lands
@@ -1167,6 +1187,8 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             try:
                 print(f"📥 Download attempt: {label}" + (f" (retry {retry})" if retry else ""))
                 sanitized_title = _attempt(ea, fmt, proxy, cookies)
+                if cookies and cookies_path:
+                    yt_account.note_ok()
                 # Only bytes through the PER-GB proxy cost money; direct and
                 # the flat-rate static proxies are free bandwidth for the
                 # monthly counter's purposes.
@@ -1183,6 +1205,10 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                                     "paid": proxy is not None and proxy == _proxy,
                                     "error": str(e)[:300]})
                 print(f"⚠️  Download attempt '{label}' failed: {str(e)[:200]}")
+                if cookies and yt_account.is_rate_limit(str(e)):
+                    account_limited = True
+                    yt_account.note_rate_limited()
+                    break       # every other request with the cookies fails the same way
                 retryable = '403' in str(e) or 'Forbidden' in str(e)
                 if not retryable or retry == 1:
                     break
@@ -1202,6 +1228,14 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     if sanitized_title is None and last_err is not None and _content_block(str(last_err)):
         print(f"❌ {_content_block(str(last_err))}")
         raise last_err
+
+    if sanitized_title is None and account_limited:
+        # Not the video's fault and not worth a failure: app.py puts the job
+        # back in line once the cooldown is over (consumed there, like
+        # PROXY_BYTES; never shown to the user).
+        print(f"YT_ACCOUNT_LIMITED {yt_account.cooling_down():.0f}", flush=True)
+        if last_err is None:      # every attempt needed the account
+            last_err = RuntimeError("The YouTube account is rate-limited by YouTube.")
 
     if sanitized_title is None:
         import sys

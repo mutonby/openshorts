@@ -19,10 +19,14 @@ Probing input duration (ffprobe / yt-dlp metadata) lives here too.
 import asyncio
 import json
 import math
+import contextlib
 import os
 from urllib.parse import urlparse
 import random
+import time
 import subprocess
+
+import yt_account
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 
@@ -260,6 +264,41 @@ def probe_url_minutes(url: str, allow_paid: bool = True) -> float:
                 pass
 
 
+# What the last probes learned about each URL, for the quality gate that runs
+# right after the metering probe (app._probe_youtube_quality): asking YouTube
+# a second time for the same video spent the account's budget twice per
+# submission. Small and short-lived: one entry per recent submission.
+_PROBE_FACTS_TTL = 600
+_probe_facts: dict = {}
+
+
+def _remember_probe(url, info):
+    try:
+        heights = [f.get("height") or 0 for f in (info.get("formats") or [])
+                   if f.get("vcodec", "none") != "none" and f.get("protocol") != "mhtml"
+                   and f.get("ext") != "mhtml"]
+        height = max(heights, default=0)
+        if not height:
+            return            # nothing to say about quality: let the gate ask
+        now = time.time()
+        for k in [k for k, v in _probe_facts.items() if now - v["at"] > _PROBE_FACTS_TTL]:
+            _probe_facts.pop(k, None)
+        _probe_facts[url] = {"at": now, "max_height": int(height),
+                             "duration": int(info.get("duration") or 0)}
+    except Exception:
+        pass
+
+
+def probe_facts(url):
+    """``{max_height, duration, mode, cookies_invalid}`` from a probe of this
+    URL in the last few minutes, or None."""
+    f = _probe_facts.get(url)
+    if not f or time.time() - f["at"] > _PROBE_FACTS_TTL:
+        return None
+    return {"max_height": f["max_height"], "duration": f["duration"],
+            "mode": "metering-probe", "cookies_invalid": False}
+
+
 def _probe_with_proxies(url, proxies, strategies, static_errors, paid, ck_path):
     """Walk the proxy chain (outer) x extractor strategies (inner) until one
     reports a duration. Split out of ``probe_url_minutes`` so the temporary
@@ -279,6 +318,7 @@ def _probe_with_proxies(url, proxies, strategies, static_errors, paid, ck_path):
         def error(self, msg): pass
 
     last_err = None
+    account_limited = False
     for proxy in proxies:
         is_paid = bool(paid) and proxy == paid
         # Every attempt's error on this route, not just the last one. The
@@ -307,16 +347,30 @@ def _probe_with_proxies(url, proxies, strategies, static_errors, paid, ck_path):
             opts = {"skip_download": True, "quiet": True, "no_warnings": True,
                     "noplaylist": True,
                     "logger": _QuietLogger(), "extractor_args": extractor_args}
-            if ck_path and use_cookies:
+            authed = bool(ck_path and use_cookies)
+            if authed and (account_limited or yt_account.cooling_down() > 0):
+                # YouTube answered this video (or, during a cooldown,
+                # everybody) that the account is limited: asking again with
+                # its cookies gets the same answer on every route and counts
+                # against it. The anonymous step of this route still runs.
+                route_errors.append("skipped: the YouTube account is limited")
+                continue
+            if authed:
                 opts["cookiefile"] = ck_path
             if proxy:
                 opts["proxy"] = proxy
             try:
                 import ssrf_guard
-                with ssrf_guard.guarded(), yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(url, download=False)
+                # With the cookies: one of the account's slots, spaced from
+                # the previous request (yt_account), like the download.
+                with (yt_account.request() if authed else contextlib.nullcontext()):
+                    with ssrf_guard.guarded(), yt_dlp.YoutubeDL(opts) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                if authed:
+                    yt_account.note_ok()
                 duration = info.get("duration")
                 if duration:
+                    _remember_probe(url, info)
                     if is_paid:
                         _paid_probe_events.append({
                             "url": url, "static_errors": dict(static_errors),
@@ -333,6 +387,9 @@ def _probe_with_proxies(url, proxies, strategies, static_errors, paid, ck_path):
             except Exception as e:
                 last_err = e
                 route_errors.append(str(e)[:300])
+                if authed and yt_account.is_rate_limit(str(e)):
+                    account_limited = True
+                    yt_account.note_rate_limited()
         else:
             if not is_paid:
                 static_errors[_route_name(proxy, proxies)] = (

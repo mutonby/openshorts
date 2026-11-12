@@ -79,3 +79,36 @@ markers), not a generic connectivity endpoint: YouTube can refuse the static IPs
 while other hosts keep answering. When `YOUTUBE_COOKIES` is set it also checks
 the ytcfg `LOGGED_IN` marker and alerts on the first probe that says the session
 is gone (`cloud/alerts.py`).
+
+## The account's request budget (`yt_account.py`)
+
+Every probe and every download that sends `YOUTUBE_COOKIES` spends the same
+account's budget, and YouTube limits a busy account ("Your account has been
+rate-limited by YouTube for up to an hour"). While it is limited every request
+with the cookies fails on every route and counts against it again, and the
+anonymous attempts are bot-checked on non-residential IPs, so downloads failed
+outright.
+
+- **Paced.** `yt_account.request()` wraps each authenticated extraction (the
+  metering probe, the quality probe, the download): at most `YT_ACCOUNT_SLOTS`
+  (2) at a time on the host, started `YT_ACCOUNT_MIN_INTERVAL` (2 s) apart.
+  State is files in `output/`, shared by job processes and both containers of
+  a deploy. Fail-open: a slot that never frees is skipped after
+  `YT_ACCOUNT_MAX_WAIT`.
+- **Per video.** After a "rate-limited" answer a probe or a download stops
+  sending the cookies for that video: the other routes would get the same
+  answer, and each one counts against the account. The anonymous attempts
+  still run.
+- **Cooldown.** YouTube limits by degrees: stray "rate-limited" answers among
+  requests that work are routine (hours of them on 12-nov-2026 with every
+  download succeeding). `YT_ACCOUNT_STRIKES` (6) in a row within
+  `YT_ACCOUNT_STRIKE_WINDOW` (180 s), with no authenticated success in
+  between, start `YT_ACCOUNT_COOLDOWN_SECONDS` (600) during which nobody sends
+  the cookies at all.
+- **One probe per submission.** The quality gate reuses what the metering
+  probe just learned (`metering.probe_facts`) instead of asking again.
+- **Wait, not fail.** A download that failed only because of the limit prints
+  `YT_ACCOUNT_LIMITED`; `app._schedule_auto_retry` puts the job back in line
+  for when the cooldown ends, up to `YT_LIMIT_RETRIES` (3) times, on a counter
+  of its own. The user sees "YouTube is limiting downloads right now".
+
