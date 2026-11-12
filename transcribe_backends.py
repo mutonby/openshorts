@@ -343,13 +343,66 @@ def onnxruntime_device():
     return "cuda" if "CUDAExecutionProvider" in providers else "cpu"
 
 
+PARAKEET_HF_REPO = "istupakov/parakeet-tdt-0.6b-v3-onnx"
+
+
+def _plain_parakeet_dir():
+    """The model's files as ordinary files in one directory, copied once from
+    the hub cache (see ``_load_parakeet``). Several job processes may get here
+    together: each copies to its own temp dir and the first rename wins."""
+    import shutil
+    import tempfile
+    from huggingface_hub import try_to_load_from_cache
+    # Not snapshot_download: the cache only has the files the loader asked
+    # for, and an incomplete snapshot is an error there.
+    cached = try_to_load_from_cache(PARAKEET_HF_REPO, "encoder-model.onnx")
+    if not isinstance(cached, str):
+        raise RuntimeError("Parakeet is not in the hub cache")
+    snap = os.path.dirname(cached)
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(snap))),
+                        "openshorts-plain")
+    target = os.path.join(root, f"parakeet-{os.path.basename(snap)}")
+    if os.path.isdir(target):
+        return target
+    os.makedirs(root, exist_ok=True)
+    tmp = tempfile.mkdtemp(dir=root, prefix=".copy-")
+    try:
+        for name in os.listdir(snap):
+            if "int8" in name:
+                continue          # the quantised twin is never loaded
+            shutil.copyfile(os.path.join(snap, name), os.path.join(tmp, name))
+        try:
+            os.rename(tmp, target)
+        except OSError:
+            if not os.path.isdir(target):
+                raise
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return target
+
+
+def _load_parakeet(onnx_asr):
+    """Load Parakeet from the hub cache. A cache written by a recent
+    huggingface_hub keeps every file as a link into its own blob directory,
+    and onnxruntime refuses a model whose external weights (``.onnx.data``)
+    resolve outside the model file's directory: the load then fails on a
+    fresh cache while an old one still works. Same files from a plain
+    directory load fine, so that is the fallback."""
+    kwargs = dict(providers=parakeet_providers(), sess_options=parakeet_session_options())
+    try:
+        return onnx_asr.load_model(PARAKEET_MODEL_ID, **kwargs)
+    except Exception as e:
+        if "External data path" not in str(e):
+            raise
+    return onnx_asr.load_model(PARAKEET_MODEL_ID, _plain_parakeet_dir(), **kwargs)
+
+
 def _get_parakeet_model():
     global _parakeet_model, PARAKEET_DEVICE
     with _parakeet_lock:
         if _parakeet_model is None:
             import onnx_asr
-            model = onnx_asr.load_model(PARAKEET_MODEL_ID, providers=parakeet_providers(),
-                                        sess_options=parakeet_session_options())
+            model = _load_parakeet(onnx_asr)
             vad = onnx_asr.load_vad("silero", **vad_load_kwargs())
             _parakeet_model = model.with_vad(
                 vad, batch_size=PARAKEET_VAD_BATCH).with_timestamps()
