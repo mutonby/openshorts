@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 import re
 import shutil
 import textwrap
@@ -531,9 +532,13 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
     # debugging hint, so it is trimmed by BYTES (filesystems cap at 255 bytes,
     # and one Bengali or Arabic character costs three). Embedding it untrimmed
     # raised OSError 36 and killed the endpoint in prod on 26-jul-2026.
+    # In the system temp dir, not the working directory: the process may run
+    # from a read-only tree (the remote worker's container), where writing the
+    # overlay next to the code failed and every clip came out without its hook.
     stem = os.path.splitext(os.path.basename(video_path))[0]
-    hook_filename = (f"temp_hook_{uuid.uuid4().hex[:8]}_"
-                     f"{_truncate_bytes(stem, 80)}.png")
+    hook_filename = os.path.join(
+        tempfile.gettempdir(),
+        f"temp_hook_{uuid.uuid4().hex[:8]}_{_truncate_bytes(stem, 80)}.png")
     
     try:
         img_path, box_w, box_h = create_hook_image(text, target_box_width, hook_filename, font_scale=font_scale, style=style,
