@@ -318,7 +318,7 @@ def _probe_with_proxies(url, proxies, strategies, static_errors, paid, ck_path):
         def error(self, msg): pass
 
     last_err = None
-    account_limited = False
+    limit_answers = 0
     for proxy in proxies:
         is_paid = bool(paid) and proxy == paid
         # Every attempt's error on this route, not just the last one. The
@@ -348,11 +348,13 @@ def _probe_with_proxies(url, proxies, strategies, static_errors, paid, ck_path):
                     "noplaylist": True,
                     "logger": _QuietLogger(), "extractor_args": extractor_args}
             authed = bool(ck_path and use_cookies)
-            if authed and (account_limited or yt_account.cooling_down() > 0):
-                # YouTube answered this video (or, during a cooldown,
-                # everybody) that the account is limited: asking again with
-                # its cookies gets the same answer on every route and counts
-                # against it. The anonymous step of this route still runs.
+            if authed and (limit_answers >= yt_account.ANSWERS_PER_VIDEO
+                           or yt_account.cooling_down() > 0):
+                # YouTube said twice for this video (or, during a cooldown,
+                # to everybody) that the account is limited: asking again
+                # with its cookies gets the same answer and counts against
+                # it. (Once is often one exit IP only: the next route is
+                # still asked.) The anonymous step of this route still runs.
                 route_errors.append("skipped: the YouTube account is limited")
                 continue
             if authed:
@@ -388,7 +390,7 @@ def _probe_with_proxies(url, proxies, strategies, static_errors, paid, ck_path):
                 last_err = e
                 route_errors.append(str(e)[:300])
                 if authed and yt_account.is_rate_limit(str(e)):
-                    account_limited = True
+                    limit_answers += 1
                     yt_account.note_rate_limited()
         else:
             if not is_paid:

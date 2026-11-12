@@ -1165,16 +1165,20 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     # proxy (the container log rotates within the hour; see cloud/proxy_ledger).
     attempt_log = []
     account_limited = False
+    limit_answers = 0
+    skip_told = False
     for label, ea, fmt, proxy, cookies in attempts:
-        if cookies and cookies_path and (account_limited or yt_account.cooling_down() > 0):
-            # YouTube answered this video (or, during a cooldown, everybody)
-            # that the account is limited: another request with its cookies
-            # gets the same answer on every route and counts against the
-            # account again. Only the anonymous attempts run.
-            if not account_limited:
-                print(f"⏳ The YouTube account is limited for another "
-                      f"{yt_account.cooling_down() / 60:.0f} min: skipping the "
-                      f"attempts that use it.")
+        if cookies and cookies_path and (limit_answers >= yt_account.ANSWERS_PER_VIDEO
+                                         or yt_account.cooling_down() > 0):
+            # YouTube said twice for this video (or, during a cooldown, to
+            # everybody) that the account is limited: one more request with
+            # its cookies gets the same answer and counts against the account
+            # again. One answer is not enough to stop: the limit is often on
+            # one exit IP only, and the next static route gets the video.
+            if not skip_told:
+                print("⏳ The YouTube account is limited: skipping the rest of "
+                      "the attempts that use it.")
+                skip_told = True
             account_limited = True
             attempt_log.append({"label": label, "ok": False, "bytes": 0, "paid": False,
                                 "error": "skipped: the YouTube account is cooling down"})
@@ -1207,8 +1211,9 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                 print(f"⚠️  Download attempt '{label}' failed: {str(e)[:200]}")
                 if cookies and yt_account.is_rate_limit(str(e)):
                     account_limited = True
+                    limit_answers += 1
                     yt_account.note_rate_limited()
-                    break       # every other request with the cookies fails the same way
+                    break       # not again on this route; the next one may differ
                 retryable = '403' in str(e) or 'Forbidden' in str(e)
                 if not retryable or retry == 1:
                     break

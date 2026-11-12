@@ -95,10 +95,12 @@ outright.
   State is files in `output/`, shared by job processes and both containers of
   a deploy. Fail-open: a slot that never frees is skipped after
   `YT_ACCOUNT_MAX_WAIT`.
-- **Per video.** After a "rate-limited" answer a probe or a download stops
-  sending the cookies for that video: the other routes would get the same
-  answer, and each one counts against the account. The anonymous attempts
-  still run.
+- **Per video.** After two "rate-limited" answers
+  (`YT_ACCOUNT_ANSWERS_PER_VIDEO`) a probe or a download stops sending the
+  cookies for that video: the remaining routes would get the same answer, and
+  each one counts against the account. Not after one: the limit is often on a
+  single exit IP and the next static route gets the video. The anonymous
+  attempts still run.
 - **Cooldown.** YouTube limits by degrees: stray "rate-limited" answers among
   requests that work are routine (hours of them on 12-nov-2026 with every
   download succeeding). `YT_ACCOUNT_STRIKES` (6) in a row within

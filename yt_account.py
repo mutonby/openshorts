@@ -60,6 +60,13 @@ STRIKES = _int_env("YT_ACCOUNT_STRIKES", 6)
 STRIKE_WINDOW = _float_env("YT_ACCOUNT_STRIKE_WINDOW", 180)
 MIN_INTERVAL = _float_env("YT_ACCOUNT_MIN_INTERVAL", 2.0)
 SLOTS = _int_env("YT_ACCOUNT_SLOTS", 2)
+# How many "rate-limited" answers one video takes before its probe or its
+# download stops sending the cookies. Not one: the limit is often on a single
+# exit IP, and the next static route got the video (seen on every refresh of
+# the cookies, and on 12-nov-2026 stopping at the first answer lost the videos
+# the second and third route used to rescue). Not unbounded: when the account
+# itself is shut every route answers the same and each one counts against it.
+ANSWERS_PER_VIDEO = _int_env("YT_ACCOUNT_ANSWERS_PER_VIDEO", 2)
 # How long a request waits for its turn before going ahead anyway.
 MAX_WAIT = _float_env("YT_ACCOUNT_MAX_WAIT", 90)
 

@@ -182,7 +182,7 @@ def test_the_probe_stops_sending_the_cookies_once_the_account_is_limited(probe_e
     _fake_ytdl(monkeypatch, calls)
     assert metering.probe_url_minutes(URL) == 10.0
     # One request with the cookies, the answer that it is limited, then the
-    # anonymous step: not one more authenticated request on the other routes.
+    # anonymous step of that route, which has the answer.
     assert [c["cookies"] for c in calls] == [True, False]
     assert yt_account.cooling_down() == 0                 # one answer is not a shut account
 
@@ -194,9 +194,38 @@ def test_the_probe_stops_sending_the_cookies_once_the_account_is_limited(probe_e
     assert [c["cookies"] for c in calls] == [False]       # during the cooldown: none at all
 
 
-def test_a_limited_video_on_one_route_is_not_asked_again_on_the_others(probe_env, monkeypatch):
+def test_the_next_route_is_still_asked_after_one_limit_answer(probe_env, monkeypatch):
+    """The limit is often on one exit IP: the second route has the video."""
+    calls = []
+
+    class _YDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            authed = bool(self.opts.get("cookiefile"))
+            calls.append((self.opts.get("proxy"), authed))
+            if authed and len([c for c in calls if c[1]]) == 1:
+                raise RuntimeError(LIMITED)                 # the first route only
+            if not authed:
+                raise RuntimeError("Sign in to confirm you’re not a bot")
+            return {"extractor": "youtube", "duration": 600}
+
+    monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=_YDL))
+    assert metering.probe_url_minutes(URL) == 10.0
+    authed = [c for c in calls if c[1]]
+    assert len(authed) == 2 and authed[0][0] != authed[1][0]    # a second route, with the cookies
+
+
+def test_a_limited_video_is_not_asked_on_every_route(probe_env, monkeypatch):
     """Anonymous fails too (bot check): the probe walks every route, and the
-    cookies go out once, not once per route."""
+    cookies go out twice (ANSWERS_PER_VIDEO), not once per route."""
     calls = []
 
     class _YDL:
@@ -218,7 +247,7 @@ def test_a_limited_video_on_one_route_is_not_asked_again_on_the_others(probe_env
     monkeypatch.setattr(metering, "_ffprobe_url_seconds", lambda *a, **k: 0)
     with pytest.raises(ValueError):
         metering.probe_url_minutes(URL)
-    assert calls.count(True) == 1 and calls.count(False) >= 3
+    assert calls.count(True) == yt_account.ANSWERS_PER_VIDEO == 2 and calls.count(False) >= 3
 
 
 def test_the_quality_gate_reuses_what_the_probe_just_learned(probe_env, monkeypatch):
