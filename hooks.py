@@ -712,8 +712,18 @@ def materialize(output_dir, hooked_name):
         return False
     if not (os.path.exists(source) and os.path.exists(png_path)):
         return False
+    # The recipe is a file: its numbers are read as numbers before they go
+    # into a filter graph, whoever wrote it.
+    try:
+        x, y = int(r["x"]), int(r["y"])
+        duration = float(r["duration"]) if r.get("duration") else None
+    except (KeyError, TypeError, ValueError):
+        return False
+    if not (-20000 <= x <= 20000 and -20000 <= y <= 20000) or (
+            duration is not None and not 0 < duration < 86400):
+        return False
     tmp = os.path.join(output_dir, f".part_{uuid.uuid4().hex[:8]}_{hooked_name}")
-    cmd = _overlay_cmd(source, png_path, _overlay_graph(r["x"], r["y"], r.get("duration")), tmp)
+    cmd = _overlay_cmd(source, png_path, _overlay_graph(x, y, duration), tmp)
     try:
         result = _run_encode(cmd, source, [tmp])
         if result.returncode != 0 and not finished_before_crash(result, [tmp]):

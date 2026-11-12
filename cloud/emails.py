@@ -4,6 +4,7 @@ If SMTP isn't configured (local dev), messages are printed to the server log so
 the magic-link flow and alerts still work without a real mailbox.
 """
 import asyncio
+import html as _html
 import smtplib
 import ssl
 from email.message import EmailMessage
@@ -90,7 +91,10 @@ GITHUB_REPO_URL = "https://github.com/mutonby/openshorts"
 async def send_clips_ready_email(email: str, job_title: str, clip_count: int,
                                  dashboard_url: str):
     """Job-completion notice: lets the user close the tab during processing."""
-    title = (job_title or "Your video").strip()
+    # The title comes from the video (and its model-written metadata): text,
+    # never markup.
+    plain = " ".join((job_title or "Your video").split())[:200] or "Your video"
+    title = _html.escape(plain)
     html = f"""
       <div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto">
         <h2>Your clips are ready 🎬</h2>
@@ -103,7 +107,7 @@ async def send_clips_ready_email(email: str, job_title: str, clip_count: int,
            <a href="{GITHUB_REPO_URL}" style="color:#666">star on GitHub</a> helps a lot ⭐</p>
       </div>
     """
-    await send_email(email, f"Your clips are ready — {title}", html)
+    await send_email(email, f"Your clips are ready — {plain}", html)
 
 
 async def send_queue_expired_email(email: str, dashboard_url: str):

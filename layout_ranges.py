@@ -59,6 +59,8 @@ def read(video_path):
             data = json.load(f)
     except (OSError, ValueError):
         return []
+    if not isinstance(data, dict):
+        return []
     return normalise(data.get("ranges"))
 
 

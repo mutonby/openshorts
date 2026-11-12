@@ -323,7 +323,10 @@ def _hex_to_ass_inline_color(hex_color, fallback="FFFFFF"):
 
 def _escape_ass_text(text):
     """Neutralize characters that would start ASS override blocks."""
-    return str(text).replace('\\', '/').replace('{', '(').replace('}', ')')
+    # Line breaks too: one inside a word would end the Dialogue line and let
+    # the rest be read as an event or a section of its own.
+    return (str(text).replace('\\', '/').replace('{', '(').replace('}', ')')
+            .replace('\r', ' ').replace('\n', ' '))
 
 
 def _dim_hex_color(hex_color, opacity, fallback="FFFFFF"):
@@ -703,7 +706,8 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
     _log(f"🎬 Burning subtitles: {' '.join(cmd)}")
     result = gpu_decode.run(
         lambda on_gpu: gpu_decode.on_card(cmd, video_path) if on_gpu else cmd,
-        lambda c: subprocess.run(c, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE),
+        lambda c: subprocess.run(c, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                 timeout=1800),
         ok=lambda r: r.returncode == 0 or finished_before_crash(r, outputs),
         path=video_path)
 

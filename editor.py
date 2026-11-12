@@ -358,6 +358,37 @@ class VideoEditor:
 
         return s
 
+    # The filters the edit builder emits (edit_builder.build_filter_string),
+    # plus the ones this module adds itself. A filter string is run only if
+    # every filter in it is one of these: none of them can open a file, and
+    # anything else (a filter that reads a file, an instance name, a label, a
+    # second chain) means the string was not built here. The self-repair path
+    # is the one that returns free text from the model.
+    _ALLOWED_FILTERS = frozenset({"eq", "zoompan", "vignette", "hue", "setsar",
+                                  "format", "scale", "fps", "null"})
+
+    @classmethod
+    def _touches_files(cls, filter_string) -> bool:
+        """True unless the string is a plain chain of the allowed filters."""
+        s = str(filter_string or "")
+        if not s.strip() or any(c in s for c in "@\\[];\n\r\x00"):
+            return True
+        for part in cls._split_filter_chain(s):
+            name = part.strip().split("=", 1)[0].strip()
+            if name not in cls._ALLOWED_FILTERS:
+                return True
+        return False
+
+    @staticmethod
+    def _ffmpeg_env():
+        """The environment for an ffmpeg that runs a generated filter: the
+        process's own, without anything named like a credential."""
+        env = {k: v for k, v in os.environ.items()
+               if not re.search(r"KEY|SECRET|TOKEN|PASSWORD|DATABASE|COOKIE|PROXY|DSN", k, re.I)}
+        env["LANG"] = "C.UTF-8"
+        env["LC_ALL"] = "C.UTF-8"
+        return env
+
     @staticmethod
     def _test_filter(input_path, filter_string, env):
         """Dry-run the filter on the first 2 seconds (no output written).
@@ -422,6 +453,10 @@ class VideoEditor:
     def apply_edits(self, input_path, output_path, filter_data):
         """Executes FFmpeg with the generated filter."""
         
+        if (filter_data and filter_data.get("filter_string")
+                and self._touches_files(filter_data["filter_string"])):
+            print("⚠️ The filter names a file or a command filter. Not run; copying original.")
+            filter_data = None
         if not filter_data or not filter_data.get("filter_string"):
             print("⚠️ No filter string found. Copying original.")
             try:
@@ -462,11 +497,9 @@ class VideoEditor:
                 filter_string = f"{filter_string},setsar=1"
 
         # Use explicit environment with UTF-8 to avoid ascii errors in subprocess
-        env = os.environ.copy()
         # On some minimal docker images, we need to ensure we use a UTF-8 locale
-        # Try C.UTF-8 first, fallback to en_US.UTF-8 if available, but C.UTF-8 is usually safer for minimal
-        env["LANG"] = "C.UTF-8"
-        env["LC_ALL"] = "C.UTF-8"
+        # (C.UTF-8 is the safe one there). No credentials: ffmpeg needs none.
+        env = self._ffmpeg_env()
 
         # Dry-run the filter on 2 seconds before committing to a full encode;
         # on failure, give Gemini one self-repair attempt with the real error.
@@ -474,6 +507,9 @@ class VideoEditor:
         if not ok:
             print(f"⚠️ AI filter failed dry-run: {error_text}")
             repaired = self._repair_filter(filter_string, error_text, w or 1080, h or 1920)
+            if repaired and self._touches_files(repaired):
+                print("⚠️ The repaired filter names a file or a command filter. Dropped.")
+                repaired = None
             if repaired:
                 repaired = self._sanitize_filter_string(repaired)
                 if w and h:
