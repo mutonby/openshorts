@@ -10019,6 +10019,28 @@ class SaaSGenerateRequest(BaseModel):
     share_to_gallery: bool = False
 
 
+async def _archive_saas_job(job_id):
+    """Keep a finished AI Short in the owner's library (R2 + History).
+
+    Its working dir is swept with every other job dir after
+    JOB_RETENTION_SECONDS and its state only lives in ``saas_jobs``, so a
+    finished video used to be reachable for an hour (or until the next deploy)
+    and then gone for good, after the user had paid fal and ElevenLabs for it.
+    """
+    if not BILLING_ENABLED:
+        return
+    job = saas_jobs.get(job_id) or {}
+    result = job.get("result") or {}
+    if not job.get("user_id") or job.get("status") != "completed" or not result.get("video_url"):
+        return
+    clip = {"video_url": result["video_url"],
+            "title": (result.get("script") or {}).get("title") or "AI Short"}
+    try:
+        await cloud.videos.archive_job(job["user_id"], job_id, [clip], job["output_dir"])
+    except Exception as e:
+        print(f"⚠️  R2 archive error for SaaSShorts job {job_id}: {e}")
+
+
 @app.post("/api/saasshorts/generate")
 async def saasshorts_generate(
     req: SaaSGenerateRequest,
@@ -10201,6 +10223,8 @@ async def saasshorts_generate(
                             log_msg("📤 Uploaded to public gallery.")
                     except Exception as gallery_err:
                         log_msg(f"⚠️ Gallery upload skipped: {gallery_err}")
+
+                await _archive_saas_job(job_id)
 
         except Exception as e:
             print(f"[SaaSShorts] ❌ Job {job_id} failed: {e}")
