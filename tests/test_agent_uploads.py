@@ -169,3 +169,19 @@ def test_auto_hook_false_opts_out(dirs, monkeypatch):
     monkeypatch.setattr(app_module.job_queue, "put", fake_put)
     payload = _tool_payload(_mcp("process_video", {"upload_id": slot["upload_id"], "confirm_rights": True, "auto_hook": False}))
     assert "AUTO_HOOK" not in app_module.jobs[payload["job_id"]]["env"]
+
+
+def test_put_unreadable_video_already_removed_is_400_not_500(dirs, monkeypatch):
+    """A DELETE, a second PUT or the sweep can remove the file while the
+    duration probe runs: the caller still gets the 400, not a 500."""
+    slot = _tool_payload(_mcp("create_upload", {}))
+    def probe_after_concurrent_delete(path):
+        os.remove(path)
+        return 0.0
+    monkeypatch.setattr(app_module, "_media_duration_seconds", probe_after_concurrent_delete)
+    async def _put():
+        async with _client() as c:
+            return await c.put(f"/api/uploads/{slot['upload_id']}", content=b"x" * 100)
+    resp = asyncio.run(_put())
+    assert resp.status_code == 400 and "readable video" in resp.json()["detail"]
+    assert app_module.pending_uploads[slot["upload_id"]]["complete"] is False
