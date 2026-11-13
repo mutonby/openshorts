@@ -2598,6 +2598,12 @@ if __name__ == '__main__':
         if path:
             os.makedirs(path, exist_ok=True)
         return path
+
+    def _is_output_dir(path: str) -> bool:
+        # Missing extensionless paths are directories; existing files (even
+        # without an extension) and explicit filenames keep their meaning.
+        return (os.path.isdir(path) or path.endswith(("/", os.sep))
+                or (not os.path.exists(path) and not os.path.splitext(path)[1]))
     
     # What the stream's viewers clipped (Twitch VODs only; [] otherwise or
     # without TWITCH_CLIENT_ID). A URL call, so it runs before the download and
@@ -2614,9 +2620,9 @@ if __name__ == '__main__':
             output_dir = _ensure_dir(args.output)
         else:
             # If output is a directory, use it; if it's a filename, use its directory; else default "."
-            if args.output and os.path.isdir(args.output):
-                output_dir = args.output
-            elif args.output and not os.path.isdir(args.output):
+            if args.output and _is_output_dir(args.output):
+                output_dir = _ensure_dir(args.output)
+            elif args.output:
                 output_dir = os.path.dirname(args.output) or "."
             else:
                 output_dir = "."
@@ -2672,9 +2678,9 @@ if __name__ == '__main__':
             output_dir = _ensure_dir(args.output)
         else:
             # If output is a directory, use it; if it's a filename, use its directory; else default to input dir.
-            if args.output and os.path.isdir(args.output):
-                output_dir = args.output
-            elif args.output and not os.path.isdir(args.output):
+            if args.output and _is_output_dir(args.output):
+                output_dir = _ensure_dir(args.output)
+            elif args.output:
                 output_dir = os.path.dirname(args.output) or os.path.dirname(input_video)
             else:
                 output_dir = os.path.dirname(input_video)
@@ -2758,8 +2764,7 @@ if __name__ == '__main__':
         # directory we still need a filename: passing the directory through
         # ends up in os.remove() on it further down and dies with EACCES.
         output_file = args.output
-        if (not output_file or os.path.isdir(output_file)
-                or output_file.endswith(("/", os.sep))):
+        if not output_file or _is_output_dir(output_file):
             output_file = os.path.join(output_dir, f"{video_title}_vertical.mp4")
         render_clip(input_video, output_file, output_format)
     else:
