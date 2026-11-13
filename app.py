@@ -5301,16 +5301,19 @@ async def put_upload(upload_id: str, request: Request):
             size += len(chunk)
             if size > limit_bytes:
                 out.close()
-                os.remove(slot["path"])
+                with suppress(FileNotFoundError):  # a concurrent PUT/DELETE/sweep may have removed it
+                    os.remove(slot["path"])
                 raise HTTPException(status_code=413, detail=f"File too large. Max size {MAX_FILE_SIZE_MB}MB")
             out.write(chunk)
     if size == 0:
-        os.remove(slot["path"])
+        with suppress(FileNotFoundError):
+            os.remove(slot["path"])
         raise HTTPException(status_code=400, detail="Empty body")
     slot.update({"bytes": size, "complete": True})
     duration = await asyncio.get_event_loop().run_in_executor(None, _media_duration_seconds, slot["path"])
     if duration <= 0:
-        os.remove(slot["path"])
+        with suppress(FileNotFoundError):
+            os.remove(slot["path"])
         slot["complete"] = False
         raise HTTPException(status_code=400, detail="The body is not a readable video file")
     return {"upload_id": upload_id, "bytes": size, "duration_seconds": round(duration, 1),
