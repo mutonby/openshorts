@@ -292,6 +292,18 @@ async def purge_stale_magic_tokens():
                 delete(LoginCode).where(LoginCode.expires_at < _now() - timedelta(days=1)))
 
 
+async def lock_signup_email(session, email: str) -> None:
+    """Serialize sign-ins that may create the user for this email.
+
+    A brand-new address has no row to lock, so two near-simultaneous sign-ins
+    (a double-clicked Google consent, a reload of the callback, a magic link
+    opened next to a Google login) both saw "no user" and both INSERTed; the
+    loser hit users_email_key and answered 500. The transaction-scoped advisory
+    lock makes the second one wait, then find the first one's row.
+    """
+    await session.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(email, 0))))
+
+
 @router.post("/api/auth/magic-link/verify")
 async def verify_magic_link(payload: MagicVerifyRequest, request: Request = None):
     token_hash = hashlib.sha256(payload.token.encode()).hexdigest()
@@ -306,6 +318,7 @@ async def verify_magic_link(payload: MagicVerifyRequest, request: Request = None
             row.used_at = _now()
             email = row.email.lower()
 
+            await lock_signup_email(session, email)
             user = (await session.execute(
                 select(User).where(User.email == email)
             )).scalar_one_or_none()
