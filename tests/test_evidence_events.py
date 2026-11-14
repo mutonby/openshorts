@@ -179,6 +179,8 @@ class TestMagicLinkLogin:
 
         class _AuthSession(_FakeSession):
             async def execute(self, stmt):
+                if "pg_advisory_xact_lock" in str(stmt):  # the per-email sign-in lock
+                    return SimpleNamespace(scalar_one_or_none=lambda: None)
                 return SimpleNamespace(scalar_one_or_none=lambda v=next(results): v)
 
         async def _load(session, uid):
