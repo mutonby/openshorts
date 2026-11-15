@@ -78,6 +78,57 @@ def test_returns_validated_payload_and_zero_cost(local, monkeypatch):
     assert cost["input_tokens"] == 120 and cost["output_tokens"] == 40
 
 
+def test_images_and_labels_go_out_as_ordered_content_parts(local, monkeypatch):
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return _completion({"layout": "none", "confidence": 0.9, "why": "x"})
+
+    _serve(handler, monkeypatch)
+    monkeypatch.setenv("LLM_VISION_MODEL", "gemma4:12b")
+    llm_backend.generate_json("pick", gemini_worker.LayoutChoice,
+                              images=["Shot 0:", b"\xff\xd8jpg"])
+
+    assert seen["body"]["model"] == "gemma4:12b"
+    parts = seen["body"]["messages"][1]["content"]
+    assert [p["type"] for p in parts] == ["text", "image_url", "text"]
+    assert parts[0]["text"] == "Shot 0:"
+    assert parts[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert parts[2]["text"] == "pick"
+
+
+def test_text_only_calls_keep_a_plain_string_and_the_text_model(local, monkeypatch):
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return _completion({"layout": "none", "confidence": 0.9, "why": "x"})
+
+    _serve(handler, monkeypatch)
+    monkeypatch.setenv("LLM_VISION_MODEL", "other:vl")
+    llm_backend.generate_json("pick", gemini_worker.LayoutChoice)
+
+    assert seen["body"]["model"] == "qwen2.5:14b"
+    assert seen["body"]["messages"][1]["content"] == "pick"
+
+
+def test_reasoning_effort_and_token_cap_are_sent_when_configured(local, monkeypatch):
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return _completion({"layout": "none", "confidence": 0.9, "why": "x"})
+
+    _serve(handler, monkeypatch)
+    monkeypatch.setenv("LLM_REASONING_EFFORT", "none")
+    monkeypatch.setenv("LLM_MAX_TOKENS", "1024")
+    llm_backend.generate_json("pick", gemini_worker.LayoutChoice)
+
+    assert seen["body"]["reasoning_effort"] == "none"
+    assert seen["body"]["max_tokens"] == 1024
+
+
 def test_falls_back_to_json_object_when_schema_mode_is_rejected(local, monkeypatch):
     formats = []
 

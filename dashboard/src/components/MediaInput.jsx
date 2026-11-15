@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Link2, Upload, FileVideo, X, Info, Loader2, ChevronDown } from 'lucide-react';
+import { Link2, Upload, FileVideo, X, Info, Loader2, ChevronDown, Radio, FolderOpen } from 'lucide-react';
 import { track } from '../lib/analytics';
 import { getApiUrl } from '../config';
+import { apiJson } from '../lib/api';
+import { liveStartEpoch, fmtWhen } from '../lib/live';
 import SourceCost from './SourceCost';
+import FolderBrowser from './FolderBrowser';
 
 const SUPPORTED_PLATFORMS = [
     'YouTube', 'Vimeo', 'TikTok', 'X / Twitter', 'Twitch', 'Kick',
@@ -14,6 +17,12 @@ const SUPPORTED_PLATFORMS = [
 // says so the moment the file is picked (a 27 s upload used to end in a bare
 // "That run failed").
 const MIN_SOURCE_SECONDS = 45;
+
+const LANGUAGE_OPTIONS = [
+    { value: 'en', label: 'English' },
+    { value: 'hi', label: 'Hindi' },
+    { value: 'auto', label: 'Auto-detect' },
+];
 
 // Duration of a local video file in seconds, or null when the browser cannot
 // read it (unsupported codec): then the server stays the judge.
@@ -64,7 +73,36 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [layout, setLayout] = useState(() => {
         try { return localStorage.getItem('os_layout') || 'auto'; } catch { return 'auto'; }
     });
+    const [language, setLanguage] = useState(() => {
+        try { return localStorage.getItem('os_language') || 'en'; } catch { return 'en'; }
+    });
     const infoRef = useRef(null);
+    const [live, setLive] = useState({ checking: false, live: false, url: '' });
+    const [saveDir, setSaveDir] = useState(() => {
+        try { return localStorage.getItem('live_save_dir') || ''; } catch { return ''; }
+    });
+    const [browsing, setBrowsing] = useState(false);
+    const [startTime, setStartTime] = useState('');
+    const [startNow, setStartNow] = useState(true);
+    const [chunkMinutes, setChunkMinutes] = useState(20);
+    const isLive = mode === 'url' && live.live && live.url === url.trim();
+    const startMs = startNow ? null : liveStartEpoch(startTime);
+
+    useEffect(() => {
+        const target = url.trim();
+        if (mode !== 'url' || !/^https?:\/\//i.test(target)) {
+            setLive({ checking: false, live: false, url: '' });
+            return undefined;
+        }
+        let cancelled = false;
+        const t = setTimeout(() => {
+            setLive({ checking: true, live: false, url: target });
+            apiJson(`/api/live/probe?url=${encodeURIComponent(target)}`)
+                .then((d) => { if (!cancelled) setLive({ checking: false, live: !!d.live, url: target, status: d.status }); })
+                .catch(() => { if (!cancelled) setLive({ checking: false, live: false, url: target }); });
+        }, 700);
+        return () => { cancelled = true; clearTimeout(t); };
+    }, [url, mode]);
 
     // Close the compatibility popover on any outside click.
     useEffect(() => {
@@ -127,6 +165,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
             autoHook,
             autoHookStyle,
             layout,
+            language,
             sourceStart: range ? Math.round(range.start) : null,
             sourceEnd: range ? Math.round(range.end) : null,
         };
@@ -134,8 +173,18 @@ export default function MediaInput({ onProcess, isProcessing }) {
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
             localStorage.setItem('os_auto_hook_style_v2', autoHookStyle);
             localStorage.setItem('os_layout', layout);
+            localStorage.setItem('os_language', language);
+            if (isLive) localStorage.setItem('live_save_dir', saveDir.trim());
         } catch { /* ignore */ }
-        if (mode === 'url' && url) {
+        if (isLive) {
+            if (!saveDir.trim()) return;
+            onProcess({
+                type: 'live', payload: url.trim(), acknowledged: true, language,
+                saveDir: saveDir.trim(), chunkMinutes: Number(chunkMinutes) || 20,
+                startAt: startMs ? startMs / 1000 : null,
+                ...advanced,
+            });
+        } else if (mode === 'url' && url) {
             onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat, ...advanced });
         } else if (mode === 'file' && file && !fileTooShort) {
             onProcess({ type: 'file', payload: file, acknowledged: true, outputFormat, ...advanced });
@@ -215,6 +264,67 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                 )}
                             </div>
                         </div>
+                        {live.checking && live.url === url.trim() && (
+                            <p className="text-xs text-muted flex items-center gap-2 text-left">
+                                <Loader2 size={12} className="animate-spin" /> checking the link…
+                            </p>
+                        )}
+                        {isLive && (
+                            <div className="rounded-card border border-brass/40 bg-brass/5 p-4 space-y-4 text-left animate-fade">
+                                <p className="text-sm text-ink flex items-center gap-2">
+                                    <Radio size={14} className="text-brass" />
+                                    {live.status === 'is_upcoming' ? 'Upcoming live stream' : 'Live stream'}: clipped while it records
+                                </p>
+                                <p className="text-xs text-muted leading-relaxed">
+                                    It is recorded in chunks into your folder. Each finished chunk is clipped while the
+                                    next one records, and its clips show up here.
+                                </p>
+                                <div>
+                                    <p className="eyebrow mb-1.5">save to folder</p>
+                                    <div className="flex gap-2">
+                                        <input className="input-field" placeholder="D:\Clips" value={saveDir}
+                                            onChange={(e) => setSaveDir(e.target.value)} />
+                                        <button type="button" className="btn-ghost px-3 py-2 text-xs shrink-0" onClick={() => setBrowsing((v) => !v)}>
+                                            <FolderOpen size={13} /> browse
+                                        </button>
+                                    </div>
+                                    {browsing && (
+                                        <FolderBrowser
+                                            initial={saveDir}
+                                            onPick={(p) => { setSaveDir(p); setBrowsing(false); }}
+                                            onClose={() => setBrowsing(false)}
+                                        />
+                                    )}
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div>
+                                        <p className="eyebrow mb-1.5">start recording</p>
+                                        <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none mb-2">
+                                            <input
+                                                type="checkbox"
+                                                checked={startNow}
+                                                onChange={(e) => setStartNow(e.target.checked)}
+                                                className="w-4 h-4 accent-[var(--color-accent)] cursor-pointer"
+                                            />
+                                            from the latest moment (right now)
+                                        </label>
+                                        <input className="input-field disabled:opacity-40" type="time" value={startTime}
+                                            disabled={startNow}
+                                            onChange={(e) => setStartTime(e.target.value)} />
+                                        <p className="text-[11px] text-muted mt-1">
+                                            {startNow
+                                                ? 'records from the live edge as soon as you start'
+                                                : startMs ? `starts ${fmtWhen(startMs)}` : 'pick a time'}
+                                        </p>
+                                    </div>
+                                    <div>
+                                        <p className="eyebrow mb-1.5">chunk length (minutes)</p>
+                                        <input className="input-field" type="number" min={5} max={60} value={chunkMinutes}
+                                            onChange={(e) => setChunkMinutes(e.target.value)} />
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 ) : (
                     <div
@@ -259,16 +369,35 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     </div>
                 )}
 
-                <SourceCost
-                    mode={mode}
-                    url={url}
-                    fileSeconds={fileSeconds}
-                    range={range}
-                    onRangeChange={setRange}
-                />
+                {!isLive && (
+                    <SourceCost
+                        mode={mode}
+                        url={url}
+                        fileSeconds={fileSeconds}
+                        range={range}
+                        onRangeChange={setRange}
+                    />
+                )}
+
+                <div className="mt-5">
+                    <p className="eyebrow mb-2">Spoken language</p>
+                    <div className="grid grid-cols-3 gap-2">
+                        {LANGUAGE_OPTIONS.map((l) => (
+                            <button
+                                key={l.value}
+                                type="button"
+                                onClick={() => setLanguage(l.value)}
+                                className={`py-2 px-2 rounded-input border text-sm transition-colors
+                                    ${language === l.value ? 'border-[color:var(--color-accent)] text-ink' : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
+                            >
+                                {l.label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
 
                 {/* Output format selector */}
-                <div className="mt-5" data-tutorial="output-format">
+                <div className={`mt-5 ${isLive ? 'hidden' : ''}`} data-tutorial="output-format">
                     <p className="eyebrow mb-2">Output format</p>
                     <div className="grid grid-cols-3 gap-2">
                         {[
@@ -333,7 +462,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             <div>
                                 <p className="eyebrow mb-1.5">min length (s)</p>
                                 <input
-                                    type="number" min="5" max="175" step="1"
+                                    type="number" min="2" max="179" step="1"
                                     value={clipMinSeconds}
                                     onChange={(e) => setClipMinSeconds(e.target.value)}
                                     placeholder="15"
@@ -343,7 +472,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             <div>
                                 <p className="eyebrow mb-1.5">max length (s)</p>
                                 <input
-                                    type="number" min="10" max="180" step="1"
+                                    type="number" min="3" max="180" step="1"
                                     value={clipMaxSeconds}
                                     onChange={(e) => setClipMaxSeconds(e.target.value)}
                                     placeholder="60"
@@ -419,13 +548,18 @@ export default function MediaInput({ onProcess, isProcessing }) {
                 <button
                     type="submit"
                     data-tutorial="generate"
-                    disabled={isProcessing || !acknowledged || (mode === 'url' && !url) || (mode === 'file' && (!file || fileTooShort))}
+                    disabled={isProcessing || !acknowledged || (mode === 'url' && !url) || (mode === 'file' && (!file || fileTooShort)) || (isLive && (!saveDir.trim() || (!startNow && !startMs)))}
                     className="w-full btn-primary mt-4"
                 >
                     {isProcessing ? (
                         <>
                             <Loader2 size={16} className="animate-spin" />
                             Processing Video...
+                        </>
+                    ) : isLive ? (
+                        <>
+                            <Radio size={16} />
+                            {startMs ? 'Schedule Live Clipping' : 'Start Live Clipping'}
                         </>
                     ) : (
                         <>

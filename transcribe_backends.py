@@ -231,7 +231,11 @@ def run_whisper_transcription(media_path, **params):
 
 
 def _transcribe_with_whisper(media_path):
-    segments, info = run_whisper_transcription(media_path, **WHISPER_TRANSCRIBE_PARAMS)
+    from subtitles import source_language
+    params = dict(WHISPER_TRANSCRIBE_PARAMS)
+    if source_language():
+        params["language"] = source_language()
+    segments, info = run_whisper_transcription(media_path, **params)
 
     out_segments = []
     text_parts = []
@@ -741,6 +745,9 @@ def transcribe_media(media_path):
             "speech, so it needs a video with audio.")
 
     backend = os.environ.get("TRANSCRIBE_BACKEND", "whisper").strip().lower()
+    from subtitles import source_language
+    if source_language() and source_language() not in PARAKEET_LANGS:
+        backend = "whisper"
 
     if backend == "parakeet":
         try:

@@ -53,9 +53,11 @@ first stretches are watched. A source that fits one stretch is one stretch: it
 goes through the same proxy, never as the raw file (a broken capture, such as an
 HLS VOD whose audio will not decode, made Gemini answer 400 INVALID_ARGUMENT).
 When the proxy's audio cannot be encoded it is retried without audio. Do not
-port the frame trick here. Gemini-only: a
-text-only `LLM_BASE_URL` server cannot see footage, and without `GEMINI_API_KEY`
-the function logs one line and returns None, which fails the job.
+port the frame trick here. With `LLM_BASE_URL` set and a
+vision-capable `LLM_MODEL` (or `LLM_VISION_MODEL`) it instead sends timestamped
+stills (`LLM_VISION_FRAME_SECONDS` 10, `LLM_VISION_FRAME_WIDTH` 1024) per
+`LLM_VISION_SEGMENT_SECONDS` (300) stretch. Without either it logs one line and
+returns None, which fails the job.
 
 The public `/gta-5-clips`, `/gta-6-clips`, `/wow-forever-clips` and `/platforms/twitch` pages state
 these thresholds and the stretch sizes; if the behaviour changes, change
@@ -70,5 +72,7 @@ server-side, so `main.py` sees one shape. `main.score_batch_size` drops to 3
 windows per call there (local contexts are 4-8k; a truncated prompt scores garbage
 silently). Self-host `/api/process` then accepts a request without
 `X-Gemini-Key` and `/api/config.localLlm` tells the dashboard not to demand one.
-Frame-based stages (`layout_picker`, `screencast_layout`, `get_visual_clips`)
-stay on Gemini. Never wired in cloud mode: `BILLING_ENABLED` ignores it.
+Frame-based stages (`layout_picker`, `screencast_layout`, `burned_subtitles`,
+`hook_grounding`, `get_visual_clips`) use the same endpoint through
+`generate_json(..., images=[...])` when it is active, and need a vision model;
+`LLM_REASONING_EFFORT` and `LLM_MAX_TOKENS` tune thinking and runaway output. Never wired in cloud mode: `BILLING_ENABLED` ignores it.

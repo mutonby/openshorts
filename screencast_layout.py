@@ -367,8 +367,10 @@ def detect_content_ranges(video_path, scenes, fps):
         return []
     if not scenes:
         return None
+    import llm_backend
+
     api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
+    if not api_key and not llm_backend.active():
         print("   ⚠️ Screen check needs GEMINI_API_KEY.")
         return None
 
@@ -385,20 +387,30 @@ def detect_content_ranges(video_path, scenes, fps):
         if not keep:
             print("   ⚠️ No readable frames for the screen check.")
             return None
-        parts = []
-        for n, (_, jpg) in enumerate(keep):
-            parts.append(f"Shot {n}:")
-            parts.append(genai_types.Part.from_bytes(data=jpg, mime_type="image/jpeg"))
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model=model_name,
-            contents=parts + [gemini_worker.SHOT_CONTENT_PROMPT],
-            config=genai_types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=gemini_worker.ShotContentResponse,
-            ))
-        gemini_worker.raise_if_blocked(response)
-        raw = (json.loads(response.text) or {}).get("shots") or []
+        if llm_backend.active():
+            labelled = []
+            for n, (_, jpg) in enumerate(keep):
+                labelled.append(f"Shot {n}:")
+                labelled.append(jpg)
+            answer, _ = llm_backend.generate_json(
+                gemini_worker.SHOT_CONTENT_PROMPT, gemini_worker.ShotContentResponse,
+                images=labelled)
+            raw = answer.get("shots") or []
+        else:
+            parts = []
+            for n, (_, jpg) in enumerate(keep):
+                parts.append(f"Shot {n}:")
+                parts.append(genai_types.Part.from_bytes(data=jpg, mime_type="image/jpeg"))
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model=model_name,
+                contents=parts + [gemini_worker.SHOT_CONTENT_PROMPT],
+                config=genai_types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=gemini_worker.ShotContentResponse,
+                ))
+            gemini_worker.raise_if_blocked(response)
+            raw = (json.loads(response.text) or {}).get("shots") or []
     except Exception as e:
         print(f"   ⚠️ Screen check failed ({e}).")
         return None

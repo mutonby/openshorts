@@ -2352,6 +2352,62 @@ def _sum_costs(costs, model_name):
     return out
 
 
+LOCAL_VISION_SEGMENT_SECONDS = float(os.environ.get("LLM_VISION_SEGMENT_SECONDS", "600"))
+LOCAL_VISION_FRAME_SECONDS = float(os.environ.get("LLM_VISION_FRAME_SECONDS", "10"))
+LOCAL_VISION_FRAME_WIDTH = int(os.environ.get("LLM_VISION_FRAME_WIDTH", "512"))
+
+
+def _local_vision_frames(video_path, start, end):
+    """``[(seconds_from_start, jpeg_bytes)]`` sampled across [start, end]."""
+    step = max(LOCAL_VISION_FRAME_SECONDS, 1.0)
+    out = []
+    t = start
+    while t < end - 0.5:
+        res = subprocess.run(
+            ["ffmpeg", "-v", "error", "-ss", f"{t:.3f}", "-i", video_path,
+             "-frames:v", "1", "-vf", f"scale={LOCAL_VISION_FRAME_WIDTH}:-2",
+             "-c:v", "mjpeg", "-q:v", "5", "-f", "image2pipe", "-"],
+            capture_output=True, timeout=120)
+        if res.returncode == 0 and res.stdout:
+            out.append((t - start, res.stdout))
+        t += step
+    return out, step
+
+
+def _visual_pass_local(video_path, start, end, language, min_clips, max_clips,
+                       min_secs, max_secs, hint=""):
+    """The silent-footage pass on a local vision model: it gets timestamped
+    stills of [start, end] instead of the video. Returns ``(shorts, cost)``
+    clamped to ``[0, end - start]``, or ``(None, None)`` when no frame could
+    be read."""
+    duration = round(end - start, 3)
+    frames, step = _local_vision_frames(video_path, start, end)
+    if not frames:
+        print("❌ No readable frames for the local vision pass.")
+        return None, None
+    images = []
+    for offset, jpg in frames:
+        images.append(f"t={offset:.0f}s")
+        images.append(jpg)
+    prompt = gemini_worker.VISUAL_PROMPT_TEMPLATE.format(
+        video_duration=duration, language=language,
+        min_clips=min_clips, max_clips=max_clips,
+        min_secs=min_secs, max_secs=max_secs) + (
+        "\nYou cannot play the video: you are given still frames sampled every "
+        f"{step:g} seconds, each preceded by its time in seconds from the start. "
+        "Judge the action from those stills and place start/end on that timeline.\n"
+    ) + (hint or "")
+    parsed, cost = llm_backend.generate_json(
+        prompt, gemini_worker.VisualResponse, images=images)
+    clean = []
+    for sh in parsed.get("shorts") or []:
+        sh["start"] = max(0.0, float(sh.get("start", 0)))
+        sh["end"] = min(float(duration), float(sh.get("end", 0)))
+        if sh["end"] - sh["start"] >= 1.0:
+            clean.append(sh)
+    return clean, cost
+
+
 def _viewer_hint(viewer_clips, offset, duration):
     """Prompt lines naming what viewers clipped inside [offset, offset+duration],
     in that file's own seconds, or "" when there is nothing to say."""
@@ -2429,18 +2485,18 @@ def get_visual_clips(video_path, video_duration, language="en", viewer_clips=Non
     stretch (``vision_segments``), and the picks are merged, de-overlapped
     and cut to the best ``CLIP_TARGET_MAX`` by score: a silent multi-hour
     console capture used to fail at the model."""
-    print("🎥  Silent video — analyzing with Gemini vision (no transcript)...")
+    local = llm_backend.active()
+    print(f"🎥  Silent video — analyzing with {'local' if local else 'Gemini'} vision (no transcript)...")
     api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        if llm_backend.active():
-            print("❌ This video has no usable speech, so it has to be clipped by "
-                  "watching it, and that needs Gemini (a text-only LLM server "
-                  "cannot see the footage). Add a GEMINI_API_KEY for silent videos.")
-        else:
-            print("❌ Error: GEMINI_API_KEY not found.")
+    if not api_key and not local:
+        print("❌ Error: GEMINI_API_KEY not found.")
         return None
-    client = genai.Client(api_key=api_key)
-    model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
+    if local:
+        client = None
+        model_name = llm_backend.vision_model_name()
+    else:
+        client = genai.Client(api_key=api_key)
+        model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
 
     # The vision path has no scoring windows to derive a count from, so the
     # env targets (user request) apply directly over the classic 3-15.
@@ -2453,10 +2509,15 @@ def get_visual_clips(video_path, video_duration, language="en", viewer_clips=Non
     v_max_clips = max(v_min_clips, _env_int("CLIP_TARGET_MAX", 15))
     v_min_secs, v_max_secs = clip_duration_bounds()
 
-    segments = vision_segments(video_duration, VISION_SEGMENT_SECONDS, VISION_MAX_SEGMENTS)
+    segments = vision_segments(
+        video_duration, LOCAL_VISION_SEGMENT_SECONDS if local else VISION_SEGMENT_SECONDS,
+        VISION_MAX_SEGMENTS)
     try:
         covered = segments[-1][1]
-        if len(segments) == 1:
+        if local:
+            print(f"🎥  Model: {model_name} | {len(segments)} stretch(es), a still every "
+                  f"{LOCAL_VISION_FRAME_SECONDS:g}s")
+        elif len(segments) == 1:
             print(f"🎥  Model: {model_name} | watching a 360p/1 fps proxy of "
                   f"{os.path.basename(video_path)}")
         else:
@@ -2474,11 +2535,17 @@ def get_visual_clips(video_path, video_duration, language="en", viewer_clips=Non
             for i, (s0, s1) in enumerate(segments):
                 proxy = os.path.join(tmp_dir, f"part{i}.mp4")
                 try:
-                    _vision_proxy(video_path, s0, s1, proxy)
-                    shorts, cost = _visual_pass(
-                        client, model_name, proxy, round(s1 - s0, 3), language,
-                        per_min, v_max_clips, v_min_secs, v_max_secs,
-                        hint=_viewer_hint(viewer_clips, s0, s1 - s0))
+                    if local:
+                        shorts, cost = _visual_pass_local(
+                            video_path, s0, s1, language,
+                            per_min, v_max_clips, v_min_secs, v_max_secs,
+                            hint=_viewer_hint(viewer_clips, s0, s1 - s0))
+                    else:
+                        _vision_proxy(video_path, s0, s1, proxy)
+                        shorts, cost = _visual_pass(
+                            client, model_name, proxy, round(s1 - s0, 3), language,
+                            per_min, v_max_clips, v_min_secs, v_max_secs,
+                            hint=_viewer_hint(viewer_clips, s0, s1 - s0))
                 except gemini_worker.GeminiBlockedError:
                     raise
                 except Exception as e:
@@ -2534,8 +2601,13 @@ if __name__ == '__main__':
                         help="Fetch the source (download, cut to the paid minutes), print "
                              "SOURCE_READY <path> and exit: a remote worker renders it.")
 
+    parser.add_argument('--language', type=str, choices=["en", "hi"],
+                        help="Spoken language of the source; picks the Whisper language and model.")
+
     args = parser.parse_args()
     output_format = args.format
+    if args.language:
+        os.environ["SOURCE_LANGUAGE"] = args.language
 
     script_start_time = time.time()
 
@@ -2915,6 +2987,8 @@ if __name__ == '__main__':
                                 split_ranges=split_ranges,
                                 mark=os.environ.get("WATERMARK") == "1")
                         served = captioned or deliver_path
+                        import text_watermark
+                        served = text_watermark.apply(served) or served
                         if os.environ.get("WATERMARK") == "1":
                             served = mark_delivery(served)
                         print(f"   ✅ Clip {i+1} ready: {clip_final_path}")

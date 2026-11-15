@@ -26,6 +26,9 @@ import TrialGate from './components/TrialGate';
 import AdvancedBanner from './components/AdvancedBanner';
 import HistoryTab from './components/HistoryTab';
 import AutopilotTab from './components/AutopilotTab';
+import LiveSessionPanel from './components/LiveSessionPanel';
+import { LIVE_ACTIVE_STATES } from './lib/live';
+import TextWatermarkCard from './components/TextWatermarkCard';
 import ProfileMenu from './components/ProfileMenu';
 import Modal from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
@@ -353,6 +356,8 @@ function App() {
   const [jobId, setJobId] = useState(null);
   const [status, setStatus] = useState('idle'); // idle, processing, complete, error
   const [results, setResults] = useState(null);
+  const [liveSession, setLiveSession] = useState(null);
+  const [liveBusy, setLiveBusy] = useState('');
   // Best clips first. The backend hands them back in transcript order, which
   // buries the strongest one wherever it happens to fall in the video — and
   // the first card is the one people actually watch and publish.
@@ -658,6 +663,7 @@ function App() {
             max_duration: options.maxDuration ?? null,
             // Chain from the clip's current server file (its video_url basename).
             input_filename: (clips[i].video_url || '').split('/').pop(),
+            watermark: options.watermark || null,
           }),
         });
         if (!res.ok) errors++;
@@ -924,7 +930,7 @@ function App() {
   // A self-hosted server running the moment picker on a local LLM
   // (LLM_BASE_URL) does not need a Gemini key for the core pipeline.
   const geminiOk = !!apiKey || !!localLlm;
-  const keysMissing = !billingEnabled && (!geminiOk || !uploadPostKey);
+  const keysMissing = !billingEnabled && !localLlm && (!geminiOk || !uploadPostKey);
   const needsPlan = billingEnabled && !isManaged;   // hosted, signed-out or no active plan/trial
 
   // Fresh sign-up: Clip Generator tutorial (AuthContext set os_show_clip_tutorial
@@ -1159,6 +1165,44 @@ function App() {
     }
     // Past every gate, so this request is really running: nothing left to resume.
     clearPendingJob();
+    if (data.type === 'live') {
+      setStatus('processing');
+      setJobError('');
+      setJobId(null);
+      setResults(null);
+      setProcessingMedia(null);
+      setLogs(['Starting live clipping...']);
+      setLogTimes([Date.now() / 1000]);
+      try {
+        const session = await apiJson('/api/live/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: data.payload,
+            save_dir: data.saveDir,
+            chunk_minutes: data.chunkMinutes,
+            start_at: data.startAt,
+            language: data.language,
+            job_options: Object.fromEntries(Object.entries({
+              target_clips: data.targetClips || null,
+              clip_min_seconds: data.clipMinSeconds || null,
+              clip_max_seconds: data.clipMaxSeconds || null,
+              auto_hook: data.autoHook ? '1' : '0',
+              auto_hook_style: data.autoHook ? (data.autoHookStyle || 'pill') : null,
+              layouts: data.layout && data.layout !== 'auto' ? data.layout : null,
+            }).filter(([, v]) => v != null)),
+          }),
+        });
+        setLiveSession(session);
+      } catch (e) {
+        const msg = (typeof e?.detail === 'string' && e.detail) || 'Could not start live clipping.';
+        setLogs((l) => [...l, msg]);
+        setLogTimes((t) => [...t, Date.now() / 1000]);
+        setJobError(msg);
+        setStatus('error');
+      }
+      return;
+    }
     setStatus('processing');
     setJobError('');
     setLogs(["Starting process..."]);
@@ -1191,6 +1235,7 @@ function App() {
         auto_hook_style: data.autoHook ? (data.autoHookStyle || 'pill') : null,
         // 'auto' is the server default, so only a deliberate choice travels.
         layouts: data.layout && data.layout !== 'auto' ? data.layout : null,
+        language: data.language && data.language !== 'auto' ? data.language : null,
         // Set when the user took the quota wall's "clip the first N minutes"
         // offer: the server reserves N minutes and cuts the source to them.
         max_minutes: data.maxMinutes || null,
@@ -1321,7 +1366,76 @@ function App() {
     handleProcessRef.current(pending.data);
   }, [billingEnabled, isSignedIn]);
 
+  const liveId = liveSession?.id;
+  useEffect(() => {
+    if (!liveId) return undefined;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const data = await apiJson('/api/live');
+        const s = (data.sessions || []).find((x) => x.id === liveId);
+        if (stopped || !s) return;
+        setLiveSession(s);
+        if (!LIVE_ACTIVE_STATES.includes(s.state)) setStatus(s.state === 'error' ? 'error' : 'complete');
+      } catch { /* server restarting: next tick */ }
+    };
+    tick();
+    const t = setInterval(tick, 3000);
+    return () => { stopped = true; clearInterval(t); };
+  }, [liveId]);
+
+  useEffect(() => {
+    if (billingEnabled) return;
+    try { if (localStorage.getItem(SESSION_KEY)) return; } catch { /* ignore */ }
+    apiJson('/api/live')
+      .then((data) => {
+        const s = (data.sessions || []).find((x) => LIVE_ACTIVE_STATES.includes(x.state));
+        if (!s) return;
+        setLiveSession(s);
+        setStatus((st) => (st === 'idle' ? 'processing' : st));
+      })
+      .catch(() => {});
+  }, [billingEnabled]);
+
+  const handleLiveAction = async (action) => {
+    if (!liveSession) return;
+    setLiveBusy(action);
+    try {
+      const s = await apiJson(`/api/live/${liveSession.id}/${action}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      });
+      setLiveSession(s);
+      if (!LIVE_ACTIVE_STATES.includes(s.state)) setStatus('complete');
+    } catch (e) {
+      setJobError((typeof e?.detail === 'string' && e.detail) || `Could not ${action}.`);
+    } finally {
+      setLiveBusy('');
+    }
+  };
+
+  const liveClips = liveSession?.clips || [];
+  const [backgroundLive, setBackgroundLive] = useState([]);
+  useEffect(() => {
+    if (billingEnabled || status !== 'idle') return undefined;
+    let stopped = false;
+    const load = () => apiJson('/api/live')
+      .then((data) => {
+        if (!stopped) setBackgroundLive((data.sessions || []).filter((x) => LIVE_ACTIVE_STATES.includes(x.state)));
+      })
+      .catch(() => {});
+    load();
+    const t = setInterval(load, 5000);
+    return () => { stopped = true; clearInterval(t); };
+  }, [billingEnabled, status]);
+  const openLiveSession = (s) => {
+    setLiveSession(s);
+    setJobId(null);
+    setResults(null);
+    setStatus(LIVE_ACTIVE_STATES.includes(s.state) ? 'processing' : 'complete');
+  };
+
   const handleReset = () => {
+    setLiveSession(null);
     setJobGone(false);
     // Flush any pending edit-state sync before dropping the project: the clips
     // themselves are already archived to R2 as they were edited.
@@ -1746,6 +1860,7 @@ function App() {
               </div>
               {/* Self-hosted installs have no account page, so the agent
                   how-to lives here; cloud users get it (with OAuth) in Account. */}
+              {!billingEnabled && <div className="mb-6"><TextWatermarkCard /></div>}
               {!billingEnabled && <div className="mb-6"><McpConnectCard cloud={false} /></div>}
               {isManaged ? (
                 <div className="card p-6 mb-2">
@@ -2193,6 +2308,28 @@ function App() {
                   )}
                 </div>
 
+                {backgroundLive.length > 0 && (
+                  <div className="space-y-2">
+                    {backgroundLive.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => openLiveSession(s)}
+                        className="w-full text-left rounded-card border border-brass/40 bg-brass/5 hover:border-brass px-4 py-3 transition-colors flex items-center gap-3"
+                      >
+                        <span className={`w-2 h-2 rounded-full shrink-0 ${s.state === 'recording' ? 'bg-danger animate-pulse' : 'bg-brass'}`} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm text-ink truncate">{s.title || s.url}</span>
+                          <span className="block text-xs text-muted">
+                            live clipping · {s.state} · {(s.clips || []).length} clips
+                          </span>
+                        </span>
+                        <span className="text-xs text-brass shrink-0">open →</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} />
 
                 <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-8 text-muted text-xs sm:text-sm">
@@ -2279,6 +2416,9 @@ function App() {
                   </div>
                 )}
 
+                {liveSession ? (
+                  <LiveSessionPanel session={liveSession} busy={liveBusy} onAct={handleLiveAction} />
+                ) : (<>
                 {/* Video Preview */}
                 {processingMedia && (
                   <ProcessingAnimation
@@ -2345,6 +2485,7 @@ function App() {
                     </div>
                   )}
                 </div>
+                </>)}
               </div>
 
               {/* Right Panel: Results Grid */}
@@ -2355,7 +2496,12 @@ function App() {
                 <div className="mb-4 sm:mb-6 shrink-0 space-y-3">
                   <h2 className="font-display lowercase text-lg sm:text-xl text-ink flex flex-wrap items-center gap-2">
                     <span className="mr-auto">Generated Shorts</span>
-                    {results?.clips?.length > 0 && (
+                    {liveSession && liveClips.length > 0 && (
+                      <span className="readout bg-paper3 px-2.5 py-1 rounded-full">
+                        {liveClips.length} Clips
+                      </span>
+                    )}
+                    {!liveSession && results?.clips?.length > 0 && (
                       <span className="readout bg-paper3 px-2.5 py-1 rounded-full">
                         {results.clips.length} Clips
                       </span>
@@ -2515,7 +2661,46 @@ function App() {
                 )}
 
                 <div className="flex-1 overflow-y-auto custom-scrollbar p-1">
-                  {results && results.clips && results.clips.length > 0 ? (
+                  {liveSession ? (
+                    liveClips.length > 0 ? (
+                      <div className={`grid gap-4 pb-10 ${status === 'complete' ? 'grid-cols-[repeat(auto-fill,minmax(min(100%,600px),1fr))]' : 'grid-cols-1'}`}>
+                        {liveClips.slice().reverse().map((c) => (
+                          <ResultCard
+                            key={`${c.jobId}-${c.clipIndex}`}
+                            clip={c}
+                            index={c.clipIndex}
+                            jobId={c.jobId}
+                            uploadPostKey={uploadPostKey}
+                            uploadUserId={uploadUserId}
+                            geminiApiKey={apiKey}
+                            elevenLabsKey={elevenLabsKey}
+                            isManaged={isManaged}
+                            connectedPlatforms={(userProfiles.find((p) => p.username === uploadUserId) || userProfiles[0])?.connected ?? null}
+                            onConnectSocials={isManaged ? handleConnectSocials : null}
+                            onPlay={() => {}}
+                            onPause={() => {}}
+                            clipCount={1}
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="h-full min-h-[140px] flex flex-col items-center justify-center text-muted space-y-3 text-center px-4">
+                        {LIVE_ACTIVE_STATES.includes(liveSession.state) && <Loader2 size={28} className="animate-spin text-brass" />}
+                        <p className="text-sm lowercase">
+                          {!LIVE_ACTIVE_STATES.includes(liveSession.state)
+                            ? 'No clips from this stream.'
+                            : (liveSession.chunks || []).length
+                              ? 'Clipping the first recording...'
+                              : 'Waiting for the first recording...'}
+                        </p>
+                        {LIVE_ACTIVE_STATES.includes(liveSession.state) && (
+                          <p className="text-xs text-muted/80 max-w-[30ch] leading-snug">
+                            Every {liveSession.chunkMinutes}-minute recording is clipped while the next one records. Its clips appear here.
+                          </p>
+                        )}
+                      </div>
+                    )
+                  ) : results && results.clips && results.clips.length > 0 ? (
                     <div className={`grid gap-4 pb-10 ${status === 'complete' ? 'grid-cols-[repeat(auto-fill,minmax(min(100%,600px),1fr))]' : 'grid-cols-1'}`}>
                       {rankedClips.map(({ clip, index: i }) => (
                         <ResultCard

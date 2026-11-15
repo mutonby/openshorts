@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Loader2 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import RemotionPreview from './RemotionPreview';
+import WatermarkControls from './WatermarkControls';
+import WatermarkOverlay from './WatermarkOverlay';
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
 
@@ -173,6 +175,28 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     const [durationSec, setDurationSec] = useState(30);
     const [captionsLoading, setCaptionsLoading] = useState(false);
     const [useRemotionPreview, setUseRemotionPreview] = useState(false);
+    const [watermark, setWatermark] = useState(null);
+    const previewRef = useRef(null);
+    const [previewSize, setPreviewSize] = useState({ w: 0, h: 0 });
+
+    useEffect(() => {
+        if (!isOpen) return;
+        apiFetch('/api/watermark')
+            .then((res) => (res.ok ? res.json() : null))
+            .then((data) => setWatermark(data))
+            .catch(() => setWatermark(null));
+    }, [isOpen]);
+
+    useEffect(() => {
+        const el = previewRef.current;
+        if (!isOpen || !el || typeof ResizeObserver === 'undefined') return undefined;
+        const ro = new ResizeObserver(([entry]) => {
+            const { width, height } = entry.contentRect;
+            setPreviewSize({ w: width, h: height });
+        });
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [isOpen]);
 
     // Fetch word-level captions when modal opens
     useEffect(() => {
@@ -278,8 +302,10 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     return (
         <Modal isOpen={isOpen} onClose={onClose} size="xl" eyebrow="EDITOR · SUBTITLES" title="subtitles">
             <div className="flex flex-col md:flex-row gap-6">
+                <div className="flex-1 flex flex-col gap-4 min-w-0">
                 {/* Left: Preview */}
-                <div className="flex-1 flex flex-col items-center justify-center bg-black rounded-card border border-rule overflow-hidden relative aspect-[9/16] max-h-[600px]">
+                <div ref={previewRef} className="flex-1 flex flex-col items-center justify-center bg-black rounded-card border border-rule overflow-hidden relative aspect-[9/16] max-h-[600px]">
+                    <WatermarkOverlay value={watermark} height={previewSize.h} width={previewSize.w} />
                     {captionsLoading ? (
                         <div className="flex items-center gap-2 text-muted">
                             <Loader2 size={16} className="animate-spin" />
@@ -306,6 +332,15 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                             </div>
                         </>
                     )}
+                </div>
+                {watermark && (
+                    <div className="rounded-card border border-rule p-4">
+                        <WatermarkControls value={watermark} onChange={setWatermark} />
+                        <p className="text-[11px] text-muted mt-2 leading-snug">
+                            Applied when you apply the subtitles, and saved for every new clip.
+                        </p>
+                    </div>
+                )}
                 </div>
 
                 {/* Right: Controls */}
@@ -562,6 +597,9 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                 // Remotion data
                                 remotion: useRemotionPreview ? subtitleConfig : null,
                                 captions: textEdited ? captions : null,
+                                watermark: watermark
+                                    ? { ...watermark, enabled: !!watermark.enabled && !!(watermark.text || '').trim() }
+                                    : null,
                             };
                             const bulkRunning = bulkProgress?.running;
                             return (

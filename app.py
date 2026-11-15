@@ -4028,6 +4028,8 @@ async def lifespan(app: FastAPI):
     # The worker starts only now, so the first job it takes off the queue was
     # already ranked by its owner's current plan.
     worker_task = asyncio.create_task(process_queue())
+    if not BILLING_ENABLED:
+        _live_clipper.resume_all()
     if BILLING_ENABLED:
         # Account erasure lives in cloud/, which can't import app.py; hand it the
         # one thing only this module can do — wipe the local working files.
@@ -4080,6 +4082,9 @@ app.include_router(_mcp_server.router)
 # captions only, never the GPU) and the title/description/tag generator.
 import free_tools as _free_tools
 app.include_router(_free_tools.router)
+
+import live_clipper as _live_clipper
+app.include_router(_live_clipper.router)
 
 # Enable CORS for frontend. Cloud mode locks this down to the configured origins;
 # self-host keeps the permissive wildcard it has always used.
@@ -4669,12 +4674,14 @@ async def _run_main(job_id, cmd, env, tick=None):
     t_log = threading.Thread(target=enqueue_output, args=(process.stdout, job_id))
     t_log.daemon = True
     t_log.start()
+    _job_processes[job_id] = process
 
     last_heartbeat = time.time()
     while process.poll() is None:
         try:
             await asyncio.sleep(2)
         except asyncio.CancelledError:
+            _job_processes.pop(job_id, None)
             try:
                 process.kill()
             except Exception:
@@ -4685,10 +4692,43 @@ async def _run_main(job_id, cmd, env, tick=None):
             last_heartbeat = time.time()
         if tick is not None:
             tick()
+    _job_processes.pop(job_id, None)
     # The exit code can be read before the reader thread saw the last lines
     # (SOURCE_READY is printed right before the exit).
     await asyncio.to_thread(t_log.join, 5)
     return process.returncode
+
+
+_job_processes = {}
+
+
+def cancel_job(job_id, reason="Cancelled."):
+    job = jobs.get(job_id)
+    if not job or job.get('status') not in ('queued', 'processing'):
+        return False
+    job['auto_retries'] = AUTO_RETRY_LIMIT
+    job['yt_retries'] = YT_LIMIT_RETRIES
+    heap = job_queue._queue
+    for entry in list(heap):
+        if entry[2] == job_id:
+            heap.remove(entry)
+            heapq.heapify(heap)
+            job_queue.task_done()
+            _queue_changed()
+            job['status'] = 'failed'
+            job['logs'].append(reason)
+            _clear_resume_manifest(job_id)
+            return True
+    process = _job_processes.get(job_id)
+    if process is None or process.poll() is not None:
+        return False
+    job['logs'].append(reason)
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                       capture_output=True)
+    else:
+        process.kill()
+    return True
 
 
 async def run_job(job_id, job_data):
@@ -5460,6 +5500,7 @@ async def process_endpoint(
     max_minutes: Optional[str] = Form(None),
     source_start: Optional[str] = Form(None),
     source_end: Optional[str] = Form(None),
+    language: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -5494,6 +5535,13 @@ async def process_endpoint(
         max_minutes = body.get("max_minutes")
         source_start = body.get("source_start")
         source_end = body.get("source_end")
+        language = body.get("language")
+
+    language = str(language or "").strip().lower()
+    if language in ("", "auto"):
+        language = None
+    elif language not in ("en", "hi"):
+        raise HTTPException(status_code=400, detail="language must be en, hi or auto")
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square"):
@@ -5623,11 +5671,11 @@ async def process_endpoint(
         return int(val) if integer else val
 
     n_clips = _gen_control(target_clips, "target_clips", 1, 15, integer=True)
-    min_secs = _gen_control(clip_min_seconds, "clip_min_seconds", 5, 175)
-    max_secs = _gen_control(clip_max_seconds, "clip_max_seconds", 10, 180)
-    if min_secs is not None and max_secs is not None and max_secs < min_secs + 5:
+    min_secs = _gen_control(clip_min_seconds, "clip_min_seconds", 2, 179)
+    max_secs = _gen_control(clip_max_seconds, "clip_max_seconds", 3, 180)
+    if min_secs is not None and max_secs is not None and max_secs < min_secs + 1:
         raise HTTPException(status_code=400,
-                            detail="clip_max_seconds must be at least 5s above clip_min_seconds")
+                            detail="clip_max_seconds must be at least 1s above clip_min_seconds")
     if n_clips is not None:
         env["CLIP_TARGET_MIN"] = env["CLIP_TARGET_MAX"] = str(n_clips)
     if min_secs is not None:
@@ -5680,8 +5728,11 @@ async def process_endpoint(
         if MIN_SOURCE_SECONDS > 0 and 0 < src_duration < MIN_SOURCE_SECONDS:
             shutil.rmtree(job_output_dir, ignore_errors=True)
             _reject_short_source(src_duration)
-        input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{upload_slot['filename']}")
-        os.replace(src, input_path)
+        if upload_slot.get("in_place"):
+            input_path = src
+        else:
+            input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{upload_slot['filename']}")
+            os.replace(src, input_path)
         pending_uploads.pop(upload_id, None)
         cmd.extend(["-i", input_path])
     else:
@@ -5715,6 +5766,8 @@ async def process_endpoint(
     cmd.extend(["-o", job_output_dir])
     if output_format and output_format != "auto":
         cmd.extend(["--format", output_format])
+    if language:
+        cmd.extend(["--language", language])
 
     print(f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true")
 
@@ -6537,6 +6590,7 @@ class SubtitleRequest(BaseModel):
     # instead of regenerating from the stored transcript — without this, text
     # edits in the modal were silently discarded on the server render path.
     words: Optional[List[CaptionWordIn]] = None
+    watermark: Optional[dict] = None
 
 
 @app.get("/api/clip/{job_id}/{clip_index}/transcript")
@@ -7673,6 +7727,15 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
 
     if reservation_id:
         await _metering.commit_reservation(reservation_id)
+
+    if req.watermark is not None and not BILLING_ENABLED:
+        import text_watermark
+        wm = text_watermark.save(req.watermark)
+        branded = await asyncio.get_event_loop().run_in_executor(
+            None, text_watermark.apply, output_path, wm)
+        if branded:
+            output_path = branded
+            output_filename = os.path.basename(branded)
 
     output_filename = await _deliver(request, req.job_id, output_filename)
 

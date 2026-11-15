@@ -23,6 +23,7 @@ so ``main.py`` sees one shape regardless of provider.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 from typing import Optional, Tuple, Type
@@ -71,6 +72,13 @@ def _timeout() -> float:
         return DEFAULT_TIMEOUT
 
 
+def _max_tokens() -> int:
+    try:
+        return max(256, int(os.environ.get("LLM_MAX_TOKENS") or 8192))
+    except ValueError:
+        return 8192
+
+
 def _headers() -> dict:
     # Ollama ignores the key but the OpenAI client convention (and vLLM with
     # --api-key) wants the header present; "ollama" is the documented placeholder.
@@ -99,9 +107,32 @@ def _is_format_rejection(resp: httpx.Response) -> bool:
         or "format" in body
 
 
+def vision_model_name() -> str:
+    return (os.environ.get("LLM_VISION_MODEL") or "").strip() or model_name()
+
+
+def _user_content(prompt: str, images):
+    if not images:
+        return prompt
+    parts = []
+    for item in images:
+        if isinstance(item, str):
+            parts.append({"type": "text", "text": item})
+        else:
+            b64 = base64.b64encode(item).decode("ascii")
+            parts.append({"type": "image_url",
+                          "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
+    parts.append({"type": "text", "text": prompt})
+    return parts
+
+
 def generate_json(prompt: str, schema: Type[BaseModel], model: Optional[str] = None,
-                  ) -> Tuple[dict, Optional[dict]]:
+                  images=None) -> Tuple[dict, Optional[dict]]:
     """One chat completion that must come back as JSON matching ``schema``.
+
+    ``images`` is an ordered list of JPEG ``bytes`` (sent as image parts) and
+    ``str`` labels (sent as text parts) placed before the prompt; it needs a
+    vision-capable model (``LLM_VISION_MODEL``, default ``LLM_MODEL``).
 
     Returns ``(parsed_dict, cost_analysis)`` in the exact shape
     ``main._run_gemini_stage`` returns, so the caller does not branch on the
@@ -111,17 +142,21 @@ def generate_json(prompt: str, schema: Type[BaseModel], model: Optional[str] = N
     import gemini_worker  # local import: keeps this module free of the google SDK
 
     url = f"{base_url()}/chat/completions"
-    model = model or model_name()
+    model = model or (vision_model_name() if images else model_name())
     messages = [
         {"role": "system", "content": "You answer with a single JSON object and nothing else."},
-        {"role": "user", "content": prompt},
+        {"role": "user", "content": _user_content(prompt, images)},
     ]
     last_rejection: Optional[str] = None
     with _client() as client:
         for fmt in _response_formats(schema):
-            body = {"model": model, "messages": messages, "temperature": 0.2, "stream": False}
+            body = {"model": model, "messages": messages, "temperature": 0.2, "stream": False,
+                    "max_tokens": _max_tokens()}
             if fmt is not None:
                 body["response_format"] = fmt
+            effort = (os.environ.get("LLM_REASONING_EFFORT") or "").strip()
+            if effort:
+                body["reasoning_effort"] = effort
             resp = client.post(url, json=body, headers=_headers())
             if fmt is not None and _is_format_rejection(resp):
                 # The server does not know this response_format flavour; the

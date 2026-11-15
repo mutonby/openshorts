@@ -16,10 +16,20 @@ _STDIO_CONFIGURED = False
 DEFAULT_WHISPER_MODEL = "small"
 
 
+SOURCE_LANGUAGES = ("en", "hi")
+
+
+def source_language():
+    lang = os.environ.get("SOURCE_LANGUAGE", "").strip().lower()
+    return lang if lang in SOURCE_LANGUAGES else ""
+
+
 def get_whisper_config():
     """Return the faster-whisper model config, overridable via env vars."""
+    lang = source_language()
+    per_lang = os.environ.get(f"WHISPER_MODEL_{lang.upper()}", "").strip() if lang else ""
     return {
-        "model_size": os.environ.get("WHISPER_MODEL", DEFAULT_WHISPER_MODEL),
+        "model_size": per_lang or os.environ.get("WHISPER_MODEL", DEFAULT_WHISPER_MODEL),
         "device": os.environ.get("WHISPER_DEVICE", "cpu"),
         "compute_type": os.environ.get("WHISPER_COMPUTE", "int8"),
     }

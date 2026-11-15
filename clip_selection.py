@@ -206,10 +206,10 @@ def clip_duration_bounds():
 
     lo = _read("CLIP_MIN_SECONDS", 15.0)
     hi = _read("CLIP_MAX_SECONDS", 60.0)
-    lo = min(max(lo, 5.0), 175.0)
-    hi = min(max(hi, 10.0), 180.0)
-    if hi < lo + 5.0:  # keep a real band: degenerate ranges starve the model
-        hi = min(180.0, lo + 5.0)
+    lo = min(max(lo, 2.0), 179.0)
+    hi = min(max(hi, 3.0), 180.0)
+    if hi < lo + 1.0:  # keep a real band: degenerate ranges starve the model
+        hi = min(180.0, lo + 1.0)
     return round(lo, 3), round(hi, 3)
 
 
