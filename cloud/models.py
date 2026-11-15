@@ -44,6 +44,12 @@ class User(Base):
     # see. Paid plans and top-ups are untouched; clearing it restores the free
     # plan. Added to existing databases by cloud/database._ADDITIVE_COLUMNS.
     free_plan_denied = Column(String(32), nullable=True)
+    # Set by the support back-office (cloud/support_ops.py): a banned account
+    # cannot sign in, and its session tokens and API keys stop authenticating
+    # (cloud/auth.py). NULL is the normal case. Added to existing databases by
+    # cloud/database._ADDITIVE_COLUMNS.
+    ban_reason = Column(Text, nullable=True)
+    banned_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class MagicLinkToken(Base):

@@ -80,9 +80,20 @@ class CurrentUser:
         self.upload_post_profile = upload_post_profile
 
 
+SUSPENDED_DETAIL = "This account is suspended. Contact info@openshorts.app."
+
+
+def is_banned(user) -> bool:
+    """True for an account banned by the support back-office. getattr: test
+    doubles and rows loaded before the column existed."""
+    return bool(user is not None and getattr(user, "ban_reason", None))
+
+
 async def _load_current_user(session, user_id) -> Optional["CurrentUser"]:
     user = await session.get(User, user_id)
-    if user is None:
+    if user is None or is_banned(user):
+        # A banned account authenticates as nobody: dashboard, API keys,
+        # OAuth tokens and Autopilot alike.
         return None
     sub = await metering._active_subscription(session, user_id)
     topups = await metering._topups_fifo(session, user_id)
@@ -131,7 +142,8 @@ async def get_current_user_optional(request: Request) -> Optional[CurrentUser]:
                 "call this endpoint. Use the MCP tools, or create an API key in the "
                 "dashboard for full API access."))
         async with database.session() as session:
-            return await _load_current_user(session, user_id)
+            return await _refuse_banned(session, user_id,
+                                        await _load_current_user(session, user_id))
 
     if not token:
         return None
@@ -144,7 +156,17 @@ async def get_current_user_optional(request: Request) -> Optional[CurrentUser]:
     except Exception:
         return None
     async with database.session() as session:
-        return await _load_current_user(session, user_id)
+        return await _refuse_banned(session, user_id,
+                                    await _load_current_user(session, user_id))
+
+
+async def _refuse_banned(session, user_id, current):
+    """Turn "nobody" into a 403 when the reason is a ban, so the client says
+    so instead of asking a signed-in user to sign in again. The row is already
+    in the session's identity map: no second query."""
+    if current is None and is_banned(await session.get(User, user_id)):
+        raise HTTPException(status_code=403, detail=SUSPENDED_DETAIL)
+    return current
 
 
 async def get_current_user_required(request: Request) -> CurrentUser:
@@ -316,6 +338,8 @@ async def verify_magic_link(payload: MagicVerifyRequest, request: Request = None
                 session.add(user)
                 await session.flush()
             else:
+                if is_banned(user):
+                    raise HTTPException(status_code=403, detail=SUSPENDED_DETAIL)
                 user.last_login_at = _now()
             user_id, user_email = user.id, user.email
 
@@ -378,6 +402,8 @@ async def exchange_login_code(payload: LoginExchangeRequest):
             user = await session.get(User, row.user_id)
             if user is None:
                 raise bad
+            if is_banned(user):
+                raise HTTPException(status_code=403, detail=SUSPENDED_DETAIL)
             user_id, user_email = user.id, user.email
         token = issue_jwt(user_id, user_email)
         cu = await _load_current_user(session, user_id)
@@ -439,6 +465,8 @@ async def review_login(payload: ReviewLoginRequest, request: Request = None):
             )).scalar_one_or_none()
             if user is None:
                 raise HTTPException(status_code=401, detail="Wrong email or password.")
+            if is_banned(user):
+                raise HTTPException(status_code=403, detail=SUSPENDED_DETAIL)
             user.last_login_at = _now()
             user_id, user_email = user.id, user.email
         token = issue_jwt(user_id, user_email)

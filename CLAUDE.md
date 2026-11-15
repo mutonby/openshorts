@@ -44,7 +44,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 - API endpoints, API keys, MCP, OAuth, webhooks → `docs/architecture/agent-access.md`
 - Autopilot → `docs/architecture/autopilot.md`
 - Free-plan watermark (served `wm_` copy, unmark on upgrade) → `docs/architecture/watermark.md`
-- Quota wall, free overflow, lifecycle emails, cancel flow, survey, GDPR erasure → `docs/architecture/billing-and-account.md`
+- Quota wall, free overflow, lifecycle emails, cancel flow, survey, GDPR erasure, support-ops API → `docs/architecture/billing-and-account.md`
 - Concurrency/VRAM, auto-retry, deploy handover and drain → `docs/architecture/jobs-and-deploys.md`
 - Download routing, yt-dlp clients, paid proxy ledger → `docs/architecture/proxy-routing.md`
 - Remote CPU worker (second host renders free jobs) → `docs/architecture/remote-worker.md`
@@ -101,6 +101,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 - Cancel and churn alerts carry the reason and rating, never the user's free text. Deletion reasons are a closed list.
 - `reserve_process_minutes` never reserves more than the balance, whatever the client asks; the source cut travels in the resume manifest.
 - Lifecycle/commercial emails go through `emails.send_commercial_email` (opt-out + unsubscribe headers), once per account per kind.
+- The support-ops API (`cloud/support_ops.py`, `/api/support-ops/v1`) is 404 unless its keys are set, never emails the customer, never calls Stripe and writes only the account in the path; every write is a dry run unless `dry_run: false` + ticket, and returns a `before` that `restore` can write back. A banned account (`users.ban_reason`) authenticates as nobody.
 
 **Public repo**
 - This repository is public: no hosts, IPs, server paths, production metrics, business figures or customer data in code, comments, docs or commit messages.
