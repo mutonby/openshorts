@@ -24,8 +24,8 @@ optionally publishes them. One job takes minutes, not seconds: always work async
 Two equivalent surfaces; prefer MCP when the client supports it:
 
 - **MCP** (streamable HTTP): `https://mcp.openshorts.app/mcp` with header
-  `Authorization: Bearer osk_...`. Seven tools: `process_video`,
-  `get_job_status`, `list_clips`, `get_quota`, `add_subtitles`, `recut_clip`,
+  `Authorization: Bearer osk_...`. Eight tools: `process_video`,
+  `create_upload`, `get_job_status`, `list_clips`, `get_quota`, `add_subtitles`, `recut_clip`,
   `publish_clip`.
 - **REST**: same key against `https://api.openshorts.app`. Exact payloads and
   error shapes are in `reference.md`; read it before the first HTTP call.
