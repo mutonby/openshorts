@@ -342,6 +342,48 @@ TOOLS = [
             "required": ["job_id", "clip_index", "platforms"],
         },
     },
+    {
+        "name": "list_dub_languages",
+        "title": "List supported AI dubbing languages",
+        "description": (
+            "Return the languages supported by the AI voice dubbing feature "
+            "(ElevenLabs). Pass one of these codes to translate_clip. "
+            "Requires the caller to hold an ElevenLabs API key."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "translate_clip",
+        "title": "Dub a clip into another language with AI voice",
+        "description": (
+            "Re-voice a clip in a different language using ElevenLabs AI dubbing. "
+            "The original video is transcribed, translated, and re-spoken by an AI "
+            "voice that matches the original speaker. Requires an ElevenLabs API key "
+            "(pass it as the X-ElevenLabs-Key request header, or configure it in "
+            "Settings). Returns the dubbed clip URL. Use list_dub_languages to get "
+            "valid target_language codes."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string"},
+                "clip_index": {
+                    "type": "integer",
+                    "description": "0-based index from list_clips.",
+                },
+                "target_language": {
+                    "type": "string",
+                    "description": "Target language code, e.g. 'es' for Spanish. "
+                                   "Use list_dub_languages to get supported codes.",
+                },
+                "source_language": {
+                    "type": "string",
+                    "description": "Source language code (optional; auto-detected when omitted).",
+                },
+            },
+            "required": ["job_id", "clip_index", "target_language"],
+        },
+    },
 ]
 
 # Behaviour hints hosts use to decide what needs the user's confirmation; the
@@ -358,6 +400,9 @@ _ANNOTATIONS = {
     # Replaces the clip's current render with the new cut.
     "recut_clip": {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False},
     "publish_clip": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
+    "list_dub_languages": _READ,
+    # Replaces the clip's audio track with AI-dubbed audio in the target language.
+    "translate_clip": {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False},
 }
 for _tool in TOOLS:
     _tool["annotations"] = {"title": _tool["title"], **_ANNOTATIONS[_tool["name"]]}
@@ -595,6 +640,27 @@ async def _tool_publish_clip(client, args):
     return resp.json(), False
 
 
+async def _tool_list_dub_languages(client, args):
+    resp = await client.get("/api/translate/languages")
+    if resp.status_code >= 400:
+        return _api_error(resp), True
+    return resp.json(), False
+
+
+async def _tool_translate_clip(client, args):
+    body = {
+        "job_id": args["job_id"],
+        "clip_index": args["clip_index"],
+        "target_language": args["target_language"],
+    }
+    if args.get("source_language") is not None:
+        body["source_language"] = args["source_language"]
+    resp = await _job_call(client, "POST", "/api/translate", args["job_id"], json=body)
+    if resp.status_code >= 400:
+        return _api_error(resp), True
+    return _with_download_url(resp.json()), False
+
+
 _TOOL_IMPLS = {
     "process_video": _tool_process_video,
     "create_upload": _tool_create_upload,
@@ -604,6 +670,8 @@ _TOOL_IMPLS = {
     "add_subtitles": _tool_add_subtitles,
     "recut_clip": _tool_recut_clip,
     "publish_clip": _tool_publish_clip,
+    "list_dub_languages": _tool_list_dub_languages,
+    "translate_clip": _tool_translate_clip,
 }
 
 
