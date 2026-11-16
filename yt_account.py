@@ -478,6 +478,9 @@ class Session:
     def close(self):
         path, self.path = self.path, None
         if path:
+            # A long-lived process (the API's probe pool) would otherwise keep
+            # every Session it ever opened, through its atexit hook.
+            atexit.unregister(self.close)
             Session._live.pop(path, None)
             try:
                 os.remove(path)

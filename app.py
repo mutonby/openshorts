@@ -5094,6 +5094,19 @@ async def worker_source(job_id: str, request: Request):
 
 
 SOURCE_CHUNK = 1024 * 1024
+# REMOTE_SOURCE_MBPS is for all transfers together: when a quiet window ends,
+# up to REMOTE_WORKER_SLOTS sources leave at once for the same link.
+_source_bucket = {"free_at": 0.0}
+_source_lock = threading.Lock()
+
+
+def _source_turn(nbytes) -> float:
+    """Seconds this chunk's sender sleeps so the sum stays under the cap."""
+    with _source_lock:
+        now = time.time()
+        start = max(now, _source_bucket["free_at"])
+        _source_bucket["free_at"] = start + nbytes * 8 / (REMOTE_SOURCE_MBPS * 1e6)
+        return max(0.0, _source_bucket["free_at"] - now)
 SOURCE_SEEN_EVERY = 10           # seconds between lease touches while sending
 
 
@@ -5105,19 +5118,15 @@ def _source_chunks(path, job_dir):
     the job was taken back mid-transfer, four of them tripped the breaker and
     the worker sat idle while this host was the one out of CPU. A sync
     generator: Starlette reads it in a thread, off the event loop."""
-    last = start = time.time()
-    sent = 0
+    last = time.time()
     with open(path, "rb") as f:
         while True:
             chunk = f.read(SOURCE_CHUNK)
             if not chunk:
                 break
             yield chunk
-            sent += len(chunk)
             if REMOTE_SOURCE_MBPS:
-                ahead = sent * 8 / (REMOTE_SOURCE_MBPS * 1e6) - (time.time() - start)
-                if ahead > 0:
-                    time.sleep(ahead)
+                time.sleep(_source_turn(len(chunk)))
             if time.time() - last >= SOURCE_SEEN_EVERY:
                 remote_worker.touch_seen(job_dir)
                 last = time.time()
@@ -5511,6 +5520,10 @@ class EstimateRequest(BaseModel):
     seconds: Optional[float] = None  # a local file: the browser read its duration
 
 
+
+# The cost line under the link box waits at most this long for the probe.
+ESTIMATE_PROBE_TIMEOUT = _int_env("ESTIMATE_PROBE_TIMEOUT", 20)
+
 @app.post("/api/process/estimate")
 async def process_estimate(req: EstimateRequest, request: Request):
     """Cost line for the dashboard: what this source would cost before it runs.
@@ -5535,7 +5548,12 @@ async def process_estimate(req: EstimateRequest, request: Request):
             _check_probe_rate(f"estimate:{user.id}")
             loop = asyncio.get_event_loop()
             try:
-                minutes = await _metering.run_probe(url, allow_paid=False)
+                minutes = await asyncio.wait_for(
+                    _metering.run_probe(url, allow_paid=False), ESTIMATE_PROBE_TIMEOUT)
+            except asyncio.TimeoutError:
+                # Only the cost line waits on it: without a number the page
+                # says nothing, and the submit probes for itself.
+                return {"billing": True, "outcome": None}
             except Exception as e:
                 from yt_clients import NotASingleVideo
                 if isinstance(e, NotASingleVideo):

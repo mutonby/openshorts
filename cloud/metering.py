@@ -264,7 +264,12 @@ def probe_url_minutes(url: str, allow_paid: bool = True) -> float:
 # leaves behind in this module (quality facts, the static-pool verdict, paid
 # proxy events) comes back with its result; the YouTube accounts' budget is
 # already shared through files (yt_account). PROBE_PROCESSES=0: in a thread.
-PROBE_PROCESSES = max(0, int(os.environ.get("PROBE_PROCESSES", "4") or 0))
+# Sized for waiting, not for CPU: a probe spends most of its time asleep on
+# the YouTube account's turn (yt_account, up to YT_ACCOUNT_MAX_WAIT), and four
+# processes asleep queued every other probe behind them (16-nov: estimate p50
+# 45 s). ~150 MB each, started on demand.
+PROBE_PROCESSES = max(0, int(os.environ.get("PROBE_PROCESSES", "12") or 0))
+PROBE_TASKS_PER_CHILD = 200
 _probe_pool = None
 
 
@@ -286,6 +291,9 @@ def _probe_in_child(url, allow_paid):
 
 def _merge_child_probe(url, out):
     if out.get("facts"):
+        now = time.time()
+        for k in [k for k, v in _probe_facts.items() if now - v["at"] > _PROBE_FACTS_TTL]:
+            _probe_facts.pop(k, None)
         _probe_facts[url] = out["facts"]
     if out.get("bot_checked"):
         _static_bot_verdicts.add(url)
@@ -305,7 +313,8 @@ def _get_probe_pool():
         import multiprocessing
         # spawn, not fork: the API process has threads and an event loop.
         _probe_pool = concurrent.futures.ProcessPoolExecutor(
-            max_workers=PROBE_PROCESSES, mp_context=multiprocessing.get_context("spawn"))
+            max_workers=PROBE_PROCESSES, mp_context=multiprocessing.get_context("spawn"),
+            max_tasks_per_child=PROBE_TASKS_PER_CHILD)
     return _probe_pool
 
 

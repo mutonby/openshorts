@@ -36,8 +36,8 @@ _ADDITIVE_COLUMNS = (
 def _pool_options(url: str) -> dict:
     """Postgres pool sizing. SQLAlchemy's default (5 + 10 overflow, 30 s wait)
     ran full on 16-nov with a busy host, and each request then waited 30 s for
-    a connection before answering 500. A bigger pool and a short wait: two
-    instances of a deploy at 40 each stay well below Postgres' 100.
+    a connection before answering 500. A bigger pool and a short wait: even
+    three instances overlapping in quick deploys (30 each) fit in Postgres' 100.
     Env: DB_POOL_SIZE, DB_MAX_OVERFLOW, DB_POOL_TIMEOUT."""
     if not url.startswith("postgresql"):
         return {}
@@ -48,8 +48,8 @@ def _pool_options(url: str) -> dict:
             return max(0, int(os.environ.get(name, default)))
         except ValueError:
             return default
-    return {"pool_size": _env("DB_POOL_SIZE", 20),
-            "max_overflow": _env("DB_MAX_OVERFLOW", 20),
+    return {"pool_size": _env("DB_POOL_SIZE", 15),
+            "max_overflow": _env("DB_MAX_OVERFLOW", 15),
             "pool_timeout": _env("DB_POOL_TIMEOUT", 10)}
 
 

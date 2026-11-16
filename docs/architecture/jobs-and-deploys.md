@@ -460,16 +460,19 @@ docs) with the next real change.
 The API is one process (event loop, yt-dlp probes in threads) in the same
 container as the jobs. When the host runs out of CPU the loop slows, DB
 connections stay checked out longer and the pool fills. Two guards: the
-Postgres pool is `DB_POOL_SIZE` 20 + `DB_MAX_OVERFLOW` 20 with a
+Postgres pool is `DB_POOL_SIZE` 15 + `DB_MAX_OVERFLOW` 15 with a
 `DB_POOL_TIMEOUT` of 10 s (the default 5 + 10 with 30 s turned a slow minute
 into minutes of 500s), and the owner check of a GET (every status poll)
 remembers the caller per credential and URL for `OWNER_ID_TTL` (30 s) instead
 of loading the full user each time.
 
 The duration probe (yt-dlp, pure Python, about a second of CPU under the GIL)
-runs in a pool of `PROBE_PROCESSES` (4) spawned processes, not in a thread of
+runs in a pool of `PROBE_PROCESSES` (12) spawned processes, not in a thread of
 the API process: at 30-50 probes a minute the threads took the GIL from the
 event loop and the pool filled even with CPU to spare. What a probe leaves in
 `cloud/metering` (quality facts, the static-pool verdict, paid proxy events)
-travels back with its result; `PROBE_PROCESSES=0` runs it in a thread.
+travels back with its result; `PROBE_PROCESSES=0` runs it in a thread. The
+pool is sized for waiting: a probe mostly sleeps on the YouTube account's
+turn, and 4 processes asleep queued the rest (estimate p50 45 s). The cost
+line (`/api/process/estimate`) gives up after `ESTIMATE_PROBE_TIMEOUT` (20 s).
 

@@ -123,8 +123,8 @@ it may hold at once), `REMOTE_LEASE_SECONDS`, `REMOTE_MAX_SECONDS`,
 `REMOTE_MAX_FILE_MB`, `REMOTE_MAX_JOB_MB`, `REMOTE_BREAKER_FAILURES`,
 `REMOTE_BREAKER_SECONDS`, `REMOTE_QUIET_MINUTES` (minutes of the hour, UTC,
 like `55-5`, with no new claim: when the worker's host shares its link with
-something that peaks at fixed times), `REMOTE_SOURCE_MBPS` (cap per source
-transfer, 0 for none).
+something that peaks at fixed times), `REMOTE_SOURCE_MBPS` (cap for all source
+transfers together, 0 for none).
 
 The source download is the worker's one long call: the API touches the lease
 while it streams the file (`_source_chunks`), so a slow transfer is not taken

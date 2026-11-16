@@ -80,7 +80,7 @@ def test_postgres_pool_has_room_and_a_short_wait(monkeypatch):
     for name in ("DB_POOL_SIZE", "DB_MAX_OVERFLOW", "DB_POOL_TIMEOUT"):
         monkeypatch.delenv(name, raising=False)
     opts = database._pool_options("postgresql+asyncpg://u:p@db/x")
-    assert opts == {"pool_size": 20, "max_overflow": 20, "pool_timeout": 10}
+    assert opts == {"pool_size": 15, "max_overflow": 15, "pool_timeout": 10}
     monkeypatch.setenv("DB_POOL_SIZE", "8")
     assert database._pool_options("postgresql+asyncpg://u:p@db/x")["pool_size"] == 8
     assert database._pool_options("sqlite+aiosqlite:///:memory:") == {}
@@ -172,3 +172,11 @@ def test_the_probe_runs_in_a_pool_process(monkeypatch):
         if metering._probe_pool is not None:
             metering._probe_pool.shutdown(wait=True)
         metering._probe_pool = None
+
+
+def test_the_source_cap_is_shared_by_every_transfer(monkeypatch):
+    monkeypatch.setattr(app_module, "REMOTE_SOURCE_MBPS", 8)      # 1 MB/s
+    monkeypatch.setattr(app_module, "_source_bucket", {"free_at": 0.0})
+    first = app_module._source_turn(500_000)
+    second = app_module._source_turn(500_000)                    # another transfer
+    assert 0.4 < first <= 0.5 and 0.9 < second <= 1.0
