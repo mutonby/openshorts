@@ -37,8 +37,15 @@ import media_auth
 import remote_worker
 import yt_account
 from jsonfile import write_json_atomic
+import fdlimit
 
 load_dotenv()
+
+# A soft limit of 1024 descriptors runs out under load (client sockets, job
+# pipes, served files) and uvicorn then refuses every new connection.
+_nofile = fdlimit.raise_nofile_limit()
+if _nofile:
+    print(f"📂 Open-file limit: soft={_nofile[0]} hard={_nofile[1]}")
 
 # Constants
 UPLOAD_DIR = "uploads"
