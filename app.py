@@ -26,7 +26,7 @@ from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
@@ -883,11 +883,43 @@ async def _assert_job_owner(request, record):
     owner = record.get("user_id") if isinstance(record, dict) else None
     if owner is None:
         return
-    user = await _user_from_request(request)
     # Compare as strings: live jobs store a uuid.UUID, but jobs recovered from
     # the .owner sidecar store its string form — UUID != str is always True.
-    if user is None or str(user.id) != str(owner):
+    if await _owner_id_from_request(request) != str(owner):
         raise HTTPException(status_code=404, detail="Not found")
+
+
+# Who the caller is, remembered for a few seconds per credential and URL, for
+# the owner check alone. /api/status is polled ~20 times a second, and the
+# full user load behind each poll is 4-5 queries: on 16-nov, with the host
+# short of CPU, those polls held the 15 pool connections and every endpoint
+# answered 500 for minutes. GET only, and only a caller that was found: a
+# credential that stops working (revoked key, ban) stops passing this check
+# within OWNER_ID_TTL.
+OWNER_ID_TTL = 30.0
+_OWNER_ID_MAX = 20000
+_owner_ids: dict = {}
+
+
+async def _owner_id_from_request(request):
+    credential = (request.headers.get("Authorization", "")
+                  + "\n" + request.headers.get("X-API-Key", ""))
+    if request.method != "GET" or not credential.strip():
+        user = await _user_from_request(request)
+        return str(user.id) if user is not None else None
+    key = hashlib.sha256(f"{credential}\n{request.url.path}".encode()).hexdigest()
+    now = time.monotonic()
+    hit = _owner_ids.get(key)
+    if hit and hit[0] > now:
+        return hit[1]
+    user = await _user_from_request(request)
+    if user is None:
+        return None
+    if len(_owner_ids) >= _OWNER_ID_MAX:
+        for k in [k for k, v in _owner_ids.items() if v[0] <= now] or list(_owner_ids):
+            _owner_ids.pop(k, None)
+    _owner_ids[key] = (now + OWNER_ID_TTL, str(user.id))
+    return str(user.id)
 
 # Application State
 # PriorityQueue holds (priority, key, job_id). Lower priority dispatches first:
@@ -1933,6 +1965,32 @@ REMOTE_MAX_SECONDS = _int_env("REMOTE_MAX_SECONDS", 3600)
 REMOTE_BREAKER_FAILURES = _int_env("REMOTE_BREAKER_FAILURES", 4)
 REMOTE_BREAKER_WINDOW = 10           # ...counted over the last this many
 REMOTE_BREAKER_SECONDS = _int_env("REMOTE_BREAKER_SECONDS", 1800)
+
+
+def _quiet_minutes(spec):
+    """Minutes of the hour (UTC) given as "55-5,28-32": wrap-around ranges."""
+    out = set()
+    for part in (spec or "").split(","):
+        try:
+            a, _, b = part.strip().partition("-")
+            a, b = int(a) % 60, int(b or a) % 60
+        except ValueError:
+            continue
+        m = a
+        while True:
+            out.add(m)
+            if m == b:
+                break
+            m = (m + 1) % 60
+    return out
+
+
+# No new claim in these minutes of the hour: the worker's host also carries
+# Upload-Post, whose scheduled posts fill its link at :00-:05. A claim is a
+# ~1 GB source sent over that link a minute or two later.
+REMOTE_QUIET_MINUTES = _quiet_minutes(os.environ.get("REMOTE_QUIET_MINUTES", ""))
+# Per-transfer cap on the source sent to the worker, in Mbit/s (0: none).
+REMOTE_SOURCE_MBPS = _int_env("REMOTE_SOURCE_MBPS", 0)
 _remote_jobs: set = set()            # the subset of _running_jobs run remotely
 _remote_breaker = {"recent": [], "until": 0.0}
 
@@ -4796,6 +4854,8 @@ def _claim_remote_job(worker):
         return None
     if time.time() < _remote_breaker["until"]:
         return None
+    if time.gmtime().tm_min in REMOTE_QUIET_MINUTES:
+        return None
     heap = job_queue._queue
     for entry in sorted(heap):
         prio, _key, job_id = entry
@@ -5031,7 +5091,39 @@ async def worker_source(job_id: str, request: Request):
     if not real or not any(real.startswith(r + os.sep) for r in roots) or not os.path.isfile(real):
         raise HTTPException(status_code=404, detail="Not found")
     remote_worker.touch_seen(job_dir)
-    return FileResponse(real, media_type="application/octet-stream")
+    return StreamingResponse(_source_chunks(real, job_dir), media_type="application/octet-stream",
+                             headers={"Content-Length": str(os.path.getsize(real))})
+
+
+SOURCE_CHUNK = 1024 * 1024
+SOURCE_SEEN_EVERY = 10           # seconds between lease touches while sending
+
+
+def _source_chunks(path, job_dir):
+    """The source file in chunks, touching the worker's lease while it is sent.
+
+    The worker makes no other call during the download, and a source of
+    ~1 GB sent from a busy host took more than REMOTE_LEASE_SECONDS (16-nov):
+    the job was taken back mid-transfer, four of them tripped the breaker and
+    the worker sat idle while this host was the one out of CPU. A sync
+    generator: Starlette reads it in a thread, off the event loop."""
+    last = start = time.time()
+    sent = 0
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(SOURCE_CHUNK)
+            if not chunk:
+                break
+            yield chunk
+            sent += len(chunk)
+            if REMOTE_SOURCE_MBPS:
+                ahead = sent * 8 / (REMOTE_SOURCE_MBPS * 1e6) - (time.time() - start)
+                if ahead > 0:
+                    time.sleep(ahead)
+            if time.time() - last >= SOURCE_SEEN_EVERY:
+                remote_worker.touch_seen(job_dir)
+                last = time.time()
+    remote_worker.touch_seen(job_dir)
 
 
 @app.post("/internal/worker/jobs/{job_id}/log")

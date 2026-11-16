@@ -454,3 +454,15 @@ coordinates them:
 
 Every deploy is a full build plus a handover, so batch small commits (tests,
 docs) with the next real change.
+
+## API under CPU pressure
+
+The API is one process (event loop, yt-dlp probes in threads) in the same
+container as the jobs. When the host runs out of CPU the loop slows, DB
+connections stay checked out longer and the pool fills. Two guards: the
+Postgres pool is `DB_POOL_SIZE` 20 + `DB_MAX_OVERFLOW` 20 with a
+`DB_POOL_TIMEOUT` of 10 s (the default 5 + 10 with 30 s turned a slow minute
+into minutes of 500s), and the owner check of a GET (every status poll)
+remembers the caller per credential and URL for `OWNER_ID_TTL` (30 s) instead
+of loading the full user each time.
+

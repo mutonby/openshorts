@@ -121,7 +121,17 @@ worker only.
 API: `REMOTE_WORKER_TOKEN` (32+ random characters), `REMOTE_WORKER_SLOTS` (jobs
 it may hold at once), `REMOTE_LEASE_SECONDS`, `REMOTE_MAX_SECONDS`,
 `REMOTE_MAX_FILE_MB`, `REMOTE_MAX_JOB_MB`, `REMOTE_BREAKER_FAILURES`,
-`REMOTE_BREAKER_SECONDS`.
+`REMOTE_BREAKER_SECONDS`, `REMOTE_QUIET_MINUTES` (minutes of the hour, UTC,
+like `55-5`, with no new claim: when the worker's host shares its link with
+something that peaks at fixed times), `REMOTE_SOURCE_MBPS` (cap per source
+transfer, 0 for none).
+
+The source download is the worker's one long call: the API touches the lease
+while it streams the file (`_source_chunks`), so a slow transfer is not taken
+for a dead worker. Before that, a ~1 GB source from a busy host outlived
+`REMOTE_LEASE_SECONDS`, the job came back mid-transfer and four of those
+tripped the breaker, leaving the worker idle exactly when the API host was
+short of CPU.
 
 Worker: `WORKER_API_URL` (https), `WORKER_TOKEN`, `WORKER_SLOTS`,
 `GEMINI_API_KEY`, plus the pipeline defaults the API host sets for itself
