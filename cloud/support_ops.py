@@ -643,6 +643,9 @@ def _ban_snapshot(user) -> dict:
 def _set_ban(ctx, reason, banned_at):
     ctx.user.ban_reason = reason
     ctx.user.banned_at = banned_at if reason else None
+    if reason:
+        from . import owner_cache
+        owner_cache.forget_user(ctx.user.id)
 
 
 def _check_field(name, value):

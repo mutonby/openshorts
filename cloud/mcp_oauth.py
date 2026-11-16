@@ -486,6 +486,9 @@ async def revoke(request: Request):
                     and key.revoked_at is None:
                 key.revoked_at = _now()
                 await session.commit()
+                from . import owner_cache
+                if getattr(key, "user_id", None) is not None:
+                    owner_cache.forget_user(key.user_id)
     return JSONResponse({}, headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"})
 
 

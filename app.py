@@ -887,16 +887,10 @@ async def _assert_job_owner(request, record):
         raise HTTPException(status_code=404, detail="Not found")
 
 
-# Who the caller is, remembered for a few seconds per credential and URL, for
-# the owner check alone. /api/status is polled ~20 times a second, and the
-# full user load behind each poll is 4-5 queries: on 16-nov, with the host
-# short of CPU, those polls held the 15 pool connections and every endpoint
-# answered 500 for minutes. GET only, and only a caller that was found: a
-# credential that stops working (revoked key, ban) stops passing this check
-# within OWNER_ID_TTL.
-OWNER_ID_TTL = 30.0
-_OWNER_ID_MAX = 20000
-_owner_ids: dict = {}
+# Who the caller of a GET is, remembered per credential for the owner check
+# alone, with a cap on how many of those lookups hold a pool connection at once
+# (cloud/owner_cache.py). A ban, a revoked key or an erased account forgets it.
+from cloud import owner_cache as _owner_cache
 
 
 async def _owner_id_from_request(request):
@@ -905,19 +899,12 @@ async def _owner_id_from_request(request):
     if request.method != "GET" or not credential.strip():
         user = await _user_from_request(request)
         return str(user.id) if user is not None else None
-    key = hashlib.sha256(f"{credential}\n{request.url.path}".encode()).hexdigest()
-    now = time.monotonic()
-    hit = _owner_ids.get(key)
-    if hit and hit[0] > now:
-        return hit[1]
-    user = await _user_from_request(request)
-    if user is None:
-        return None
-    if len(_owner_ids) >= _OWNER_ID_MAX:
-        for k in [k for k, v in _owner_ids.items() if v[0] <= now] or list(_owner_ids):
-            _owner_ids.pop(k, None)
-    _owner_ids[key] = (now + OWNER_ID_TTL, str(user.id))
-    return str(user.id)
+    try:
+        return await _owner_cache.owner_id(credential,
+                                           lambda: _user_from_request(request))
+    except _owner_cache.Busy:
+        raise HTTPException(status_code=503, detail="Busy, retry shortly.",
+                            headers={"Retry-After": "3"})
 
 # Application State
 # PriorityQueue holds (priority, key, job_id). Lower priority dispatches first:

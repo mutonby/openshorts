@@ -152,4 +152,6 @@ async def revoke_key(key_id: str, request: Request):
                 raise HTTPException(status_code=404, detail="Key not found")
             if row.revoked_at is None:
                 row.revoked_at = _now()
+    from . import owner_cache
+    owner_cache.forget_user(user.id)
     return {"ok": True}

@@ -382,6 +382,8 @@ async def erase_account(user_id, reason=None, *, cancel_stripe=True, notify_user
     print(f"🗑️  Account erased: {user_id} (plan={plan}, r2_objects={r2_deleted})")
 
     # Everything below is after-the-fact and must never fail the deletion.
+    from . import owner_cache
+    owner_cache.forget_user(user_id)
     try:
         # OpenPanel only ever received the account uuid, never the address (see
         # cloud/analytics.py), and it expires those identifiers on its own

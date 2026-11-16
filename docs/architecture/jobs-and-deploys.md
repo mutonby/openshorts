@@ -463,8 +463,14 @@ connections stay checked out longer and the pool fills. Two guards: the
 Postgres pool is `DB_POOL_SIZE` 15 + `DB_MAX_OVERFLOW` 15 with a
 `DB_POOL_TIMEOUT` of 10 s (the default 5 + 10 with 30 s turned a slow minute
 into minutes of 500s), and the owner check of a GET (every status poll)
-remembers the caller per credential and URL for `OWNER_ID_TTL` (30 s) instead
-of loading the full user each time.
+goes through `cloud/owner_cache.py`: the caller is remembered per credential
+for `OWNER_ID_TTL` (600 s) instead of loading the full user each time, and at
+most `OWNER_LOOKUP_CONCURRENCY` (8) of those lookups hold a pool connection at
+once, so polls can never take the connections login, checkout or the Stripe
+webhook need. With the gate full for `OWNER_LOOKUP_WAIT` (3 s) a caller seen in
+the last `OWNER_ID_STALE` (1 h) gets its last answer and an unknown one a 503
+with `Retry-After`. A ban, a revoked key (dashboard or OAuth revoke) and an
+erased account call `owner_cache.forget_user`, so they apply at once.
 
 The duration probe (yt-dlp, pure Python, about a second of CPU under the GIL)
 runs in a pool of `PROBE_PROCESSES` (12) spawned processes, not in a thread of
