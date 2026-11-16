@@ -440,6 +440,10 @@ async def _job_call(client, method, path, job_id, **kw):
         restored = await client.post(f"/api/projects/{job_id}/restore")
         if restored.status_code < 400:
             resp = await send(path, **kw)
+        elif restored.status_code != 404:
+            # The job is in the library but could not be brought back: say
+            # that, not "Job not found", which reads as "never existed".
+            return restored
     return resp
 
 
