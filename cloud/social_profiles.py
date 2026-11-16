@@ -48,7 +48,7 @@ def profile_username_for(user_id) -> str:
 
 async def _create_remote_profile(username: str):
     """Create the profile in Upload-Post. Treat 'already exists' as success."""
-    async with httpx.AsyncClient(timeout=20) as client:
+    async with social_platforms.upload_post_client(20) as client:
         resp = await client.post(
             f"{API_BASE}/uploadposts/users",
             headers=_auth_headers(),
@@ -123,7 +123,7 @@ async def get_connect_url(username: str, return_to: str = "account") -> str:
         "platforms": platforms,
         "showCalendar": True,  # keep the scheduling calendar available in the page
     }
-    async with httpx.AsyncClient(timeout=20) as client:
+    async with social_platforms.upload_post_client(20) as client:
         resp = await client.post(
             f"{API_BASE}/uploadposts/users/generate-jwt",
             headers=_auth_headers(),
@@ -142,7 +142,7 @@ async def profile_token(username: str):
     The token rides in generate-jwt's access_url.
     """
     from urllib.parse import parse_qs, urlparse
-    async with httpx.AsyncClient(timeout=20) as client:
+    async with social_platforms.upload_post_client(20) as client:
         resp = await client.post(
             f"{API_BASE}/uploadposts/users/generate-jwt",
             headers=_auth_headers(),

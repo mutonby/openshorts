@@ -8366,7 +8366,7 @@ async def social_post_status(request_id: str, request: Request):
     upload_key, _ = await resolve_upload_post(request, None)
     if not upload_key:
         return {"status": "unknown"}
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    async with social_platforms.upload_post_client(20.0) as client:
         try:
             resp = await client.get("https://api.upload-post.com/api/uploadposts/status",
                                     headers={"Authorization": f"Apikey {upload_key}"},
@@ -8421,7 +8421,7 @@ async def _managed_social_user(request, api_key, profile):
         user = await _user_from_request(request)
         name = cloud.social_profiles.profile_username_for(user.id)
         return {"profiles": [{"username": name, "connected": []}]}
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with social_platforms.upload_post_client(30.0) as client:
         resp = await client.get(f"https://api.upload-post.com/api/uploadposts/users/{profile}",
                                 headers={"Authorization": f"Apikey {api_key}"})
     if resp.status_code == 404:
@@ -8452,7 +8452,7 @@ async def get_social_user(request: Request):
     print(f"🔍 Fetching User ID from: {url}")
     headers = {"Authorization": f"Apikey {api_key}"}
     
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with social_platforms.upload_post_client(30.0) as client:
         try:
             resp = await client.get(url, headers=headers)
             if resp.status_code != 200:
@@ -8543,7 +8543,7 @@ async def _social_analytics_auth(request: Request, byok_profile: Optional[str]):
 
 async def _upload_post_get(api_key: str, url: str, params: dict):
     headers = {"Authorization": f"Apikey {api_key}"}
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with social_platforms.upload_post_client(60.0) as client:
         resp = await client.get(url, headers=headers, params=params)
     if resp.status_code != 200:
         raise HTTPException(status_code=resp.status_code, detail=f"Vendor API Error: {resp.text}")
@@ -8747,7 +8747,7 @@ async def social_cancel_scheduled(job_id: str, request: Request, user: Optional[
         # 404 rather than 403: never confirm that someone else's job exists.
         raise HTTPException(status_code=404, detail="Scheduled post not found")
     headers = {"Authorization": f"Apikey {api_key}"}
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with social_platforms.upload_post_client(30.0) as client:
         resp = await client.delete(
             f"https://api.upload-post.com/api/uploadposts/schedule/{job_id}",
             headers=headers)

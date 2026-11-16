@@ -87,3 +87,19 @@ def upload_fields(platforms: Iterable[str], *, title: str, description: str,
         data["bluesky_title"] = title
         data["bluesky_description"] = description
     return data
+
+
+# A connection to Upload-Post that does not open in a few seconds is retried
+# instead of waited on: from a busy host some connects to the API hung until
+# the 20 s timeout and the user got a 500 (16-nov), while the next attempt
+# connected in milliseconds. httpx retries only failures to connect, so a
+# request that reached Upload-Post is never sent twice.
+UPLOAD_POST_CONNECT_TIMEOUT = 5.0
+UPLOAD_POST_CONNECT_RETRIES = 2
+
+
+def upload_post_client(timeout: float):
+    import httpx
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(timeout, connect=UPLOAD_POST_CONNECT_TIMEOUT),
+        transport=httpx.AsyncHTTPTransport(retries=UPLOAD_POST_CONNECT_RETRIES))

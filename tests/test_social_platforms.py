@@ -43,3 +43,11 @@ def test_post_endpoints_refuse_an_unsupported_network():
     with pytest.raises(HTTPException):
         app_module._checked_platforms([])
     assert app_module._checked_platforms(["Threads", "tiktok"]) == ["tiktok", "threads"]
+
+
+def test_upload_post_client_retries_only_the_connect():
+    import asyncio
+    client = sp.upload_post_client(20)
+    assert client.timeout.connect == sp.UPLOAD_POST_CONNECT_TIMEOUT
+    assert client.timeout.read == 20
+    asyncio.run(client.aclose())
