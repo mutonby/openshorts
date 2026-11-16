@@ -205,6 +205,34 @@ free text: anything typed would land in a row designed to outlive the user.
 still exists before inserting; otherwise the FK violation makes Stripe retry the
 same doomed event for days.
 
+## Support-ops API (`cloud/support_ops.py`)
+
+A private API for the support back-office under `/api/support-ops/v1`: look up an
+account (`GET /users?email=|id=|stripe_customer=`, `GET /users/{id}`), read its
+recent activity (`GET /users/{id}/activity`) and fix it with one action at a time
+(`GET /actions`, `POST /users/{id}/actions/{action}`).
+
+- Off (404 on every path) unless `SUPPORT_OPS_READ_KEY` and/or
+  `SUPPORT_OPS_WRITE_KEY` are set, each at least 32 characters. Bearer auth,
+  constant-time compare; the read key cannot POST. No UI, no OpenAPI entry, no
+  CORS (`CorsGuard` sits outside the CORS middleware).
+- Every write is a dry run unless `dry_run: false`, which also needs a ticket.
+  The action runs inside a transaction holding the user row lock and is rolled
+  back on a dry run, so `after` is exactly what the write would leave.
+  `before`/`after` carry only the touched fields and `restore` writes a `before`
+  back. Real writes print one `support-ops audit` JSON line.
+- Never emails the customer, never calls Stripe, only touches the account in the
+  path. `set_plan` rewrites the subscription row app-side (minutes from
+  `PLAN_MINUTES`) and Stripe's next webhook for that subscription wins.
+  `add_credits` adds or consumes top-up minutes; `reset_usage` and usage restores
+  write one committed `support_adjust` ledger row instead of rewriting history.
+  `delete_account` runs `account.erase_account` without the Stripe step and
+  without the goodbye email, and refuses a live subscription row.
+- `ban` sets `users.ban_reason`: sign-in (magic link, Google, review login) is
+  refused and `_load_current_user` treats the account as nobody, so sessions, API
+  keys, OAuth tokens and Autopilot stop with it (`get_current_user_optional`
+  answers 403).
+
 ## Checkout session (`create_checkout`)
 
 - The client sends the surface that opened it as `source` (`wall`, `watermark`,
