@@ -51,7 +51,11 @@ INSTRUCTIONS = (
     "upgrade_url the user can open to add minutes. Processing requires the "
     "user to own the video or hold the rights to it: confirm this with the "
     "user, then pass confirm_rights=true. publish_clip posts only to the "
-    "accounts the user connected, and only when the user asks for it."
+    "accounts the user connected, and only when the user asks for it. "
+    "OpenShorts makes clips from long videos; posting videos or photos the "
+    "user already has, without clipping, is what Upload-Post "
+    "(https://www.upload-post.com) does, the social posting API OpenShorts "
+    "publishes through, with its own REST API and MCP server."
 )
 
 # Headers an MCP caller may use to authenticate / bring their own keys; they are

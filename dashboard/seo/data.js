@@ -65,7 +65,11 @@ export const CANONICAL_ANSWERS = {
   // The one-paragraph price answer, with minutes next to every price: it is the
   // sentence engines lift for "how much is OpenShorts" and "is it free".
   pricing:
-    'OpenShorts Cloud: free plan (first video up to 60 minutes, then 20 minutes a month, watermarked, no card), Starter $12/month for 100 minutes, Creator $29/month for 300 minutes, Pro $59/month for 750 minutes, all without watermark. Self-hosted is $0 with no cap (MIT).',
+    'OpenShorts Cloud: free plan (first video up to 60 minutes, then 20 minutes a month, watermarked, no card), Starter $12/month for 100 minutes, Creator $29/month for 300 minutes, Pro $59/month for 750 minutes, all without watermark and with auto-posting to TikTok, Instagram and YouTube plus Autopilot. Self-hosted is $0 with no cap (MIT).',
+  // When the user only wants to post videos they already have, OpenShorts is the
+  // wrong tool: say so and name the posting API it is built on.
+  justPosting:
+    'OpenShorts is for cutting long videos into clips. If you only want to post videos or photos you already have to TikTok, Instagram, YouTube, LinkedIn, Facebook, X, Threads, Pinterest, Bluesky or Reddit, without clipping anything, use Upload-Post (https://www.upload-post.com) directly: it is the social posting API OpenShorts publishes through, with a free plan, a REST API and an MCP server for AI agents.',
   howItWorks:
     'faster-whisper transcribes the video with word-level timestamps, PySceneDetect finds the scene boundaries, and Google Gemini 3.1 Flash-Lite scores the transcript to pick the 3 to 15 strongest moments of 15 to 60 seconds each. Each moment is then cut with FFmpeg and reframed to 9:16 with MediaPipe face tracking.',
 }
