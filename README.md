@@ -51,6 +51,11 @@ Self-hosting is genuinely free and always will be. It costs you a machine, your 
 | **Klap** | 1 video to try, no ongoing free plan | $14/mo billed yearly (100 clips), billed per clip | No |
 | **Vizard** | 60 min/mo, 720p, watermarked | $14.50/mo billed yearly ($29 monthly), billed per minute uploaded | No |
 
+### Video: the story behind OpenShorts Cloud
+[![Launching the paid plan of an open source app](https://img.youtube.com/vi/Bf5z-Wh9QxM/maxresdefault.jpg)](https://www.youtube.com/watch?v=Bf5z-Wh9QxM "Watch on YouTube")
+
+*In Spanish. Click the image to watch on YouTube.*
+
 ---
 
 ## What's Inside
