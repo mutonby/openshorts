@@ -466,3 +466,10 @@ into minutes of 500s), and the owner check of a GET (every status poll)
 remembers the caller per credential and URL for `OWNER_ID_TTL` (30 s) instead
 of loading the full user each time.
 
+The duration probe (yt-dlp, pure Python, about a second of CPU under the GIL)
+runs in a pool of `PROBE_PROCESSES` (4) spawned processes, not in a thread of
+the API process: at 30-50 probes a minute the threads took the GIL from the
+event loop and the pool filled even with CPU to spare. What a probe leaves in
+`cloud/metering` (quality facts, the static-pool verdict, paid proxy events)
+travels back with its result; `PROBE_PROCESSES=0` runs it in a thread.
+

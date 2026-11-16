@@ -668,9 +668,7 @@ async def _reserve_after_job_limit(request, user, url, input_path, job_id, max_m
         if cached is not None:
             minutes = cached
         elif url:
-            minutes = await loop.run_in_executor(
-                None, functools.partial(_metering.probe_url_minutes, url,
-                                        allow_paid=paid_allowed))
+            minutes = await _metering.run_probe(url, allow_paid=paid_allowed)
         else:
             minutes = await loop.run_in_executor(None, _metering.probe_file_minutes, input_path)
     except Exception as e:
@@ -5537,8 +5535,7 @@ async def process_estimate(req: EstimateRequest, request: Request):
             _check_probe_rate(f"estimate:{user.id}")
             loop = asyncio.get_event_loop()
             try:
-                minutes = await loop.run_in_executor(
-                    None, functools.partial(_metering.probe_url_minutes, url, allow_paid=False))
+                minutes = await _metering.run_probe(url, allow_paid=False)
             except Exception as e:
                 from yt_clients import NotASingleVideo
                 if isinstance(e, NotASingleVideo):
@@ -8801,8 +8798,7 @@ async def _probe_thumbnail_url(request, url, user):
     paid_allowed = not await _paid_proxy_budget_exceeded()
     loop = asyncio.get_event_loop()
     try:
-        minutes = await loop.run_in_executor(
-            None, functools.partial(_metering.probe_url_minutes, url, allow_paid=paid_allowed))
+        minutes = await _metering.run_probe(url, allow_paid=paid_allowed)
     except Exception as e:
         from yt_clients import NotASingleVideo
         if isinstance(e, NotASingleVideo):

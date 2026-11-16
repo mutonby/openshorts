@@ -255,6 +255,81 @@ def probe_url_minutes(url: str, allow_paid: bool = True) -> float:
         session.close()
 
 
+# --- The probe in its own process -------------------------------------------
+# yt-dlp is pure Python: a probe holds the GIL for about a second of CPU, and
+# the API is one process whose event loop needs the same GIL. At 30-50 probes
+# a minute (16-nov) the loop got too little of it, DB connections stayed
+# checked out and every endpoint answered 500 for minutes. In a pool of
+# processes the probes use other cores and leave the loop alone. What a probe
+# leaves behind in this module (quality facts, the static-pool verdict, paid
+# proxy events) comes back with its result; the YouTube accounts' budget is
+# already shared through files (yt_account). PROBE_PROCESSES=0: in a thread.
+PROBE_PROCESSES = max(0, int(os.environ.get("PROBE_PROCESSES", "4") or 0))
+_probe_pool = None
+
+
+def _probe_in_child(url, allow_paid):
+    """Runs in a pool process: the probe and what it left in this module."""
+    from yt_clients import NotASingleVideo
+    out = {"minutes": None, "error": None, "single": False}
+    try:
+        out["minutes"] = probe_url_minutes(url, allow_paid=allow_paid)
+    except NotASingleVideo as e:
+        out["error"], out["single"] = str(e), True
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {e}"[:500]
+    out["facts"] = _probe_facts.get(url)
+    out["bot_checked"] = pop_statics_bot_checked(url)
+    out["events"] = pop_paid_probe_events()
+    return out
+
+
+def _merge_child_probe(url, out):
+    if out.get("facts"):
+        _probe_facts[url] = out["facts"]
+    if out.get("bot_checked"):
+        _static_bot_verdicts.add(url)
+    _paid_probe_events.extend(out.get("events") or [])
+    if out.get("error") is not None:
+        if out.get("single"):
+            from yt_clients import NotASingleVideo
+            raise NotASingleVideo(out["error"])
+        raise ValueError(out["error"])
+    return out["minutes"]
+
+
+def _get_probe_pool():
+    global _probe_pool
+    if _probe_pool is None:
+        import concurrent.futures
+        import multiprocessing
+        # spawn, not fork: the API process has threads and an event loop.
+        _probe_pool = concurrent.futures.ProcessPoolExecutor(
+            max_workers=PROBE_PROCESSES, mp_context=multiprocessing.get_context("spawn"))
+    return _probe_pool
+
+
+async def run_probe(url: str, allow_paid: bool = True) -> float:
+    """``probe_url_minutes`` off the event loop and, with PROBE_PROCESSES, off
+    this process's GIL."""
+    import functools
+    loop = asyncio.get_running_loop()
+    if PROBE_PROCESSES:
+        global _probe_pool
+        try:
+            out = await loop.run_in_executor(_get_probe_pool(), _probe_in_child, url, allow_paid)
+        except Exception as e:
+            from concurrent.futures.process import BrokenProcessPool
+            if not isinstance(e, BrokenProcessPool):
+                raise
+            print(f"⚠️ Probe pool broke ({e}); this probe runs in a thread.")
+            _probe_pool = None
+        else:
+            return _merge_child_probe(url, out)
+    return await loop.run_in_executor(
+        None, functools.partial(probe_url_minutes, url, allow_paid=allow_paid))
+
+
 # What the last probes learned about each URL, for the quality gate that runs
 # right after the metering probe (app._probe_youtube_quality): asking YouTube
 # a second time for the same video spent the account's budget twice per

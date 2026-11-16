@@ -17,3 +17,8 @@ import tempfile  # noqa: E402
 
 os.environ["YT_ACCOUNT_STATE_DIR"] = tempfile.mkdtemp(prefix="yt-account-tests-")
 os.environ.setdefault("YT_ACCOUNT_MIN_INTERVAL", "0")
+
+
+# Probes run in a thread in the suite: tests replace metering.probe_url_minutes,
+# which a pool process would not see.
+os.environ.setdefault("PROBE_PROCESSES", "0")

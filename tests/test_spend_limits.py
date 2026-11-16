@@ -217,6 +217,10 @@ def thumb_cloud(cloud_user, dirs, monkeypatch):
             return log.probe_minutes
 
         @staticmethod
+        async def run_probe(url, allow_paid=True):
+            return _M.probe_url_minutes(url, allow_paid=allow_paid)
+
+        @staticmethod
         async def commit_reservation(rid):
             log.order.append("commit")
 

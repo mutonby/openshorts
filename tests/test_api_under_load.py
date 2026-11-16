@@ -127,3 +127,48 @@ def test_the_source_transfer_can_be_capped(tmp_path, monkeypatch):
     t = time.time()
     assert len(b"".join(app_module._source_chunks(str(src), str(tmp_path)))) == 250_000
     assert time.time() - t >= 0.15
+
+
+def test_a_child_probe_brings_back_what_it_learned(monkeypatch):
+    from cloud import metering
+    from yt_clients import NotASingleVideo
+
+    def _probe(url, allow_paid=True):
+        metering._probe_facts[url] = {"at": time.time(), "max_height": 1080, "duration": 60}
+        metering._static_bot_verdicts.add(url)
+        metering._paid_probe_events.append({"url": url})
+        return 1.5
+    monkeypatch.setattr(metering, "probe_url_minutes", _probe)
+    out = metering._probe_in_child("https://v/1", True)
+    # The child's module state is drained into the result...
+    assert "https://v/1" not in metering._static_bot_verdicts
+    assert metering.pop_paid_probe_events() == []
+    metering._probe_facts.pop("https://v/1", None)
+    # ...and lands in the parent's.
+    assert metering._merge_child_probe("https://v/1", out) == 1.5
+    assert metering.probe_facts("https://v/1")["max_height"] == 1080
+    assert metering.pop_statics_bot_checked("https://v/1") is True
+    assert metering.pop_paid_probe_events() == [{"url": "https://v/1"}]
+
+    def _not_single(url, allow_paid=True):
+        raise NotASingleVideo("This link is a playlist.")
+    monkeypatch.setattr(metering, "probe_url_minutes", _not_single)
+    import pytest
+    with pytest.raises(NotASingleVideo):
+        metering._merge_child_probe("u", metering._probe_in_child("u", True))
+
+
+def test_the_probe_runs_in_a_pool_process(monkeypatch):
+    from cloud import metering
+    import pytest
+    monkeypatch.setattr(metering, "PROBE_PROCESSES", 1)
+    monkeypatch.setattr(metering, "_probe_pool", None)
+    try:
+        # Refused before any network: the scheme is not http(s).
+        with pytest.raises(ValueError):
+            asyncio.run(metering.run_probe("file:///etc/passwd"))
+        assert metering._probe_pool is not None      # it ran there, not in a fallback
+    finally:
+        if metering._probe_pool is not None:
+            metering._probe_pool.shutdown(wait=True)
+        metering._probe_pool = None
