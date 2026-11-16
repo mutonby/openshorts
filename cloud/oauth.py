@@ -20,7 +20,7 @@ from sqlalchemy import select
 from .config import settings
 from . import database, email_policy, evidence
 from .models import User
-from .auth import issue_jwt, valid_challenge, create_login_code, is_banned
+from .auth import issue_jwt, valid_challenge, create_login_code, is_banned, lock_signup_email
 
 router = APIRouter()
 oauth = None
@@ -140,6 +140,7 @@ async def _google_user(email, google_sub):
     """Find (or create, or link) the account for a Google sign-in."""
     async with database.session() as session:
         async with session.begin():
+            await lock_signup_email(session, email)
             user = (await session.execute(
                 select(User).where(User.google_sub == google_sub)
             )).scalar_one_or_none()
