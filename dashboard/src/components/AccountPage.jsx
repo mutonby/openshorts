@@ -221,11 +221,19 @@ export default function AccountPage() {
         <div className="space-y-2">
           <div className="flex justify-between text-sm">
             <span className="text-muted lowercase">Plan minutes</span>
-            <span className="text-ink2">{fmt1(m.plan_used)} / {fmt1(m.plan_allowance)} used</span>
+            <span className="text-ink2">{fmt1(Math.max(0, (m.plan_used || 0) - (m.plan_held || 0)))} / {fmt1(m.plan_allowance)} used</span>
           </div>
           <div className="h-1.5 bg-paper3 rounded-full overflow-hidden">
             <div className={`h-full transition-all ${low ? 'bg-warn' : 'bg-brass'}`} style={{ width: `${usedPct}%` }} />
           </div>
+          {/* A queued or running video holds its minutes until it ends: spent
+              only if it completes, back otherwise. Not "used" yet. */}
+          {(m.held || 0) > 0 && (
+            <div className="flex justify-between gap-3 text-xs text-muted">
+              <span>Held for videos still in progress</span>
+              <span className="text-right">{fmt1(m.held)} min · back if they don't finish</span>
+            </div>
+          )}
           <div className="flex justify-between text-sm pt-1">
             <span className="text-muted lowercase">Top-up minutes</span>
             <span className="text-ink2">{fmt1(m.topup_remaining)} remaining</span>

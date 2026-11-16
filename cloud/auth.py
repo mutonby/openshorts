@@ -595,6 +595,10 @@ async def get_me(request: Request):
         "minutes": {
             "plan_allowance": bal["plan_allowance"],
             "plan_used": bal["plan_used"],
+            # Part of plan_used (and of topup spent) held by videos still
+            # queued or running: back to the balance if they do not complete.
+            "plan_held": bal["plan_held"],
+            "held": bal["held"],
             "plan_remaining": bal["plan_remaining"],
             "topup_remaining": bal["topup_remaining"],
             "remaining": bal["remaining"],

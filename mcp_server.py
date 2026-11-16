@@ -541,6 +541,13 @@ async def _tool_get_quota(client, args):
     out = {"plan": data.get("plan"), "entitled": data.get("entitled"),
            "minutes": data.get("minutes"),
            "upload_post_profile": data.get("upload_post_profile")}
+    held = (data.get("minutes") or {}).get("held") or 0
+    if held > 0:
+        # Without this an agent reports a queued video's reservation as spent.
+        out["held_note"] = (
+            f"{held:g} of these minutes are held by videos still queued or "
+            "processing, not spent: they are used only when a video completes "
+            "and come back to the balance if it does not.")
     if data.get("plan") in (None, "free") or not data.get("entitled"):
         # The link an agent hands the user when the free minutes run short.
         from cloud.config import settings
