@@ -50,20 +50,21 @@ const planRow = (p) => `<tr>
 <td>${money(p.yearly.price)}/month (${money(Math.round(p.yearly.price * 12))}/year)</td>
 <td>${p.monthly.minutes}</td>
 <td>No</td>
+<td>Yes, plus Autopilot</td>
 <td><a class="btn-primary" href="/pricing?plan=${slug(p)}" onclick="window.op&amp;&amp;window.op('track','SeoCtaClick',{page:'/pricing',plan:'${slug(p)}'})">Choose ${esc(p.name)}</a>
 <br><a href="/pricing?plan=${slug(p)}&amp;interval=year">or yearly</a></td>
 </tr>`
 
 const table = `
 <table class="plans">
-<thead><tr><th>Plan</th><th>Monthly</th><th>Billed yearly</th><th>Source minutes / month</th><th>Watermark</th><th></th></tr></thead>
+<thead><tr><th>Plan</th><th>Monthly</th><th>Billed yearly</th><th>Source minutes / month</th><th>Watermark</th><th>Auto-posting</th><th></th></tr></thead>
 <tbody>
 <tr>
-<td class="os"><strong>Self-hosted</strong></td><td>$0</td><td>$0</td><td>No cap</td><td>No</td>
+<td class="os"><strong>Self-hosted</strong></td><td>$0</td><td>$0</td><td>No cap</td><td>No</td><td>With your own Upload-Post key</td>
 <td><a href="${SITE.repo}" rel="noopener">Source on GitHub (MIT)</a></td>
 </tr>
 <tr>
-<td class="os"><strong>Free</strong></td><td>$0</td><td>–</td><td>${FREE.monthly.minutes} (first video up to ${FIRST_VIDEO_MINUTES})</td><td>Yes</td>
+<td class="os"><strong>Free</strong></td><td>$0</td><td>–</td><td>${FREE.monthly.minutes} (first video up to ${FIRST_VIDEO_MINUTES})</td><td>Yes</td><td>No, download only</td>
 <td><a class="btn-primary" href="${APP}" onclick="window.op&amp;&amp;window.op('track','SeoCtaClick',{page:'/pricing',plan:'free'})">Start free</a></td>
 </tr>
 ${PAID.map(planRow).join('\n')}
@@ -92,6 +93,14 @@ const faq = [
     a: `There is a free plan instead, with no credit card: your first video is clipped whole up to ${FIRST_VIDEO_MINUTES} minutes, then ${FREE.monthly.minutes} minutes a month, with a watermark. Upgrading removes the watermark, also from the clips you already made.`,
   },
   {
+    q: 'Can OpenShorts post the clips to my socials for me?',
+    a: 'Yes, on every paid plan. Connect TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky once and post or schedule each clip to all of them from the app. With Autopilot on, every new video on your YouTube channel is clipped by itself and the best clips are scheduled one a day. The free plan is download only.',
+  },
+  {
+    q: 'I only want to post videos I already have. Do I need OpenShorts?',
+    a: CANONICAL_ANSWERS.justPosting,
+  },
+  {
     q: 'Do unused minutes roll over?',
     a: 'Plan minutes reset at each renewal. Extra minutes bought as a top-up do not: they stay on the account until used, also after a cancellation.',
   },
@@ -114,7 +123,7 @@ const offer = (p, interval) => ({
   name: `OpenShorts Cloud ${p.name}${interval === 'year' ? ' (billed yearly)' : ''}`,
   price: String(interval === 'year' ? Math.round(p.yearly.price * 12) : p.monthly.price),
   priceCurrency: CLOUD.currency,
-  description: `${p.monthly.minutes} minutes of source video a month, no watermark.`,
+  description: `${p.monthly.minutes} minutes of source video a month, no watermark, auto-posting to TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky, and Autopilot.`,
   url: `${SITE.url}/pricing?plan=${slug(p)}${interval === 'year' ? '&interval=year' : ''}`,
   priceSpecification: {
     '@type': 'UnitPriceSpecification',
@@ -183,9 +192,20 @@ export function pricingPage() {
 <p>The same pipeline as the open source code, with the GPU and the API keys
 covered: AI moment detection, 9:16 reframing that follows the speaker (two
 speakers stacked, screen recordings kept readable), word-level captions, hook
-overlays, the clip editor, direct posting to YouTube Shorts, Instagram Reels and
-TikTok, the REST API and the MCP server. API and MCP jobs use the same minutes
-as the dashboard, with no per-call fee.</p>
+overlays, the clip editor, the REST API and the MCP server. API and MCP jobs
+use the same minutes as the dashboard, with no per-call fee.</p>
+
+<h2>What paid plans add: auto-posting and Autopilot</h2>
+<ul>
+<li><strong>Auto-posting.</strong> Connect TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky once and
+send every clip straight to all of them, or schedule it, without downloading a
+file. Posting runs on Upload-Post and is already set up.</li>
+<li><strong>Autopilot.</strong> Connect your YouTube channel and every new video
+is clipped on its own; the best clips are scheduled to your socials, one a day,
+at the hour you choose. <a href="/auto-clip">How Autopilot works</a>.</li>
+</ul>
+<p>The free plan is download only. Self-hosted, you can post with your own
+Upload-Post account; Autopilot is Cloud only.</p>
 
 <h2>Paying by the source minute</h2>
 <p>Most AI clippers bill by the minute of video you import, and so does

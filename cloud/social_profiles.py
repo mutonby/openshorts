@@ -2,11 +2,12 @@
 
 Each OpenShorts user maps to one Upload-Post profile (a container for their
 connected socials). We create it lazily and generate branded connection links so
-the user connects TikTok/IG/YouTube on a page that looks like OpenShorts.
+the user connects their socials on a page that looks like OpenShorts.
 
 Docs: https://docs.upload-post.com/guides/user-profile-integration
 """
 import httpx
+import social_platforms
 from fastapi import APIRouter, Request, HTTPException
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -17,7 +18,7 @@ from .models import UploadPostProfile
 router = APIRouter()
 
 API_BASE = "https://api.upload-post.com/api"
-CONNECT_PLATFORMS = ["tiktok", "instagram", "youtube"]
+CONNECT_PLATFORMS = list(social_platforms.PLATFORMS)
 
 
 def connect_platforms():
@@ -30,7 +31,8 @@ def connect_platforms():
 def connect_description(platforms) -> str:
     """The connect page's subtitle. Twitch is read-only there, so it is named
     as a source to clip from, never as somewhere shorts get posted."""
-    text = "Link TikTok, Instagram and YouTube to post your shorts directly from OpenShorts."
+    text = ("Link TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky "
+            "to post your shorts directly from OpenShorts.")
     if "twitch" in platforms:
         text += " Link Twitch so Autopilot can clip your past broadcasts (read-only)."
     return text

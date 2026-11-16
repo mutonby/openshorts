@@ -154,6 +154,10 @@ and needs the retained source video.
   "scheduled_date": "2026-08-25T18:00:00Z", "timezone": "Europe/Madrid" }
 ```
 
+`platforms`: any of `tiktok`, `instagram`, `youtube`, `facebook`, `linkedin`,
+`threads`, `bluesky`, limited to the accounts the user connected. Any other
+name is a 400.
+
 Omit `scheduled_date` to post now. Uploads are asynchronous. TikTok arrives as a
 draft in the app; Instagram and YouTube publish directly.
 

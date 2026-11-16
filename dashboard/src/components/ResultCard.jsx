@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp } from 'lucide-react';
+import { Download, Share2, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
+import { platformOptions as buildPlatformOptions, defaultPlatformFlags, flagsFromList } from '../lib/socialPlatforms';
 import { track } from '../lib/analytics';
 import SubtitleModal from './SubtitleModal';
 import HookModal from './HookModal';
@@ -41,11 +42,7 @@ async function followPost(requestId, tries = 12, everyMs = 5000) {
     return { done: false, failed: [] };
 }
 
-const PLATFORM_OPTIONS = [
-    { value: 'tiktok', label: 'tiktok', icon: <Video size={16} /> },
-    { value: 'instagram', label: 'instagram', icon: <Instagram size={16} /> },
-    { value: 'youtube', label: 'youtube', icon: <Youtube size={16} /> },
-];
+const PLATFORM_OPTIONS = buildPlatformOptions({ lower: true });
 
 function clipDurationSeconds(clip) {
     // A recut clip's start/end are the covering source range (segments may be
@@ -210,11 +207,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [clip.video_url]);
 
-    const [platforms, setPlatforms] = useState({
-        tiktok: true,
-        instagram: true,
-        youtube: true
-    });
+    const [platforms, setPlatforms] = useState(defaultPlatformFlags);
     const [postTitle, setPostTitle] = useState("");
     const [postDescription, setPostDescription] = useState("");
     const [isScheduling, setIsScheduling] = useState(false);
@@ -306,11 +299,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             setPostResult(null);
             // Only preselect platforms the profile can actually publish to.
             if (knownConnections) {
-                setPlatforms({
-                    tiktok: connectedPlatforms.includes('tiktok'),
-                    instagram: connectedPlatforms.includes('instagram'),
-                    youtube: connectedPlatforms.includes('youtube'),
-                });
+                setPlatforms(flagsFromList(connectedPlatforms));
             }
         }
         // Reset only when the modal opens for a clip; connection changes while
@@ -1116,7 +1105,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 {noAccountsConnected && (
                     <div className="mb-4 px-3 py-2 rounded-input text-xs text-warn bg-[color-mix(in_oklab,var(--color-warn)_10%,transparent)] flex items-start gap-2">
                         <AlertCircle size={14} className="mt-0.5 shrink-0" />
-                        <div className="lowercase">no social accounts connected yet — link tiktok, instagram or youtube to publish this clip.</div>
+                        <div className="lowercase">no social accounts connected yet — link tiktok, instagram, youtube, facebook, linkedin, threads or bluesky to publish this clip.</div>
                     </div>
                 )}
 
@@ -1181,14 +1170,10 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         <label className="eyebrow block mb-2">PLATFORMS</label>
                         <SegmentedControl
                             multi
-                            columns={3}
+                            columns={4}
                             options={platformOptions}
                             value={Object.keys(platforms).filter(k => platforms[k])}
-                            onChange={(arr) => setPlatforms({
-                                tiktok: arr.includes('tiktok'),
-                                instagram: arr.includes('instagram'),
-                                youtube: arr.includes('youtube'),
-                            })}
+                            onChange={(arr) => setPlatforms(flagsFromList(arr))}
                         />
                     </div>
 

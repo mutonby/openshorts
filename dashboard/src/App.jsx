@@ -30,6 +30,7 @@ import ProfileMenu from './components/ProfileMenu';
 import Modal from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError, QUOTA_WALL_EVENT } from './lib/api';
+import { SOCIAL_PLATFORMS } from './lib/socialPlatforms';
 import { track } from './lib/analytics';
 import { readConnectReturn, stripConnectReturn } from './lib/connectReturn';
 import { rememberTabAfterLogin } from './lib/tabAfterLogin';
@@ -142,6 +143,9 @@ const formatRetention = (seconds) => {
   return `${Math.max(1, Math.round(seconds / 60))} min`;
 };
 
+// TikTok, Instagram and YouTube have their own icons above; the rest come from the shared list.
+const EXTRA_NETWORKS = SOCIAL_PLATFORMS.slice(3);
+
 const ProfileNetworkIcons = ({ profile, size = 12 }) => (
   <span className="flex items-center gap-1.5">
     <span className={profile?.connected?.includes('tiktok') ? 'text-ink' : 'text-muted opacity-40'}>
@@ -153,6 +157,11 @@ const ProfileNetworkIcons = ({ profile, size = 12 }) => (
     <span className={profile?.connected?.includes('youtube') ? 'text-ink' : 'text-muted opacity-40'}>
       <Youtube size={size} />
     </span>
+    {EXTRA_NETWORKS.map((p) => (
+      <span key={p.value} className={profile?.connected?.includes(p.value) ? 'text-ink' : 'text-muted opacity-40'}>
+        <p.Icon size={size} />
+      </span>
+    ))}
   </span>
 );
 
@@ -219,6 +228,11 @@ const UserProfileSelector = ({ profiles, selectedUserId, onSelect, onConnect }) 
                       <div className={`flex items-center gap-1 ${profile.connected.includes('youtube') ? 'text-ink2' : 'text-muted opacity-40'}`}>
                         <Youtube size={10} />
                       </div>
+                      {EXTRA_NETWORKS.map((p) => (
+                        <div key={p.value} className={`flex items-center gap-1 ${profile.connected.includes(p.value) ? 'text-ink2' : 'text-muted opacity-40'}`}>
+                          <p.Icon size={10} />
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </div>

@@ -88,7 +88,7 @@ export default function PlanChoiceModal({ onClose }) {
               <h3 className="font-display lowercase text-lg text-ink">paid plans</h3>
               <Zap size={16} className="text-brass" />
             </div>
-            <p className="text-muted text-xs mb-3 lowercase">no watermark · more minutes · durable library</p>
+            <p className="text-muted text-xs mb-3 lowercase">no watermark · auto-posting · autopilot · more minutes</p>
             <div className="space-y-2 flex-1">
               {PLAN_ORDER.map((p) => {
                 const e = byPlan(p);

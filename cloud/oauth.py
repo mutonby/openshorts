@@ -20,7 +20,7 @@ from sqlalchemy import select
 from .config import settings
 from . import database, email_policy, evidence
 from .models import User
-from .auth import issue_jwt, valid_challenge, create_login_code
+from .auth import issue_jwt, valid_challenge, create_login_code, is_banned, lock_signup_email
 
 router = APIRouter()
 oauth = None
@@ -115,8 +115,32 @@ async def google_callback(request: Request):
     if userinfo.get("email_verified") is False:
         return RedirectResponse(f"{settings.frontend_url}/#/auth/callback?error=noemail")
 
+    try:
+        user_id, user_email = await _google_user(email, google_sub)
+    except _Suspended:
+        return RedirectResponse(f"{settings.frontend_url}/#/auth/callback?error=suspended")
+    evidence.record_event(user_id=user_id, email=user_email, kind="login",
+                          method="google", request=request)
+
+    challenge = request.session.pop("login_cc", None)
+    if valid_challenge(challenge):
+        code = await create_login_code(user_id, challenge)
+        return RedirectResponse(f"{settings.frontend_url}/#/auth/callback?code={code}")
+    if _legacy_token_redirect_open():
+        jwt_token = issue_jwt(user_id, user_email)
+        return RedirectResponse(f"{settings.frontend_url}/#/auth/callback?token={jwt_token}")
+    return RedirectResponse(f"{settings.frontend_url}/#/auth/callback?error=retry")
+
+
+class _Suspended(Exception):
+    """The Google account maps to a banned account (cloud/support_ops.py)."""
+
+
+async def _google_user(email, google_sub):
+    """Find (or create, or link) the account for a Google sign-in."""
     async with database.session() as session:
         async with session.begin():
+            await lock_signup_email(session, email)
             user = (await session.execute(
                 select(User).where(User.google_sub == google_sub)
             )).scalar_one_or_none()
@@ -136,15 +160,7 @@ async def google_callback(request: Request):
                     user.last_login_at = _now()
             else:
                 user.last_login_at = _now()
-            user_id, user_email = user.id, user.email
-    evidence.record_event(user_id=user_id, email=user_email, kind="login",
-                          method="google", request=request)
-
-    challenge = request.session.pop("login_cc", None)
-    if valid_challenge(challenge):
-        code = await create_login_code(user_id, challenge)
-        return RedirectResponse(f"{settings.frontend_url}/#/auth/callback?code={code}")
-    if _legacy_token_redirect_open():
-        jwt_token = issue_jwt(user_id, user_email)
-        return RedirectResponse(f"{settings.frontend_url}/#/auth/callback?token={jwt_token}")
-    return RedirectResponse(f"{settings.frontend_url}/#/auth/callback?error=retry")
+            if is_banned(user):
+                # Nothing above is committed: the ban stops the sign-in whole.
+                raise _Suspended()
+            return user.id, user.email

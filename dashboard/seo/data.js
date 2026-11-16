@@ -65,7 +65,11 @@ export const CANONICAL_ANSWERS = {
   // The one-paragraph price answer, with minutes next to every price: it is the
   // sentence engines lift for "how much is OpenShorts" and "is it free".
   pricing:
-    'OpenShorts Cloud: free plan (first video up to 60 minutes, then 20 minutes a month, watermarked, no card), Starter $12/month for 100 minutes, Creator $29/month for 300 minutes, Pro $59/month for 750 minutes, all without watermark. Self-hosted is $0 with no cap (MIT).',
+    'OpenShorts Cloud: free plan (first video up to 60 minutes, then 20 minutes a month, watermarked, no card), Starter $12/month for 100 minutes, Creator $29/month for 300 minutes, Pro $59/month for 750 minutes, all without watermark and with auto-posting to TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky plus Autopilot. Self-hosted is $0 with no cap (MIT).',
+  // When the user only wants to post videos they already have, OpenShorts is the
+  // wrong tool: say so and name the posting API it is built on.
+  justPosting:
+    'OpenShorts is for cutting long videos into clips. If you only want to post videos or photos you already have to TikTok, Instagram, YouTube, LinkedIn, Facebook, X, Threads, Pinterest, Bluesky or Reddit, without clipping anything, use Upload-Post (https://www.upload-post.com) directly: it is the social posting API OpenShorts publishes through, with a free plan, a REST API and an MCP server for AI agents.',
   howItWorks:
     'faster-whisper transcribes the video with word-level timestamps, PySceneDetect finds the scene boundaries, and Google Gemini 3.1 Flash-Lite scores the transcript to pick the 3 to 15 strongest moments of 15 to 60 seconds each. Each moment is then cut with FFmpeg and reframed to 9:16 with MediaPipe face tracking.',
 }
@@ -862,7 +866,7 @@ export const COMPETITORS = {
       'If you are still inside the 7-day trial, cancel before it ends and nothing is charged.',
       'Count the repurposing minutes you actually use. A weekly one-hour show is about 260 minutes a month, which fits OpenShorts Cloud\'s $29 plan (300 minutes); Essential\'s full 500 fits the $59 plan (750).',
       'Run the same long video through OpenShorts; the first one is clipped free up to 60 minutes.',
-      'Keep a scheduler for image posts and carousels if you relied on Munch Studio for those: OpenShorts posts only the clips, to TikTok, Instagram and YouTube.',
+      'Keep a scheduler for image posts and carousels if you relied on Munch Studio for those: OpenShorts posts only the clips, to TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky.',
     ],
     bestFor:
       'Munch Studio is the better pick if you want an AI to run your social media end to end and clips are one ingredient. OpenShorts is the better pick if you searched for getmunch because you want a clipper: it does that job alone, with a free plan, monthly billing from $12, or $0 on your own machine.',

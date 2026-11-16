@@ -24,7 +24,7 @@
 
 Two people on camera? OpenShorts stacks them instead of shrinking the wide shot, puts the captions on the seam where they cover nobody, and switches back to a face-tracked crop when the cut goes to one person. The AI picks the layout per video; nothing to configure.
 
-**Cloud version:** don't want to run it yourself? [OpenShorts Cloud](https://www.openshorts.app/?ref=github) is the same software on a GPU. Free plan with a watermark (20 min/mo, no credit card), paid plans from $12/mo with no watermark.
+**Cloud version:** don't want to run it yourself? [OpenShorts Cloud](https://www.openshorts.app/?ref=github) is the same software on a GPU. Free plan: your first video is clipped whole up to 60 minutes, then 20 minutes a month, with a watermark and no credit card. Paid plans from $12/mo remove the watermark and add **auto-posting** and **Autopilot** (below).
 
 **Two ways to run it, same software either way:**
 
@@ -34,117 +34,105 @@ Two people on camera? OpenShorts stacks them instead of shrinking the wide shot,
 | **Speed** | 5 to 8 min per 8-min video on CPU | About 50s on our NVIDIA GPU |
 | **API keys** | Bring your own Gemini, ElevenLabs, fal.ai | Gemini included, nothing to set up |
 | **Watermark / limits** | None, ever | Watermark and 20 min/mo on the free plan, neither on paid |
+| **Auto-posting** | With your own Upload-Post account | Paid plans: connect TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky once, post or schedule from the app |
+| **Autopilot** | Not included | Paid plans: every new video on your channel becomes scheduled shorts |
 | **Setup** | Docker, 8GB+ RAM, model downloads | Sign in and paste a link |
 | **MCP / API for agents** | Same `/mcp` endpoint, but only while your machine is on | Always-on endpoint at [mcp.openshorts.app](https://www.openshorts.app/mcp), API keys in one click |
 | **Your data** | Your server | Ours |
 
-Self-hosting is genuinely free and always will be. It costs you a machine, your own API keys and the time to keep it running. The hosted plans exist to cover that hardware and those keys, not to unlock features.
+Self-hosting is genuinely free and always will be. It costs you a machine, your own API keys and the time to keep it running. The hosted plans exist to cover that hardware and those keys.
 
 **Compared to Opus Clip, Klap, Vizard** (public pricing pages, checked October 2026; full breakdown at [openshorts.app/alternatives](https://www.openshorts.app/alternatives)):
 
 | | Free plan | Paid from | Open source |
 |---|---|---|---|
-| **OpenShorts** | Self-hosted: free, no watermark, no cap. Cloud: 20 min/mo with watermark | $12/mo (Cloud, 100 min) | **Yes, MIT** |
+| **OpenShorts** | Self-hosted: free, no watermark, no cap. Cloud: first video up to 60 min, then 20 min/mo, watermarked | $12/mo (Cloud, 100 min) | **Yes, MIT** |
 | **Opus Clip** | 60 min/mo, watermarked, export within 3 days | $15/mo (Starter, 150 min), billed per minute of source | No |
 | **Klap** | 1 video to try, no ongoing free plan | $14/mo billed yearly (100 clips), billed per clip | No |
 | **Vizard** | 60 min/mo, 720p, watermarked | $14.50/mo billed yearly ($29 monthly), billed per minute uploaded | No |
 
-https://github.com/user-attachments/assets/b45fa983-16b4-48b5-ac5b-a267836b9ad9
+### Video: the story behind OpenShorts Cloud
+[![Launching the paid plan of an open source app](https://img.youtube.com/vi/Bf5z-Wh9QxM/maxresdefault.jpg)](https://www.youtube.com/watch?v=Bf5z-Wh9QxM "Watch on YouTube")
 
-
-
-### Video Tutorial: How it works
-[![OpenShorts Tutorial](https://img.youtube.com/vi/xlyjD1qCaX0/maxresdefault.jpg)](https://www.youtube.com/watch?v=xlyjD1qCaX0 "Click to watch the video on YouTube")
-
-*Click the image above to watch the full walkthrough.*
+*In Spanish. Click the image to watch on YouTube.*
 
 ---
 
-## 3 Tools in 1 Platform
+## What's Inside
 
 ### 1. Clip Generator
-Turn your long-form videos — podcasts, webinars, livestreams, vlogs, interviews — into viral-ready 9:16 shorts for TikTok, Instagram Reels, and YouTube Shorts.
+Paste a YouTube link or upload a file. OpenShorts finds the strongest moments of a podcast, webinar, stream or interview and returns finished 9:16 clips: reframed, captioned, with a hook line, a virality score and titles for each platform.
 
-![Clip Results](screenshots/clip-results.png)
+![A clip with its viral score, titles and edit actions](dashboard/public/screens/app-clipcard.webp)
 
-### 2. AI Shorts (UGC Video Creator)
-Generate marketing videos with AI actors for **any product or business**. No camera, no studio, no influencer budget. Just describe your product or paste a URL.
+Every clip opens in a real editor: source and program monitors side by side with the full transcript. Click a word to set a cut, add segments, change the framing and re-render in seconds.
 
-![AI Shorts Setup](screenshots/ai-shorts.png)
+![The clip editor with source monitor, program monitor, transcript and segments](dashboard/public/screens/app-editor.webp)
+
+### 2. Autopilot (Cloud)
+Connect your YouTube channel and publish as usual. Every new video is clipped on its own, you get an email when the clips are ready, and with autopublish on the best ones go out to your socials (TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky), one a day at the hour you pick. Paid plans only.
+
+![Autopilot settings](dashboard/public/screens/autopilot-settings.webp)
+
+### 3. AI Shorts (UGC Video Creator)
+Generate marketing videos with AI actors for **any product or business**. No camera, no studio, no influencer budget. Describe your product or paste a URL.
+
+![The UGC gallery with AI actor videos](dashboard/public/screens/app-ugc.webp)
 
 - **Two cost modes**: Low Cost (~$0.65/video) and Premium (~$2/video)
-- Works for any business: SaaS, restaurants, e-commerce, coaching, local businesses
-- AI-generated actors with lip-sync, voiceover, b-roll, and TikTok-style subtitles
-- Choose from a shared avatar gallery or upload your own photo
-- Publish directly to TikTok, Instagram, and YouTube
+- AI actors with lip-sync, voiceover, b-roll and TikTok-style subtitles
+- Pick an avatar from the shared gallery or upload your own photo
+- Every video lands in the public gallery ([openshorts.app/gallery](https://openshorts.app/gallery)) with its own SEO page
 
-### 3. YouTube Studio
-Complete free AI YouTube toolkit: thumbnails, titles, descriptions, and direct publishing.
+### 4. YouTube Studio
+AI titles (10 options with a refinement chat), thumbnails with your face over a background, descriptions with chapter timestamps, and one-click publishing to YouTube.
 
-![YouTube Studio](screenshots/youtube-studio.png)
+### 5. Inside Claude and ChatGPT
+Add OpenShorts to Claude or ChatGPT with one URL and ask for clips in plain language: same pipeline, same minutes, no API key to manage. See [Automate it](#automate-it-mcp-server-rest-api-and-webhooks).
 
-- AI thumbnail generator with face overlay
-- 10 viral title suggestions with refinement chat
-- Auto-generated descriptions with chapter timestamps
-- One-click publish to YouTube
-
-### UGC Video Gallery
-All generated videos and avatars are saved to a public gallery with SEO pages for each video.
-
-![UGC Gallery](screenshots/ugc-gallery.png)
-
-- Public gallery page with hover-to-play (`/gallery`)
-- Individual SEO video pages with og:video meta tags (`/video/{id}`)
-- JSON-LD structured data for search engines
-- Avatar gallery with prompt history
+![Connecting OpenShorts to an AI agent](dashboard/public/screens/connect-an-agent.webp)
 
 ---
 
 ## Key Features
 
 ### Clip Generator
-- **Viral Moment Detection**: Google Gemini 3.1 Flash-Lite analyzes transcripts and scene boundaries to detect 3-15 high-potential moments
+- **Viral Moment Detection**: Google Gemini 3.1 Flash-Lite ranks the transcript and scene boundaries to pick 3-15 moments of 15-60 seconds, each with a virality score
 - **Runs fully local if you want**: point `LLM_BASE_URL` at Ollama, LM Studio, vLLM or any OpenAI-compatible server and the moment picker runs on your own model, no Google key needed (see [Run without a Google key](#6-run-without-a-google-key-local-llm-optional))
-- **Smart 9:16 Cropping**: AI reframing per scene — TRACK mode (MediaPipe + YOLOv8 face tracking), GENERAL mode (blurred background), SPLIT mode (two speakers stacked, captions on the seam) and SCREENCAST mode (screen over presenter); the layout is picked per video by Gemini or forced from the dashboard
-- **Auto Subtitles**: faster-whisper with word-level timestamps, styled and burned into clips
-- **AI Voice Dubbing**: ElevenLabs integration for 30+ languages with voice cloning (bring your own ElevenLabs key, on the cloud too)
-- **Hook Text Overlays**: AI-generated attention-grabbing text overlays
-- **AI Video Effects**: Gemini-generated FFmpeg filters for professional effects
+- **Smart 9:16 Reframing**: per scene: TRACK (MediaPipe + YOLOv8 face tracking), GENERAL (blurred background), SPLIT (two speakers stacked, captions on the seam) and SCREENCAST (screen over presenter); the layout is picked per video by Gemini or forced from the dashboard
+- **Captions**: faster-whisper (or Parakeet on GPU) with word-level timestamps, several caption styles, burned into the clip
+- **Clip editor**: word-level cuts, extra segments, framing changes and fast re-renders
+- **Hook overlays**: an opening line written from what is said in the clip, editable in text, style, font and position
+- **AI Voice Dubbing**: ElevenLabs, 30+ languages with voice cloning (bring your own ElevenLabs key, on the Cloud too)
+- **AI Video Effects**: Gemini-generated FFmpeg filters
+
+### Social Auto-Publishing (via [Upload-Post](https://www.upload-post.com))
+- **Post a clip to TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky at once**, or schedule it for any date and time
+- **Schedule a week**: spread a batch of clips across the coming days in one go
+- **Post analytics**: views of the clips you published from OpenShorts, in the app
+- On the Cloud it is wired up on every paid plan; self-hosted, paste your own Upload-Post key
+- **Only want to post videos you already have, without clipping?** Use [Upload-Post](https://www.upload-post.com) directly: TikTok, Instagram, YouTube, LinkedIn, Facebook, X, Threads, Pinterest, Bluesky and more, with a free plan, a REST API and an MCP server
 
 ### AI Shorts Pipeline
 1. **Analyze**: Scrape website URL + web research, or generate from manual description
 2. **Script**: AI writes viral scripts (hook - problem - solution - CTA format)
 3. **Actor**: Generate AI actors with Flux 2 Pro or select from shared gallery
 4. **Voice**: ElevenLabs TTS voiceover (English/Spanish, male/female)
-5. **Video**: Talking head generation (Hailuo 2.3 Fast img2video + VEED Lipsync)
+5. **Video**: Talking head generation (Hailuo 2.3 Fast img2video + VEED Lipsync, or Kling Avatar v2 in Premium)
 6. **B-roll**: AI-generated visuals with Ken Burns effect
 7. **Composite**: FFmpeg final assembly with subtitles and hook overlays
 8. **Publish**: Direct posting to TikTok, Instagram Reels, YouTube Shorts via Upload-Post
 
-### YouTube Studio
-- AI-powered title generation with 10 viral options
-- Interactive refinement chat for titles
-- AI thumbnail generation with custom face + background
-- Auto descriptions with chapter timestamps from Whisper transcript
-- Direct YouTube publishing via Upload-Post
-
-### Social Auto-Publishing
-- **One-click posting** to TikTok, Instagram Reels, and YouTube Shorts simultaneously
-- **Schedule uploads** for any date and time — plan your content calendar and let OpenShorts publish automatically
-- **Multi-platform distribution** — publish to all your social networks at once from a single interface
-- Upload-Post integration with async uploads
-
 ### Infrastructure
-- S3 cloud backup (private bucket for clips, public bucket for gallery/avatars)
+- S3-compatible storage for clip backup and the public gallery
 - SEO gallery pages served by FastAPI with JSON-LD structured data
-- Shared avatar gallery across all users
-- Async job queue with configurable concurrency
+- Async job queue with configurable concurrency, and optional NVIDIA GPU rendering (NVENC)
 
 ---
 
 ## Who Is This For?
 
-- **Content creators** — Turn long videos into shorts automatically, publish to all platforms at once
+- **Content creators** — Turn long videos into shorts automatically, publish to all platforms at once, or let Autopilot do it for every new upload
 - **Marketing agencies** — Generate UGC videos for clients at scale, no actors or studios needed
 - **SaaS founders** — Create product demos and marketing shorts from just a URL
 - **E-commerce brands** — Product videos with AI actors for TikTok Shop, Instagram, YouTube
@@ -205,7 +193,7 @@ Self-hosting OpenShorts is free. You provide the machine and you only pay for th
 
 **Bottom line:** You can clip videos for practically free with Gemini, and publish 10 videos/month to all social networks at zero cost with Upload-Post.
 
-**Don't want to run any of that?** [openshorts.app](https://www.openshorts.app/) is the same software on our hardware: our NVIDIA GPU clips an 8-minute video in about 50 seconds instead of the 5 to 8 minutes it takes on a typical CPU, the Gemini key is included, and auto-publishing is already wired up. Free plan is 20 minutes a month with a watermark and no credit card; paid plans start at $12/mo for 100 minutes without watermark.
+**Don't want to run any of that?** [openshorts.app](https://www.openshorts.app/) is the same software on our hardware: our NVIDIA GPU clips an 8-minute video in about 50 seconds instead of the 5 to 8 minutes it takes on a typical CPU, the Gemini key is included, and paid plans add auto-posting and Autopilot with nothing to set up. The free plan clips your first video whole up to 60 minutes, then 20 minutes a month, with a watermark and no credit card; paid plans start at $12/mo for 100 minutes without watermark.
 
 ---
 
@@ -246,6 +234,7 @@ Navigate to **`http://localhost:5175`**
 3. **AI Shorts**: Describe your product or paste a URL to generate UGC marketing videos
 4. **YouTube Studio**: Generate thumbnails, titles, and descriptions for YouTube
 5. **UGC Gallery**: Browse all generated videos and avatars
+6. **AI Agent**: Drop vertical videos in a folder and an agent skill picks, edits and queues clips for your approval
 
 ### 5. GPU acceleration (optional, NVIDIA)
 
@@ -327,8 +316,8 @@ know:
 ## Technical Pipeline
 
 ### Clip Generator
-1. **Ingest** — Local video upload (or self-hosted URL ingest via yt-dlp)
-2. **Transcribe** — faster-whisper with word-level timestamps
+1. **Ingest** — YouTube URL (yt-dlp) or local upload
+2. **Transcribe** — faster-whisper (or Parakeet on GPU) with word-level timestamps
 3. **Detect** — PySceneDetect for scene boundaries
 4. **Analyze** — Gemini identifies 3-15 viral moments (15-60s each)
 5. **Extract** — FFmpeg precise clip cutting
@@ -478,7 +467,7 @@ lives in [`examples/n8n/`](examples/n8n/).
 
 - **Non-Root Execution**: Containers run as dedicated `appuser`
 - **Concurrency Control**: Semaphore-based job queue (`MAX_CONCURRENT_JOBS`)
-- **Auto-Cleanup**: Automatic purging of old jobs (1h retention)
+- **Auto-Cleanup**: Old jobs are purged automatically (24h by default when self-hosted, `JOB_RETENTION_SECONDS`)
 - **Encrypted Keys**: API keys encrypted client-side, never stored server-side
 - **Upload Validation**: Image uploads validated for format and minimum size
 - **File Limits**: 2GB upload limit protection
@@ -492,6 +481,8 @@ lives in [`examples/n8n/`](examples/n8n/).
 3. **Connect Accounts**: Link TikTok, Instagram, and/or YouTube
 4. **Get API Key**: Navigate to [API Keys](https://app.upload-post.com/api-keys)
 5. **Use in OpenShorts**: Paste the key in Settings
+
+On [OpenShorts Cloud](https://www.openshorts.app/) none of this is needed: paid plans connect your socials from the app.
 
 ---
 
