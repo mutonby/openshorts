@@ -5612,7 +5612,13 @@ async def process_endpoint(
     # Handle JSON body manually for URL payload
     content_type = request.headers.get("content-type", "")
     if "application/json" in content_type:
-        body = await request.json()
+        try:
+            body = await request.json()
+        except ValueError:
+            # Malformed JSON (or undecodable bytes) is the caller's mistake.
+            raise HTTPException(status_code=400, detail="Request body is not valid JSON")
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object")
         url = body.get("url")
         ack_flag = bool(body.get("acknowledged"))
         force_low = bool(body.get("force_low_quality"))
