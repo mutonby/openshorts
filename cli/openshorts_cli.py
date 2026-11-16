@@ -94,7 +94,7 @@ def cmd_process(args):
     if args.json and not args.wait:
         print(json.dumps(payload))
         return
-    print(f"job queued: {job_id}")
+    print(f"job queued: {job_id}", file=sys.stderr if args.json else sys.stdout)
     if args.wait:
         _watch(job_id, as_json=args.json)
     else:
@@ -109,7 +109,7 @@ def _watch(job_id, as_json=False):
             _die(status, payload)
         logs = payload.get("logs") or []
         for line in logs[seen_logs:]:
-            print(f"  {line}")
+            print(f"  {line}", file=sys.stderr if as_json else sys.stdout)
         seen_logs = len(logs)
         state = payload.get("status")
         if state == "completed":
