@@ -8084,8 +8084,21 @@ async def translate_clip(
         data = json.load(f)
 
     clips = data.get('shorts', [])
-    if req.clip_index >= len(clips):
+    if req.clip_index < 0 or req.clip_index >= len(clips):
         raise HTTPException(status_code=404, detail="Clip not found")
+
+    # Validate target_language against the allowlist to prevent path traversal.
+    # An unvalidated language code would be embedded directly in the output
+    # filename; a value like "../other-job/clip" would escape output_dir.
+    from translate import SUPPORTED_LANGUAGES as _SUPPORTED_LANGUAGES
+    if req.target_language not in _SUPPORTED_LANGUAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported target_language '{req.target_language}'. "
+                "Use the list_dub_languages endpoint to get valid codes."
+            ),
+        )
 
     clip_data = clips[req.clip_index]
 
@@ -8102,9 +8115,14 @@ async def translate_clip(
     if not os.path.exists(input_path):
         raise HTTPException(status_code=404, detail=f"Video file not found: {input_path}")
 
-    # Output video with language suffix
+    # Output video with language suffix.
+    # Safety: target_language is now validated against the SUPPORTED_LANGUAGES
+    # allowlist above, so it cannot contain path-traversal characters.
     base, ext = os.path.splitext(filename)
-    output_filename = f"translated_{req.target_language}_{base}{ext}"
+    # os.path.basename is applied as defense-in-depth even though the allowlist
+    # already constrains the value to safe 2-3 letter ISO 639-1 codes.
+    safe_lang = os.path.basename(req.target_language)
+    output_filename = f"translated_{safe_lang}_{base}{ext}"
     output_path = os.path.join(output_dir, output_filename)
 
     try:
