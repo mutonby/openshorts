@@ -50,6 +50,8 @@ from pydantic import BaseModel
 from sqlalchemy import and_, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 
+import social_platforms
+
 from . import database
 from .config import settings
 from .models import AutopilotRun, AutopilotSettings, UploadPostProfile, User
@@ -59,7 +61,7 @@ router = APIRouter()
 API_BASE = "https://api.upload-post.com/api"
 
 PAID_PLANS = ("starter", "creator", "pro")
-PUBLISH_PLATFORMS = ("tiktok", "instagram", "youtube")
+PUBLISH_PLATFORMS = social_platforms.PLATFORMS
 TWITCH_PREFIX = "twitch:"
 
 
@@ -396,16 +398,9 @@ async def _upload_clip(profile: str, file_path: str, clip: dict, platforms: List
         "scheduled_date": when,
         "timezone": tz_name or "UTC",
     }
-    if "tiktok" in platforms:
-        data["tiktok_title"] = description
-        data["post_mode"] = os.environ.get("TIKTOK_POST_MODE", "MEDIA_UPLOAD").strip()
-    if "instagram" in platforms:
-        data["instagram_title"] = description
-        data["media_type"] = "REELS"
-    if "youtube" in platforms:
-        data["youtube_title"] = title
-        data["youtube_description"] = description
-        data["privacyStatus"] = "public"
+    data.update(social_platforms.upload_fields(
+        platforms, title=title, description=description,
+        tiktok_post_mode=os.environ.get("TIKTOK_POST_MODE", "MEDIA_UPLOAD").strip()))
     files = {"video": (os.path.basename(file_path), content, "video/mp4")}
     async with httpx.AsyncClient(timeout=300) as client:
         resp = await client.post(f"{API_BASE}/upload", headers=_headers(),

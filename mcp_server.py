@@ -30,6 +30,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
 import mcp_ui
+import social_platforms
 from subtitles import CAPTION_PRESETS, line_budget
 
 router = APIRouter()
@@ -318,8 +319,9 @@ TOOLS = [
         "name": "publish_clip",
         "title": "Publish a clip to social platforms",
         "description": (
-            "Post one clip to the user's connected accounts (TikTok lands as a "
-            "draft in the app; Instagram and YouTube publish directly). Requires "
+            "Post one clip to the user's connected accounts: TikTok (lands as a "
+            "draft in the app), Instagram, YouTube, Facebook, LinkedIn, Threads "
+            "or Bluesky, which publish directly. Requires "
             "a connected social profile (cloud) or an Upload-Post key (self-host). "
             "Optionally schedule with an ISO-8601 scheduled_date."
         ),
@@ -330,7 +332,7 @@ TOOLS = [
                 "clip_index": {"type": "integer"},
                 "platforms": {
                     "type": "array",
-                    "items": {"type": "string", "enum": ["tiktok", "instagram", "youtube"]},
+                    "items": {"type": "string", "enum": list(social_platforms.PLATFORMS)},
                 },
                 "title": {"type": "string"},
                 "description": {"type": "string"},

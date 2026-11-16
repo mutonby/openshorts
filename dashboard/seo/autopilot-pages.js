@@ -63,7 +63,7 @@ const autoClip = () => ({
   },
   tldr: [
     'Automatic clipping means software watches a long video, picks the moments that stand on their own and cuts them into short vertical clips. OpenShorts does that for any video you paste, and Autopilot does it for every new upload on your YouTube channel without you opening anything.',
-    'Autopilot checks your channel about once an hour, clips each new video (only videos published after you switch it on, at most one a day, the first 10 to 90 minutes of each), emails you when the clips are ready and, if you turn on autopublish, schedules the best 1 to 5 of them one a day on TikTok, Instagram and YouTube Shorts.',
+    'Autopilot checks your channel about once an hour, clips each new video (only videos published after you switch it on, at most one a day, the first 10 to 90 minutes of each), emails you when the clips are ready and, if you turn on autopublish, schedules the best 1 to 5 of them one a day on TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky.',
   ],
   body: `
 <h2>What "auto clip" does, step by step</h2>

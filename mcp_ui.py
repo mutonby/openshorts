@@ -68,6 +68,10 @@ button:disabled{opacity:.4;cursor:default}
   <span class="chip on" data-p="tiktok">TikTok</span>
   <span class="chip on" data-p="instagram">Instagram</span>
   <span class="chip" data-p="youtube">YouTube</span>
+  <span class="chip" data-p="facebook">Facebook</span>
+  <span class="chip" data-p="linkedin">LinkedIn</span>
+  <span class="chip" data-p="threads">Threads</span>
+  <span class="chip" data-p="bluesky">Bluesky</span>
   <button id="pub" disabled>Publish selected</button>
 </div>
 <div class="msg" id="msg"></div>
@@ -215,8 +219,9 @@ RESOURCES = [
         "title": "OpenShorts clip picker",
         "description": (
             "Interactive picker for a job's finished clips: preview each 9:16 "
-            "clip, select the keepers and publish them to TikTok, Instagram or "
-            "YouTube without leaving the conversation."
+            "clip, select the keepers and publish them to TikTok, Instagram, "
+            "YouTube, Facebook, LinkedIn, Threads or Bluesky without leaving the "
+            "conversation."
         ),
         "mimeType": MIME_TYPE,
     },

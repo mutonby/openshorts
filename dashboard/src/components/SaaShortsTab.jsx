@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Globe, Sparkles, Download, Copy, Check, ChevronRight, ChevronLeft, Loader2, AlertCircle, Volume2, User, Film, Terminal, ChevronDown, RefreshCw, Share2, Calendar, Upload } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
+import { SOCIAL_PLATFORMS, defaultPlatformFlags, flagsFromList } from '../lib/socialPlatforms';
 import StepIndicator from './ui/StepIndicator';
 import SegmentedControl from './ui/SegmentedControl';
 import StarBanner from './StarBanner';
@@ -92,7 +93,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   // Publish
   const [publishing, setPublishing] = useState(false);
   const [publishResult, setPublishResult] = useState(null);
-  const [publishPlatforms, setPublishPlatforms] = useState({ tiktok: true, instagram: true, youtube: true });
+  const [publishPlatforms, setPublishPlatforms] = useState(defaultPlatformFlags);
   const [isScheduling, setIsScheduling] = useState(false);
   const [scheduleDate, setScheduleDate] = useState('');
 
@@ -1387,17 +1388,9 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                         <SegmentedControl
                           multi
                           size="sm"
-                          options={[
-                            { value: 'tiktok', label: 'TikTok' },
-                            { value: 'instagram', label: 'Instagram' },
-                            { value: 'youtube', label: 'YouTube' },
-                          ]}
+                          options={SOCIAL_PLATFORMS.map(({ value, label }) => ({ value, label }))}
                           value={Object.keys(publishPlatforms).filter((k) => publishPlatforms[k])}
-                          onChange={(arr) => setPublishPlatforms({
-                            tiktok: arr.includes('tiktok'),
-                            instagram: arr.includes('instagram'),
-                            youtube: arr.includes('youtube'),
-                          })}
+                          onChange={(arr) => setPublishPlatforms(flagsFromList(arr))}
                         />
 
                         {/* Same notice as ResultCard: TikTok lands as a draft,

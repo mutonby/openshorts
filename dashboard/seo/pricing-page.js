@@ -94,7 +94,7 @@ const faq = [
   },
   {
     q: 'Can OpenShorts post the clips to my socials for me?',
-    a: 'Yes, on every paid plan. Connect TikTok, Instagram and YouTube once and post or schedule each clip to all of them from the app. With Autopilot on, every new video on your YouTube channel is clipped by itself and the best clips are scheduled one a day. The free plan is download only.',
+    a: 'Yes, on every paid plan. Connect TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky once and post or schedule each clip to all of them from the app. With Autopilot on, every new video on your YouTube channel is clipped by itself and the best clips are scheduled one a day. The free plan is download only.',
   },
   {
     q: 'I only want to post videos I already have. Do I need OpenShorts?',
@@ -123,7 +123,7 @@ const offer = (p, interval) => ({
   name: `OpenShorts Cloud ${p.name}${interval === 'year' ? ' (billed yearly)' : ''}`,
   price: String(interval === 'year' ? Math.round(p.yearly.price * 12) : p.monthly.price),
   priceCurrency: CLOUD.currency,
-  description: `${p.monthly.minutes} minutes of source video a month, no watermark, auto-posting to TikTok, Instagram and YouTube, and Autopilot.`,
+  description: `${p.monthly.minutes} minutes of source video a month, no watermark, auto-posting to TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky, and Autopilot.`,
   url: `${SITE.url}/pricing?plan=${slug(p)}${interval === 'year' ? '&interval=year' : ''}`,
   priceSpecification: {
     '@type': 'UnitPriceSpecification',
@@ -197,7 +197,7 @@ use the same minutes as the dashboard, with no per-call fee.</p>
 
 <h2>What paid plans add: auto-posting and Autopilot</h2>
 <ul>
-<li><strong>Auto-posting.</strong> Connect TikTok, Instagram and YouTube once and
+<li><strong>Auto-posting.</strong> Connect TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky once and
 send every clip straight to all of them, or schedule it, without downloading a
 file. Posting runs on Upload-Post and is already set up.</li>
 <li><strong>Autopilot.</strong> Connect your YouTube channel and every new video

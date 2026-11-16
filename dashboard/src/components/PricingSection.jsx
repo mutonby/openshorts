@@ -189,7 +189,7 @@ export default function PricingSection({ onRequireLogin }) {
                 <li className="flex items-start gap-2"><Check size={16} className="text-ok shrink-0 mt-0.5" /> <span><b>{entry.minutes} min</b> of video / month</span></li>
                 <li className="flex items-start gap-2"><Check size={16} className="text-ok shrink-0 mt-0.5" /> <span><b>No watermark</b>, no 7-day clip expiry</span></li>
                 <li className="flex items-start gap-2"><Cpu size={16} className="text-ok shrink-0 mt-0.5" /> <span><b>GPU rendering</b>, about 50s per 8-min video</span></li>
-                <li className="flex items-start gap-2"><Send size={16} className="text-ok shrink-0 mt-0.5" /> <span><b>Auto-post every clip</b> to TikTok, Instagram &amp; YouTube</span></li>
+                <li className="flex items-start gap-2"><Send size={16} className="text-ok shrink-0 mt-0.5" /> <span><b>Auto-post every clip</b> to TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads &amp; Bluesky</span></li>
                 <li className="flex items-start gap-2"><Repeat size={16} className="text-ok shrink-0 mt-0.5" /> <span><b>Autopilot</b>: new channel videos become scheduled shorts</span></li>
                 <li className="flex items-start gap-2"><KeyRound size={16} className="text-ok shrink-0 mt-0.5" /> <span>Gemini key included, no setup</span></li>
                 <li className="flex items-start gap-2"><Bot size={16} className="text-ok shrink-0 mt-0.5" /> <span><b>MCP + API access</b> for AI agents &amp; automations</span></li>
@@ -216,7 +216,7 @@ export default function PricingSection({ onRequireLogin }) {
         <div className="grid md:grid-cols-2 gap-6 text-sm text-ink2">
           <div className="flex items-start gap-3">
             <Send size={18} className="text-ok shrink-0 mt-0.5" />
-            <p className="leading-relaxed"><b className="text-ink">Auto-posting to your socials.</b> Connect TikTok, Instagram and YouTube once
+            <p className="leading-relaxed"><b className="text-ink">Auto-posting to your socials.</b> Connect TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky once
               from your account, then send every clip straight to all of them, or schedule it, without downloading a file.
               Posting is built on Upload-Post, already wired up for you.</p>
           </div>

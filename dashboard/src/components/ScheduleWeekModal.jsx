@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
-import { Loader2, Calendar, CheckCircle, AlertCircle, Video, Instagram, Youtube, ChevronLeft, ChevronRight, Circle, ExternalLink } from 'lucide-react';
+import { Loader2, Calendar, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Circle, ExternalLink } from 'lucide-react';
 import { apiFetch } from '../lib/api';
+import { platformOptions, defaultPlatformFlags, flagsFromList } from '../lib/socialPlatforms';
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
 import TikTokDraftNotice from './TikTokDraftNotice';
@@ -40,11 +41,7 @@ const TIMEZONES = [
     { value: 'Pacific/Auckland', label: '(GMT+12:00) Auckland' },
 ];
 
-const PLATFORM_OPTIONS = [
-    { value: 'tiktok', label: 'TikTok', icon: <Video size={16} /> },
-    { value: 'instagram', label: 'Instagram', icon: <Instagram size={16} /> },
-    { value: 'youtube', label: 'YouTube', icon: <Youtube size={16} /> },
-];
+const PLATFORM_OPTIONS = platformOptions();
 
 function getDayLabel(date) {
     const today = new Date();
@@ -76,11 +73,7 @@ function detectTimezone() {
 export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploadPostKey, uploadUserId, isManaged }) {
     const [time, setTime] = useState('12:00');
     const [timezone, setTimezone] = useState(detectTimezone);
-    const [platforms, setPlatforms] = useState({
-        tiktok: true,
-        instagram: true,
-        youtube: true
-    });
+    const [platforms, setPlatforms] = useState(defaultPlatformFlags);
     const [startOffset, setStartOffset] = useState(1);
 
     const schedule = useMemo(() => {
@@ -330,11 +323,7 @@ export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploa
                     multi
                     options={PLATFORM_OPTIONS.map(opt => ({ ...opt, disabled: scheduling }))}
                     value={selectedPlatforms}
-                    onChange={(arr) => setPlatforms({
-                        tiktok: arr.includes('tiktok'),
-                        instagram: arr.includes('instagram'),
-                        youtube: arr.includes('youtube')
-                    })}
+                    onChange={(arr) => setPlatforms(flagsFromList(arr))}
                 />
             </div>
 

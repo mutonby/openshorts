@@ -442,7 +442,7 @@ const UGC_PATH = '/ai-ugc-video-generator'
 const ugcSteps = [
   ['Describe the product or paste its website', `Open the AI Shorts tab in the app. Paste the product's URL (the page and up to ${UGC.subpages} of its subpages are read, and the product is researched on the web) or describe the business in your own words. Pick the language, the actor's gender, a script style and how many scripts you want.`],
   ['Choose a script, an actor and a voice', 'Each script is a 20 to 25 second ad in five beats: hook, problem, solution, demo, call to action. Pick one, edit the narration if you like, then choose an actor (from the gallery, from three new AI portraits, or your own photo) and a voice from your ElevenLabs account.'],
-  ['Generate, then download or post', `Choose Low Cost (about ${UGC.lowCost} a video) or Premium (about ${UGC.premium}), billed by fal.ai and ElevenLabs on your keys. You get a 1080x1920 MP4 with the lip-synced actor, two b-roll inserts and burned-in captions, ready to download or post to TikTok, Instagram and YouTube.`],
+  ['Generate, then download or post', `Choose Low Cost (about ${UGC.lowCost} a video) or Premium (about ${UGC.premium}), billed by fal.ai and ElevenLabs on your keys. You get a 1080x1920 MP4 with the lip-synced actor, two b-roll inserts and burned-in captions, ready to download or post to TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky.`],
 ]
 
 const ugcFaq = [
@@ -456,7 +456,7 @@ const ugcFaq = [
   { q: 'Which languages are supported?', a: 'English and Spanish. Scripts are written natively in the chosen language (casual US English, or Spanish), and the voice comes from ElevenLabs\' multilingual model, so it is not a translation of an English script.' },
   { q: 'What is the difference between Low Cost and Premium?', a: `Low Cost animates the actor image with MiniMax Hailuo 2.3 Fast and then lip-syncs it with VEED Lipsync, for about ${UGC.lowCost} a video. Premium generates the talking head with Kling Avatar v2 from the image and the audio in one step, for about ${UGC.premium}, with more natural movement. Both use the same script, voice, b-roll and captions.` },
   { q: 'Is it an AI avatar video generator?', a: 'In the sense that it makes talking-head videos of an AI-generated person, yes. It is built for one job, short vertical product ads, rather than long presenter videos or training content, and it does not train a persistent avatar of you: each video is generated from a single image.' },
-  { q: 'Can I post the videos straight to social media?', a: 'Yes, to TikTok, Instagram and YouTube, now or scheduled, from the result screen. TikTok receives it as a draft you finish in the TikTok app, where you can add a trending sound. Each script also comes with a suggested caption.' },
+  { q: 'Can I post the videos straight to social media?', a: 'Yes, to TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky, now or scheduled, from the result screen. TikTok receives it as a draft you finish in the TikTok app, where you can add a trending sound. Each script also comes with a suggested caption.' },
   { q: 'Do I have to label it as AI?', a: 'Rules differ by platform and by country, and they change. TikTok, YouTube and Instagram all have their own labels for realistic AI-generated content, and advertising rules generally forbid presenting an actor as a real customer. Check the current rules of the platform you post on; OpenShorts does not add a label for you.' },
 ]
 
@@ -605,7 +605,7 @@ script that won, and to never present an AI actor as a real customer.</p>
 <a href="/platforms/tiktok">TikTok</a>, <a href="/platforms/instagram-reels">Instagram Reels</a>
 and <a href="/platforms/youtube-shorts">YouTube Shorts</a>, and about 20 to 25
 seconds, well inside the limits of all three. From the result screen you can
-post to TikTok, Instagram and YouTube at once or schedule it for a date and time.
+post to TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky at once or schedule it for a date and time.
 TikTok receives it as a draft, which you finish in the app; that is also where
 you add a trending sound, which posting through an API cannot. If you already
 have long videos of your own, the clip generator is the other half: it cuts real

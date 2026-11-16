@@ -1,7 +1,7 @@
 ---
 name: openshorts
 version: 1.1.0
-description: Turn long videos (podcasts, webinars, streams) into vertical 9:16 clips with subtitles, re-cut them, and publish them to TikTok, Instagram Reels and YouTube Shorts via the OpenShorts API or MCP server. Use when the user wants to clip a video into shorts, find the best moments of a video, restyle captions on a clip, re-cut a clip, schedule or post clips to social platforms, or automate a clipping pipeline.
+description: Turn long videos (podcasts, webinars, streams) into vertical 9:16 clips with subtitles, re-cut them, and publish them to TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky via the OpenShorts API or MCP server. Use when the user wants to clip a video into shorts, find the best moments of a video, restyle captions on a clip, re-cut a clip, schedule or post clips to social platforms, or automate a clipping pipeline.
 homepage: https://www.openshorts.app/mcp
 metadata:
   openclaw:
@@ -53,8 +53,9 @@ anonymous: there is no minute quota to enforce.
    `{"status", "logs", "result"}` and `result.clips` appears on completion.
 4. Publish: `POST /api/social/post` with `{"job_id", "clip_index",
    "platforms": ["tiktok", "instagram", "youtube"]}`, optional `title`,
-   `scheduled_date` (ISO) + `timezone`. TikTok lands as a draft in the app;
-   Instagram and YouTube publish directly. Restyle captions first if asked:
+   `scheduled_date` (ISO) + `timezone`. Platforms: `tiktok`, `instagram`,
+   `youtube`, `facebook`, `linkedin`, `threads`, `bluesky`. TikTok lands as a
+   draft in the app; the others publish directly. Restyle captions first if asked:
    `POST /api/subtitle` with `{"job_id", "clip_index", "style"}` (`classic`
    or `karaoke` word highlighting).
 

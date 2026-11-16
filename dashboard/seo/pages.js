@@ -1568,7 +1568,7 @@ snippets for Claude Desktop, Cursor, n8n and curl.</p>
 <tr><td><code>list_clips</code></td><td>Titles, durations, platform-ready descriptions and download URLs for a finished job.</td></tr>
 <tr><td><code>get_quota</code></td><td>Plan and remaining minutes, so an agent can check before starting a large job.</td></tr>
 <tr><td><code>add_subtitles</code></td><td>Restyles the burned-in captions of one clip: presets (default, hormozi, pill, lime, oneword, clean), size, word-by-word reveal, a box behind the active word or one word at a time.</td></tr>
-<tr><td><code>publish_clip</code></td><td>Posts or schedules one clip to TikTok, Instagram or YouTube through the connected account.</td></tr>
+<tr><td><code>publish_clip</code></td><td>Posts or schedules one clip to TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads or Bluesky through the connected account.</td></tr>
 </tbody>
 </table>
 <p>In clients that support the MCP Apps extension (ChatGPT apps, mcp-ui hosts),
@@ -1652,7 +1652,7 @@ ${faqBlock([
   },
   {
     q: 'Can Claude or ChatGPT create video clips with OpenShorts?',
-    a: 'Yes. Any MCP-capable client, including Claude and ChatGPT, can connect to mcp.openshorts.app/mcp with an API key and drive the whole flow: submit a video URL, wait for processing, list the generated clips and publish them to TikTok, Instagram or YouTube.',
+    a: 'Yes. Any MCP-capable client, including Claude and ChatGPT, can connect to mcp.openshorts.app/mcp with an API key and drive the whole flow: submit a video URL, wait for processing, list the generated clips and publish them to TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads or Bluesky.',
   },
   {
     q: 'Is there an API for OpenShorts?',

@@ -34,7 +34,7 @@ Two people on camera? OpenShorts stacks them instead of shrinking the wide shot,
 | **Speed** | 5 to 8 min per 8-min video on CPU | About 50s on our NVIDIA GPU |
 | **API keys** | Bring your own Gemini, ElevenLabs, fal.ai | Gemini included, nothing to set up |
 | **Watermark / limits** | None, ever | Watermark and 20 min/mo on the free plan, neither on paid |
-| **Auto-posting** | With your own Upload-Post account | Paid plans: connect TikTok, Instagram and YouTube once, post or schedule from the app |
+| **Auto-posting** | With your own Upload-Post account | Paid plans: connect TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky once, post or schedule from the app |
 | **Autopilot** | Not included | Paid plans: every new video on your channel becomes scheduled shorts |
 | **Setup** | Docker, 8GB+ RAM, model downloads | Sign in and paste a link |
 | **MCP / API for agents** | Same `/mcp` endpoint, but only while your machine is on | Always-on endpoint at [mcp.openshorts.app](https://www.openshorts.app/mcp), API keys in one click |
@@ -70,7 +70,7 @@ Every clip opens in a real editor: source and program monitors side by side with
 ![The clip editor with source monitor, program monitor, transcript and segments](dashboard/public/screens/app-editor.webp)
 
 ### 2. Autopilot (Cloud)
-Connect your YouTube channel and publish as usual. Every new video is clipped on its own, you get an email when the clips are ready, and with autopublish on the best ones go out to TikTok, Instagram and YouTube Shorts, one a day at the hour you pick. Paid plans only.
+Connect your YouTube channel and publish as usual. Every new video is clipped on its own, you get an email when the clips are ready, and with autopublish on the best ones go out to your socials (TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky), one a day at the hour you pick. Paid plans only.
 
 ![Autopilot settings](dashboard/public/screens/autopilot-settings.webp)
 
@@ -107,7 +107,7 @@ Add OpenShorts to Claude or ChatGPT with one URL and ask for clips in plain lang
 - **AI Video Effects**: Gemini-generated FFmpeg filters
 
 ### Social Auto-Publishing (via [Upload-Post](https://www.upload-post.com))
-- **Post a clip to TikTok, Instagram Reels and YouTube Shorts at once**, or schedule it for any date and time
+- **Post a clip to TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky at once**, or schedule it for any date and time
 - **Schedule a week**: spread a batch of clips across the coming days in one go
 - **Post analytics**: views of the clips you published from OpenShorts, in the app
 - On the Cloud it is wired up on every paid plan; self-hosted, paste your own Upload-Post key

@@ -221,7 +221,7 @@ def main(argv=None):
     p = sub.add_parser("publish", help="post or schedule one clip to social platforms")
     p.add_argument("job_id")
     p.add_argument("clip_index", type=int)
-    p.add_argument("--platforms", required=True, help="comma list: tiktok,instagram,youtube")
+    p.add_argument("--platforms", required=True, help="comma list: tiktok,instagram,youtube,facebook,linkedin,threads,bluesky")
     p.add_argument("--title")
     p.add_argument("--schedule", help="ISO datetime for scheduled posting")
     p.add_argument("--timezone", help="IANA timezone for --schedule")

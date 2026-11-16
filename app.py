@@ -8068,7 +8068,7 @@ class SocialPostRequest(BaseModel):
     clip_index: int
     api_key: Optional[str] = None  # BYOK; ignored for managed users
     user_id: Optional[str] = None  # BYOK profile; ignored for managed users
-    platforms: List[str] # ["tiktok", "instagram", "youtube"]
+    platforms: List[str]  # social_platforms.PLATFORMS
     # Optional overrides if frontend wants to edit them
     title: Optional[str] = None
     description: Optional[str] = None
@@ -8087,18 +8087,18 @@ def _post_video_blocking(url, headers, data, file_path, filename, timeout):
         return client.post(url, headers=headers, data=data, files=files)
 
 
-# YouTube refuses a title over 100 characters; the Gemini title is not bounded.
-YOUTUBE_TITLE_MAX = 100
+import social_platforms
+from social_platforms import YOUTUBE_TITLE_MAX, youtube_title  # noqa: F401  (re-exported)
 
 
-def youtube_title(title) -> str:
-    """``title`` cut to YouTube's limit, on a word boundary when there is one."""
-    t = " ".join(str(title or "").split())
-    if len(t) <= YOUTUBE_TITLE_MAX:
-        return t
-    cut = t[:YOUTUBE_TITLE_MAX]
-    space = cut.rfind(" ")
-    return (cut[:space] if space >= YOUTUBE_TITLE_MAX // 2 else cut).rstrip(" ,.;:-")
+def _checked_platforms(platforms) -> List[str]:
+    """The request's platforms, or a 400 naming the ones OpenShorts does not post to."""
+    bad = social_platforms.unknown(platforms)
+    if bad or not platforms:
+        raise HTTPException(status_code=400, detail=(
+            f"Unsupported platform: {', '.join(map(str, bad))}. " if bad else "No platform chosen. ")
+            + f"Choose from {', '.join(social_platforms.PLATFORMS)}.")
+    return social_platforms.clean(platforms)
 
 
 # Async uploads started here, so the status proxy below only ever answers the
@@ -8160,6 +8160,7 @@ async def _check_social_post_rate(request):
 
 @app.post("/api/social/post")
 async def post_to_socials(req: SocialPostRequest, request: Request):
+    req.platforms = _checked_platforms(req.platforms)
     await _ensure_job_files(req.job_id, request)
     if req.job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -8185,7 +8186,7 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
         if stale:
             print(f"[social-post-failed] request=none platform={','.join(stale)} "
                   f"status=reauth_required message='refused before upload: reconnect needed'")
-            names = ", ".join(p.capitalize() if p != "youtube" else "YouTube" for p in stale)
+            names = ", ".join(social_platforms.label(p) for p in stale)
             raise HTTPException(status_code=409, detail=(
                 f"Reconnect {names} first: its login has expired, so the post would "
                 "fail. Use \"connect socials\" and try again."))
@@ -8228,20 +8229,10 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
             if req.timezone:
                 data_payload["timezone"] = req.timezone
         
-        # Add Platform specifics
-        if "tiktok" in req.platforms:
-             data_payload["tiktok_title"] = final_description
-             data_payload["post_mode"] = TIKTOK_POST_MODE
-             
-        if "instagram" in req.platforms:
-             data_payload["instagram_title"] = final_description
-             data_payload["media_type"] = "REELS"
-
-        if "youtube" in req.platforms:
-             yt_title = req.title or clip.get('video_title_for_youtube_short', final_title)
-             data_payload["youtube_title"] = youtube_title(yt_title)
-             data_payload["youtube_description"] = final_description
-             data_payload["privacyStatus"] = "public"
+        data_payload.update(social_platforms.upload_fields(
+            req.platforms, title=final_title, description=final_description,
+            yt_title=req.title or clip.get('video_title_for_youtube_short', final_title),
+            tiktok_post_mode=TIKTOK_POST_MODE))
 
         # The upload is a blocking multipart POST of the whole clip (tens of
         # seconds for TikTok+YouTube). Run inline, it froze the event loop:
@@ -8326,7 +8317,7 @@ def _log_post_failures(request_id, status, results):
         print(f"[social-post-failed] request={request_id} platform={r.get('platform')} "
               f"status={status} message={msg!r}")
 
-SOCIAL_PLATFORMS = ("tiktok", "instagram", "youtube")
+SOCIAL_PLATFORMS = social_platforms.PLATFORMS
 
 
 async def _managed_social_user(request, api_key, profile):
@@ -8395,7 +8386,7 @@ async def get_social_user(request: Request):
                              socials = p.get('social_accounts', {})
                              connected = []
                              # Check typical platforms
-                             for platform in ['tiktok', 'instagram', 'youtube']:
+                             for platform in SOCIAL_PLATFORMS:
                                  account_info = socials.get(platform)
                                  # If it's a dict and typically has data, or just not empty string
                                  if isinstance(account_info, dict):
@@ -9696,6 +9687,7 @@ class SaaSPostRequest(BaseModel):
 @app.post("/api/saasshorts/post")
 async def saasshorts_post_to_socials(req: SaaSPostRequest, request: Request):
     """Post an AI Shorts video to social media via Upload-Post."""
+    req.platforms = _checked_platforms(req.platforms)
     if req.job_id not in saas_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -9741,16 +9733,9 @@ async def saasshorts_post_to_socials(req: SaaSPostRequest, request: Request):
             if req.timezone:
                 data_payload["timezone"] = req.timezone
 
-        if "tiktok" in req.platforms:
-            data_payload["tiktok_title"] = final_description
-            data_payload["post_mode"] = TIKTOK_POST_MODE
-        if "instagram" in req.platforms:
-            data_payload["instagram_title"] = final_description
-            data_payload["media_type"] = "REELS"
-        if "youtube" in req.platforms:
-            data_payload["youtube_title"] = youtube_title(final_title)
-            data_payload["youtube_description"] = final_description
-            data_payload["privacyStatus"] = "public"
+        data_payload.update(social_platforms.upload_fields(
+            req.platforms, title=final_title, description=final_description,
+            tiktok_post_mode=TIKTOK_POST_MODE))
 
         filename = os.path.basename(file_path)
         print(f"📡 [AI Shorts] Sending to Upload-Post: {req.platforms}")
