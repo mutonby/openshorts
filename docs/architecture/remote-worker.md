@@ -141,3 +141,18 @@ per-job options travel with a job.
 On a CPU each job costs several times the CPU of a GPU job. Size
 `WORKER_SLOTS` by cores (a job keeps about eight busy), and keep
 `REMOTE_WORKER_SLOTS` equal to it.
+
+What limits a CPU worker is rarely its slots:
+
+- **Transcription turns.** `ASR_HOST_SLOTS` (default 2) is sized for a GPU's
+  memory. On a CPU host a transcription takes minutes, so with 2 turns most
+  slots sit waiting for one (the job's `asr_wait_s`). Raise it on a CPU host
+  with cores to spare, and cap the math libraries' threads per process
+  (`OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`) so parallel
+  transcriptions do not each start one thread per core.
+- **Process limit.** Each job runs about two hundred threads; a container
+  `pids_limit` below slots x 250 makes ffmpeg fail to start threads and a job
+  hang or die.
+- **Encoder effort.** Most of a CPU job is libx264. `X264_PRESET` (for example
+  `veryfast`) replaces every tier's preset at the same CRF: less CPU per clip
+  for a somewhat larger file. Leave it unset on a GPU host.

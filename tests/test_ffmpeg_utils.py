@@ -21,6 +21,7 @@ from ffmpeg_utils import (
 @pytest.fixture(autouse=True)
 def _clean_encoder_state(monkeypatch):
     monkeypatch.delenv("FFMPEG_ENCODER", raising=False)
+    monkeypatch.delenv("X264_PRESET", raising=False)
     monkeypatch.setattr(ffmpeg_utils, "_gpu_cut_sources", {})
     reset_encoder_cache()
     yield
@@ -34,6 +35,22 @@ def test_default_args_pin_historical_x264_settings():
         "-c:v", "libx264", "-preset", "fast", "-crf", "18"]
     assert video_encode_args(DELIVERY) == [
         "-c:v", "libx264", "-preset", "fast", "-crf", "22"]
+
+
+def test_a_deployment_can_pick_a_faster_x264_preset(monkeypatch):
+    """A CPU-only host (the remote worker) trades a little size for CPU; the
+    CRF stays, NVENC and an unknown preset name are untouched."""
+    monkeypatch.setenv("X264_PRESET", "veryfast")
+    assert video_encode_args(QUALITY) == [
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18"]
+    assert video_encode_args(DELIVERY)[3:] == ["veryfast", "-crf", "22"]
+    assert ffmpeg_utils._X264_ARGS[QUALITY][3] == "medium"      # not mutated
+    monkeypatch.setenv("X264_PRESET", "placebo; rm")
+    assert video_encode_args(QUALITY)[3] == "medium"
+    monkeypatch.setenv("X264_PRESET", "veryfast")
+    monkeypatch.setenv("FFMPEG_ENCODER", "nvenc")
+    monkeypatch.setattr(ffmpeg_utils, "_probe_nvenc", lambda: True)
+    assert video_encode_args(QUALITY)[:4] == ["-c:v", "h264_nvenc", "-preset", "p3"]
 
 
 def test_unknown_tier_raises():

@@ -217,7 +217,23 @@ def video_encode_args(tier=QUALITY):
 
     if use_nvenc and tier == INTERMEDIATE:
         return _intermediate_nvenc_args()
-    return list((_NVENC_ARGS if use_nvenc else _X264_ARGS)[tier])
+    if use_nvenc:
+        return list(_NVENC_ARGS[tier])
+    return _x264_with_preset(_X264_ARGS[tier])
+
+
+# libx264 presets a deployment may pick with X264_PRESET (same CRF, less CPU
+# per frame for slightly larger files). Unset keeps each tier's own preset.
+_X264_PRESETS = ("ultrafast", "superfast", "veryfast", "faster", "fast",
+                 "medium", "slow")
+
+
+def _x264_with_preset(args):
+    args = list(args)
+    preset = os.environ.get("X264_PRESET", "").strip().lower()
+    if preset in _X264_PRESETS:
+        args[args.index("-preset") + 1] = preset
+    return args
 
 
 def _intermediate_nvenc_args():
