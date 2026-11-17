@@ -46,9 +46,15 @@ def main(argv=None):
         else:
             cands = D.discover_youtube_cc(args.query, limit=args.limit)
         for c in cands:
-            for clip in cut(c, os.path.join(args.out, c["id"])):
+            print(f"licensed source: {c['source_url']} ({c['license']})")
+            try:
+                clips = cut(c, os.path.join(args.out, c["id"]))
+            except subprocess.CalledProcessError as e:
+                print(f"  cutting failed (exit {e.returncode}); run main.py manually to see why")
+                continue
+            for clip in clips:
                 q.add({**c, "clip_path": clip})
-        print(f"{len(cands)} licensed source(s) processed; review with `list`")
+        print(f"{len(cands)} licensed source(s) found; review with `list`")
     elif args.cmd == "approve":
         print("approved" if q.approve(args.clip_path) else "not found or not pending")
     elif args.cmd == "list":
