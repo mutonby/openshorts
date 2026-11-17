@@ -1204,6 +1204,10 @@ function App() {
         // but the dashboard always states the user's choice.
         auto_hook: data.autoHook ? '1' : '0',
         auto_hook_style: data.autoHook ? (data.autoHookStyle || 'pill') : null,
+        // Caption look for the auto-burn at render time: the SubtitleModal
+        // field set as JSON (what /api/process `caption_style` accepts).
+        // null keeps the server default, so untouched requests stay identical.
+        caption_style: data.captionStyle ? JSON.stringify(data.captionStyle) : null,
         // 'auto' is the server default, so only a deliberate choice travels.
         layouts: data.layout && data.layout !== 'auto' ? data.layout : null,
         // Set when the user took the quota wall's "clip the first N minutes"
