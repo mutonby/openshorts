@@ -22,7 +22,6 @@ This module holds the parts with no FastAPI or queue in them: what crosses
 the wire, which file names a worker may write, and the file protocol.
 """
 import contextlib
-import fcntl
 import hmac
 import json
 import os
@@ -167,6 +166,12 @@ def file_limit(rel, max_bytes):
     return max_bytes
 
 
+try:
+    import fcntl as _fcntl
+except ImportError:
+    _fcntl = None  # Windows: no cross-process file locking; uploads serialised by in-process logic
+
+
 @contextlib.contextmanager
 def upload_lock(job_dir):
     """One upload request per job at a time, across both containers of a
@@ -176,10 +181,11 @@ def upload_lock(job_dir):
     UploadError(429) when another request holds it."""
     fd = os.open(os.path.join(job_dir, LOCK_FILE), os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            raise UploadError(429, "another upload of this job is in progress")
+        if _fcntl is not None:
+            try:
+                _fcntl.flock(fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            except OSError:
+                raise UploadError(429, "another upload of this job is in progress")
         yield
     finally:
         os.close(fd)
@@ -321,7 +327,7 @@ def append_log(job_dir, lines):
         room -= cost
         clean.append(text)
     if clean:
-        with open(path, "a", encoding="utf-8") as f:
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
             f.write("\n".join(clean) + "\n")
     touch_seen(job_dir)
     return len(clean)
@@ -340,7 +346,7 @@ def read_log(job_dir, offset):
     if end < 0:
         return [], offset
     lines = data[:end].decode("utf-8", "replace").split("\n")
-    return [line for line in lines if line], offset + end + 1
+    return [line.rstrip("\r") for line in lines if line.rstrip("\r")], offset + end + 1
 
 
 def mark_done(job_dir, returncode):

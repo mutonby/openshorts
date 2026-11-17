@@ -65,7 +65,14 @@ class RestoringStaticFiles(StaticFiles):
         except HTTPException as exc:
             if exc.status_code != 404 or self.restorer is None:
                 raise
-            job_id = path.split("/", 1)[0] if "/" in path else ""
+            # Starlette may pass the path with either "/" or "\" as separator
+            # depending on platform; normalise before splitting. Only proceed
+            # for paths of the form "<job_id>/<file>" — bare names like
+            # "robots.txt" have no separator and must not reach the restorer.
+            norm = path.replace("\\", "/")
+            if "/" not in norm:
+                raise
+            job_id = norm.split("/", 1)[0]
             if not job_id:
                 raise
             try:

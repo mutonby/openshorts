@@ -37,11 +37,15 @@ never frees, a clock that jumped: the request goes ahead as it always did.
 """
 import atexit
 import contextlib
-import fcntl
 import json
 import os
 import tempfile
 import time
+
+try:
+    import fcntl as _fcntl
+except ImportError:
+    _fcntl = None  # Windows: file locking unavailable; operations are fail-open by design
 
 
 def _float_env(name, default):
@@ -154,7 +158,8 @@ def note_rate_limited(now=None) -> float:
     except OSError:
         return 0.0
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        if _fcntl is not None:
+            _fcntl.flock(fd, _fcntl.LOCK_EX)
         n, first = _strikes(fd)
         if not n or now - first > STRIKE_WINDOW or now < first:
             n, first = 0, now
@@ -183,7 +188,8 @@ def note_ok():
         if os.path.getsize(path) > 0:
             fd = os.open(path, os.O_RDWR)
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                if _fcntl is not None:
+                    _fcntl.flock(fd, _fcntl.LOCK_EX)
                 if _strikes(fd)[0]:
                     _write_strikes(fd, 0, 0.0)
             finally:
@@ -212,7 +218,8 @@ def _take_slot(deadline, account=0):
             except OSError:
                 return None
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                if _fcntl is not None:
+                    _fcntl.flock(fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
                 return fd
             except OSError:
                 os.close(fd)
@@ -233,7 +240,8 @@ def _pace(deadline, account=0):
     except OSError:
         return
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        if _fcntl is not None:
+            _fcntl.flock(fd, _fcntl.LOCK_EX)
         try:
             last = float(os.read(fd, 64).decode().strip() or 0)
         except ValueError:
@@ -325,7 +333,8 @@ def note_account_limited(account, now=None) -> float:
     except OSError:
         return 0.0
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        if _fcntl is not None:
+            _fcntl.flock(fd, _fcntl.LOCK_EX)
         n, first, until = _rest_state(fd)
         if 0 < until - now <= REST_SECONDS + 60:
             return until - now            # already resting: do not extend it
@@ -352,7 +361,8 @@ def note_account_ok(account):
         if os.path.getsize(path) > 0:
             fd = os.open(path, os.O_RDWR)
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                if _fcntl is not None:
+                    _fcntl.flock(fd, _fcntl.LOCK_EX)
                 n, _first, until = _rest_state(fd)
                 if n:
                     _write_rest(fd, 0, 0.0, until)
@@ -370,7 +380,8 @@ def _turn():
     except OSError:
         return os.getpid()
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        if _fcntl is not None:
+            _fcntl.flock(fd, _fcntl.LOCK_EX)
         try:
             n = int(os.read(fd, 32).decode().strip() or 0)
         except ValueError:
