@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 
 import pytest
 
@@ -297,17 +298,22 @@ def test_cut_uses_the_intermediate_tier(_cut):
 # --- bin/ffmpeg: the thread cap every ffmpeg of the image goes through ---
 
 WRAPPER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                       "bin", "ffmpeg")
+                       "bin", "ffmpeg.py" if os.name == "nt" else "ffmpeg")
 
 
 def _wrapped(tmp_path, threads, *args):
-    echo = tmp_path / "echo-ffmpeg"
-    echo.write_text('#!/bin/sh\nfor a in "$@"; do printf \'%s\\n\' "$a"; done\n')
+    echo_name = "echo-ffmpeg.py" if os.name == "nt" else "echo-ffmpeg"
+    echo = tmp_path / echo_name
+    if os.name == "nt":
+        echo.write_text('import sys\nfor a in sys.argv[1:]:\n    print(a)\n')
+    else:
+        echo.write_text('#!/bin/sh\nfor a in "$@"; do printf \'%s\\n\' "$a"; done\n')
     echo.chmod(0o755)
     env = {"PATH": os.environ.get("PATH", ""), "FFMPEG_REAL_BIN": str(echo)}
     if threads is not None:
         env["FFMPEG_THREADS"] = threads
-    out = subprocess.run(["sh", WRAPPER, *args], env=env, capture_output=True,
+    cmd = [sys.executable, WRAPPER, *args] if os.name == "nt" else ["sh", WRAPPER, *args]
+    out = subprocess.run(cmd, env=env, capture_output=True,
                          text=True, check=True).stdout
     return out.splitlines()
 
