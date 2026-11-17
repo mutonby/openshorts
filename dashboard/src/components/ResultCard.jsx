@@ -240,6 +240,11 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     // card remounts from it exactly like after a recut.
     const isPro = clip.mode === 'pro';
     const [isSwitchingMode, setIsSwitchingMode] = useState(false);
+    // Pro mode frames a face in a vertical clip: on a horizontal or square
+    // one the server refuses, so the switch is not offered there. Unknown
+    // until the video's metadata loads, and offered meanwhile.
+    const [isUpright, setIsUpright] = useState(true);
+    const canSwitchMode = Boolean(onModeChanged) && (isUpright || isPro);
     const handleMode = async () => {
         setIsSwitchingMode(true);
         setEditError(null);
@@ -827,7 +832,10 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     className="w-full h-full object-contain"
                     playsInline
                     onLoadedMetadata={(e) => {
-                        if (e.target.videoWidth) setResolution(`${e.target.videoWidth}×${e.target.videoHeight}`);
+                        if (e.target.videoWidth) {
+                            setResolution(`${e.target.videoWidth}×${e.target.videoHeight}`);
+                            setIsUpright(e.target.videoHeight > e.target.videoWidth);
+                        }
                     }}
                     onError={() => {
                         // The durable copy is unreachable (signature expired after an
@@ -983,7 +991,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     </div>
                 )}
 
-                {onModeChanged && !isPro && clip.pro_suggested && (
+                {canSwitchMode && !isPro && clip.pro_suggested && (
                     <button
                         onClick={handleMode}
                         disabled={isSwitchingMode}
@@ -1002,7 +1010,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         </span>
                     </button>
                 )}
-                {onModeChanged && (isPro || !clip.pro_suggested) && (
+                {canSwitchMode && (isPro || !clip.pro_suggested) && (
                     <p className="mb-2 text-[11px] leading-snug text-muted">
                         {isPro
                             ? 'Pro mode is on: tighter frame on the face, pauses cut, cinematic look. You can switch back to normal any time.'
@@ -1032,7 +1040,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         </button>
                     )}
 
-                    {onModeChanged && (
+                    {canSwitchMode && (
                         <button
                             onClick={handleMode}
                             disabled={isSwitchingMode}
