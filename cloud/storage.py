@@ -49,14 +49,17 @@ def upload_fileobj(fileobj, key, content_type="video/mp4", metadata=None):
     ``upload_file`` re-opens the path for every multipart part, so a disk sweep
     that deletes the file halfway through a large upload breaks it. A handle
     opened once keeps reading the same inode whatever happens to the name. The
-    price is that parts are buffered in memory, hence the small transfer config:
-    a few 8 MB chunks per upload instead of the default ten.
+    price is that parts are buffered in memory, hence two parts at a time
+    instead of the default ten.
     """
     from boto3.s3.transfer import TransferConfig
     extra = {"ContentType": content_type}
     if metadata:
         extra["Metadata"] = {str(k): str(v) for k, v in metadata.items()}
-    config = TransferConfig(max_concurrency=2, max_in_memory_upload_chunks=4)
+    # Only options boto3's own TransferConfig takes: s3transfer's has more
+    # (max_in_memory_upload_chunks), and passing one of those here raised on
+    # every upload.
+    config = TransferConfig(max_concurrency=2)
     client().upload_fileobj(fileobj, settings.r2_bucket, key, ExtraArgs=extra, Config=config)
 
 

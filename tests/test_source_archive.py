@@ -596,3 +596,24 @@ class TestSourceUrlForAJobWithoutFiles:
         r2.objects.clear()
         assert _client_get(f"/api/source-url/{JOB}",
                            headers={"X-Test-User": OWNER}).status_code == 404
+
+
+def test_upload_fileobj_builds_a_transfer_config_boto3_accepts(tmp_path, monkeypatch):
+    """The storage fake used above never builds the real TransferConfig: an
+    option boto3 does not know made every real upload raise."""
+    pytest.importorskip("boto3")
+    from cloud import storage as real_storage
+    sent = {}
+
+    class Client:
+        def upload_fileobj(self, fileobj, bucket, key, ExtraArgs=None, Config=None):
+            sent.update(key=key, extra=ExtraArgs, config=Config, data=fileobj.read())
+
+    monkeypatch.setattr(real_storage, "client", lambda: Client())
+    path = tmp_path / "source.mp4"
+    path.write_bytes(b"video")
+    with open(path, "rb") as f:
+        real_storage.upload_fileobj(f, "users/u/j/source/x.mp4", "video/mp4", {"duration": 12.5})
+    assert sent["data"] == b"video" and sent["key"] == "users/u/j/source/x.mp4"
+    assert sent["extra"] == {"ContentType": "video/mp4", "Metadata": {"duration": "12.5"}}
+    assert sent["config"].max_request_concurrency == 2
