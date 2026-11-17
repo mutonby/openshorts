@@ -6749,9 +6749,16 @@ async def edit_clip(
             editor = VideoEditor(api_key=final_api_key)
             
             # SAFE FILE RENAMING STRATEGY (Avoid UnicodeEncodeError in Docker)
-            # Create a safe ASCII filename in the same directory
-            safe_filename = f"temp_input_{req.job_id}.mp4"
+            # Create a safe ASCII filename in the same directory. Unique per
+            # request: with one name per job, two clips of a job edited at the
+            # same time copied over each other's input while it was being
+            # uploaded, deleted it under the other, and moved each other's
+            # result (a clip could end up with another clip's edit, or none).
+            token = uuid.uuid4().hex[:8]
+            safe_filename = f"temp_input_{req.job_id}_{token}.mp4"
             safe_input_path = os.path.join(OUTPUT_DIR, req.job_id, safe_filename)
+            safe_output_path = os.path.join(
+                OUTPUT_DIR, req.job_id, f"temp_output_{req.job_id}_{token}.mp4")
             
             # Copy original file to safe path
             # (Copy is safer than rename if something crashes, we keep original)
@@ -6789,9 +6796,7 @@ async def edit_clip(
                 has_captions = ("subtitled_" in filename) or ("hook_" in filename) or ("hooked_" in filename)
                 filter_data = editor.get_ffmpeg_filter(vid_file, duration, fps=fps, width=width, height=height, transcript=transcript, has_captions=has_captions)
                 
-                # 4. Apply
-                # Use safe output name first
-                safe_output_path = os.path.join(OUTPUT_DIR, req.job_id, f"temp_output_{req.job_id}.mp4")
+                # 4. Apply (safe output name first)
                 editor.apply_edits(safe_input_path, safe_output_path, filter_data)
                 
                 # Move result to final destination (rename works even if dest name has unicode if filesystem supports it, 
@@ -6799,14 +6804,20 @@ async def edit_clip(
                 # Actually, output_path is defined above: f"edited_{filename}"
                 # If filename has unicode, output_path has unicode.
                 # Let's hope shutil.move / os.rename works.
-                if os.path.exists(safe_output_path):
-                    shutil.move(safe_output_path, output_path)
-                
+                # No file is a failed edit, not a finished one: answering 200
+                # here left the clip pointing at a video that was never
+                # written, and every later action on it (post, download,
+                # restyle) failed on a missing file.
+                if not os.path.exists(safe_output_path) or os.path.getsize(safe_output_path) == 0:
+                    raise RuntimeError("the edit produced no video")
+                shutil.move(safe_output_path, output_path)
+
                 return filter_data
             finally:
-                # Cleanup temp safe input
-                if os.path.exists(safe_input_path):
-                    os.remove(safe_input_path)
+                # Cleanup the temp copies, whatever happened.
+                for temp_path in (safe_input_path, safe_output_path):
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
 
         # Run in thread pool
         loop = asyncio.get_event_loop()
@@ -8780,9 +8791,21 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
         
         filename = clip['video_url'].split('/')[-1]
         file_path = os.path.join(OUTPUT_DIR, req.job_id, filename)
-        
+
         if not os.path.exists(file_path):
-             raise HTTPException(status_code=404, detail=f"Video file not found: {file_path}")
+            # The recorded file is not there (an edit that failed used to
+            # record a name it never wrote): post the newest file this clip
+            # does have, and point the clip back at it.
+            job_dir = os.path.join(OUTPUT_DIR, req.job_id)
+            meta_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
+            if meta_files:
+                base_name = os.path.basename(meta_files[0]).replace('_metadata.json', '')
+                newest = _canonical_clip_file(job_dir, base_name, req.clip_index)
+                if os.path.exists(os.path.join(job_dir, newest)):
+                    filename, file_path = newest, os.path.join(job_dir, newest)
+                    clip['video_url'] = f"/videos/{req.job_id}/{newest}"
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Video file not found")
 
         # Construct parameters for Upload-Post API
         # Fallbacks
