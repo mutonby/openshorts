@@ -64,9 +64,14 @@ _IMAGE_FILE_BYTES = 32 * 1024 * 1024
 # storage secret: this host downloads the source and delivers the result.
 _OPTION_NAMES = frozenset({
     "WATERMARK", "MAX_SOURCE_MINUTES", "SOURCE_CAP_MINUTES", "HOOK_LAZY",
-    "CUT_MAX_FPS"})
+    "CUT_MAX_FPS", "CAPTION_STYLE_B64"})
 _OPTION_PREFIXES = ("AUTO_", "CLIP_")
 _OPTION_VALUE = re.compile(r"^[A-Za-z0-9 _.,:+-]{0,120}$")
+# CAPTION_STYLE_B64 carries a whole caption look (base64url JSON), which does
+# not fit the 120-char option cap; base64url is still only letters, digits,
+# '-' and '_', so only the length needs a wider ceiling.
+_OPTION_VALUE_LONG = re.compile(r"^[A-Za-z0-9_-]{0,800}$")
+_LONG_VALUE_NAMES = frozenset({"CAPTION_STYLE_B64"})
 _FORMATS = frozenset({"auto", "vertical", "horizontal", "square"})
 
 
@@ -76,7 +81,10 @@ def allowed_option(name, value=""):
         return False
     if name not in _OPTION_NAMES and not name.startswith(_OPTION_PREFIXES):
         return False
-    return bool(_OPTION_VALUE.match(str(value)))
+    value = str(value)
+    if name in _LONG_VALUE_NAMES:
+        return bool(_OPTION_VALUE_LONG.match(value))
+    return bool(_OPTION_VALUE.match(value))
 
 
 def job_options(job_env, base_env):

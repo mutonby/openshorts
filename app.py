@@ -1,3 +1,4 @@
+import base64
 import os
 import llm_backend
 import re
@@ -1758,6 +1759,52 @@ CAPTION_STYLE_FIELDS = (
     "border_color", "border_width", "bg_color", "bg_opacity",
     "highlight_color", "effect", "base_opacity", "uppercase", "reveal",
     "shadow", "max_chars", "max_duration")
+
+
+def _caption_style_from_request(raw):
+    """Validate the /api/process ``caption_style`` submit field and encode it
+    for the job env: either a preset name (subtitles.CAPTION_PRESETS) or a
+    JSON object of CAPTION_STYLE_FIELDS — the same fields the SubtitleModal
+    burns. Explicit fields override the preset's. Raises HTTPException(400)
+    on anything unknown; returns None when the field is absent, so the
+    pipeline keeps its built-in default look."""
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, str) and not raw.strip().startswith("{"):
+        preset = CAPTION_PRESETS.get(raw.strip().lower())
+        if preset is None:
+            raise HTTPException(status_code=400, detail=(
+                "Unknown caption_style preset. Use one of: "
+                f"{', '.join(CAPTION_PRESETS)} — or a JSON object of style fields."))
+        style = dict(preset)
+    else:
+        try:
+            style = json.loads(raw) if isinstance(raw, str) else dict(raw)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail=(
+                "caption_style must be a preset name or a JSON object"))
+        if not isinstance(style, dict):
+            raise HTTPException(status_code=400, detail=(
+                "caption_style must be a preset name or a JSON object"))
+    named = style.pop("preset", None)
+    if named:
+        preset = CAPTION_PRESETS.get(str(named).strip().lower())
+        if preset is None:
+            raise HTTPException(status_code=400, detail=(
+                f"Unknown caption_style preset. Use one of: {', '.join(CAPTION_PRESETS)}."))
+        style = {**preset, **style}
+    unknown = sorted(k for k in style if k not in CAPTION_STYLE_FIELDS)
+    if unknown:
+        raise HTTPException(status_code=400, detail=(
+            f"Unknown caption_style fields: {', '.join(unknown)}. "
+            f"Allowed: {', '.join(CAPTION_STYLE_FIELDS)}"))
+    style = {k: v for k, v in style.items() if v is not None}
+    if not style:
+        return None
+    # The value crosses to a remote worker through remote_worker.job_options,
+    # whose value charset has no braces or quotes: urlsafe base64 (padding
+    # stripped) of the JSON travels through it, main.py decodes it back.
+    return base64.urlsafe_b64encode(json.dumps(style).encode()).decode().rstrip("=")
 
 
 def _words_transcript(words, language="en"):
@@ -5740,6 +5787,7 @@ async def process_endpoint(
     auto_hook_style: Optional[str] = Form(None),
     thumbnail_session_id: Optional[str] = Form(None),
     captions: Optional[str] = Form(None),
+    caption_style: Optional[str] = Form(None),
     upload_id: Optional[str] = Form(None),
     max_minutes: Optional[str] = Form(None),
     source_start: Optional[str] = Form(None),
@@ -5774,6 +5822,7 @@ async def process_endpoint(
         auto_hook_style = body.get("auto_hook_style")
         thumbnail_session_id = body.get("thumbnail_session_id")
         captions = body.get("captions")
+        caption_style = body.get("caption_style")
         upload_id = body.get("upload_id")
         max_minutes = body.get("max_minutes")
         source_start = body.get("source_start")
@@ -5928,6 +5977,15 @@ async def process_endpoint(
     if captions is not None and str(captions).lower() in ("0", "false", "no"):
         env["AUTO_CAPTIONS"] = "0"
         print(f"[captions] job={job_id} auto-captions off")
+
+    # Caption look requested at submit time (SubtitleModal fields or a preset
+    # name): auto-captions burn with it instead of the built-in default, so
+    # the clips come out right the first time. Must be set before Popen, on
+    # the same path as WATERMARK — the pipeline reads it at render time.
+    caption_style_json = _caption_style_from_request(caption_style)
+    if caption_style_json:
+        env["CAPTION_STYLE_B64"] = caption_style_json
+        print(f"[captions] job={job_id} caption style requested at submit")
 
     input_path = None
     if url:

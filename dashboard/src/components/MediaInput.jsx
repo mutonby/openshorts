@@ -3,6 +3,7 @@ import { Link2, Upload, FileVideo, X, Info, Loader2, ChevronDown } from 'lucide-
 import { track } from '../lib/analytics';
 import { getApiUrl } from '../config';
 import SourceCost from './SourceCost';
+import CaptionStyleEditor, { DEFAULT_CAPTION_STYLE, toRequestFields } from './CaptionStyleEditor';
 
 const SUPPORTED_PLATFORMS = [
     'YouTube', 'Vimeo', 'TikTok', 'X / Twitter', 'Twitch', 'Kick',
@@ -58,6 +59,13 @@ export default function MediaInput({ onProcess, isProcessing }) {
         // v2 key: the default became 'pill'; an old saved 'classic' was just the old default.
         try { return localStorage.getItem('os_auto_hook_style_v2') || 'pill'; } catch { return 'pill'; }
     });
+    // Caption look burned at render time. 'default' sends nothing (the
+    // built-in look); any other value is the SubtitleModal field set the
+    // user built in the editor below. Persisted so the choice sticks.
+    const [captionStyle, setCaptionStyle] = useState(() => {
+        try { return JSON.parse(localStorage.getItem('os_caption_style_v2') || 'null') || null; } catch { return null; }
+    });
+    const [showCaptionStyle, setShowCaptionStyle] = useState(() => !!captionStyle);
     // Layout: 'auto' lets the AI pick per video (server default); the others
     // force one on so a podcast host who knows what they uploaded doesn't
     // depend on the detector, and 'none' keeps the plain single crop.
@@ -126,6 +134,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
             clipMaxSeconds: clipMaxSeconds || null,
             autoHook,
             autoHookStyle,
+            // The caption look as /api/subtitle request fields, or null for
+            // the built-in default burn.
+            captionStyle: captionStyle ? toRequestFields(captionStyle) : null,
             layout,
             sourceStart: range ? Math.round(range.start) : null,
             sourceEnd: range ? Math.round(range.end) : null,
@@ -133,6 +144,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
         try {
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
             localStorage.setItem('os_auto_hook_style_v2', autoHookStyle);
+            localStorage.setItem('os_caption_style_v2', captionStyle ? JSON.stringify(captionStyle) : '');
             localStorage.setItem('os_layout', layout);
         } catch { /* ignore */ }
         if (mode === 'url' && url) {
@@ -400,6 +412,49 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                     </p>
                                 )}
                             </div>
+                            <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">
+                                <span className="text-xs text-ink2">caption style</span>
+                                <div className="flex items-center gap-2">
+                                    <select
+                                        value={captionStyle ? 'custom' : 'default'}
+                                        onChange={(e) => {
+                                            setCaptionStyle(e.target.value === 'custom'
+                                                ? (captionStyle || DEFAULT_CAPTION_STYLE)
+                                                : null);
+                                            setShowCaptionStyle(e.target.value === 'custom');
+                                        }}
+                                        className="input-field !w-auto text-xs py-1.5"
+                                        aria-label="caption style"
+                                    >
+                                        <option value="default">Default</option>
+                                        <option value="custom">Custom…</option>
+                                    </select>
+                                    {captionStyle && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowCaptionStyle(!showCaptionStyle)}
+                                            className="text-xs text-muted underline underline-offset-2 lowercase hover:text-ink2"
+                                        >
+                                            {showCaptionStyle ? 'hide' : 'edit'}
+                                        </button>
+                                    )}
+                                </div>
+                                <p className="w-full text-[11px] leading-relaxed text-muted">
+                                    Custom look is burned in while the clips render — no restyle pass
+                                    needed. Fine-tune per clip afterwards with its captions button.
+                                </p>
+                            </div>
+                            {captionStyle && showCaptionStyle && (
+                                <div className="col-span-1 sm:col-span-3 pt-1 border-t border-rule">
+                                    <CaptionStyleEditor
+                                        value={captionStyle}
+                                        onChange={(next) => {
+                                            setCaptionStyle(next);
+                                            try { localStorage.setItem('os_caption_style_v2', JSON.stringify(next)); } catch { /* ignore */ }
+                                        }}
+                                    />
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>

@@ -1,4 +1,5 @@
 import time
+import base64
 import cv2
 import subprocess
 import shutil
@@ -1354,6 +1355,28 @@ def finalize_clip_passthrough(input_video, final_output_video):
     return True
 
 
+def _caption_style_env():
+    """The caption look requested at submit time, or None.
+
+    app.py encodes the /api/process ``caption_style`` field (SubtitleModal
+    fields, or a preset name it already expanded) into CAPTION_STYLE_B64 —
+    urlsafe base64 without padding, because the value crosses to a remote
+    worker through remote_worker.job_options whose charset has no braces or
+    quotes. Field names are the /api/subtitle request names (CAPTION_STYLE_FIELDS),
+    what a modal restyle records on a clip."""
+    raw = os.environ.get("CAPTION_STYLE_B64", "").strip()
+    if not raw:
+        return None
+    try:
+        data = json.loads(base64.urlsafe_b64decode(
+            raw + "=" * ((4 - len(raw) % 4) % 4)))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return {str(k): v for k, v in data.items() if str(k) != "preset"}
+
+
 def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=None,
                       plan_only=False, mark=False, style=None):
     """Burn the default caption style onto a finished clip.
@@ -1391,6 +1414,15 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
         # ``style``: a CAPTION_PRESETS entry to burn instead of the default
         # look (pro mode's captions); what it does not name stays the default.
         style = {**_subs.AUTO_CAPTION_STYLE, **(style or {})}
+        requested = _caption_style_env()
+        if requested:
+            # Submit-time look wins per field over the built-in default and
+            # over the pro-mode preset. The burn copy maps the request field
+            # "position" onto the generator parameter "alignment"; the
+            # metadata record keeps request names.
+            style = {**style, **requested}
+            if "position" in style:
+                style["alignment"] = style.pop("position")
         output_dir = os.path.dirname(clip_path)
         stem = os.path.basename(clip_path)
         generation_id = int(time.time())
@@ -3012,6 +3044,12 @@ if __name__ == '__main__':
                     # seam there, and /api/subtitle needs it again later.
                     import layout_ranges as _layouts
                     clip['layout_ranges'] = _layouts.read(clip_final_path)
+                    requested_style = _caption_style_env()
+                    if requested_style:
+                        # Re-apply paths (hook, AI edit, recut) read
+                        # clip['caption_style'] and burn the same look, like a
+                        # modal restyle leaves behind (github issue #82 path).
+                        clip['caption_style'] = requested_style
                     # The hook was written from the transcript alone. When the
                     # render put this clip's meaning on the screen, rewrite hook
                     # and title from three of its frames BEFORE burning them.
