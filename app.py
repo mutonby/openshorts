@@ -6180,7 +6180,14 @@ async def get_source_video(job_id: str, request: Request,
     source_path = _locate_source(job_id)
     if not source_path:
         raise HTTPException(status_code=404, detail="Source not found")
-    return FileResponse(source_path, media_type="video/mp4")
+    # The retention sweep can drop the file between _locate_source and the send.
+    # FileResponse stats lazily and raises RuntimeError (a 500) when it is gone,
+    # so stat here and hand the result over: a vanished source is a 404.
+    try:
+        stat_result = os.stat(source_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Source not found")
+    return FileResponse(source_path, media_type="video/mp4", stat_result=stat_result)
 
 
 @app.get("/api/jobs/{job_id}/download-all")
