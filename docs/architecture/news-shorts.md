@@ -25,3 +25,7 @@ Publishing env vars (never committed): `YOUTUBE_CLIENT_ID`,
 `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN` (scope `youtube.upload`),
 `TIKTOK_ACCESS_TOKEN` (Content Posting API, `video.publish`). TikTok posts default
 to `SELF_ONLY` until your app is audited.
+
+## Local credentials file
+
+The CLI also reads a local `.env` (git-ignored) with `KEY=VALUE` lines for the variables above, without overriding variables already set in the shell.

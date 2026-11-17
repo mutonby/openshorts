@@ -11,6 +11,17 @@ from .publish import publish_approved
 from .queue import Queue
 
 
+def load_env(path=".env"):
+    """Read KEY=VALUE lines from a local, git-ignored .env without overriding the shell."""
+    if not os.path.exists(path):
+        return
+    for line in open(path, encoding="utf-8"):
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip("\"'"))
+
+
 def cut(cand, out_dir):
     """Reuse the repo's clipper (main.py) on a licensed source."""
     os.makedirs(out_dir, exist_ok=True)
@@ -21,6 +32,7 @@ def cut(cand, out_dir):
 
 
 def main(argv=None):
+    load_env()
     ap = argparse.ArgumentParser(prog="news_shorts")
     ap.add_argument("--queue", default="output/news_queue.json")
     sub = ap.add_subparsers(dest="cmd", required=True)
