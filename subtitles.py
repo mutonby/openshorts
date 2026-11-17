@@ -149,11 +149,16 @@ def generate_srt_from_video(video_path, output_path, max_chars=20, max_duration=
     return generate_srt(transcript, 0, duration, output_path, max_chars, max_duration)
 
 
-def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_duration=2.0):
+def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_duration=2.0,
+                         fits=None):
     """
     Flatten transcript words for a clip range and group them into short blocks
     suitable for vertical video. Returns a list of blocks; each block is a list
     of {'word', 'start', 'end'} dicts with times relative to the clip.
+
+    ``fits`` (see ``line_fitter``) is asked before a word joins a block: the
+    character budget is only a proxy for width, and a block that passes it can
+    still be wider than the frame.
 
     Continuation fragments are merged defensively here too, because transcripts
     from old jobs on disk store unmerged tokens (the leading space is still
@@ -189,7 +194,9 @@ def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_dur
         current_text_len = sum(len(w['word']) + 1 for w in current_block)
         duration = word['end'] - block_start
 
-        if current_text_len + len(word['word']) > max_chars or duration > max_duration:
+        too_wide = fits is not None and not fits(
+            [w['word'] for w in current_block] + [word['word']])
+        if current_text_len + len(word['word']) > max_chars or duration > max_duration or too_wide:
             blocks.append(current_block)
             current_block = [word]
             block_start = word['start']
@@ -232,24 +239,26 @@ SAFE_MARGIN_V = 43
 
 # The caption look applied automatically to every generated clip. Chosen by
 # rendering four candidates on a real clip and comparing them (25-jul-2026):
-# white Anton uppercase with a yellow active word, heavy black outline, gentle
-# pop. Yellow because it is the one colour that almost never occurs in footage,
-# so the active word reads instantly on any background; the base text stays
-# fully opaque (dimming it tested worse over bright scenes). This is a starting
-# point, not a cage — the subtitle modal still overrides every field.
+# white Anton uppercase with a yellow active word, black outline, gentle pop.
+# Yellow because it is the one colour that almost never occurs in footage, so
+# the active word reads instantly on any background; the base text stays fully
+# opaque (dimming it tested worse over bright scenes). Size and outline came
+# down from 44 / 4 to 40 / 2 (17-nov-2026): at 44 a line held one or two words
+# and the outline ate the letter shapes. This is a starting point, not a cage:
+# the subtitle modal still overrides every field.
 AUTO_CAPTION_STYLE = {
     "style": "karaoke",
     "alignment": "bottom",
     "font_name": "Anton",
-    "font_size": 44,
+    "font_size": 40,
     "font_color": "#FFFFFF",
     "highlight_color": "#FFE500",
     "border_color": "#000000",
-    "border_width": 4,
+    "border_width": 2,
     "effect": "pop",
     "base_opacity": 1.0,
     "uppercase": True,
-    "max_chars": 16,
+    "max_chars": 18,
     "max_duration": 1.4,
 }
 
@@ -262,9 +271,9 @@ _PRESET_BASE = {"style": "karaoke", "font_color": "#FFFFFF", "bg_opacity": 0.0,
                 "base_opacity": 1.0, "reveal": False, "shadow": 0,
                 "max_duration": 1.4}
 CAPTION_PRESETS = {
-    "default": {**_PRESET_BASE, "font_name": "Anton", "font_size": 44,
-                "highlight_color": "#FFE500", "border_width": 4, "effect": "pop",
-                "uppercase": True, "max_chars": 16},
+    "default": {**_PRESET_BASE, "font_name": "Anton", "font_size": 40,
+                "highlight_color": "#FFE500", "border_width": 2, "effect": "pop",
+                "uppercase": True, "max_chars": 18},
     # Words appear as they are spoken, yellow active word, shadow.
     "hormozi": {**_PRESET_BASE, "font_name": "Montserrat ExtraBold", "font_size": 44,
                 "highlight_color": "#FFE500", "border_width": 4, "shadow": 2,
@@ -296,6 +305,86 @@ def line_budget(font_name, font_size):
     """max_chars that keeps one line inside the 9:16 frame at this size."""
     size = _clamp_number(font_size, 10, 200, 44)
     return max(6, round(_LINE_CHARS.get(font_name, 14) * 44 / size))
+
+
+# A caption block is ONE line, always. The character budget cannot promise
+# that: "MMMM WWWW" and "ill it is" count the same and are not the same width,
+# so libass wrapped the wide ones and the caption jumped to two lines in the
+# middle of a sentence. Blocks are now also checked against the real advance
+# width of the font, for the fonts shipped in fonts/ (the ones libass renders
+# with); any other font keeps the budget and libass's own wrapping.
+_FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+_FONT_FILES = {"Anton": "Anton-Regular.ttf", "Impact": "Anton-Regular.ttf",
+               "Montserrat ExtraBold": "Montserrat-ExtraBold.ttf"}
+# PlayResX that libass derives for a 9:16 frame from PlayResY 288, minus the
+# style's MarginL + MarginR (10 each).
+_LINE_UNITS = 288 * 9 / 16 - 20
+_font_metrics = {}
+
+
+def _font_metric(font_name):
+    """(Pillow font at 1000 px, width of 1000 px in ASS font-size units, faux-bold
+    advance per glyph in the same units), or None when it cannot be measured."""
+    if font_name in _font_metrics:
+        return _font_metrics[font_name]
+    metric = None
+    filename = _FONT_FILES.get(font_name)
+    try:
+        if filename:
+            import struct
+            from PIL import ImageFont
+            path = os.path.join(_FONT_DIR, filename)
+            with open(path, "rb") as fh:
+                data = fh.read()
+            tables = {}
+            for i in range(struct.unpack(">H", data[4:6])[0]):
+                tag, _, offset, _ = struct.unpack(">4sIII", data[12 + 16 * i:28 + 16 * i])
+                tables[tag] = offset
+            units_per_em = struct.unpack(">H", data[tables[b"head"] + 18:tables[b"head"] + 20])[0]
+            os2 = tables[b"OS/2"]
+            weight = struct.unpack(">H", data[os2 + 4:os2 + 6])[0]
+            win_ascent, win_descent = struct.unpack(">HH", data[os2 + 74:os2 + 78])
+            # libass sizes a face so that usWinAscent + usWinDescent spans the
+            # ASS font size, so one em is this fraction of it.
+            em = units_per_em / float(win_ascent + win_descent)
+            # The style asks for bold; on a regular-weight face libass
+            # synthesises it, which widens every glyph by 1/64 em.
+            metric = (ImageFont.truetype(path, 1000), em, em / 64.0 if weight < 550 else 0.0)
+    except Exception:
+        metric = None
+    _font_metrics[font_name] = metric
+    return metric
+
+
+def line_width(font_name, final_fontsize, text):
+    """Width of ``text`` on one line in PlayRes units, or None if the font
+    is not one we can measure. ``final_fontsize`` is the ASS style size."""
+    metric = _font_metric(font_name)
+    if metric is None:
+        return None
+    font, em, bold = metric
+    return (font.getlength(text) / 1000.0 * em + len(text) * bold) * final_fontsize
+
+
+def line_fitter(font_name, final_fontsize, uppercase=False, grow=0.0, padding=0.0):
+    """fits(words) -> bool: do these words stay on one line of a 9:16 frame?
+
+    ``grow`` is how much the active word swells (0.08 for the pop effect: the
+    widest word is the worst case), ``padding`` what the outline or box adds
+    at both ends. None when the font cannot be measured."""
+    if _font_metric(font_name) is None:
+        return None
+    budget = _LINE_UNITS * 0.97 - 2 * padding
+
+    def fits(words):
+        if len(words) < 2:
+            return True     # a lone word cannot be split; generate_ass narrows it
+        shown = [w.upper() if uppercase else w for w in words]
+        widest = max(line_width(font_name, final_fontsize, w) for w in shown)
+        return line_width(font_name, final_fontsize, " ".join(shown)) + grow * widest <= budget
+
+    fits.budget = budget
+    return fits
 
 
 def _ass_time(seconds):
@@ -375,10 +464,6 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     0 it is the soft "clean" look; a hard outline does not need it.
     max_chars=1 puts one word on screen at a time.
     """
-    blocks = _collect_word_blocks(transcript, clip_start, clip_end, max_chars, max_duration)
-    if not blocks:
-        return False
-
     # Match the SRT burn path: PlayResY 288 keeps font sizes consistent.
     final_fontsize = int(_clamp_number(fontsize, 10, 200, 16) * 0.85)
     if final_fontsize < 10:
@@ -424,6 +509,18 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     back_colour = hex_to_ass_color("#000000", 0.55 if shadow else 0.0)
     highlight_inline = _hex_to_ass_inline_color(highlight_color, fallback="FFD700")
 
+    # One line per block (see line_fitter). The widest thing drawn around the
+    # text is the active word's own border: glow and box thicken it.
+    edge = {"glow": max(3, int(outline_width) + 2), "box": max(4, int(outline_width) + 3),
+            "highlight": max(2, round(final_fontsize * 0.12))}.get(effect, int(outline_width))
+    fits = None if max_chars == 1 else line_fitter(
+        font_name, final_fontsize, uppercase=uppercase,
+        grow=0.08 if effect == "pop" else 0.0, padding=edge + shadow)
+    blocks = _collect_word_blocks(transcript, clip_start, clip_end, max_chars, max_duration,
+                                  fits=fits)
+    if not blocks:
+        return False
+
     # Inline override tags for the active word; {\r} after it resets to the
     # (dimmed) style so the rest of the block stays untouched.
     if effect == "glow":
@@ -465,7 +562,9 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
         "PlayResY: 288\n"
-        "WrapStyle: 0\n"
+        # Measured blocks never need wrapping, so it is switched off for them:
+        # a rounding difference must not bring the two-line jump back.
+        f"WrapStyle: {2 if fits else 0}\n"
         "ScaledBorderAndShadow: yes\n"
         "\n"
         "[V4+ Styles]\n"
@@ -484,6 +583,15 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
 
     events = []
     for block in blocks:
+        # A single word wider than the frame (a URL, a German compound) cannot
+        # be split and no longer wraps: it is narrowed to fit instead.
+        squeeze = ""
+        if fits and len(block) == 1:
+            lone = _escape_ass_text(block[0]['word'])
+            wide = line_width(font_name, final_fontsize, lone.upper() if uppercase else lone)
+            if wide > fits.budget:
+                pct = max(40, int(100 * fits.budget / wide))
+                squeeze = f"{{\\c{highlight_inline}\\fscx{pct}\\fscy{pct}}}"
         for i, word in enumerate(block):
             # Event runs until the next word starts (no flicker in gaps);
             # the last word holds until the block ends.
@@ -498,7 +606,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
                 if uppercase:
                     text = text.upper()
                 if j == i:
-                    parts.append(f"{active_prefix}{text}{{\\r}}")
+                    parts.append(f"{squeeze or active_prefix}{text}{{\\r}}")
                 elif reveal and j > i:
                     parts.append(f"{{\\alpha&HFF&}}{text}{{\\r}}")
                 else:

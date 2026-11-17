@@ -79,3 +79,55 @@ def test_preset_fills_only_fields_not_sent():
                                     if k not in req.model_fields_set})
     assert merged.highlight_color == "#00FF00"
     assert merged.reveal is True and merged.font_name == "Montserrat ExtraBold"
+
+
+# --- one line per block ----------------------------------------------------
+
+def _words(text, step=0.3):
+    return {"segments": [{"words": [
+        {"word": " " + w, "start": i * step, "end": i * step + step - 0.02}
+        for i, w in enumerate(text.split())]}]}
+
+
+def _default_ass(tmp_path, text, **over):
+    from subtitles import generate_ass
+    st = {**AUTO_CAPTION_STYLE, **over}
+    out = tmp_path / "c.ass"
+    assert generate_ass(_words(text), 0, 60, str(out), max_chars=st["max_chars"],
+                        max_duration=st["max_duration"], fontsize=st["font_size"],
+                        font_name=st["font_name"], border_width=st["border_width"],
+                        effect=st["effect"], uppercase=st["uppercase"])
+    return out.read_text(encoding="utf-8-sig")
+
+
+def _lines(ass):
+    """The text of every event, override tags removed."""
+    return [re.sub(r"\{[^}]*\}", "", ln.split(",", 9)[9])
+            for ln in ass.splitlines() if ln.startswith("Dialogue:")]
+
+
+def test_a_block_never_needs_a_second_line(tmp_path):
+    from subtitles import line_fitter, line_width, _LINE_UNITS
+    # Inside the character budget yet wider than the frame in Anton
+    # capitals: this is the block that used to jump to two lines.
+    text = "immortality, which is a mmmm wwww mmmm wwww il it is at if in"
+    ass = _default_ass(tmp_path, text)
+    assert "WrapStyle: 2" in ass
+    size = int(AUTO_CAPTION_STYLE["font_size"] * 0.85)
+    shown = set(_lines(ass))
+    assert "IMMORTALITY, WHICH IS A" not in shown
+    for line in shown:
+        assert line_width("Anton", size, line) <= _LINE_UNITS, line
+    assert line_fitter("Anton", size, uppercase=True)(["il", "it", "is", "at"])
+
+
+def test_a_lone_word_wider_than_the_frame_is_narrowed(tmp_path):
+    ass = _default_ass(tmp_path, "ok " + "w" * 30 + " ok")
+    event = next(ln for ln in ass.splitlines() if "W" * 30 in ln)
+    assert re.search(r"\\fscx(\d+)", event) and int(re.search(r"\\fscx(\d+)", event).group(1)) < 100
+
+
+def test_an_unmeasured_font_keeps_the_old_wrapping(tmp_path):
+    from subtitles import line_fitter
+    assert line_fitter("Some Font Nobody Ships", 27) is None
+    assert "WrapStyle: 0" in _default_ass(tmp_path, "one two three four", font_name="Verdana")

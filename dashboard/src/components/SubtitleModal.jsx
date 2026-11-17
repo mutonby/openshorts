@@ -49,19 +49,19 @@ const ANIMATION_OPTIONS = [
 const ANIMATION_TO_EFFECT = { pop: 'pop', 'word-highlight': 'glow', karaoke: 'highlight', none: 'none' };
 const EFFECT_TO_ANIMATION = { pop: 'pop', glow: 'word-highlight', highlight: 'karaoke', box: 'karaoke', none: 'none' };
 
-// Font size in the units /api/subtitle takes. M is what every clip ships
-// with (subtitles.AUTO_CAPTION_STYLE font_size 44), so opening the modal and
-// applying never shrinks the captions.
+// Font size in the units /api/subtitle takes. S is what every clip ships
+// with (subtitles.AUTO_CAPTION_STYLE font_size 40), so opening the modal and
+// applying never resizes the captions.
 const SIZE_OPTIONS = [
-    { value: 34, label: 'S' },
+    { value: 40, label: 'S' },
     { value: 44, label: 'M' },
     { value: 56, label: 'L' },
     { value: 70, label: 'XL' },
 ];
 
-// Characters per line at size M, per font: Anton is condensed, Montserrat
-// wide. Bigger text gets proportionally fewer, so a line still fits the 9:16
-// frame instead of wrapping into a wall of text.
+// Characters per line at size 44 (M), per font: Anton is condensed, Montserrat
+// wide. Bigger text gets proportionally fewer. The server also measures the
+// real width (subtitles.line_fitter), so a block is always one line.
 const LINE_CHARS = { Anton: 16, 'Montserrat ExtraBold': 9, Impact: 16 };
 const lineBudget = (fontName, fontSize, oneWord) =>
     oneWord ? 1 : Math.max(6, Math.round((LINE_CHARS[fontName] || 14) * 44 / fontSize));
@@ -80,7 +80,7 @@ const POSITION_OPTIONS = [
 // dimmed base text + strong active word, optional glow/pop/box effect.
 const CAPTION_PRESETS = [
     // What every clip ships with (subtitles.AUTO_CAPTION_STYLE).
-    { id: 'default', label: 'Default',  style: 'karaoke', effect: 'pop',       highlightColor: '#FFE500', baseOpacity: 1.0, uppercase: true,  fontName: 'Anton', borderWidth: 4, fontSize: 44 },
+    { id: 'default', label: 'Default',  style: 'karaoke', effect: 'pop',       highlightColor: '#FFE500', baseOpacity: 1.0, uppercase: true,  fontName: 'Anton', borderWidth: 2, fontSize: 40 },
     // Trending short-form looks (2026): word-by-word build-up, a box behind
     // the active word, one big word at a time, and the clean shadow-only look.
     { id: 'hormozi', label: 'Hormozi',  style: 'karaoke', effect: 'pop',       highlightColor: '#FFE500', baseOpacity: 1.0, uppercase: true,  fontName: 'Montserrat ExtraBold', borderWidth: 4, shadow: 2, reveal: true, fontSize: 44 },
@@ -118,12 +118,12 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     // Opens on the look the clip already has (the Default preset), so
     // "apply" without touching anything changes nothing.
     const [position, setPosition] = useState('bottom');
-    const [fontSize, setFontSize] = useState(44);
+    const [fontSize, setFontSize] = useState(40);
     const [fontName, setFontName] = useState('Anton');
     const [fontColor, setFontColor] = useState('#FFFFFF');
     const [highlightColor, setHighlightColor] = useState('#FFE500');
     const [borderColor, setBorderColor] = useState('#000000');
-    const [borderWidth, setBorderWidth] = useState(4);
+    const [borderWidth, setBorderWidth] = useState(2);
     const [bgColor, setBgColor] = useState('#000000');
     const [bgOpacity, setBgOpacity] = useState(0.0);
     const [animation, setAnimationState] = useState('pop');

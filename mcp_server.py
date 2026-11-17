@@ -247,7 +247,7 @@ TOOLS = [
                 "style": {"type": "string", "enum": ["classic", "karaoke"]},
                 "position": {"type": "string", "enum": ["top", "middle", "bottom"]},
                 "font_size": {"type": "integer",
-                              "description": "44 is the default (M); 34 = S, 56 = L, 70 = XL."},
+                              "description": "40 is the default (S); 44 = M, 56 = L, 70 = XL."},
                 "font_name": {"type": "string",
                               "description": "Anton, Montserrat ExtraBold, Verdana, Arial, Impact, Georgia..."},
                 "font_color": {"type": "string", "description": "Hex color, e.g. #FFFFFF."},
