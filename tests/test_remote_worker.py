@@ -740,8 +740,10 @@ def test_worker_round_trip_over_http(api, client):
     rw.set_ready(d, src, ["--format", "square"], {"WATERMARK": "1"})
     info = client.get(f"/internal/worker/jobs/{job_id}", headers=h).json()
     assert info == {"state": "ready", "source": src, "source_size": 12,
-                    "args": ["--format", "square"], "env": {"WATERMARK": "1"}}
+                    "args": ["--format", "square"], "env": {"WATERMARK": "1"},
+                    "transcript_size": 0}
     assert client.get(f"/internal/worker/jobs/{job_id}/source", headers=h).content == b"source-bytes"
+    assert client.get(f"/internal/worker/jobs/{job_id}/transcript", headers=h).status_code == 404
 
     url = f"/internal/worker/jobs/{job_id}/file"
     assert client.put(url, headers=h, params={"name": "V_clip_1.mp4", "offset": 0},
@@ -783,6 +785,99 @@ def test_the_source_endpoint_serves_only_the_jobs_own_file(api, client, tmp_path
     assert client.get(f"/internal/worker/jobs/{job_id}/source", headers=h).status_code == 404
 
 
+# --- the transcript this host prepares for the worker ---------------------------
+
+CHECKPOINT = {"source": {"name": "V.mp4", "duration": 58.6},
+              "transcript": {"text": "hola", "language": "es",
+                             "segments": [{"start": 0.0, "end": 1.0, "text": "hola", "words": []}]}}
+
+
+@pytest.mark.parametrize("bad", [
+    None, [], "x", {},
+    {"source": {"name": "V.mp4", "duration": 1.0}},
+    {"source": {"name": "V.mp4", "duration": 1.0}, "transcript": {"segments": []}},
+    {"source": {"name": "V.mp4", "duration": 1.0}, "transcript": {"segments": ["x"]}},
+    {"source": {"name": "../V.mp4", "duration": 1.0}, "transcript": CHECKPOINT["transcript"]},
+    {"source": {"name": "a/V.mp4", "duration": 1.0}, "transcript": CHECKPOINT["transcript"]},
+    {"source": {"name": "V.mp4", "duration": "1"}, "transcript": CHECKPOINT["transcript"]},
+    {"source": {"name": "V.mp4", "duration": True}, "transcript": CHECKPOINT["transcript"]},
+    {"source": {"name": "", "duration": 1.0}, "transcript": CHECKPOINT["transcript"]},
+])
+def test_a_transcript_that_is_not_the_checkpoints_shape_is_refused(bad):
+    assert not rw.valid_transcript(bad)
+    assert rw.valid_transcript(CHECKPOINT)
+
+
+def test_the_prepared_transcript_is_announced_and_read_as_data(tmp_path, monkeypatch):
+    d = str(tmp_path)
+    rw.begin(d, "w1")
+    src = os.path.join(d, "V.mp4")
+    open(src, "wb").write(b"source")
+    assert rw.transcript_path(d) is None and rw.read_transcript(d) is None
+    rw.set_ready(d, src, [], {})
+    assert rw.read(d)["transcript_size"] == 0
+    path = os.path.join(d, rw.TRANSCRIPT_FILE)
+    json.dump(dict(CHECKPOINT, extra={"not": "sent"}), open(path, "w"))
+    rw.set_ready(d, src, [], {})
+    assert rw.read(d)["transcript_size"] == os.path.getsize(path)
+    assert json.loads(rw.read_transcript(d)) == CHECKPOINT       # only the two known keys
+    open(path, "w").write("{not json")
+    assert rw.read_transcript(d) is None
+    json.dump({"source": {}, "transcript": {}}, open(path, "w"))
+    assert rw.read_transcript(d) is None
+    json.dump(CHECKPOINT, open(path, "w"))
+    monkeypatch.setattr(rw, "MAX_TRANSCRIPT_BYTES", 10)
+    assert rw.transcript_path(d) is None and rw.read_transcript(d) is None
+    monkeypatch.undo()
+    os.remove(path)
+    os.symlink(src, path)
+    assert rw.transcript_path(d) is None                          # never through a link
+    rw.drop_transcript(d)
+    rw.drop_transcript(d)                                         # twice is fine
+    assert not os.path.lexists(path)
+
+
+def test_the_checkpoint_name_is_main_pys_own():
+    main = pytest.importorskip("main")      # needs cv2/mediapipe, absent in minimal CI
+    assert rw.TRANSCRIPT_FILE == main.TRANSCRIPT_CHECKPOINT
+
+
+def test_the_transcript_endpoint_needs_a_live_claim_on_a_ready_job(api, client):
+    job_id, d = _queued(api, enqueue=False)
+    claim = rw.begin(d, "w1")
+    h = dict(AUTH, **{"X-Worker-Claim": claim})
+    url = f"/internal/worker/jobs/{job_id}/transcript"
+    json.dump(CHECKPOINT, open(os.path.join(d, rw.TRANSCRIPT_FILE), "w"))
+    assert client.get(url, headers=h).status_code == 404         # still preparing
+    src = os.path.join(d, "V.mp4")
+    open(src, "wb").write(b"source")
+    rw.set_ready(d, src, [], {})
+    info = client.get(f"/internal/worker/jobs/{job_id}", headers=h).json()
+    assert info["transcript_size"] > 0
+    assert client.get(url, headers=h).json() == CHECKPOINT
+    assert client.get(url, headers=AUTH).status_code in (404, 410)    # no claim
+    assert client.get(url).status_code == 404                         # no token
+    # The worker can read it and never write it.
+    put = client.put(f"/internal/worker/jobs/{job_id}/file", headers=h,
+                     params={"name": rw.TRANSCRIPT_FILE, "offset": 0, "size": 1}, content=b"x")
+    assert put.status_code == 400
+    assert json.load(open(os.path.join(d, rw.TRANSCRIPT_FILE))) == CHECKPOINT
+
+
+def test_a_failed_remote_run_keeps_the_prepared_transcript_for_the_retry(api, monkeypatch):
+    m = api
+    job_id, d = _queued(m, enqueue=False)
+    json.dump(CHECKPOINT, open(os.path.join(d, rw.TRANSCRIPT_FILE), "w"))   # --prepare-only left it
+    seen = {}
+
+    def worker_does(_claim):
+        seen["size"] = rw.read(d)["transcript_size"]
+        rw.mark_done(d, 1)                   # the worker's run failed
+    _run_remote_with(m, monkeypatch, d, job_id, worker_does)
+    assert seen["size"] > 0
+    assert os.path.exists(os.path.join(d, rw.TRANSCRIPT_FILE))
+
+
 # --- end to end: the real worker.py against the real endpoints -----------------
 
 STUB_MAIN = r'''
@@ -800,6 +895,9 @@ time.sleep(1)
 open(os.path.join(out, "V_clip_2.mp4"), "wb").write(b"2" * 10)
 open(os.path.join(out, ".marked"), "w").write("1")
 print("CLIP_READY 1 V_clip_2.mp4", flush=True)
+ck = os.path.join(out, ".transcript_checkpoint.json")
+print("TRANSCRIPT %s" % (json.load(open(ck))["transcript"]["segments"][0]["text"]
+                         if os.path.exists(ck) else None), flush=True)
 print("SEEN watermark=%s proxy=%s key=%s" % (
     os.environ.get("WATERMARK"), os.environ.get("PROXY_URL"),
     os.environ.get("GEMINI_API_KEY")), flush=True)
@@ -822,6 +920,8 @@ def test_end_to_end_with_the_real_worker(api, monkeypatch, tmp_path):
         with open(os.path.join(d, "V.mp4"), "wb") as f:
             f.write(b"source-bytes")
         m._handle_job_line(jid, f"SOURCE_READY {os.path.join(d, 'V.mp4')}")
+        with open(os.path.join(d, rw.TRANSCRIPT_FILE), "w") as f:
+            json.dump(CHECKPOINT, f)
         return 0
     monkeypatch.setattr(m, "_run_main", prepare)
 
@@ -857,6 +957,10 @@ def test_end_to_end_with_the_real_worker(api, monkeypatch, tmp_path):
     assert open(os.path.join(d, ".marked")).read() == "1"   # written by the API, not sent
     # The job's option reached the worker; the API's proxy and model key did not.
     assert "SEEN watermark=1 proxy=None key=the-workers-own-key" in job["logs"]
+    # The transcript this host prepared reached the worker's main.py, and
+    # once the job is done nothing of it stays here.
+    assert "TRANSCRIPT hola" in job["logs"]
+    assert not os.path.exists(os.path.join(d, rw.TRANSCRIPT_FILE))
     assert not m._remote_jobs and job_id not in m._running_jobs
     assert m.concurrency_semaphore._value == 2
     assert not rw.is_remote(d)

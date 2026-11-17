@@ -84,3 +84,69 @@ class TestRobustness:
         assert main.TRANSCRIPT_CHECKPOINT.startswith(".")
         assert not main.TRANSCRIPT_CHECKPOINT.endswith("_metadata.json")
         assert not main.TRANSCRIPT_CHECKPOINT.endswith(".mp4")
+
+
+class _FakeCapture:
+    """25 fps, DUR seconds: what main reads to tie a checkpoint to its source."""
+    def __init__(self, path):
+        pass
+
+    def get(self, prop):
+        return 25.0 if prop == main.cv2.CAP_PROP_FPS else DUR * 25
+
+    def release(self):
+        pass
+
+
+class TestPrepareOnly:
+    """--prepare-only leaves the transcript for the run that renders the job
+    (the remote worker): from the download cache or transcribed on this host."""
+
+    @pytest.fixture
+    def prep(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main.cv2, "VideoCapture", _FakeCapture)
+        calls = []
+
+        def transcribe(path, slot_timeout=None):
+            calls.append(path)
+            assert slot_timeout == 45.0          # never waits for a slot for ever
+            return TRANSCRIPT
+        monkeypatch.setattr(main, "transcribe_video", transcribe)
+        import source_cache
+        monkeypatch.setattr(source_cache, "fetch_transcript", lambda url, dur: None)
+        stored = []
+        monkeypatch.setattr(source_cache, "store_transcript",
+                            lambda *a: stored.append(a) or True)
+        return calls, stored
+
+    def test_transcribes_here_and_leaves_the_checkpoint(self, tmp_path, prep):
+        calls, stored = prep
+        assert main.prepare_transcript(SRC, str(tmp_path), "https://youtu.be/x", "1")
+        assert calls == [SRC] and len(stored) == 1
+        assert main.load_transcript_checkpoint(str(tmp_path), SRC, DUR) == TRANSCRIPT
+        # A second prepare of the same job (a retry) does not transcribe again.
+        assert main.prepare_transcript(SRC, str(tmp_path), "https://youtu.be/x", "1")
+        assert calls == [SRC]
+
+    def test_cache_mode_never_transcribes(self, tmp_path, prep, monkeypatch):
+        calls, stored = prep
+        assert not main.prepare_transcript(SRC, str(tmp_path), "https://youtu.be/x", "cache")
+        assert calls == [] and _load(tmp_path) is None
+        import source_cache
+        monkeypatch.setattr(source_cache, "fetch_transcript", lambda url, dur: TRANSCRIPT)
+        assert main.prepare_transcript(SRC, str(tmp_path), "https://youtu.be/x", "cache")
+        assert calls == [] and stored == [] and _load(tmp_path) == TRANSCRIPT
+
+    def test_a_failure_never_fails_the_prepare(self, tmp_path, prep, monkeypatch):
+        def boom(path, slot_timeout=None):
+            raise RuntimeError("no card")
+        monkeypatch.setattr(main, "transcribe_video", boom)
+        assert not main.prepare_transcript(SRC, str(tmp_path), None, "1")
+        assert _load(tmp_path) is None
+
+    def test_busy_slots_leave_it_to_the_renderer(self, tmp_path, prep, monkeypatch):
+        def busy(path, slot_timeout=None):
+            raise TimeoutError("no free transcription slot")
+        monkeypatch.setattr(main, "transcribe_video", busy)
+        assert not main.prepare_transcript(SRC, str(tmp_path), "https://youtu.be/x", "1")
+        assert _load(tmp_path) is None

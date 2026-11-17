@@ -71,7 +71,10 @@ the API host.
   settings cross by name from a closed list (`remote_worker.allowed_option`:
   `WATERMARK`, the source caps, `AUTO_*`, `CLIP_*`), checked on both sides, and
   the command is `--format <choice>` or nothing (`worker_args`, `safe_args`).
-- It can read one thing: the source of a job it holds a live claim for.
+- It can read two things, both of a job it holds a live claim for: the source
+  and, when this host prepared one, the source's transcript
+  (`.../transcript`, see below). It can never write the transcript back: it
+  is a dotfile.
 - It can write only render outputs into that job's directory
   (`remote_worker.safe_relpath`): one plain file name with a known extension,
   no subdirectory, no link, **no dotfile**, and never a file that was there
@@ -128,7 +131,8 @@ it may hold at once), `REMOTE_LEASE_SECONDS`, `REMOTE_MAX_SECONDS`,
 `REMOTE_BREAKER_SECONDS`, `REMOTE_QUIET_MINUTES` (minutes of the hour, UTC,
 like `55-5`, with no new claim: when the worker's host shares its link with
 something that peaks at fixed times), `REMOTE_SOURCE_MBPS` (cap for all source
-transfers together, 0 for none).
+transfers together, 0 for none), `PREPARE_TRANSCRIPT` (`1`, `cache` or unset:
+whether the source's transcript is prepared for the worker).
 
 The source download is the worker's one long call: the API touches the lease
 while it streams the file (`_source_chunks`), so a slow transfer is not taken
@@ -148,6 +152,22 @@ On a CPU each job costs several times the CPU of a GPU job. Size
 
 What limits a CPU worker is rarely its slots:
 
+- **Transcription.** On a CPU the transcript is the largest single cost of a
+  job and about half of its wall time. With `PREPARE_TRANSCRIPT` set on the
+  API host, `main.py --prepare-only` leaves the transcript in the job
+  directory as main.py's own checkpoint (`.transcript_checkpoint.json`):
+  `cache` takes only what the download cache holds for that very source, `1`
+  otherwise transcribes there, on the card, inside the same `ASR_HOST_SLOTS`
+  as any job, and only if a slot frees up within `PREPARE_TRANSCRIPT_WAIT`
+  seconds (45): when the card's own jobs keep them busy the worker
+  transcribes for itself, so neither host waits for the other. The claim then announces `transcript_size`, the worker fetches
+  it (`GET .../transcript`, re-serialised as data and shape-checked on both
+  sides, `remote_worker.valid_transcript`), puts it at the same place in its
+  own job directory and its main.py reuses it exactly like a resumed run.
+  Anything wrong with it and the worker transcribes as before. A remote run
+  that fails leaves the checkpoint for the retry on the API host; a completed
+  one removes it. Watch `asr_wait_s` in the API host's `[job-cpu]` lines: the
+  prepared transcripts share its transcription turns.
 - **Transcription turns.** `ASR_HOST_SLOTS` (default 2) is sized for a GPU's
   memory. On a CPU host a transcription takes minutes, so with 2 turns most
   slots sit waiting for one (the job's `asr_wait_s`). Raise it on a CPU host

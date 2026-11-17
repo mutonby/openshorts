@@ -100,6 +100,17 @@ def limits() -> dict:
     }
 
 
+def free_clip_cap() -> int:
+    """Most clips a free-plan job renders (``FREE_MAX_CLIPS``), 0 for no cap.
+    A free job costs render time in proportion to its clips: this is the
+    setting that sizes the free queue's output to the hardware. Independent of
+    the saturation mode and of its kill switch."""
+    try:
+        return max(0, int(os.environ.get("FREE_MAX_CLIPS", "") or 0))
+    except ValueError:
+        return 0
+
+
 def enabled() -> bool:
     """Cloud only, not killed, and something to do."""
     if not is_enabled() or killed():

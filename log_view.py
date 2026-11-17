@@ -28,6 +28,8 @@ _RULES = [
                 r'Execution error|No metadata|❌)'), None, None),
     # The free queue's brake capped this video's clips (app._apply_brake_clips).
     (re.compile(r'^⏳ The free queue is very busy'), None, None),
+    # The free plan's clip cap (app._cap_clips_at_dispatch).
+    (re.compile(r'^⏳ On the free plan a video gets'), None, None),
     # The download waits for the YouTube account (app._schedule_auto_retry).
     (re.compile(r'^⏳ YouTube is limiting downloads'), None, None),
     (re.compile(r'Download attempt'), '📥 Downloading video…', 'download'),

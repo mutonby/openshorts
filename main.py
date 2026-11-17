@@ -2043,6 +2043,56 @@ def load_transcript_checkpoint(output_dir, input_video, duration):
         return None
 
 
+def prepare_transcript(input_video, output_dir, url, mode):
+    """``--prepare-only``: leave this source's transcript as the job's
+    checkpoint, so the run that renders it (a remote worker with no GPU, or
+    the retry on this host) reuses it instead of transcribing.
+
+    ``mode`` "cache": only what the download cache already holds for this very
+    source. "1": otherwise transcribe here, on this host's card, inside the
+    same host-wide slot as any job, and only if one frees up within
+    ``PREPARE_TRANSCRIPT_WAIT`` seconds (45): this host's own jobs need those
+    slots too, so when they are busy the renderer transcribes for itself.
+    Best effort: without a checkpoint the renderer transcribes as it always
+    did."""
+    try:
+        cap = cv2.VideoCapture(input_video)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        duration = frame_count / fps
+        if load_transcript_checkpoint(output_dir, input_video, duration) is not None:
+            return True
+        transcript, from_cache = None, False
+        if url:
+            import source_cache
+            transcript = source_cache.fetch_transcript(url, duration)
+            from_cache = transcript is not None
+        if transcript is None and mode == "1":
+            from transcribe_backends import NoAudioError
+            try:
+                wait = float(os.environ.get("PREPARE_TRANSCRIPT_WAIT", "") or 45)
+            except ValueError:
+                wait = 45.0
+            try:
+                transcript = transcribe_video(input_video, slot_timeout=max(0.0, wait))
+            except NoAudioError:
+                return False
+            except TimeoutError:
+                print("⏭️ No free transcription slot here: the renderer transcribes.")
+                return False
+        if transcript is None or not transcript.get("segments"):
+            return False
+        save_transcript_checkpoint(output_dir, transcript, input_video, duration)
+        if url and not from_cache:
+            import source_cache
+            source_cache.store_transcript(url, duration, transcript, input_video)
+        return True
+    except Exception as e:
+        print(f"⚠️ Transcript not prepared ({type(e).__name__}: {e}).")
+        return False
+
+
 def clear_transcript_checkpoint(output_dir):
     try:
         os.remove(os.path.join(output_dir, TRANSCRIPT_CHECKPOINT))
@@ -2075,7 +2125,9 @@ def _free_gpu_cache():
         pass
 
 
-def transcribe_video(video_path):
+def transcribe_video(video_path, slot_timeout=None):
+    """``slot_timeout``: seconds to wait for a host transcription slot before
+    giving up with TimeoutError (None waits for as long as it takes)."""
     print("🎙️  Transcribing video...")
     from transcribe_backends import transcribe_media, release_models, host_asr_slot
 
@@ -2086,7 +2138,7 @@ def transcribe_video(video_path):
     # clips into its render still held 5.9 GB of the 20 GB card; eight such
     # jobs filled it and NVENC / TransNetV2 failed with CUDA OOM (30-60% of
     # jobs failing per hour at peak). Nothing after this point transcribes.
-    with host_asr_slot():
+    with host_asr_slot(timeout=slot_timeout):
         try:
             transcript = transcribe_media(video_path)
         finally:
@@ -2814,6 +2866,9 @@ if __name__ == '__main__':
         # cut to what was reserved). A remote worker takes it from here
         # (remote_worker.py); the marker is consumed by app.py.
         print(f"SOURCE_READY {input_video}", flush=True)
+        _mode = os.environ.get("PREPARE_TRANSCRIPT", "").strip().lower()
+        if _mode in ("1", "cache") and not args.skip_analysis and not args.transcript:
+            prepare_transcript(input_video, output_dir, args.url, _mode)
         sys.exit(0)
 
     # Layout choice is per SOURCE video, not per clip: one upload and one call

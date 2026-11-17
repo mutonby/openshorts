@@ -549,6 +549,46 @@ class TestBrakeClips:
         assert self._dispatch(out, monkeypatch) == ["slow1"]
         assert "CLIP_TARGET_MAX" not in app_module.jobs["slow1"]["env"]
 
+    def test_free_plan_cap_is_decided_at_dispatch(self, sat):
+        cap = app_module._cap_clips_at_dispatch
+        job = {"env": {}, "logs": [], "watermark": True}
+        cap(job, FREE)
+        assert "CLIP_TARGET_MAX" not in job["env"]          # unset: no cap
+        sat.setenv("FREE_MAX_CLIPS", "2")
+        cap(job, FREE)
+        assert job["env"]["CLIP_TARGET_MIN"] == job["env"]["CLIP_TARGET_MAX"] == "2"
+        assert job["logs"][-1] == app_module.FREE_CLIPS_LOG.format(n=2)
+        from log_view import friendly_logs
+        assert friendly_logs([job["logs"][-1]]) == [job["logs"][-1]]
+        # The user's own smaller target stays.
+        job = {"env": {"CLIP_TARGET_MIN": "1", "CLIP_TARGET_MAX": "1"}, "logs": [],
+               "watermark": True}
+        cap(job, FREE)
+        assert job["env"]["CLIP_TARGET_MAX"] == "1"
+
+    def test_free_plan_cap_never_reaches_a_paid_job(self, sat):
+        cap = app_module._cap_clips_at_dispatch
+        sat.setenv("FREE_MAX_CLIPS", "2")
+        for job, prio in (({"env": {}, "logs": [], "watermark": True}, 1),       # paid since
+                          ({"env": {}, "logs": [], "watermark": False}, FREE),   # no mark
+                          ({"env": {}, "logs": [], "watermark": True, "topup": True}, FREE)):
+            cap(job, prio)
+            assert "CLIP_TARGET_MAX" not in job["env"]
+
+    def test_the_lower_of_the_free_cap_and_the_brake_wins(self, sat):
+        cap = app_module._cap_clips_at_dispatch
+        sat.setenv("FREE_MAX_CLIPS", "2")
+        _set_brake(True)
+        job = {"env": {}, "logs": [], "watermark": True}
+        cap(job, SLOW)
+        assert job["env"]["CLIP_TARGET_MAX"] == "2"
+        assert job["logs"][-1] == app_module.FREE_CLIPS_LOG.format(n=2)
+        sat.setenv("FREE_MAX_CLIPS", "5")
+        job = {"env": {}, "logs": [], "watermark": True}
+        cap(job, SLOW)
+        assert job["env"]["CLIP_TARGET_MAX"] == "3"
+        assert job["logs"][-1] == app_module.BRAKE_CLIPS_LOG.format(n=3)
+
 
 # --- Starved jobs ---------------------------------------------------------------------
 

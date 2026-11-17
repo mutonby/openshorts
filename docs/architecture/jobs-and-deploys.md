@@ -483,6 +483,22 @@ turn, and 4 processes asleep queued the rest (estimate p50 45 s). The cost
 line (`/api/process/estimate`) gives up after `ESTIMATE_PROBE_TIMEOUT` (20 s).
 
 
+## Clips of a free job
+
+A job's render time grows with its clips (the cut, the reframe and the caption
+pass are per clip; only the download, the transcript and the selection are per
+job), so the number of clips a free job renders is what sizes the free queue's
+output to the hardware. `FREE_MAX_CLIPS` (unset or 0: no cap) caps it at
+dispatch (`app._cap_clips_at_dispatch`), through `CLIP_TARGET_MIN/MAX` like the
+slow lane's brake and like the user's own `target_clips`: the scoring pass
+still ranks every window and the best ones are kept. Only a job that carries
+the free-plan mark, was not bought with a top-up and is still at a free
+priority when it is dispatched: a job whose owner paid while it waited was
+raised and gets every clip. Decided at dispatch, so the jobs already waiting
+get the setting of the moment, here and on the remote worker. The job's log
+says it (`FREE_CLIPS_LOG`, kept by `log_view`). With the brake on, the lower
+of the two caps applies.
+
 ## Frame rate of free jobs
 
 Every pass after the cut (tracking, scene detection, the reframe render,

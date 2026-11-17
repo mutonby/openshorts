@@ -72,12 +72,15 @@ class host_asr_slot:
     Blocks (polling once a second) until a slot is free. A crashed holder
     releases its lock with its file descriptor, so a slot can never leak.
     Degrades to a no-op where flock or the directory is unavailable.
+    ``timeout``: give up with TimeoutError after that many seconds without a
+    slot (a caller that has another way to get the work done).
     """
 
-    def __init__(self, slots=None, lock_dir=None, poll=1.0):
+    def __init__(self, slots=None, lock_dir=None, poll=1.0, timeout=None):
         self.slots = ASR_HOST_SLOTS if slots is None else slots
         self.lock_dir = lock_dir or ASR_LOCK_DIR
         self.poll = poll
+        self.timeout = timeout
         self._fh = None
 
     def __enter__(self):
@@ -104,6 +107,9 @@ class host_asr_slot:
                     return self
                 except OSError:
                     fh.close()
+            if self.timeout is not None and time.monotonic() - started >= self.timeout:
+                ASR_WAIT["s"] += time.monotonic() - started
+                raise TimeoutError("no free transcription slot")
             if not announced:
                 print("🎙️ Waiting for a free transcription slot…", flush=True)
                 announced = True

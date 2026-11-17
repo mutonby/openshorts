@@ -329,6 +329,18 @@ class TestHostAsrSlot:
         t.join(2)
         assert got and got[0] >= released
 
+    def test_a_bounded_wait_gives_up_and_takes_no_slot(self, tmp_path):
+        import transcribe_backends as tb
+        first = tb.host_asr_slot(slots=1, lock_dir=str(tmp_path), poll=0.01)
+        first.__enter__()
+        with pytest.raises(TimeoutError):
+            with tb.host_asr_slot(slots=1, lock_dir=str(tmp_path), poll=0.01, timeout=0.05):
+                raise AssertionError("no slot was free")
+        first.__exit__(None, None, None)
+        # Free again: a bounded wait takes it at once.
+        with tb.host_asr_slot(slots=1, lock_dir=str(tmp_path), poll=0.01, timeout=0.05) as s:
+            assert s._fh is not None
+
     def test_disabled_is_a_noop(self, tmp_path):
         import transcribe_backends as tb
         with tb.host_asr_slot(slots=0, lock_dir=str(tmp_path)) as s:

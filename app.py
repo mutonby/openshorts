@@ -26,7 +26,8 @@ from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, StreamingResponse, RedirectResponse
+from fastapi.responses import (HTMLResponse, FileResponse, JSONResponse, StreamingResponse,
+                               RedirectResponse, Response)
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
@@ -3118,18 +3119,22 @@ async def cleanup_jobs():
 
 BRAKE_CLIPS_LOG = ("⏳ The free queue is very busy right now, so this video gets its "
                    "{n} best clips. Plans get every clip and skip the line.")
+FREE_CLIPS_LOG = ("⏳ On the free plan a video gets its {n} best clips. "
+                  "Plans get every clip and skip the line.")
 
 
-def _apply_brake_clips(job):
+def _apply_brake_clips(job, cap=None, log=BRAKE_CLIPS_LOG):
     """A slow-lane free job dispatched while the brake is on renders at most
     ``SLOW_LANE_BRAKE_CLIPS`` clips. Through ``CLIP_TARGET_MIN/MAX`` like the
     user's own ``target_clips``: the scoring pass still ranks every window,
     the floor stays enforced in code (here equal to the cap) and the extra
     clips are dropped by score (``trim_to_best``). Decided at dispatch, so a
-    job resumed after the brake let go gets the full set."""
+    job resumed after the brake let go gets the full set. ``cap``/``log``:
+    another cap decided at dispatch (``_cap_clips_at_dispatch``)."""
     if not job or job.get('env') is None:
         return
-    cap = _queue_mode.limits()["brake_clips"]
+    if cap is None:
+        cap = _queue_mode.limits()["brake_clips"]
     env = job['env']
     try:
         cap = min(cap, int(env["CLIP_TARGET_MAX"])) if env.get("CLIP_TARGET_MAX") else cap
@@ -3141,7 +3146,26 @@ def _apply_brake_clips(job):
     job['clips_capped'] = cap
     logs = job.get('logs')
     if logs is not None:
-        logs.append(BRAKE_CLIPS_LOG.format(n=cap))
+        logs.append(log.format(n=cap))
+
+
+def _cap_clips_at_dispatch(job, priority):
+    """The clip caps of a free job, decided when it is dispatched (here or to
+    the remote worker) so a job already waiting gets today's setting: the
+    free plan's own cap (``FREE_MAX_CLIPS``; never a job that carries no mark
+    or whose owner bought a top-up) and the slow lane's brake, whichever is
+    lower."""
+    if not job or priority is None or priority < _queue_mode.FREE_PRIORITY:
+        return
+    cap, log = 0, FREE_CLIPS_LOG
+    if job.get('watermark') and not job.get('topup'):
+        cap = _queue_mode.free_clip_cap()
+    if priority >= _queue_mode.SLOW_PRIORITY and _queue_mode.brake_active():
+        brake = _queue_mode.limits()["brake_clips"]
+        if not cap or brake < cap:
+            cap, log = brake, BRAKE_CLIPS_LOG
+    if cap:
+        _apply_brake_clips(job, cap, log)
 
 
 async def process_queue():
@@ -3177,8 +3201,7 @@ async def process_queue():
                 print(f"⏸️ Draining — leaving {job_id} for the next instance.")
                 continue
             print(f"🔄 Acquired slot for job: {job_id}")
-            if _priority >= _queue_mode.SLOW_PRIORITY and _queue_mode.brake_active():
-                _apply_brake_clips(jobs.get(job_id))
+            _cap_clips_at_dispatch(jobs.get(job_id), _priority)
             _running_jobs.add(job_id)
             if job_id in jobs:
                 jobs[job_id]['run_started'] = time.time()
@@ -5007,8 +5030,7 @@ def _claim_remote_job(worker):
                 kind = ""
             job['logs'].append(_expired_log(kind))
             continue
-        if prio >= _queue_mode.SLOW_PRIORITY and _queue_mode.brake_active():
-            _apply_brake_clips(job)
+        _cap_clips_at_dispatch(job, prio)
         _running_jobs.add(job_id)
         _remote_jobs.add(job_id)
         job['run_started'] = time.time()
@@ -5088,6 +5110,10 @@ async def _run_job_remote(job_id, job_data):
                 jobs[job_id]['logs'].append(REMOTE_LOST_LOG)
                 return
         _finish_job(job_id, returncode, output_dir)
+        if returncode == 0:
+            # The worker's run is the job: the transcript prepared for it has
+            # no reader left (a failed run keeps it for the retry here).
+            remote_worker.drop_transcript(output_dir)
         if (returncode == 0 and remote_worker.source_is_url(cmd)
                 and "--keep-original" not in cmd):
             with suppress(OSError):
@@ -5214,7 +5240,23 @@ async def worker_job(job_id: str, request: Request):
         return {"state": remote_worker.PREPARING}
     return {"state": remote_worker.READY, "source": data.get("source"),
             "source_size": data.get("source_size"), "args": data.get("args") or [],
-            "env": data.get("env") or {}}
+            "env": data.get("env") or {},
+            "transcript_size": int(data.get("transcript_size") or 0)}
+
+
+@app.get("/internal/worker/jobs/{job_id}/transcript")
+async def worker_transcript(job_id: str, request: Request):
+    """The transcript this host prepared for the job (``main.py
+    --prepare-only``), as data: the worker reuses it instead of transcribing
+    on its CPU. Only for a live claim on a ready job, like the source."""
+    job_dir, data = _worker_job(request, job_id)
+    body = None
+    if data.get("state") == remote_worker.READY:
+        body = await asyncio.to_thread(remote_worker.read_transcript, job_dir)
+    if body is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    remote_worker.touch_seen(job_dir)
+    return Response(content=body, media_type="application/json")
 
 
 @app.get("/internal/worker/jobs/{job_id}/source")
