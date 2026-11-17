@@ -60,6 +60,12 @@ def _make_job(tmp_path, monkeypatch, served="mytitle_clip_1.mp4", **clip_extra):
     return job_dir, meta_path
 
 
+@pytest.fixture(autouse=True)
+def no_model(monkeypatch):
+    """No test here talks to a model, whatever key the environment holds."""
+    monkeypatch.setattr(pro_mode, "_ask_model", lambda prompt, key: {"titles": []})
+
+
 @pytest.fixture()
 def job(tmp_path, monkeypatch):
     job_dir, meta_path = _make_job(tmp_path, monkeypatch)
@@ -74,7 +80,7 @@ def fake_render(monkeypatch):
     """Stub the render seam: writes the output and keeps two stretches."""
     calls = []
 
-    def fake_run(clip_path, out_path, words=(), ranges=(), wait=0.0):
+    def fake_run(clip_path, out_path, words=(), ranges=(), wait=0.0, **kw):
         calls.append({"clip": os.path.basename(clip_path), "wait": wait})
         with open(out_path, "wb") as f:
             f.write(b"pro")
@@ -200,6 +206,25 @@ class TestLayersGoBackOn:
         assert hook["on"].startswith("recut_") and hook["text"] == "Wait for it"
         assert hook["position"] == "auto" and hook["has_captions"] is True
         assert layered_job["captions"][0].startswith("hooked_")
+
+    def test_pro_mode_brings_its_caption_style_and_takes_it_back(self, layered_job, fake_render):
+        _switch("pro")
+        clip = _clip(layered_job["meta_path"])
+        assert clip["caption_style"] == app_module.CAPTION_PRESETS["cine"]
+        _switch("normal")
+        assert not _clip(layered_job["meta_path"]).get("caption_style")
+
+    def test_titles_stay_off_the_hook(self, layered_job, monkeypatch):
+        seen = {}
+
+        def fake_run(clip_path, out_path, words=(), ranges=(), wait=0.0, **kw):
+            seen.update(kw)
+            with open(out_path, "wb") as f:
+                f.write(b"pro")
+            return {"keep": [[0.0, 30.0]], "duration": 30.0, "shots": 1, "framed": 1}
+        monkeypatch.setattr(pro_mode, "run", fake_run)
+        assert _switch("pro").status_code == 200
+        assert seen["hook_seconds"] == 5.0
 
     def test_back_to_normal_serves_the_file_from_before(self, layered_job, fake_render):
         _switch("pro")

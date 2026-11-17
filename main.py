@@ -1355,7 +1355,7 @@ def finalize_clip_passthrough(input_video, final_output_video):
 
 
 def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=None,
-                      plan_only=False, mark=False):
+                      plan_only=False, mark=False, style=None):
     """Burn the default caption style onto a finished clip.
 
     ``split_ranges``: (start, end) stretches, in clip seconds, rendered with
@@ -1388,7 +1388,9 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
         return None  # silent video: nothing to caption
     try:
         import subtitles as _subs
-        style = _subs.AUTO_CAPTION_STYLE
+        # ``style``: a CAPTION_PRESETS entry to burn instead of the default
+        # look (pro mode's captions); what it does not name stays the default.
+        style = {**_subs.AUTO_CAPTION_STYLE, **(style or {})}
         output_dir = os.path.dirname(clip_path)
         stem = os.path.basename(clip_path)
         generation_id = int(time.time())
@@ -1429,7 +1431,8 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
                 font_name=style["font_name"], font_color=style["font_color"],
                 border_color=style["border_color"], border_width=style["border_width"],
                 highlight_color=style["highlight_color"], effect=style["effect"],
-                base_opacity=style["base_opacity"], uppercase=style["uppercase"]):
+                base_opacity=style["base_opacity"], uppercase=style["uppercase"],
+                shadow=style.get("shadow", 0), reveal=style.get("reveal", False)):
             print("   ℹ️ No words in range — clip ships without captions.")
             return None
 
@@ -1569,9 +1572,18 @@ def pro_clip(clip_path, clip, transcript):
         wait = float(os.environ.get("PRO_JOB_WAIT_SECONDS", "120"))
     except ValueError:
         wait = 120.0
+    import subtitles as _subs
+    hook_seconds = 0.0
+    if os.environ.get("AUTO_HOOK") == "1" and (clip.get('viral_hook_text') or '').strip():
+        try:
+            hook_seconds = float(os.environ.get("AUTO_HOOK_SECONDS", "5"))
+        except ValueError:
+            hook_seconds = 5.0
     try:
         out_name, updates = pro_mode.convert(
-            clip_path, os.path.basename(clip_path), clip, transcript, wait=wait)
+            clip_path, os.path.basename(clip_path), clip, transcript, wait=wait,
+            api_key=os.getenv("GEMINI_API_KEY"), hook_seconds=hook_seconds,
+            caption_style=_subs.CAPTION_PRESETS["cine"])
     except Exception as e:
         print(f"   ℹ️ Pro mode skipped ({type(e).__name__}: {e}) — clip ships as it is.")
         return None
@@ -3011,9 +3023,11 @@ if __name__ == '__main__':
                     # canonical reframe stays, it is the clip's normal mode.
                     base_path, words, w_start, w_end = clip_final_path, transcript, start, end
                     pro = pro_clip(clip_final_path, clip, transcript) if success else None
+                    cap_style = None
                     if pro:
                         deliver_path = base_path = pro[0]
                         words, w_start, w_end = pro[1:]
+                        cap_style = clip.get('caption_style')
                     split_ranges = _layouts.split_ranges(clip['layout_ranges'])
                     if success and os.environ.get("AUTO_HOOK") == "1":
                         # Captions ride the hook's ffmpeg (one decode, two
@@ -3021,7 +3035,8 @@ if __name__ == '__main__':
                         plan = None
                         if (clip.get('viral_hook_text') or '').strip():
                             plan = auto_caption_clip(base_path, words, w_start, w_end,
-                                                     split_ranges=split_ranges, plan_only=True)
+                                                     split_ranges=split_ranges, plan_only=True,
+                                                     style=cap_style)
                         hooked = auto_hook_clip(base_path, clip, captions=plan,
                                                 mark=os.environ.get("WATERMARK") == "1")
                         if hooked:
@@ -3032,7 +3047,8 @@ if __name__ == '__main__':
                             captioned = auto_caption_clip(
                                 deliver_path, words, w_start, w_end,
                                 split_ranges=split_ranges,
-                                mark=os.environ.get("WATERMARK") == "1")
+                                mark=os.environ.get("WATERMARK") == "1",
+                                style=cap_style)
                         served = captioned or deliver_path
                         if os.environ.get("WATERMARK") == "1":
                             served = mark_delivery(served)

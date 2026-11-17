@@ -7307,11 +7307,21 @@ async def _set_clip_mode_locked(req: ClipModeRequest, request: Request, job):
         minutes = _cloud_config.EDITOR_ACTION_MINUTES if BILLING_ENABLED else 0
         reservation_id = await reserve_managed_action(request, minutes, req.job_id, "pro")
         layers = _clip_layers(clip, had_hook, had_captions)
+        # Keyword titles need a model: the caller's entitlement decides, as
+        # for every other Gemini-backed action. None just means no titles.
+        api_key = await resolve_gemini(request)
+        hook_seconds = 0.0
+        if had_hook:
+            try:
+                hook_seconds = float((clip.get('auto_hook') or {}).get('duration_seconds') or 5.0)
+            except (TypeError, ValueError):
+                hook_seconds = 5.0
         try:
             new_base, updates = await loop.run_in_executor(
-                None, lambda: pro_mode.convert(base_path, clean_name, clip,
-                                               data.get('transcript') or {},
-                                               wait=PRO_WAIT_SECONDS))
+                None, lambda: pro_mode.convert(
+                    base_path, clean_name, clip, data.get('transcript') or {},
+                    wait=PRO_WAIT_SECONDS, api_key=api_key, hook_seconds=hook_seconds,
+                    caption_style=CAPTION_PRESETS["cine"] if had_captions else None))
         except Exception as e:
             if reservation_id:
                 await _metering.release_reservation(reservation_id)

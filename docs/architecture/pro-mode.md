@@ -4,8 +4,9 @@ A second pass over a clip that is already framed (the clean 9:16 file). It cuts
 the dead air (silences measured in the audio, with air left around the words),
 changes the scale a little on every cut, frames tighter on the face and follows
 it, grades the picture and dims the background behind the speaker (MediaPipe
-person segmentation). No on-screen titles and no music: captions and the hook
-stay the product's own layers, on top.
+person segmentation), and burns three to five keyword titles at the top of the
+frame. No music. Captions and the hook stay the product's own layers, on top;
+the captions take pro mode's own look.
 
 It is for one person talking to camera. On a screen recording, a split or a
 wide shot there is no face to frame, and cutting inside the picture pulls what
@@ -36,6 +37,22 @@ is shown away from what is said.
   puts back the layers that were on it: the hook from the clip's `auto_hook`,
   captions through `_reapply_captions` (so in the clip's `caption_style`),
   the free plan's mark through `_deliver`.
+- **Titles** (`pick_titles`, `sanitize_titles`, `place_titles`,
+  `write_titles`): one model call per conversion proposes the words (Gemini
+  with the caller's entitlement, `resolve_gemini`, or the local LLM); without
+  a model, or on any failure, the clip simply has none. The code keeps only
+  words really spoken at the index the model names (a drifted proposal falls
+  back to the spoken word), and places them on the cut timeline: only where
+  the word survived, only on a shot framed on the face (the top of the frame
+  is headroom there; over a board it would cover content), never during the
+  hook's seconds, 2.5 s apart, five at most. They are burned into the pro
+  file itself (Archivo Black, `fonts/`), in the render's own encode: no extra
+  pass, and going back to normal is what removes them. The words shown are
+  kept as `pro_titles`.
+- **Captions.** A clip with burned captions and no style of its own gets the
+  `cine` preset (`subtitles.CAPTION_PRESETS`) as its `caption_style`; a style
+  the user picked is never replaced. Going back to normal removes it only if
+  it is still the one pro mode set (`pro_before.caption_style_set`).
 - **Which file.** The job writes no `video_url` into the metadata, so the
   switch finds the served file through `_served_clip_file`: what the dashboard
   says it shows (`input_filename`, only a file of that clip), the in-memory

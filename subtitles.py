@@ -289,6 +289,14 @@ CAPTION_PRESETS = {
     "oneword": {**_PRESET_BASE, "font_name": "Anton", "font_size": 70,
                 "highlight_color": "#FFFFFF", "border_width": 5, "effect": "pop",
                 "uppercase": True, "max_chars": 1},
+    # Pro mode's captions (pro_mode.py): sentence case, no outline, soft
+    # shadow, the words not being said dimmed and the spoken one in the
+    # title's orange. Sized between "clean" and the default: the reference
+    # look is smaller still, and reads badly on a phone.
+    "cine": {**_PRESET_BASE, "font_name": "Montserrat ExtraBold", "font_size": 36,
+             "highlight_color": "#FF5A1F", "border_width": 0, "shadow": 2,
+             "effect": "none", "uppercase": False, "base_opacity": 0.8,
+             "max_chars": 14},
     # No outline, soft shadow, sentence case.
     "clean": {**_PRESET_BASE, "font_name": "Montserrat ExtraBold", "font_size": 34,
               "highlight_color": "#FFFFFF", "border_width": 0, "shadow": 2,

@@ -5,6 +5,7 @@ The render itself (ffmpeg, mediapipe) is not run here: these tests own the
 decisions around it."""
 
 import os
+import re
 
 import pytest
 
@@ -12,6 +13,15 @@ np = pytest.importorskip("numpy")
 import pro_mode  # noqa: E402
 
 FPS = 30.0
+
+
+@pytest.fixture(autouse=True)
+def no_model(monkeypatch):
+    """No test here talks to a model, whatever key the environment holds."""
+    def refuse(prompt, api_key):
+        raise AssertionError("a test reached the model")
+    monkeypatch.setattr(pro_mode, "_ask_model", refuse)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
 
 
 def _words(*spans):
@@ -189,7 +199,7 @@ class TestConvert:
     def rendered(self, monkeypatch):
         calls = []
 
-        def fake_run(clip_path, out_path, words=(), ranges=(), wait=0.0):
+        def fake_run(clip_path, out_path, words=(), ranges=(), wait=0.0, **kw):
             calls.append({"clip": clip_path, "words": list(words), "wait": wait})
             with open(out_path, "wb") as f:
                 f.write(b"pro")
@@ -249,3 +259,137 @@ class TestConvert:
         assert updates["recipe"]["framing"] == "track"
         assert updates["recipe"]["canonical_range"] == {"start": 10.0, "end": 40.0}
         assert updates["pro_before"]["recipe"] == recipe
+
+
+WORDS = [{"w": "The", "s": 0.0, "e": 0.2}, {"w": "champion,", "s": 0.3, "e": 0.9},
+         {"w": "años", "s": 4.0, "e": 4.5}, {"w": "it", "s": 8.0, "e": 8.1},
+         {"w": "mindset", "s": 9.0, "e": 9.5}]
+
+
+class TestTitles:
+    def test_only_words_really_spoken_become_titles(self):
+        raw = {"titles": [
+            {"word_index": 1, "text": "CHAMPION"},           # as spoken
+            {"word_index": 2, "text": "YEARS"},              # translated: the spoken word wins
+            {"word_index": 3, "text": "IT"},                 # too short to be a title
+            {"word_index": 4, "text": "the mindset is {x}"},  # a sentence, and markup
+            {"word_index": 99, "text": "NOWHERE"},
+            {"text": "NO INDEX"}]}
+        assert pro_mode.sanitize_titles(raw, WORDS) == [
+            {"t": 0.3, "text": "CHAMPION"}, {"t": 4.0, "text": "AÑOS"},
+            {"t": 9.0, "text": "MINDSET"}]
+
+    def test_no_key_no_titles_and_no_call(self):
+        assert pro_mode.pick_titles(WORDS, "a title", api_key=None) == []
+
+    def test_a_model_failure_is_a_clip_without_titles(self, monkeypatch):
+        def broken(prompt, api_key):
+            raise RuntimeError("quota")
+        monkeypatch.setattr(pro_mode, "_ask_model", broken)
+        assert pro_mode.pick_titles(WORDS, "a title", api_key="k") == []
+
+    def test_the_model_sees_the_words_with_their_index(self, monkeypatch):
+        seen = {}
+
+        def answer(prompt, api_key):
+            seen["prompt"] = prompt
+            return {"titles": [{"word_index": 4, "text": "MINDSET"}]}
+        monkeypatch.setattr(pro_mode, "_ask_model", answer)
+        assert pro_mode.pick_titles(WORDS, "My clip", api_key="k") == [
+            {"t": 9.0, "text": "MINDSET"}]
+        assert "4|9.00|mindset" in seen["prompt"] and "My clip" in seen["prompt"]
+
+    def _shots(self, anchors):
+        return [{"f0": i * 150, "f1": (i + 1) * 150, "anchor": a}
+                for i, a in enumerate(anchors)]
+
+    def test_a_title_lands_where_its_word_went_after_the_cuts(self):
+        frames = [(0, 150), (300, 600)]            # 5 s kept, 5 s cut, 10 s kept
+        placed = pro_mode.place_titles(
+            [{"t": 2.0, "text": "ONE"}, {"t": 7.0, "text": "CUT"}, {"t": 12.0, "text": "TWO"}],
+            frames, self._shots([(1, 1)] * 3), FPS, total=15.0)
+        assert placed == [{"t": 2.0, "text": "ONE"}, {"t": 7.0, "text": "TWO"}]
+
+    def test_no_title_over_a_shot_without_a_face(self):
+        placed = pro_mode.place_titles(
+            [{"t": 2.0, "text": "FACE"}, {"t": 7.0, "text": "BOARD"}],
+            [(0, 450)], self._shots([(1, 1), None, (1, 1)]), FPS, total=15.0)
+        assert [t["text"] for t in placed] == ["FACE"]
+
+    def test_titles_wait_for_the_hook_and_keep_their_distance(self):
+        titles = [{"t": t, "text": f"T{t}"} for t in (1.0, 6.0, 7.0, 10.0, 14.6)]
+        placed = pro_mode.place_titles(titles, [(0, 450)], self._shots([(1, 1)] * 3),
+                                       FPS, total=15.0, not_before=5.3)
+        # 1.0 is under the hook, 7.0 too close to 6.0, 14.6 too close to the end.
+        assert [t["t"] for t in placed] == [6.0, 10.0]
+
+    def test_the_file_is_sized_to_the_frame_and_carries_no_markup(self, tmp_path):
+        path = tmp_path / "titles.ass"
+        pro_mode.write_titles(str(path), [{"t": 1.0, "text": "A{\\b1}B"},
+                                          {"t": 2.0, "text": "CHAMPIONSHIP"}],
+                              10.0, 540, 960)
+        text = path.read_text()
+        assert "PlayResX: 540" in text and "PlayResY: 960" in text
+        events = [line for line in text.splitlines() if line.startswith("Dialogue:")]
+        assert events[0].endswith("}A(b1)B")
+        # The first ends where the second starts; a long word is set smaller.
+        assert events[0].split(",")[2] == "0:00:01.95"
+        sizes = [int(re.search(r"fs(\d+)", e).group(1)) for e in events]
+        assert sizes[1] < sizes[0] <= 116
+
+
+class TestConvertExtras:
+    @pytest.fixture()
+    def rendered(self, monkeypatch):
+        calls = []
+
+        def fake_run(clip_path, out_path, words=(), ranges=(), wait=0.0, **kw):
+            calls.append(kw)
+            with open(out_path, "wb") as f:
+                f.write(b"pro")
+            return {"keep": [[0.0, 30.0]], "duration": 30.0, "shots": 1, "framed": 1,
+                    "titles": [t["text"] for t in kw.get("titles") or []]}
+        monkeypatch.setattr(pro_mode, "run", fake_run)
+        monkeypatch.setattr(pro_mode, "_ask_model", lambda prompt, key: {
+            "titles": [{"word_index": 1, "text": "WORLD"}]})
+        return calls
+
+    def _clip(self, tmp_path, **extra):
+        base = tmp_path / "t_clip_1.mp4"
+        base.write_bytes(b"clean")
+        return str(base), {"start": 10.0, "end": 40.0, **extra}
+
+    def test_titles_and_the_hook_time_reach_the_render(self, tmp_path, rendered):
+        base, clip = self._clip(tmp_path)
+        _name, updates = pro_mode.convert(base, "t_clip_1.mp4", clip, TRANSCRIPT,
+                                          api_key="k", hook_seconds=5.0)
+        assert rendered[0]["titles"] == [{"t": 10.0, "text": "WORLD"}]
+        assert rendered[0]["hook_seconds"] == 5.0
+        assert updates["pro_titles"] == ["WORLD"]
+
+    def test_the_pro_caption_style_comes_and_goes_with_the_mode(self, tmp_path, rendered):
+        base, clip = self._clip(tmp_path)
+        style = {"font_size": 36, "uppercase": False}
+        _name, updates = pro_mode.convert(base, "t_clip_1.mp4", clip, TRANSCRIPT,
+                                          caption_style=style)
+        assert updates["caption_style"] == style
+        clip.update(updates)
+        back = pro_mode.restore(clip)
+        assert back["caption_style"] is None and back["pro_titles"] is None
+
+    def test_a_style_the_user_picked_is_never_replaced(self, tmp_path, rendered):
+        mine = {"font_size": 70, "uppercase": True}
+        base, clip = self._clip(tmp_path, caption_style=mine)
+        _name, updates = pro_mode.convert(base, "t_clip_1.mp4", clip, TRANSCRIPT,
+                                          caption_style={"font_size": 36})
+        assert "caption_style" not in updates
+        clip.update(updates)
+        assert "caption_style" not in pro_mode.restore(clip)
+
+    def test_a_style_changed_in_pro_mode_stays_on_the_way_back(self, tmp_path, rendered):
+        base, clip = self._clip(tmp_path)
+        _name, updates = pro_mode.convert(base, "t_clip_1.mp4", clip, TRANSCRIPT,
+                                          caption_style={"font_size": 36})
+        clip.update(updates)
+        clip["caption_style"] = {"font_size": 70}
+        assert "caption_style" not in pro_mode.restore(clip)

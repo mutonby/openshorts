@@ -63,6 +63,14 @@ BACKGROUND_GAIN = 0.24   # how much light the background keeps
 SEGMENT_EVERY = 2        # person mask refreshed every N frames
 MASK_SIZE = (288, 512)
 
+# --- titles -------------------------------------------------------------------
+TITLE_COLOR = "#FF5A1F"
+TITLE_FONT = "Archivo Black"     # fonts/ArchivoBlack-Regular.ttf
+TITLE_SECONDS = 1.45
+TITLE_GAP = 2.5          # seconds between two titles
+TITLE_LIMIT = 5
+TITLE_MAX_CHARS = 14
+
 # --- suggestion ---------------------------------------------------------------
 KEYFRAME_LIMIT = 16
 MIN_TRACK_SHARE = 0.9
@@ -492,6 +500,167 @@ def frame_matrix(anchor, z, width, height):
     return np.float32([[z, 0, tx], [0, z, ty]])
 
 
+# ---------------------------------------------------------------------- titles
+TITLES_PROMPT = """You are a senior short-form video editor (TikTok / Reels / Shorts).
+Below is the word-by-word transcript of a vertical clip, one word per line as
+`index|start_seconds|word`. The clip's language is whatever the words are in.
+
+Clip title: {title}
+
+Return ONLY JSON: {{"titles": [{{"word_index": 3, "text": "CHAMPION"}}]}}
+
+titles: 3 to 5 on-screen keyword titles (fewer if the clip is under 15 seconds).
+Each is ONE word (two at most) that is actually spoken at word_index: the
+concept the sentence lands on, a noun or a strong verb (CHAMPION, MINDSET,
+MONEY), never a filler or a function word. In the clip's language, UPPERCASE,
+keep accents. Spread them across the clip, at least 3 seconds apart.
+
+Transcript:
+{words}
+"""
+
+
+def _ask_model(prompt, api_key):
+    """One text call that must answer {"titles": [...]}. Split out so tests
+    can stub it; a local LLM (llm_backend) takes it when one is configured."""
+    from typing import List
+
+    from pydantic import BaseModel
+
+    class Title(BaseModel):
+        word_index: int
+        text: str
+
+    class Titles(BaseModel):
+        titles: List[Title]
+
+    import llm_backend
+    if llm_backend.active():
+        return llm_backend.generate_json(prompt, Titles)[0]
+    from google import genai
+    from google.genai import types as genai_types
+    # Keep the client in a name: one built inline is closed before its call
+    # is sent ("client has been closed").
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model=os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite",
+        contents=[prompt],
+        config=genai_types.GenerateContentConfig(
+            response_mime_type="application/json", response_schema=Titles))
+    return json.loads(response.text) or {}
+
+
+def _plain(text):
+    """Letters and digits only, lowercase, accents kept: what two spellings of
+    the same word have in common."""
+    return re.sub(r"[\W_]+", "", str(text), flags=re.UNICODE).lower()
+
+
+def sanitize_titles(raw, words):
+    """The model proposes, the code decides. Keeps [{"t", "text"}] for the
+    proposals that name a word really spoken at that index, as one or two
+    words of at most TITLE_MAX_CHARS; a proposal that drifted from the word
+    (translated, inflected) falls back to the spoken word itself."""
+    out = []
+    for item in (raw or {}).get("titles") or []:
+        try:
+            i = int(item["word_index"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not 0 <= i < len(words):
+            continue
+        spoken = _plain(words[i]["w"])
+        text = " ".join(re.sub(r"[^\w\s\-]", "", str(item.get("text", "")),
+                               flags=re.UNICODE).split()[:2]).upper()
+        first = _plain(text.split(" ")[0]) if text else ""
+        if not first or not (first.startswith(spoken[:4]) or spoken.startswith(first[:4])):
+            text = spoken.upper()
+        if not 3 <= len(text) <= TITLE_MAX_CHARS:
+            continue
+        out.append({"t": float(words[i]["s"]), "text": text})
+    out.sort(key=lambda t: t["t"])
+    return out
+
+
+def pick_titles(words, clip_title="", api_key=None):
+    """Keyword titles for the clip, [{"t" (seconds on the clip), "text"}].
+    Empty without a model to ask, and on any failure: a clip without titles
+    is still a pro clip."""
+    import llm_backend
+    if not words or not (api_key or llm_backend.active()):
+        return []
+    listing = "\n".join(f"{i}|{w['s']:.2f}|{w['w']}" for i, w in enumerate(words))
+    try:
+        answer = _ask_model(TITLES_PROMPT.format(title=clip_title, words=listing[:12000]),
+                            api_key)
+        return sanitize_titles(answer, words)
+    except Exception as e:
+        print(f"   ℹ️ Pro titles skipped ({type(e).__name__}: {e})")
+        return []
+
+
+def place_titles(titles, frames, shots, fps, total, not_before=0.0):
+    """Put the titles on the CUT timeline: [{"t", "text"}] with ``t`` in
+    output seconds. A title goes only where its word survived the cuts, on a
+    shot framed on the face (the top of the frame is the headroom there; over
+    a screen or a board it would cover content), after ``not_before`` (the
+    hook's time on screen) and TITLE_GAP after the previous one."""
+    convert = to_output_time(frames, fps)
+    placed, last = [], -TITLE_GAP
+    for title in titles or []:
+        t = float(title["t"])
+        if not any(fa / fps <= t < fb / fps for fa, fb in frames):
+            continue
+        at = convert(t)
+        frame = int(at * fps)
+        shot = next((s for s in shots if s["f0"] <= frame < s["f1"]), None)
+        if not shot or not shot["anchor"]:
+            continue
+        if at < not_before or at - last < TITLE_GAP or at > total - 0.8:
+            continue
+        placed.append({"t": round(at, 3), "text": str(title["text"])})
+        last = at
+        if len(placed) >= TITLE_LIMIT:
+            break
+    return placed
+
+
+def _ass_time(t):
+    cs = int(round(max(0.0, t) * 100))
+    return f"{cs // 360000}:{cs // 6000 % 60:02d}:{cs // 100 % 60:02d}.{cs % 100:02d}"
+
+
+def write_titles(path, titles, total, width, height):
+    """The titles as an ASS file: one huge word at the top of the frame that
+    pops in and fades, sized to span most of the width whatever its length."""
+    k = width / 1080.0
+    colour = TITLE_COLOR.lstrip("#")
+    colour = f"&H00{colour[4:6]}{colour[2:4]}{colour[0:2]}".upper()
+    lines = [
+        "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {width}",
+        f"PlayResY: {height}", "WrapStyle: 2", "ScaledBorderAndShadow: yes", "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
+        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
+        "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+        f"Style: Title,{TITLE_FONT},{int(200 * k)},{colour},{colour},&H00000000,&H00000000,"
+        "0,0,0,0,100,100,0,0,1,0,0,8,20,20,0,1", "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    for i, title in enumerate(titles):
+        following = titles[i + 1]["t"] if i + 1 < len(titles) else total
+        end = min(title["t"] + TITLE_SECONDS, following - 0.05, total)
+        text = title["text"].replace("\\", "").replace("{", "(").replace("}", ")")
+        size = int(min(232, 0.88 * 1080 / (0.735 * max(4, len(text)))) * k)
+        lines.append(
+            f"Dialogue: 2,{_ass_time(title['t'])},{_ass_time(end)},Title,,0,0,0,,"
+            f"{{\\an8\\pos({width // 2},{int(64 * k)})\\fs{size}\\blur0.5\\fad(50,160)"
+            f"\\fscx112\\fscy112\\t(0,130,\\fscx100\\fscy100)}}{text}")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 # ------------------------------------------------------------------------ look
 def grade_lut():
     """Contrast curve, crushed blacks, warm skin over slightly cold shadows."""
@@ -592,13 +761,16 @@ _FINISH = ("scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,"
            "eq=saturation=1.04,unsharp=7:7:0.2:7:7:0.0")
 
 
-def render(clip_path, out_path, words=(), ranges=()):
+def render(clip_path, out_path, words=(), ranges=(), titles=(), hook_seconds=0.0):
     """Render the pro version of ``clip_path`` (a clean 9:16 clip) to
     ``out_path``. ``words``: [{"w", "s", "e"}] on the clip's timeline;
-    ``ranges``: its layout ranges. Returns {"keep": [[start, end], ...]
-    (seconds of the clip that survive), "duration", "shots", "framed"}."""
+    ``ranges``: its layout ranges; ``titles``: [{"t", "text"}] keyword titles
+    on the same timeline, burned at the top (none while a hook is on screen,
+    its first ``hook_seconds``). Returns {"keep": [[start, end], ...] (seconds
+    of the clip that survive), "duration", "shots", "framed", "titles"}."""
     import cv2
-    from ffmpeg_utils import METADATA_SCRUB, QUALITY_FAST, video_encode_args
+    from ffmpeg_utils import (METADATA_SCRUB, QUALITY_FAST, escape_filter_value,
+                              video_encode_args)
 
     try:
         cv2.setNumThreads(max(1, int(os.environ.get("PRO_THREADS", "2"))))
@@ -620,12 +792,24 @@ def render(clip_path, out_path, words=(), ranges=()):
     shots, total = plan_shots(frames, fps, out_words, faces, height, non_track)
     track = smooth_track(faces, width) if faces else None
 
+    # Neutral temp names next to the output: the titles file goes inside an
+    # ffmpeg filter string, where a clip title's apostrophe would end the quote.
+    work = os.path.join(os.path.dirname(out_path) or ".",
+                        f"temp_pro_{os.getpid()}_{int(time.time() * 1000)}")
     work_audio = None
     if len(audio):
-        work_audio = os.path.join(os.path.dirname(out_path) or ".",
-                                  f"temp_pro_{os.getpid()}_{int(time.time() * 1000)}.wav")
+        work_audio = work + ".wav"
         _write_wav(work_audio, cut_audio(audio, frames, fps))
     del audio
+    placed = place_titles(titles, frames, shots, fps, total / fps,
+                          not_before=float(hook_seconds or 0) + 0.3 if hook_seconds else 0.0)
+    finish, work_titles = _FINISH, None
+    if placed:
+        work_titles = work + ".ass"
+        write_titles(work_titles, placed, total / fps, width, height)
+        fonts = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+        finish += (f",ass=filename='{escape_filter_value(work_titles)}'"
+                   f":fontsdir='{escape_filter_value(fonts)}'")
 
     size = width * height * 3
     decoder = subprocess.Popen(
@@ -637,7 +821,7 @@ def render(clip_path, out_path, words=(), ranges=()):
                "-s", f"{width}x{height}", "-r", rate, "-i", "-"]
     if work_audio:
         command += ["-i", work_audio]
-    command += ["-vf", _FINISH, "-map", "0:v"]
+    command += ["-vf", finish, "-map", "0:v"]
     if work_audio:
         command += ["-map", "1:a", "-c:a", "aac"]
     command += [*video_encode_args(QUALITY_FAST), "-colorspace", "bt709",
@@ -691,8 +875,9 @@ def render(clip_path, out_path, words=(), ranges=()):
         decoder.stdout.close()
         decoder.wait()
         look.close()
-        if work_audio and os.path.exists(work_audio):
-            os.remove(work_audio)
+        for temp in (work_audio, work_titles):
+            if temp and os.path.exists(temp):
+                os.remove(temp)
 
     # A short last read can leave the picture a few frames under the plan:
     # report what was really written.
@@ -703,8 +888,10 @@ def render(clip_path, out_path, words=(), ranges=()):
         fb = min(fb, fa + left)
         left -= fb - fa
         keep.append([round(fa / fps, 3), round(fb / fps, 3)])
-    return {"keep": keep, "duration": round(written / fps, 3), "shots": len(shots),
-            "framed": sum(1 for s in shots if s["anchor"])}
+    shown = written / fps
+    return {"keep": keep, "duration": round(shown, 3), "shots": len(shots),
+            "framed": sum(1 for s in shots if s["anchor"]),
+            "titles": [t["text"] for t in placed if t["t"] < shown]}
 
 
 # ------------------------------------------------------------- host-wide slots
@@ -770,14 +957,16 @@ def words_for(transcript, segments):
     return words
 
 
-def run(clip_path, out_path, words=(), ranges=(), wait=0.0):
+def run(clip_path, out_path, words=(), ranges=(), wait=0.0, titles=(), hook_seconds=0.0):
     """Render in a process of its own, under a host slot. Returns render()'s
     dict. Raises Busy, NotApplicable or RuntimeError."""
     with slot(wait):
         try:
             result = subprocess.run(
                 [sys.executable, os.path.abspath(__file__), clip_path, out_path],
-                input=json.dumps({"words": list(words), "ranges": list(ranges or [])}).encode(),
+                input=json.dumps({"words": list(words), "ranges": list(ranges or []),
+                                  "titles": list(titles or []),
+                                  "hook_seconds": float(hook_seconds or 0)}).encode(),
                 capture_output=True, timeout=RENDER_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             if os.path.exists(out_path):
@@ -799,13 +988,19 @@ def run(clip_path, out_path, words=(), ranges=(), wait=0.0):
 _REPLACED = ("start", "end", "recipe", "layout_ranges", "crop_overrides", "caption_words")
 
 
-def convert(base_path, clean_name, clip, transcript, wait=0.0):
+def convert(base_path, clean_name, clip, transcript, wait=0.0, api_key=None,
+            hook_seconds=0.0, caption_style=None):
     """Render the pro version of a clip from its clean file ``base_path``.
 
     Returns (clean pro filename, updates for the clip's metadata). The pro
     file is a recut of the same source: the updates carry its ``recipe`` (the
     kept stretches, on the source timeline), so captions and the clip editor
-    follow the new cut the way they follow a manual trim."""
+    follow the new cut the way they follow a manual trim.
+
+    ``api_key`` (or a configured local LLM) adds the keyword titles;
+    ``hook_seconds`` keeps them off the hook's time on screen. ``caption_style``
+    becomes the clip's caption style unless the user already picked one: going
+    back to normal undoes it only if it is still the one set here."""
     import uuid
 
     import layout_ranges
@@ -815,7 +1010,10 @@ def convert(base_path, clean_name, clip, transcript, wait=0.0):
     ranges = clip.get("layout_ranges") or layout_ranges.read(base_path)
     out_name = f"recut_{int(time.time())}_{uuid.uuid4().hex[:6]}_{clean_name}"
     out_path = os.path.join(os.path.dirname(base_path), out_name)
-    result = run(base_path, out_path, words_for(transcript, segments), ranges, wait)
+    words = words_for(transcript, segments)
+    titles = pick_titles(words, clip.get("video_title_for_youtube_short") or "", api_key)
+    result = run(base_path, out_path, words, ranges, wait, titles=titles,
+                 hook_seconds=hook_seconds)
 
     kept = [{"start": a, "end": b} for a, b in result["keep"]]
     new_segments = source_segments(result["keep"], segments)
@@ -830,12 +1028,16 @@ def convert(base_path, clean_name, clip, transcript, wait=0.0):
     before["base"] = os.path.basename(base_path)
     updates = {
         "mode": "pro", "pro_before": before, "recipe": new_recipe,
+        "pro_titles": result.get("titles") or [],
         "start": min(s["start"] for s in new_segments),
         "end": max(s["end"] for s in new_segments),
         "layout_ranges": new_ranges,
         # Both are keyed to the cut they were made on (same as a rerender).
         "crop_overrides": None, "caption_words": None,
     }
+    if caption_style and not clip.get("caption_style"):
+        updates["caption_style"] = dict(caption_style)
+        before["caption_style_set"] = dict(caption_style)
     return out_name, updates
 
 
@@ -844,7 +1046,12 @@ def restore(clip):
     points it at ``pro_before['base']`` (the clean file from before)."""
     before = clip.get("pro_before") or {}
     updates = {key: before.get(key) for key in _REPLACED if key in before}
-    updates.update(mode="normal", pro_before=None)
+    updates.update(mode="normal", pro_before=None, pro_titles=None)
+    # The caption style pro mode brought goes with it, unless the user has
+    # changed it since: then it is theirs.
+    style = before.get("caption_style_set")
+    if style and clip.get("caption_style") == style:
+        updates["caption_style"] = None
     return updates
 
 
@@ -856,7 +1063,8 @@ def _main(argv):
     payload = json.loads(sys.stdin.read() or "{}")
     try:
         result = render(clip_path, out_path, payload.get("words") or (),
-                        payload.get("ranges") or ())
+                        payload.get("ranges") or (), payload.get("titles") or (),
+                        payload.get("hook_seconds") or 0.0)
     except NotApplicable as e:
         print("PRO_RESULT " + json.dumps({"error": "not_applicable", "detail": str(e)}))
         return 2
