@@ -276,3 +276,80 @@ class TestCleanFileGone:
             assert not _clip(meta_path).get("mode")
         finally:
             app_module.jobs.pop(JOB_ID, None)
+
+
+class TestServedFileOfAFreshJob:
+    """The job writes no ``video_url`` into the metadata: until the first edit
+    only the in-memory result, the dashboard and the disk know which file a
+    clip is served from. Converting the clean reframe instead dropped the
+    captions and the hook."""
+
+    @pytest.fixture()
+    def fresh_job(self, tmp_path, monkeypatch):
+        served = "subtitled_5_mytitle_clip_1.mp4"
+        job_dir, meta_path = _make_job(tmp_path, monkeypatch, served=served)
+        (job_dir / served).write_bytes(b"captioned")
+        data = json.loads(meta_path.read_text())
+        del data["shorts"][0]["video_url"]
+        meta_path.write_text(json.dumps(data))
+        captions = []
+
+        def fake_captions(job_id, clip_index, video_path):
+            captions.append(os.path.basename(video_path))
+            out = os.path.join(os.path.dirname(video_path),
+                               f"subtitled_9_{os.path.basename(video_path)}")
+            with open(out, "wb") as f:
+                f.write(b"captioned")
+            return out
+        monkeypatch.setattr(app_module, "_reapply_captions", fake_captions)
+        try:
+            yield {"dir": job_dir, "meta_path": meta_path, "served": served,
+                   "captions": captions}
+        finally:
+            app_module.jobs.pop(JOB_ID, None)
+
+    def test_captions_go_back_on_from_the_in_memory_result(self, fresh_job, fake_render):
+        resp = _switch("pro")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["new_video_url"].split("/")[-1].startswith("subtitled_9_recut_")
+        assert fake_render[0]["clip"] == "mytitle_clip_1.mp4"
+        assert len(fresh_job["captions"]) == 1
+
+    def test_the_disk_answers_after_a_restart_lost_the_result(self, fresh_job, fake_render):
+        app_module.jobs[JOB_ID]["result"]["clips"][0].pop("video_url")
+        resp = _switch("pro")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["new_video_url"].split("/")[-1].startswith("subtitled_9_recut_")
+
+    def test_the_dashboard_can_say_which_file_it_shows(self, fresh_job, fake_render):
+        app_module.jobs[JOB_ID]["result"]["clips"][0]["video_url"] = (
+            f"/videos/{JOB_ID}/mytitle_clip_1.mp4")
+        resp = _request("POST", "/api/clip/mode", {
+            "job_id": JOB_ID, "clip_index": 0, "mode": "pro",
+            "input_filename": fresh_job["served"]})
+        assert resp.status_code == 200, resp.text
+        assert len(fresh_job["captions"]) == 1
+
+    def test_another_clips_file_is_not_taken_for_this_one(self, fresh_job, fake_render):
+        (fresh_job["dir"] / "subtitled_5_mytitle_clip_2.mp4").write_bytes(b"other clip")
+        resp = _request("POST", "/api/clip/mode", {
+            "job_id": JOB_ID, "clip_index": 0, "mode": "pro",
+            "input_filename": "subtitled_5_mytitle_clip_2.mp4"})
+        assert resp.status_code == 200, resp.text
+        assert fake_render[0]["clip"] == "mytitle_clip_1.mp4"
+
+    def test_back_to_normal_brings_the_captioned_file_back(self, fresh_job, fake_render):
+        _switch("pro")
+        resp = _switch("normal")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["new_video_url"].endswith("/" + fresh_job["served"])
+
+
+class TestWhileTheJobRuns:
+    def test_a_running_job_is_not_switched(self, job, fake_render):
+        """The job rewrites the metadata when it ends: the switch would be
+        undone under the user's eyes."""
+        app_module.jobs[JOB_ID]["status"] = "processing"
+        resp = _switch("pro")
+        assert resp.status_code == 409
+        assert fake_render == []

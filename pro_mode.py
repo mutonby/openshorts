@@ -849,10 +849,9 @@ def restore(clip):
 
 
 def _main(argv):
-    try:
-        os.nice(int(os.environ.get("PRO_NICE", "10")))
-    except (OSError, ValueError, AttributeError):
-        pass
+    # No renice: the render keeps its caller's priority. From the API that is
+    # a person waiting on a spinner (ahead of the jobs, which run niced, and
+    # held to one render by the host slot); inside a job it is the job's own.
     clip_path, out_path = argv[1], argv[2]
     payload = json.loads(sys.stdin.read() or "{}")
     try:

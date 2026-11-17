@@ -2540,7 +2540,7 @@ function App() {
                           jobId={jobId}
                           onEditClip={(index) => setEditingClip(index)}
                           onReframeClip={(index) => setReframingClip(index)}
-                          onModeChanged={handleClipRerendered}
+                          onModeChanged={status === 'processing' ? null : handleClipRerendered}
                           onUpgrade={isManaged ? openUpsell : null}
                           initialState={projectState?.clips?.find((c) => c.index === i) || null}
                           onStateChange={handleClipStateChange}

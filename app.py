@@ -7155,6 +7155,30 @@ class ClipModeRequest(BaseModel):
     job_id: str
     clip_index: int
     mode: str  # "pro" | "normal"
+    # The file the dashboard is showing for this clip (same field as
+    # /api/hook and /api/subtitle).
+    input_filename: Optional[str] = None
+
+
+def _served_clip_file(job, output_dir, base_name, clip, index, asked=None):
+    """The file a clip is served from right now. The metadata only learns it
+    at the first edit (the job writes no ``video_url``), so ask in order: the
+    caller, the job's in-memory result, the metadata, the newest derived file
+    on disk. Each has to exist; the clean reframe is the last resort."""
+    clean = f"{base_name}_clip_{index + 1}.mp4"
+    mem_clips = (job.get('result') or {}).get('clips') or []
+    mem = mem_clips[index] if index < len(mem_clips) else {}
+    # What the caller names has to be a file of THIS clip: every derivation
+    # keeps the clean name as its tail.
+    asked = os.path.basename(str(asked or ''))
+    candidates = [asked if asked.endswith(clean) else None,
+                  mem.get('video_url'), clip.get('video_url'),
+                  _canonical_clip_file(output_dir, base_name, index)]
+    for candidate in candidates:
+        name = os.path.basename(str(candidate or '').split('?')[0])
+        if name and os.path.isfile(os.path.join(output_dir, name)):
+            return name
+    return clean
 
 
 # How long a switch to pro waits for a render slot of this host (pro_mode.slot)
@@ -7190,6 +7214,13 @@ async def set_clip_mode(req: ClipModeRequest, request: Request):
         raise HTTPException(status_code=404, detail="Job not found")
     job = jobs[req.job_id]
     await _assert_job_owner(request, job)
+    if job.get('status') != 'completed':
+        # The job rewrites the metadata when it ends: a switch made while it
+        # runs would be undone under the user's eyes.
+        raise HTTPException(
+            status_code=409,
+            detail="This video is still processing. Pro mode is available "
+                   "once all its clips are ready.")
     _check_editor_rate(await _owner_id(request))
 
     # Same lock as the rerenders: they all read-modify-write the metadata and
@@ -7213,17 +7244,18 @@ async def _set_clip_mode_locked(req: ClipModeRequest, request: Request, job):
         raise HTTPException(status_code=404, detail="Clip not found")
     clip = clips[req.clip_index]
 
+    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+    clean_name = f"{base_name}_clip_{req.clip_index + 1}.mp4"
+    served = _served_clip_file(job, output_dir, base_name, clip, req.clip_index,
+                               req.input_filename)
+
     def answer(**extra):
         return {"success": True, "mode": clip.get('mode') or 'normal',
-                "new_video_url": clip.get('video_url'),
+                "new_video_url": clip.get('video_url') or f"/videos/{req.job_id}/{served}",
                 "start": clip.get('start'), "end": clip.get('end'), **extra}
 
     if (clip.get('mode') or 'normal') == req.mode:
         return answer(unchanged=True)
-
-    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
-    clean_name = f"{base_name}_clip_{req.clip_index + 1}.mp4"
-    served = (clip.get('video_url') or '').split('/')[-1] or clean_name
     if not os.path.exists(os.path.join(output_dir, served)):
         raise HTTPException(status_code=404, detail="Video file not found")
     # Walk the layers back to the clean file, noting which ones to put back.

@@ -23,7 +23,8 @@ is shown away from what is said.
 - **Cost.** Every frame goes through Python (decode, affine, segmentation,
   encode): CPU time of the order of a whole job's on a GPU host, for one clip.
   Hence three brakes: a render is always its own process (`pro_mode.run`,
-  niced, never a thread of the API or of a job), `PRO_SLOTS` (default 1) caps
+  never a thread of the API or of a job; it keeps its caller's priority, so
+  one asked for in the dashboard runs ahead of the niced jobs), `PRO_SLOTS` (default 1) caps
   the renders of one host with flock files `output/.pro-N.lock`, and a caller
   that cannot get a slot gives up instead of queueing: the API answers 503
   after `PRO_WAIT_SECONDS` (20), a job ships the clip as it is after
@@ -35,6 +36,15 @@ is shown away from what is said.
   puts back the layers that were on it: the hook from the clip's `auto_hook`,
   captions through `_reapply_captions` (so in the clip's `caption_style`),
   the free plan's mark through `_deliver`.
+- **Which file.** The job writes no `video_url` into the metadata, so the
+  switch finds the served file through `_served_clip_file`: what the dashboard
+  says it shows (`input_filename`, only a file of that clip), the in-memory
+  result, the metadata, the newest derived file on disk. Starting from the
+  clean reframe instead silently dropped the captions and the hook.
+- **When.** Only on a finished job (409 while it runs: the job rewrites the
+  metadata when it ends) and only while the clip's clean file is on disk (409
+  once a purge left the served file alone: reframing a picture with captions
+  burned in would crop them).
 - **The pro file is a recut.** It is named `recut_<ts>_<hex>_<clean>` and the
   clip's `recipe.segments` are the stretches that survived, on the source
   timeline (`source_segments` maps them through whatever recipe the clip

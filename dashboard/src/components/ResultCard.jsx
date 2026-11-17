@@ -247,7 +247,12 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             const res = await apiFetch('/api/clip/mode', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ job_id: jobId, clip_index: index, mode: isPro ? 'normal' : 'pro' }),
+                body: JSON.stringify({
+                    job_id: jobId,
+                    clip_index: index,
+                    mode: isPro ? 'normal' : 'pro',
+                    input_filename: serverVideoFile,
+                }),
             });
             if (!res.ok) {
                 let detail = '';
@@ -978,13 +983,30 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     </div>
                 )}
 
-                {onModeChanged && (
+                {onModeChanged && !isPro && clip.pro_suggested && (
+                    <button
+                        onClick={handleMode}
+                        disabled={isSwitchingMode}
+                        className="mb-3 w-full flex items-center gap-3 px-3 py-2.5 rounded-input border border-brass bg-brass/10 hover:bg-brass/20 text-left transition-colors disabled:opacity-70"
+                    >
+                        {isSwitchingMode
+                            ? <Loader2 size={20} className="animate-spin text-brass shrink-0" />
+                            : <Sparkles size={20} className="text-brass shrink-0" />}
+                        <span className="min-w-0">
+                            <span className="block text-sm font-semibold text-ink">
+                                {isSwitchingMode ? 'Rendering pro mode…' : 'Try pro mode on this clip'}
+                            </span>
+                            <span className="block text-[11px] leading-snug text-ink2">
+                                One person talking: tighter frame on the face, pauses cut, cinematic look. One click back to normal.
+                            </span>
+                        </span>
+                    </button>
+                )}
+                {onModeChanged && (isPro || !clip.pro_suggested) && (
                     <p className="mb-2 text-[11px] leading-snug text-muted">
                         {isPro
                             ? 'Pro mode is on: tighter frame on the face, pauses cut, cinematic look. You can switch back to normal any time.'
-                            : clip.pro_suggested
-                                ? 'This clip is one person talking: pro mode is recommended for it.'
-                                : 'Pro mode is recommended only for podcasts and talking-head clips, where the picture is one person speaking.'}
+                            : 'Pro mode is recommended only for podcasts and talking-head clips, where the picture is one person speaking.'}
                     </p>
                 )}
 
@@ -1015,9 +1037,13 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                             onClick={handleMode}
                             disabled={isSwitchingMode}
                             title="Pro mode: tighter frame on the face, pauses cut, cinematic look. Recommended for podcasts and talking-head clips."
-                            className={QUIET_BTN}
+                            className={!isPro && clip.pro_suggested
+                                ? 'btn-primary flex-col gap-1 py-2.5 sm:py-2 px-1 text-[11px] leading-none rounded-input whitespace-nowrap'
+                                : QUIET_BTN}
                         >
-                            {isSwitchingMode ? <Loader2 size={16} className="animate-spin text-brass shrink-0" /> : <Sparkles size={16} className={`${isPro || clip.pro_suggested ? 'text-brass' : 'text-muted'} group-hover:text-brass transition-colors shrink-0`} />}
+                            {isSwitchingMode
+                                ? <Loader2 size={16} className={`animate-spin shrink-0 ${!isPro && clip.pro_suggested ? '' : 'text-brass'}`} />
+                                : <Sparkles size={16} className={!isPro && clip.pro_suggested ? 'shrink-0' : `${isPro ? 'text-brass' : 'text-muted'} group-hover:text-brass transition-colors shrink-0`} />}
                             {isSwitchingMode ? 'rendering…' : isPro ? 'normal mode' : 'pro mode'}
                         </button>
                     )}
