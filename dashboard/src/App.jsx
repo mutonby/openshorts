@@ -597,6 +597,7 @@ function App() {
         start: data.start,
         end: data.end,
         recipe: data.recipe,
+        mode: data.mode ?? clips[index].mode,
       };
       return { ...prev, clips };
     });
@@ -2539,6 +2540,7 @@ function App() {
                           jobId={jobId}
                           onEditClip={(index) => setEditingClip(index)}
                           onReframeClip={(index) => setReframingClip(index)}
+                          onModeChanged={handleClipRerendered}
                           onUpgrade={isManaged ? openUpsell : null}
                           initialState={projectState?.clips?.find((c) => c.index === i) || null}
                           onStateChange={handleClipStateChange}

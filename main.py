@@ -1525,6 +1525,41 @@ def auto_hook_clip(clip_path, clip, captions=None, mark=False):
         return None
 
 
+def pro_clip(clip_path, clip, transcript):
+    """Pro mode for a freshly framed clip (pro_mode.py, PRO_MODE).
+
+    Always records whether the clip is the kind pro mode fits
+    (``clip['pro_suggested']``, a keyframe face check: the dashboard offers
+    the switch on those). With PRO_MODE=auto it also renders it, and returns
+    (pro clean path, clip-relative transcript, 0.0, duration) for the hook and
+    the captions to go on that file instead; None otherwise. A busy host or a
+    failed render ships the clip as it is: pro mode must never cost a clip."""
+    import pro_mode
+    if pro_mode.mode() == "off":
+        return None
+    clip['pro_suggested'] = pro_mode.suggested(clip_path, clip.get('layout_ranges'))
+    if pro_mode.mode() != "auto" or not clip['pro_suggested']:
+        return None
+    try:
+        wait = float(os.environ.get("PRO_JOB_WAIT_SECONDS", "120"))
+    except ValueError:
+        wait = 120.0
+    try:
+        out_name, updates = pro_mode.convert(
+            clip_path, os.path.basename(clip_path), clip, transcript, wait=wait)
+    except Exception as e:
+        print(f"   ℹ️ Pro mode skipped ({type(e).__name__}: {e}) — clip ships as it is.")
+        return None
+    clip.update(updates)
+    import recut
+    segments = updates['recipe']['segments']
+    print(f"   ✨ Pro mode: {len(segments)} stretch(es), "
+          f"{recut.total_duration(segments):.1f}s")
+    return (os.path.join(os.path.dirname(clip_path), out_name),
+            recut.virtual_transcript(transcript, segments),
+            0.0, recut.total_duration(segments))
+
+
 def trim_subtitle_band(input_video, band):
     """Copy of a cut clip without the source's burned-in subtitle band.
 
@@ -2905,6 +2940,11 @@ if __name__ == '__main__':
             # clip. Renders are mostly ffmpeg subprocesses (parallelize well);
             # detector inference is serialized internally via DETECT_LOCK.
             def _process_one_clip(i, clip):
+                if clip.get('pro_before'):
+                    # A retry of a clip whose first attempt got as far as pro
+                    # mode: start again from the range Gemini picked.
+                    import pro_mode
+                    clip.update(pro_mode.restore(clip))
                 start = clip['start']
                 end = clip['end']
                 print(f"\n🎬 Processing Clip {i+1}: {start}s - {end}s")
@@ -2941,15 +2981,23 @@ if __name__ == '__main__':
                     if success and hook_grounding.wanted(clip['layout_ranges'], end - start):
                         hook_grounding.reground(clip_final_path, clip, transcript, start, end)
                     captioned = None
+                    # Pro mode replaces the file the hook and the captions go
+                    # on, and the timeline they are laid on (its cuts); the
+                    # canonical reframe stays, it is the clip's normal mode.
+                    base_path, words, w_start, w_end = clip_final_path, transcript, start, end
+                    pro = pro_clip(clip_final_path, clip, transcript) if success else None
+                    if pro:
+                        deliver_path = base_path = pro[0]
+                        words, w_start, w_end = pro[1:]
                     split_ranges = _layouts.split_ranges(clip['layout_ranges'])
                     if success and os.environ.get("AUTO_HOOK") == "1":
                         # Captions ride the hook's ffmpeg (one decode, two
                         # outputs) when both are on; see auto_hook_clip.
                         plan = None
                         if (clip.get('viral_hook_text') or '').strip():
-                            plan = auto_caption_clip(clip_final_path, transcript, start, end,
+                            plan = auto_caption_clip(base_path, words, w_start, w_end,
                                                      split_ranges=split_ranges, plan_only=True)
-                        hooked = auto_hook_clip(clip_final_path, clip, captions=plan,
+                        hooked = auto_hook_clip(base_path, clip, captions=plan,
                                                 mark=os.environ.get("WATERMARK") == "1")
                         if hooked:
                             deliver_path, clip['auto_hook'] = hooked
@@ -2957,7 +3005,7 @@ if __name__ == '__main__':
                     if success:
                         if not captioned:
                             captioned = auto_caption_clip(
-                                deliver_path, transcript, start, end,
+                                deliver_path, words, w_start, w_end,
                                 split_ranges=split_ranges,
                                 mark=os.environ.get("WATERMARK") == "1")
                         served = captioned or deliver_path
@@ -3020,7 +3068,8 @@ if __name__ == '__main__':
 
             # Persist per-clip render results added by the workers (auto_hook)
             # so the editor can see what is already burned into each clip.
-            if any('auto_hook' in c or 'hook_grounding' in c for c in shorts):
+            if any('auto_hook' in c or 'hook_grounding' in c or 'pro_suggested' in c
+                   for c in shorts):
                 # Atomic: the dashboard is already reading this file for the
                 # clips announced above (CLIP_READY).
                 write_json_atomic(metadata_file, clips_data, indent=2)

@@ -7066,6 +7066,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
         # captions from the transcript (in the recorded style, if any).
         if clip.get('caption_words'):
             updates['caption_words'] = None
+        updates.update(_leaves_pro_mode(clip))
         clip.update(updates)
         data['shorts'] = clips
         write_json_atomic(json_files[0], data, indent=2)
@@ -7085,12 +7086,207 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
             "end": new_end,
             "duration": total,
             "render_path": "fast" if fast else "source",
+            "mode": "normal",
         }
     except Exception as e:
         if reservation_id:
             await _metering.release_reservation(reservation_id)
         print(f"❌ Rerender Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Pro mode -----------------------------------------------------------------
+#
+# pro_mode.py re-edits a talking-head clip (dead air cut, a tighter frame that
+# changes scale on every cut, graded picture with the background dimmed). The
+# job pipeline flags the clips it fits (``pro_suggested``); this is the switch
+# the dashboard puts on every clip, both ways. The pro file is a recut of the
+# clip's current clean file, so the layers above it (hook, captions, the free
+# plan's mark) are put back exactly as the other derivations put them back.
+
+class ClipModeRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    mode: str  # "pro" | "normal"
+
+
+# How long a switch to pro waits for a render slot of this host (pro_mode.slot)
+# before answering "busy": a person is looking at a spinner.
+PRO_WAIT_SECONDS = float(os.environ.get("PRO_WAIT_SECONDS", "20"))
+
+
+def _leaves_pro_mode(clip):
+    """Metadata updates for a clip rebuilt from the canonical file or the
+    source (rerender, manual reframe): that render is the normal look."""
+    if clip.get('mode') != 'pro':
+        return {}
+    return {'mode': 'normal', 'pro_before': None}
+
+
+def _clip_layers(clip, had_hook, had_captions):
+    """What sits on top of a clip's clean file, as one comparable value: a
+    served file can be reused only for the layers it was burned with."""
+    return json.dumps([had_hook and clip.get('auto_hook'), had_captions,
+                       had_captions and clip.get('caption_style'),
+                       had_captions and clip.get('caption_words')],
+                      sort_keys=True, default=str)
+
+
+@app.post("/api/clip/mode")
+async def set_clip_mode(req: ClipModeRequest, request: Request):
+    """Switch a clip between its normal render and pro mode."""
+    if req.mode not in ("pro", "normal"):
+        raise HTTPException(status_code=400, detail="mode must be 'pro' or 'normal'")
+    await require_managed_entitlement(request)
+    await _ensure_job_files(req.job_id, request)
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs[req.job_id]
+    await _assert_job_owner(request, job)
+    _check_editor_rate(await _owner_id(request))
+
+    # Same lock as the rerenders: they all read-modify-write the metadata and
+    # replace the clip's files. It also makes a repeated click wait for the
+    # first one and get its result.
+    lock = _rerender_locks.setdefault(req.job_id, asyncio.Lock())
+    async with lock:
+        return await _set_clip_mode_locked(req, request, job)
+
+
+async def _set_clip_mode_locked(req: ClipModeRequest, request: Request, job):
+    import pro_mode
+    output_dir = os.path.join(OUTPUT_DIR, req.job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+    with open(json_files[0], 'r') as f:
+        data = json.load(f)
+    clips = data.get('shorts', [])
+    if req.clip_index < 0 or req.clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = clips[req.clip_index]
+
+    def answer(**extra):
+        return {"success": True, "mode": clip.get('mode') or 'normal',
+                "new_video_url": clip.get('video_url'),
+                "start": clip.get('start'), "end": clip.get('end'), **extra}
+
+    if (clip.get('mode') or 'normal') == req.mode:
+        return answer(unchanged=True)
+
+    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+    clean_name = f"{base_name}_clip_{req.clip_index + 1}.mp4"
+    served = (clip.get('video_url') or '').split('/')[-1] or clean_name
+    if not os.path.exists(os.path.join(output_dir, served)):
+        raise HTTPException(status_code=404, detail="Video file not found")
+    # Walk the layers back to the clean file, noting which ones to put back.
+    uncaptioned = await asyncio.to_thread(
+        _strip_burned_captions, output_dir, served, False)
+    had_captions = uncaptioned != _strip_watermark_copy(output_dir, served)
+    base = _strip_burned_hook(output_dir, uncaptioned)
+    had_hook = base != uncaptioned and bool((clip.get('auto_hook') or {}).get('text'))
+    loop = asyncio.get_event_loop()
+
+    reservation_id = None
+    reuse = None
+    if req.mode == "pro":
+        base_path = os.path.join(output_dir, base)
+        # A restored project may only have the served file: with captions or
+        # a hook still burned in, the reframing would crop and scale them.
+        if (not os.path.exists(base_path) or watermarked.is_marked(base)
+                or re.match(r'^(?:subtitled_\d+_|hooked_\d+_|hook_)', base)):
+            raise HTTPException(
+                status_code=409,
+                detail="The clean render of this clip is no longer on the server, "
+                       "so it cannot be converted.")
+        minutes = _cloud_config.EDITOR_ACTION_MINUTES if BILLING_ENABLED else 0
+        reservation_id = await reserve_managed_action(request, minutes, req.job_id, "pro")
+        layers = _clip_layers(clip, had_hook, had_captions)
+        try:
+            new_base, updates = await loop.run_in_executor(
+                None, lambda: pro_mode.convert(base_path, clean_name, clip,
+                                               data.get('transcript') or {},
+                                               wait=PRO_WAIT_SECONDS))
+        except Exception as e:
+            if reservation_id:
+                await _metering.release_reservation(reservation_id)
+            if isinstance(e, pro_mode.Busy):
+                raise HTTPException(
+                    status_code=503, headers={"Retry-After": "60"},
+                    detail="Pro mode is busy right now. Try again in a minute.")
+            if isinstance(e, pro_mode.NotApplicable):
+                raise HTTPException(status_code=400,
+                                    detail="Pro mode needs a vertical clip.")
+            print(f"❌ Pro mode error: {e}")
+            raise HTTPException(status_code=500, detail="Pro mode could not render this clip.")
+        # Going back reuses the file served today when nothing on it changed.
+        updates['pro_before'].update(served=_strip_watermark_copy(output_dir, served),
+                                     layers=layers)
+    else:
+        before = clip.get('pro_before') or {}
+        new_base = before.get('base') or clean_name
+        if not os.path.exists(os.path.join(output_dir, new_base)):
+            new_base = clean_name
+        if not os.path.exists(os.path.join(output_dir, new_base)):
+            raise HTTPException(status_code=409,
+                                detail="The normal render of this clip is no longer on the server.")
+        updates = pro_mode.restore(clip)
+        kept = before.get('served')
+        if (kept and os.path.exists(os.path.join(output_dir, kept))
+                and before.get('layers') == _clip_layers(
+                    {**clip, **updates}, had_hook, had_captions)):
+            reuse = kept
+
+    try:
+        # A valid state first (the clean file of the new mode, no layers), so
+        # nothing below can leave the clip pointing at the other mode's file.
+        clip.update(updates)
+        clip['video_url'] = f"/videos/{req.job_id}/{new_base}"
+        data['shorts'] = clips
+        write_json_atomic(json_files[0], data, indent=2)
+
+        def layer():
+            name = new_base
+            if had_hook:
+                hook = clip['auto_hook']
+                hooked = f"hooked_{int(time.time())}_{new_base}"
+                try:
+                    add_hook_to_video(
+                        os.path.join(output_dir, name), hook['text'],
+                        os.path.join(output_dir, hooked),
+                        position=hook.get('position') or "auto",
+                        duration=hook.get('duration_seconds'),
+                        style=hook.get('style') or "pill", font=hook.get('font'),
+                        layout_ranges=clip.get('layout_ranges'),
+                        has_captions=had_captions)
+                    name = hooked
+                except Exception as e:
+                    # The clip without its hook beats no clip.
+                    print(f"⚠️ Could not put the hook back on {new_base}: {e}")
+            if had_captions:
+                recap = _reapply_captions(req.job_id, req.clip_index,
+                                          os.path.join(output_dir, name))
+                if recap:
+                    name = os.path.basename(recap)
+            return name
+
+        final = reuse or await loop.run_in_executor(None, layer)
+        final = await _deliver(request, req.job_id, final)
+        clip['video_url'] = f"/videos/{req.job_id}/{final}"
+        write_json_atomic(json_files[0], data, indent=2)
+        mem_clips = (job.get('result') or {}).get('clips') or []
+        if req.clip_index < len(mem_clips):
+            mem_clips[req.clip_index].update(updates)
+            mem_clips[req.clip_index]['video_url'] = clip['video_url']
+        _archive_clip_edit_bg(req.job_id, req.clip_index, final)
+        if reservation_id:
+            await _metering.commit_reservation(reservation_id)
+        return answer(recipe=clip.get('recipe'))
+    except Exception as e:
+        if reservation_id:
+            await _metering.release_reservation(reservation_id)
+        print(f"❌ Clip mode error: {e}")
+        raise HTTPException(status_code=500, detail="Could not switch the clip's mode.")
 
 
 # --- Manual framing -----------------------------------------------------------
@@ -7420,6 +7616,7 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
             'crop_overrides': {str(k): v for k, v in overrides.items()},
             'layout_ranges': layout_ranges.read(os.path.join(output_dir, _clean)),
         }
+        updates.update(_leaves_pro_mode(clip))
         clip.update(updates)
         data['shorts'] = clips
         write_json_atomic(json_files[0], data, indent=2)
@@ -7440,6 +7637,7 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
             "start": min(s['start'] for s in segments),
             "end": max(s['end'] for s in segments),
             "framed_scenes": sorted(overrides),
+            "mode": "normal",
         }
     except Exception as e:
         if reservation_id:

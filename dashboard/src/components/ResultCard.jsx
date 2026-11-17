@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Download, Share2, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp } from 'lucide-react';
+import { Download, Share2, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp, Sparkles } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
 import { platformOptions as buildPlatformOptions, defaultPlatformFlags, flagsFromList } from '../lib/socialPlatforms';
@@ -60,7 +60,7 @@ function formatDuration(clip) {
     return `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
 }
 
-export default function ResultCard({ clip, index, jobId, durable, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress, initialState = null, onStateChange, connectedPlatforms = null, onConnectSocials, onEditClip = null, onReframeClip = null, onUpgrade = null }) {
+export default function ResultCard({ clip, index, jobId, durable, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress, initialState = null, onStateChange, connectedPlatforms = null, onConnectSocials, onEditClip = null, onReframeClip = null, onModeChanged = null, onUpgrade = null }) {
     const [showModal, setShowModal] = useState(false);
     // The "why" line is clamped to two lines so cards in a row stay level;
     // when it overflows, a hover (desktop) or tap (touch) shows the whole
@@ -234,6 +234,36 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const [showHookModal, setShowHookModal] = useState(false);
     const [showTranslateModal, setShowTranslateModal] = useState(false);
     const [editError, setEditError] = useState(null);
+
+    // Pro mode: the talking-head re-edit (tighter frame on the face, dead air
+    // cut, graded picture). The server renders a new file both ways, so the
+    // card remounts from it exactly like after a recut.
+    const isPro = clip.mode === 'pro';
+    const [isSwitchingMode, setIsSwitchingMode] = useState(false);
+    const handleMode = async () => {
+        setIsSwitchingMode(true);
+        setEditError(null);
+        try {
+            const res = await apiFetch('/api/clip/mode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ job_id: jobId, clip_index: index, mode: isPro ? 'normal' : 'pro' }),
+            });
+            if (!res.ok) {
+                let detail = '';
+                try { detail = (await res.json()).detail; } catch { /* not JSON */ }
+                throw new Error(typeof detail === 'string' && detail ? detail : 'Could not switch the clip mode.');
+            }
+            const data = await res.json();
+            track('ClipModeSwitched', { props: { mode: data.mode } });
+            if (onModeChanged && data.new_video_url) onModeChanged(index, data);
+        } catch (e) {
+            setEditError(e.message);
+            setTimeout(() => setEditError(null), 6000);
+        } finally {
+            setIsSwitchingMode(false);
+        }
+    };
 
     const [clipDuration, setClipDuration] = useState(() => {
         const secs = clipDurationSeconds(clip);
@@ -895,6 +925,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     <div className="flex flex-wrap gap-1.5">
                         {durationReadout && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{durationReadout}</span>}
                         {resolution && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{resolution}</span>}
+                        {isPro && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0 text-brass">pro mode</span>}
+                        {!isPro && clip.pro_suggested && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0 text-brass">pro recommended</span>}
                         <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">#shorts</span>
                         <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">#viral</span>
                     </div>
@@ -946,6 +978,16 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     </div>
                 )}
 
+                {onModeChanged && (
+                    <p className="mb-2 text-[11px] leading-snug text-muted">
+                        {isPro
+                            ? 'Pro mode is on: tighter frame on the face, pauses cut, cinematic look. You can switch back to normal any time.'
+                            : clip.pro_suggested
+                                ? 'This clip is one person talking: pro mode is recommended for it.'
+                                : 'Pro mode is recommended only for podcasts and talking-head clips, where the picture is one person speaking.'}
+                    </p>
+                )}
+
                 {/* Actions Footer */}
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-2 mt-auto pt-4 border-t border-rule">
                     {onEditClip && (
@@ -965,6 +1007,18 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         >
                             <Crosshair size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />
                             reframing
+                        </button>
+                    )}
+
+                    {onModeChanged && (
+                        <button
+                            onClick={handleMode}
+                            disabled={isSwitchingMode}
+                            title="Pro mode: tighter frame on the face, pauses cut, cinematic look. Recommended for podcasts and talking-head clips."
+                            className={QUIET_BTN}
+                        >
+                            {isSwitchingMode ? <Loader2 size={16} className="animate-spin text-brass shrink-0" /> : <Sparkles size={16} className={`${isPro || clip.pro_suggested ? 'text-brass' : 'text-muted'} group-hover:text-brass transition-colors shrink-0`} />}
+                            {isSwitchingMode ? 'rendering…' : isPro ? 'normal mode' : 'pro mode'}
                         </button>
                     )}
 

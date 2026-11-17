@@ -30,7 +30,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 - `main.py`: core processing (transcription, scene detection, clip extraction, reframing). Runs as a child process per job.
 - `app.py`: FastAPI server, job queue, REST endpoints, deploy handover/drain.
 - `clip_selection.py`, `layout_picker.py`, `reframe_v2.py`, `split_layout.py`, `screencast_layout.py`, `camera_inset.py`: moment picking and layouts.
-- `editor.py` (Gemini FFmpeg effects), `hooks.py` (hook overlays), `subtitles.py` (SRT/ASS, burning), `translate.py` (ElevenLabs dubbing), `thumbnail.py`.
+- `editor.py` (Gemini FFmpeg effects), `pro_mode.py` (talking-head re-edit), `hooks.py` (hook overlays), `subtitles.py` (SRT/ASS, burning), `translate.py` (ElevenLabs dubbing), `thumbnail.py`.
 - `mcp_server.py`, `mcp_stdio.py`: MCP over HTTP and stdio.
 - `cloud/`: auth, API keys, metering, billing, lifecycle emails, account erasure, autopilot, proxy ledger, alerts, queue watch.
 - `dashboard/src/App.jsx`: main React component. `dashboard/vite-plugin-seo.js` + `dashboard/seo/`: build-time SEO pages, sitemap, llms.txt. `dashboard/seo/data.js`: single source of truth for pricing/pipeline/competitor facts.
@@ -41,6 +41,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 - Layout picker, reframing modes, hook grounding → `docs/architecture/layouts-and-reframing.md`
 - Clip count, silent-footage fallback, local LLM → `docs/architecture/clip-selection.md`
 - Thumbnail Studio → `docs/architecture/thumbnails.md`
+- Pro mode (talking-head re-edit, per-clip switch) → `docs/architecture/pro-mode.md`
 - API endpoints, API keys, MCP, OAuth, webhooks → `docs/architecture/agent-access.md`
 - Autopilot → `docs/architecture/autopilot.md`
 - Free-plan watermark (served `wm_` copy, unmark on upgrade) → `docs/architecture/watermark.md`
@@ -67,6 +68,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 - SPLIT captions need ASS with `{\an5}` per word event on the seam; SRT cannot do per-stretch alignment. Preserve `layout_ranges` through recut (`layout_ranges.remap`).
 - Mouth activity is normalised per speaker before comparing (`normalise_activity`).
 - The reframe render runs in one GPU pass (`gpu_render` + `osrender/`) built from the scenes' own filtergraphs: a layout graph that `gpu_render.layers_from_graph` cannot read silently renders through ffmpeg, so keep new layouts to crop/scale/gblur/overlay/vstack/pad and run `tests/test_gpu_render_equivalence.py` on a GPU. After editing `osrender/src/kernels.cu`, regenerate `kernels.ptx` (see `osrender/README.md`).
+- Pro mode (`pro_mode.py`) renders frame by frame on the CPU: always through `pro_mode.run` (own process, host slot), never inside the API or a job thread, and `PRO_MODE=auto` stays opt-in. The pro file is a `recut_` with its `recipe`; never a new filename prefix.
 - Canonical files are always clean; the free-plan mark exists only on the served `wm_` copy (`main.mark_delivery` / `app._deliver`). While a job has `.marked`, `/videos` refuses its clean deliverables.
 
 **Clip selection**
