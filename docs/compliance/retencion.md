@@ -23,7 +23,7 @@ alargarlos por encima de lo que dice la política sin actualizarla.
 | Ficheros en `uploads/` | **1 h** (misma vuelta del barrido) | `app.cleanup_jobs` |
 | **Miniaturas generadas y fotogramas muestreados** (`output/thumbnails/<sesión>`) — recortes de la cara del presentador | **24 h desde la última descarga**; servir un fichero reinicia el reloj | `app._sweep_thumbnail_sessions`, `THUMBNAIL_RETENTION_SECONDS` |
 | **Fotos de actor subidas** (`output/actor_uploads/*.png`) — fotografías de personas | **1 h** (el reloj del trabajo) | `app._sweep_actor_uploads`, `ACTOR_UPLOAD_RETENTION_SECONDS` |
-| Tope de disco: se purgan los trabajos más antiguos por encima del límite | Inmediato al superarlo | `app._enforce_output_size_cap`, `OUTPUT_MAX_GB` |
+| Tope de disco: se purgan los trabajos más antiguos por encima del límite | Al superarlo, salvo los tocados en los últimos 30 minutos | `app._enforce_output_size_cap`, `OUTPUT_MAX_GB`, `OUTPUT_CAP_GRACE_SECONDS` |
 
 Antes del 4-sep-2026 las dos filas en negrita **no tenían ningún plazo**: el
 barrido horario salta deliberadamente `output/thumbnails`, y `actor_uploads`

@@ -64,6 +64,12 @@ TIKTOK_POST_MODE = os.environ.get("TIKTOK_POST_MODE", "MEDIA_UPLOAD").strip()
 # age-based sweep alone can't stop a burst of long videos from filling the disk.
 # 0 disables the cap.
 OUTPUT_MAX_GB = int(os.environ.get("OUTPUT_MAX_GB", "25"))
+# A job dir touched this recently is left alone by the size cap. Where the
+# jobs still queued or running hold more than the cap by themselves, the cap
+# purged every finished job at the next sweep: an edit made minutes after the
+# clips were ready lost its files before its archive upload ended, and a
+# project restored from the library was purged again while it was open.
+OUTPUT_CAP_GRACE_SECONDS = int(os.environ.get("OUTPUT_CAP_GRACE_SECONDS", "1800"))
 # Same idea for source uploads, which are the biggest single files on disk.
 UPLOADS_MAX_GB = int(os.environ.get("UPLOADS_MAX_GB", "15"))
 # Pre-flight quality gate: warn before processing a YouTube source below this
@@ -2979,7 +2985,9 @@ def _enforce_uploads_size_cap():
 
 
 def _enforce_output_size_cap():
-    """Delete the oldest job dirs while OUTPUT_DIR is over OUTPUT_MAX_GB."""
+    """Delete the oldest job dirs while OUTPUT_DIR is over OUTPUT_MAX_GB.
+    Live jobs and dirs touched within OUTPUT_CAP_GRACE_SECONDS are kept, so
+    the directory can sit over the cap by what those hold."""
     cap = OUTPUT_MAX_GB * 1024 ** 3
     if cap <= 0:
         return
@@ -2987,6 +2995,7 @@ def _enforce_output_size_cap():
     if used <= cap:
         return
     thumbs = os.path.basename(THUMBNAILS_DIR)
+    fresh_after = time.time() - OUTPUT_CAP_GRACE_SECONDS
     candidates = []
     for job_id in os.listdir(OUTPUT_DIR):
         if job_id == thumbs or _not_a_job_dir(job_id):
@@ -2994,9 +3003,11 @@ def _enforce_output_size_cap():
         p = os.path.join(OUTPUT_DIR, job_id)
         if os.path.isdir(p) and not _job_is_active(job_id):
             try:
-                candidates.append((os.path.getmtime(p), p, job_id))
+                mtime = os.path.getmtime(p)
             except OSError:
-                pass
+                continue
+            if mtime <= fresh_after:
+                candidates.append((mtime, p, job_id))
     candidates.sort()  # oldest first
     print(f"🧹 Output dir at {used / 1024**3:.1f} GB (cap {OUTPUT_MAX_GB} GB) — trimming.")
     for _mtime, path, job_id in candidates:

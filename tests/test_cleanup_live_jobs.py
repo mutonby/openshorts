@@ -100,9 +100,23 @@ class TestJobDirSweep:
         app_module.jobs["live"] = {"status": "queued"}
         dead = _job_dir(out, "dead")
         (dead / "clip.mp4").write_bytes(b"x" * 2048)
+        _age(dead, OLD)
         monkeypatch.setattr(app_module, "OUTPUT_MAX_GB", 1 / 1024 ** 3)  # 1 byte
         app_module._enforce_output_size_cap()
         assert live.exists() and not dead.exists()
+
+    def test_size_cap_leaves_a_job_that_just_finished(self, disk, monkeypatch):
+        """With the queue alone over the cap, every finished job went at the
+        next sweep: an edit made minutes later lost its files mid-archive."""
+        out, _ = disk
+        fresh = _job_dir(out, "fresh")
+        (fresh / "clip.mp4").write_bytes(b"x" * 2048)
+        stale = _job_dir(out, "stale")
+        (stale / "clip.mp4").write_bytes(b"x" * 2048)
+        _age(stale, app_module.OUTPUT_CAP_GRACE_SECONDS + 60)
+        monkeypatch.setattr(app_module, "OUTPUT_MAX_GB", 1 / 1024 ** 3)  # 1 byte
+        app_module._enforce_output_size_cap()
+        assert fresh.exists() and not stale.exists()
 
     def test_size_cap_does_not_count_the_download_cache(self, disk, monkeypatch):
         """The cache has its own cap and this one may not delete it: counting
