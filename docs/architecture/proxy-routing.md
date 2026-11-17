@@ -121,6 +121,16 @@ outright.
   `YT_ACCOUNT_REST_SECONDS` (900) while the others carry the load; with every
   account resting, the one closest to waking is used, never none. The session
   watcher (`cloud/alerts.py`) only checks the first account.
+- **Age-restricted videos.** YouTube opens them only to an age-verified
+  account ("Sorry, this content is age-restricted ... provide more info so we
+  can be sure you're an adult"; anonymous: "Sign in to confirm your age").
+  `yt_account.is_age_gate` + `Session.age_gated()` move the video to an
+  account it has not tried (awake first), with no strike against the one
+  that refused: it is fine for every other video. The probe and the download
+  both do it. With every account tried, the download stops there, before the
+  per-GB proxy, and prints `main.AGE_RESTRICTED_MESSAGE` (download it and
+  upload the file); unless an account was only rate-limited, in which case
+  the job waits for the cooldown like any limited download.
 - **One probe per submission.** The quality gate reuses what the metering
   probe just learned (`metering.probe_facts`) instead of asking again.
 - **Wait, not fail.** A download that failed only because of the limit prints

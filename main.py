@@ -853,6 +853,10 @@ def cap_source_duration(input_video, max_minutes, safety=False, start_seconds=0.
     raise RuntimeError(f"could not cut the source to its first {float(max_minutes):g} minutes")
 
 
+AGE_RESTRICTED_MESSAGE = ("This video is age-restricted on YouTube and could not be "
+                          "opened. Download it and upload the file instead.")
+
+
 def _content_block(error_text):
     """User-facing reason when the VIDEO (not the network) can't be fetched."""
     t = error_text.lower()
@@ -1190,6 +1194,8 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     # proxy (the container log rotates within the hour; see cloud/proxy_ledger).
     attempt_log = []
     account_limited = False
+    # Age-restricted: every account tried said no (or nobody is signed in).
+    age_refused = False
     skip_told = False
     for label, ea, fmt, proxy, cookies in attempts:
         if cookies and cookies_path and yt_session.spent:
@@ -1238,6 +1244,17 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                         print(f"🔁 Moving this video to YouTube account "
                               f"{yt_session.account + 1}.")
                     break       # not again on this route; the next one may differ
+                if yt_account.is_age_gate(str(e)):
+                    # Age-restricted, and this account is not age-verified
+                    # (or nobody is signed in). Another account may be: the
+                    # next route uses it. With none left, no other route or
+                    # proxy can help: the video is the problem.
+                    if cookies and cookies_path and yt_session.age_gated():
+                        print(f"🔞 Age-restricted video: moving it to YouTube account "
+                              f"{yt_session.account + 1}.")
+                    else:
+                        age_refused = True
+                    break
                 retryable = '403' in str(e) or 'Forbidden' in str(e)
                 if not retryable or retry == 1:
                     break
@@ -1248,6 +1265,8 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         # cannot change that, so stop instead of spending every attempt.
         if last_err is not None and _content_block(str(last_err)):
             break
+        if age_refused:
+            break
 
     if sanitized_title is None and isinstance(route_out, dict):
         # A failed download still paid for its proxied attempts.
@@ -1256,6 +1275,12 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
 
     if sanitized_title is None and last_err is not None and _content_block(str(last_err)):
         print(f"❌ {_content_block(str(last_err))}")
+        raise last_err
+
+    if sanitized_title is None and age_refused and not account_limited:
+        # Not while an account was only rate-limited: that one may be
+        # age-verified, and the job is retried after the cooldown below.
+        print(f"❌ {AGE_RESTRICTED_MESSAGE}")
         raise last_err
 
     if sanitized_title is None and account_limited:

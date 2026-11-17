@@ -101,6 +101,19 @@ def is_rate_limit(text) -> bool:
     return any(m in t for m in _MARKERS)
 
 
+# An age-restricted video, refused to the account that asked (signed in but
+# not age-verified: "Sorry, this content is age-restricted ... provide more
+# info so we can be sure you're an adult") or to nobody signed in ("Sign in to
+# confirm your age"). Other accounts may be verified: the video moves on.
+_AGE_MARKERS = ("age-restricted", "confirm your age", "inappropriate for some users")
+
+
+def is_age_gate(text) -> bool:
+    """Whether an error text is YouTube refusing an age-restricted video."""
+    t = str(text or "").lower()
+    return any(m in t for m in _AGE_MARKERS)
+
+
 def state_dir():
     """Where the shared state lives: the output directory every process of
     the host sees, or the temp dir when there is none (a one-off script)."""
@@ -474,6 +487,17 @@ class Session:
             return True
         self.answers += 1
         return False
+
+    def age_gated(self) -> bool:
+        """YouTube refused this video to this account for its age (the
+        account is not age-verified). True when the video moved to an account
+        it has not tried yet, preferring one that is not resting. Not a strike
+        against the account: it is fine for every other video."""
+        n = len(self._texts)
+        nxt = pick(exclude=self._tried, awake_only=True, count=n)
+        if nxt is None:
+            nxt = pick(exclude=self._tried, awake_only=False, count=n)
+        return self._use(nxt)
 
     def close(self):
         path, self.path = self.path, None

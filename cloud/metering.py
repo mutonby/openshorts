@@ -99,7 +99,7 @@ _CONTENT_HINTS = (
     "join this channel", "not available on this app", "is not a valid url",
     "unsupported url", "no video formats found", "premieres in", "will begin in",
     "this live event", "no duration in metadata", "requested format is not available",
-    "account has been terminated", "video is age", "confirm your age",
+    "account has been terminated", "video is age", "confirm your age", "age-restricted",
     # An uploader's country block: the residential pool exits from the same
     # blocked countries, so the paid probe failed with the identical error in
     # 5 of the 6 cases between 3-sep and 5-sep-2026 (3.6 MB each, and the
@@ -479,6 +479,8 @@ def _probe_with_proxies(url, proxies, strategies, static_errors, paid, ck_path):
                 route_errors.append(str(e)[:300])
                 if authed and yt_account.is_rate_limit(str(e)):
                     session.limited()   # moves to another account if one is awake
+                elif authed and yt_account.is_age_gate(str(e)):
+                    session.age_gated()  # an age-verified account may open it
         else:
             if not is_paid:
                 static_errors[_route_name(proxy, proxies)] = (
