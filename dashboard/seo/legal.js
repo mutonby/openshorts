@@ -23,6 +23,9 @@
  */
 
 const PUBLISHED = '2026-09-04'
+// The privacy policy alone changed on this date (paid plans' source videos
+// kept 30 days for editing, docs/compliance/retencion.md section 2).
+const PRIVACY_UPDATED = '2026-11-17'
 
 const TERMS_EN = `
 <h2>1. Who we are</h2>
@@ -726,7 +729,8 @@ actor photo you upload or generate — which may be a photograph of a real
 person — and the audio to lip-sync it to. USA.</li>
 <li><strong>Stripe</strong> — payments and invoicing. USA/EU.</li>
 <li><strong>Cloudflare R2 and Amazon Web Services S3</strong> — storage of your
-clips and project files. EU/USA regions.</li>
+clips and project files (and, on paid plans, of each job's source video for 30
+days). EU/USA regions.</li>
 <li><strong>Cloudflare</strong> — DNS and CDN in front of the website, so it
 sees the IP address and request metadata of every visitor. USA/global.</li>
 <li><strong>Hetzner and Contabo</strong> — the servers the service runs on.
@@ -776,6 +780,10 @@ matching the statute of limitations for civil claims, and deleted with your
 account if you delete it sooner.</li>
 <li>Working files on the processing server (the source download, the working
 copies): 1 hour after the job finishes. Uploads waiting for a job: 6 hours.</li>
+<li>Paid plans only: the source video of each job, in our storage provider, for
+30 days after the job finishes (then deleted in the next daily clean-up), so
+you can keep extending cuts and reframing clips; deleted sooner with your
+account, or with your library when your subscription ends.</li>
 <li>Generated thumbnails and the video frames sampled to make them: 24 hours
 after you last downloaded one.</li>
 <li>Photos you upload to drive an AI actor: deleted with the job that used
@@ -991,7 +999,8 @@ fotografía de una persona real — y el audio con el que se sincronizan sus
 labios. EE. UU.</li>
 <li><strong>Stripe</strong> — pagos y facturación. EE. UU./UE.</li>
 <li><strong>Cloudflare R2 y Amazon Web Services S3</strong> — almacenamiento de
-tus clips y archivos de proyecto. Regiones UE/EE. UU.</li>
+tus clips y archivos de proyecto (y, en planes de pago, del vídeo de origen de
+cada trabajo durante 30 días). Regiones UE/EE. UU.</li>
 <li><strong>Cloudflare</strong> — DNS y CDN delante del sitio web, por lo que
 ve la dirección IP y los metadatos de petición de cada visitante.
 EE. UU./global.</li>
@@ -1045,6 +1054,11 @@ se eliminan con tu cuenta si la borras antes.</li>
 <li>Archivos de trabajo en el servidor de procesado (la descarga de origen,
 las copias intermedias): 1 hora tras finalizar el trabajo. Subidas pendientes
 de trabajo: 6 horas.</li>
+<li>Solo en planes de pago: el vídeo de origen de cada trabajo, en nuestro
+proveedor de almacenamiento, durante 30 días desde que termina el trabajo (y
+se borra en la limpieza diaria siguiente), para que puedas seguir alargando
+cortes y reencuadrando clips; se elimina antes si borras tu cuenta, o con tu
+biblioteca cuando termina tu suscripción.</li>
 <li>Miniaturas generadas y fotogramas muestreados para crearlas: 24 horas
 desde la última vez que descargaste una.</li>
 <li>Fotos que subes para animar un actor de IA: se eliminan con el trabajo que
@@ -1478,7 +1492,7 @@ export function legalPages() {
       h1: 'Privacy Policy',
       breadcrumb: [{ name: 'Privacy Policy' }],
       published: PUBLISHED,
-      updated: PUBLISHED,
+      updated: PRIVACY_UPDATED,
       tldr: [
         'We store your email, your billing reference and the videos you process — nothing beyond what the service needs.',
         'No advertising trackers: audience measurement is first-party, served from our own domain, and stays off until you accept it in the banner. BYOK API keys are obfuscated in your own browser and never reach our servers.',
@@ -1525,7 +1539,7 @@ export function legalPages() {
       h1: 'Política de Privacidad',
       breadcrumb: [{ name: 'Política de Privacidad' }],
       published: PUBLISHED,
-      updated: PUBLISHED,
+      updated: PRIVACY_UPDATED,
       lang: 'es',
       tldr: [
         'Guardamos tu email, tu referencia de facturación y los vídeos que procesas — nada más de lo que el servicio necesita.',

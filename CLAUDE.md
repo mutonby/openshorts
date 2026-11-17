@@ -45,7 +45,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 - API endpoints, API keys, MCP, OAuth, webhooks → `docs/architecture/agent-access.md`
 - Autopilot → `docs/architecture/autopilot.md`
 - Free-plan watermark (served `wm_` copy, unmark on upgrade) → `docs/architecture/watermark.md`
-- Quota wall, free overflow, lifecycle emails, cancel flow, survey, GDPR erasure, support-ops API → `docs/architecture/billing-and-account.md`
+- Quota wall, free overflow, lifecycle emails, cancel flow, survey, GDPR erasure, paid-source archive, support-ops API → `docs/architecture/billing-and-account.md`
 - Concurrency/VRAM, auto-retry, deploy handover and drain → `docs/architecture/jobs-and-deploys.md`
 - Download routing, yt-dlp clients, paid proxy ledger → `docs/architecture/proxy-routing.md`
 - Remote CPU worker (second host renders free jobs) → `docs/architecture/remote-worker.md`
@@ -101,6 +101,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 
 **Billing, account, privacy**
 - GDPR erasure order is fixed: Stripe cancel (abort on failure) → R2 purge → one DB transaction over `USER_OWNED_TABLES`. Never via API key. Every new table referencing `users.id` joins `USER_OWNED_TABLES` (a test enforces it).
+- A paid job's source goes to R2 only under `users/<uid>/<job>/source/` with a random name (`cloud/source_archive.py`): never restored with the project, deleted after `SOURCE_ARCHIVE_DAYS` by the daily sweep, and read back only through `_archived_source` / `_locate_or_fetch_source` after the owner check. A change to its retention changes `docs/compliance/retencion.md` and the privacy policy in the same commit.
 - Coupon ids and promotion codes live only in env / Stripe, never in this repo.
 - Cancel and churn alerts carry the reason and rating, never the user's free text. Deletion reasons are a closed list.
 - `reserve_process_minutes` never reserves more than the balance, whatever the client asks; the source cut travels in the resume manifest.

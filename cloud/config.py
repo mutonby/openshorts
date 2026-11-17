@@ -465,6 +465,12 @@ class Settings:
 # Days a user's videos survive after their subscription ends (grace period).
 VIDEO_RETENTION_GRACE_DAYS = 7
 
+# Days a paid job's source video stays in R2 after its upload
+# (cloud/source_archive.py), so the editor can still extend a cut or reframe and
+# the source preview still plays once the server copy has aged out. 0 turns the
+# archive off, and the next sweep then deletes whatever is still stored.
+SOURCE_ARCHIVE_DAYS = max(0, _env_int("SOURCE_ARCHIVE_DAYS", 30))
+
 # How long the erasure log (cloud/models.AccountDeletion) is kept. Matches the
 # "rights declarations and related logs: up to 5 years" line in the privacy
 # policy, which in turn matches the statute of limitations for civil claims.

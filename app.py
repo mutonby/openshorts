@@ -26,7 +26,7 @@ from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, StreamingResponse, RedirectResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
@@ -160,6 +160,7 @@ DEBUG_LOGS = os.environ.get("DEBUG_LOGS", "").lower() in ("1", "true", "yes")
 if BILLING_ENABLED:
     import cloud
     from cloud import managed_keys, metering as _metering, config as _cloud_config, alerts as _alerts
+    from cloud import source_archive as _source_archive
     from cloud.auth import get_current_user_optional
 else:
     cloud = None
@@ -167,6 +168,7 @@ else:
     _metering = None
     _cloud_config = None
     _alerts = None
+    _source_archive = None
 
     async def get_current_user_optional(request: Request):
         # No-op dependency in self-host mode: every request is anonymous / BYOK.
@@ -3602,6 +3604,42 @@ async def _archive_managed_job(job_id):
         await cloud.videos.archive_job(job['user_id'], job_id, clips, job['output_dir'])
     except Exception as e:
         print(f"⚠️  R2 archive error for {job_id}: {e}")
+    _archive_source_bg(job_id, job)
+
+
+_source_archive_tasks: set = set()
+
+
+def _archive_source_bg(job_id, job):
+    """Upload a paid job's source to R2 for SOURCE_ARCHIVE_DAYS, in the
+    background (``cloud/source_archive.py``).
+
+    Never awaited by the delivery: the clips are ready, and a source of
+    hundreds of MB must not hold the job in 'processing' nor a delivery slot.
+    The plan check, the open and the upload all happen in the task; at most
+    ``UPLOAD_CONCURRENCY`` uploads run at once in the process. A drain or a
+    restart that cuts it short loses only this copy: the job is delivered.
+    """
+    if not BILLING_ENABLED or _source_archive is None or not _source_archive.enabled():
+        return
+    owner = job.get('user_id')
+    if owner is None or not _JOB_ID_RE.match(job_id or ""):
+        return
+    path = _locate_source(job_id)
+    if not path:
+        print(f"ℹ️  No source on disk to archive for {job_id}.")
+        return
+
+    async def _run():
+        try:
+            await _source_archive.archive_source(
+                owner, job_id, path, duration_probe=_source_duration_seconds)
+        except Exception as e:
+            print(f"⚠️  Source archive error for {job_id}: {e}")
+
+    task = asyncio.create_task(_run())
+    _source_archive_tasks.add(task)
+    task.add_done_callback(_source_archive_tasks.discard)
 
 
 async def _unmark_if_owner_paid(job_id, job):
@@ -6209,7 +6247,57 @@ def _locate_source(job_id: str):
                     return candidate
     except Exception:
         pass
+    # A paid job's source brought back from R2 (_locate_or_fetch_source): a
+    # fixed dot name, never one read from the job directory.
+    if _source_archive is not None:
+        for candidate in _source_archive.local_candidates(os.path.join(OUTPUT_DIR, job_id)):
+            if os.path.exists(candidate):
+                return candidate
     return None
+
+
+_source_fetch_locks: Dict[str, asyncio.Lock] = {}
+
+
+async def _archived_source(job_id: str):
+    """``{"key", "duration"}`` of this job's source in R2, or None.
+
+    Looked up under the prefix of the job's owner as the server knows it
+    (memory, ``.owner``, the Project row), never one the caller names, so a
+    signed link or an owner check that passed for this job can only ever reach
+    this job's own object. Callers have done that check already.
+    """
+    if (not BILLING_ENABLED or _source_archive is None or not _source_archive.enabled()
+            or not _JOB_ID_RE.match(job_id or "")):
+        return None
+    owner = await _media_owner("videos", job_id)
+    if owner is None:
+        return None
+    return await _source_archive.find(owner, job_id)
+
+
+async def _locate_or_fetch_source(job_id: str):
+    """``_locate_source``, falling back to downloading the archived source into
+    the job directory. Off the loop, and once per job however many requests
+    ask at the same time. The job directory must exist (``_ensure_job_files``
+    runs first in every caller)."""
+    path = _locate_source(job_id)
+    if path or not BILLING_ENABLED or _source_archive is None:
+        return path
+    if not _source_archive.enabled() or not _JOB_ID_RE.match(job_id or ""):
+        return None
+    job_dir = os.path.join(OUTPUT_DIR, job_id)
+    if not os.path.isdir(job_dir):
+        return None
+    lock = _source_fetch_locks.setdefault(job_id, asyncio.Lock())
+    async with lock:
+        path = _locate_source(job_id)
+        if path:
+            return path
+        owner = await _media_owner("videos", job_id)
+        if owner is None:
+            return None
+        return await _source_archive.fetch(owner, job_id, job_dir)
 
 
 # How long a signed source URL stays valid. Long enough to survive an editing
@@ -6261,8 +6349,17 @@ async def get_source_url(job_id: str, request: Request):
         # its owner), so the only callers this turns away are asking about a
         # job that does not exist. Off billing there is nothing to protect and
         # the self-host preview must keep working.
+        #
+        # One exception: a paid job whose directory is gone but whose source is
+        # archived in R2. Its owner is still known (.owner / the Project row),
+        # so the check is the same as for any other job, not a blind mint.
         if BILLING_ENABLED:
-            raise HTTPException(status_code=404, detail="Source not found")
+            owner = await _media_owner("videos", job_id) if _JOB_ID_RE.match(job_id or "") else None
+            if owner is None:
+                raise HTTPException(status_code=404, detail="Source not found")
+            await _assert_disk_job_owner(request, job_id)
+            if await _archived_source(job_id) is None:
+                raise HTTPException(status_code=404, detail="Source not found")
     else:
         await _assert_job_owner(request, record)
     return {"url": _signed_source_url(job_id)}
@@ -6302,6 +6399,14 @@ async def get_source_video(job_id: str, request: Request,
             await _assert_disk_job_owner(request, job_id)
     source_path = _locate_source(job_id)
     if not source_path:
+        # Gone from the server but archived (paid plan): send the player to a
+        # short-lived R2 link instead of pulling hundreds of MB back here just
+        # to stream them out again. Only reached past the checks above.
+        archived = await _archived_source(job_id)
+        if archived is not None:
+            return RedirectResponse(_source_archive.signed_url(archived), status_code=307,
+                                    headers={"Cache-Control": "no-store",
+                                             "Referrer-Policy": "no-referrer"})
         raise HTTPException(status_code=404, detail="Source not found")
     return FileResponse(source_path, media_type="video/mp4")
 
@@ -6441,6 +6546,11 @@ async def _restore_job_files(job_id: str, proj, user_id: str) -> bool:
         else:
             prefix = cloud_storage.job_key(user_id, job_id, "")
             keys = await asyncio.to_thread(cloud_storage.list_keys, prefix)
+            # Never the archived source: hundreds of MB that most reopened
+            # projects never touch; the editor fetches it when it needs it
+            # (_locate_or_fetch_source) and the preview plays it from R2.
+            if _source_archive is not None:
+                keys = [k for k in keys if not _source_archive.is_source_key(k)]
             if not keys:
                 raise HTTPException(status_code=502,
                                     detail="Project files are no longer available")
@@ -6908,6 +7018,11 @@ async def get_clip_edl(job_id: str, clip_index: int, request: Request):
 
     source_path = _locate_source(job_id)
     source_duration = _source_duration_seconds(source_path) if source_path else None
+    # Not on the server but archived in R2: still available, played from
+    # there by /api/source and fetched back by the endpoints that cut from it.
+    archived = None if source_path else await _archived_source(job_id)
+    if archived is not None:
+        source_duration = archived.get("duration")
     duration_estimated = source_duration is None
     if duration_estimated:
         # Best remaining scale for the source track: the last spoken word or
@@ -6941,8 +7056,8 @@ async def get_clip_edl(job_id: str, clip_index: int, request: Request):
                                       watermarked.clean_name(current_file))),
         "words": words_out,
         "source": {
-            "available": bool(source_path),
-            "url": _signed_source_url(job_id) if source_path else None,
+            "available": bool(source_path or archived),
+            "url": _signed_source_url(job_id) if (source_path or archived) else None,
             "duration": source_duration,
             "duration_estimated": duration_estimated,
         },
@@ -7035,6 +7150,12 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
     _, canonical_range = _clip_recipe_parts(clip)
     source_path = _locate_source(req.job_id)
     source_duration = _source_duration_seconds(source_path) if source_path else None
+    # Archived in R2 (paid plan) counts as available, but is only downloaded
+    # below once the edit really needs it: a trim inside the range stays on
+    # the fast path and never pulls the source back.
+    archived = None if source_path else await _archived_source(req.job_id)
+    if archived is not None:
+        source_duration = archived.get("duration")
 
     framing = req.framing or (clip.get('recipe') or {}).get('framing') or 'auto'
     if framing not in _FRAMING_STRATEGIES:
@@ -7049,7 +7170,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
         if req.snap_to_words:
             snap_bound = source_duration or max(s['end'] for s in segments)
             segments = recut.snap_segments(segments, transcript, snap_bound)
-            if not source_path:
+            if not source_path and archived is None:
                 # Snapping trails into silence and may nudge a boundary past
                 # the canonical range; without a source the fast path is the
                 # only path, so clamp back instead of failing with a 409.
@@ -7071,6 +7192,8 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
             and os.path.exists(canonical_path)
             and recut.within_range(segments, canonical_range['start'],
                                    canonical_range['end']))
+    if not fast and not source_path and archived is not None:
+        source_path = await _locate_or_fetch_source(req.job_id)
     if not fast and not source_path:
         raise HTTPException(
             status_code=409,
@@ -7483,7 +7606,7 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
     # since a re-render rebuilds from source using ONLY what it is sent, the
     # next save would silently drop every earlier adjustment.
     saved_overrides = clip.get('crop_overrides') or {}
-    source_path = _locate_source(job_id)
+    source_path = await _locate_or_fetch_source(job_id)
     if not source_path:
         raise HTTPException(
             status_code=409,
@@ -7668,7 +7791,7 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
             detail="Horizontal clips keep the full frame; there is no crop to reframe.")
 
     segments, canonical_range = _clip_recipe_parts(clip)
-    source_path = _locate_source(req.job_id)
+    source_path = await _locate_or_fetch_source(req.job_id)
     if not source_path:
         raise HTTPException(
             status_code=409,

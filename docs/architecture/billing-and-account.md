@@ -205,6 +205,39 @@ free text: anything typed would land in a row designed to outlive the user.
 still exists before inserting; otherwise the FK violation makes Stripe retry the
 same doomed event for days.
 
+## Paid jobs keep their source for 30 days (`cloud/source_archive.py`)
+
+The server keeps a job's source an hour at most (less under the disk caps);
+without it the preview stops and the editor answers 409 to a cut past the
+original range or a reframe. For an owner on a live paid plan when the job is
+delivered (`metering.live_plans`, plan not `free`), `app._archive_source_bg`
+uploads it to `users/<uid>/<job>/source/<random hex>.<ext>` after the clip
+archive, as a background task (at most `UPLOAD_CONCURRENCY` = 2 uploads per
+process, the file opened before queueing so a sweep cannot pull it away). A
+missing source or a failed upload is logged and nothing else; the delivery
+never waits for it.
+
+- **Erasure and purges** take it by prefix with no code of their own (account
+  erasure, lapsed and free purges). The project restore skips it
+  (`is_source_key`): a reopened project must not pull hundreds of MB.
+- **Back on demand**: `/api/source` redirects (307, `no-store`) to a one-hour
+  R2 link when the file is not on disk, after the same owner/signature checks
+  as before, and `/api/source-url` still mints for a job whose directory is
+  gone when the server knows its owner and the source is archived; `/edl`
+  reports it available with the duration stored as object
+  metadata; `/rerender` (only off the fast path), `/scenes` and `/reframe`
+  download it into the job dir as `.source_archive.<ext>` through
+  `app._locate_or_fetch_source` (one download per job, off the loop). The
+  owner is always the one the server knows for the job, never one the caller
+  names.
+- **Expiry** without a table: `purge_expired_sources`, on the retention
+  sweeper but at most once a day, lists the bucket and deletes source objects
+  older than `SOURCE_ARCHIVE_DAYS` (default 30) by their LastModified. `0`
+  turns uploads off and lets the next sweep delete what is left.
+- **The random name** is the lock on a public custom domain
+  (`R2_PUBLIC_BASE`): a clip URL shows the user and job ids, which must not be
+  enough to fetch the original.
+
 ## Support-ops API (`cloud/support_ops.py`)
 
 A private API for the support back-office under `/api/support-ops/v1`: look up an

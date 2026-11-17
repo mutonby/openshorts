@@ -221,8 +221,9 @@ async def archive_job(user_id, job_id, clips, output_dir, attestation=None):
         # one (captioned/recut): it is the editable master — the clip editor's
         # fast path and /api/subtitle re-styles cut from it, so a project
         # restored after a redeploy is only editable if it comes back too.
-        # Restore downloads every key under the job prefix, so no change is
-        # needed on that side; the free-retention purge deletes by prefix.
+        # Restore downloads every key under the job prefix (except the
+        # archived source, cloud/source_archive.py), so no change is needed on
+        # that side; the free-retention purge deletes by prefix.
         if base_name:
             clean = f"{base_name}_clip_{i + 1}.mp4"
             clean_path = os.path.join(output_dir, clean)
@@ -644,6 +645,9 @@ async def _sweeper_loop():
             await purge_stale_deletion_records()
             from .evidence import purge_stale_events
             await purge_stale_events()
+            # Paid jobs' source videos past SOURCE_ARCHIVE_DAYS (once a day).
+            from .source_archive import purge_expired_sources
+            await purge_expired_sources()
         except asyncio.CancelledError:
             break
         except Exception as e:
