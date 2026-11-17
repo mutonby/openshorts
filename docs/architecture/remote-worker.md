@@ -52,8 +52,10 @@ GPU admission counts, and `_jobs_busy_elsewhere` skips a job with a claim.
   (a job resumed after a deploy starts over and can be).
 - The download fails: the job fails as a local one would, with the same logs.
 - The worker is stopped or restarted (SIGTERM): it hands its running jobs back
-  with `stopping: true`, they are retried here like any remote failure, and
-  they do not count towards the breaker (`REMOTE_BREAKER_FAILURES` of the last
+  with `stopping: true` (also the ones whose source this host is still
+  preparing, and the ones in the middle of the source transfer; the compose
+  file gives it `stop_grace_period` to do so), they are retried here like any
+  remote failure, and they do not count towards the breaker (`REMOTE_BREAKER_FAILURES` of the last
   10 jobs failing parks the worker for `REMOTE_BREAKER_SECONDS`, 30 min).
 - The instance that dispatched the job is stopped before the worker ends: the
   manifest stays, the next instance resumes the job locally and

@@ -125,6 +125,8 @@ def fetch_source(job_id, claim, target, size):
     got = 0
     with open(target, "wb") as f:
         for chunk in r.iter_content(1024 * 1024):
+            if _stop.is_set():
+                raise Stopping("worker stopping")    # a long transfer: hand the job back now
             got += len(chunk)
             if got > limit:
                 raise RuntimeError("source: larger than announced")
@@ -236,7 +238,9 @@ def run_job(job_id, claim):
             info = r.json() if r.status_code == 200 else {}
             if info.get("state") == "ready":
                 break
-            if time.time() > deadline or _stop.is_set():
+            if _stop.is_set():
+                raise Stopping("worker stopping")
+            if time.time() > deadline:
                 raise RuntimeError("the source never became ready")
             time.sleep(3)
 

@@ -5364,14 +5364,21 @@ async def worker_file(job_id: str, request: Request):
 @app.post("/internal/worker/jobs/{job_id}/done")
 async def worker_done(job_id: str, request: Request):
     job_dir, data = _worker_job(request, job_id)
-    if data.get("state") != remote_worker.READY:
-        raise HTTPException(status_code=409, detail="The job is not rendering yet.")
+    ready = data.get("state") == remote_worker.READY
     try:
         body = await _worker_body(request)
         returncode = int(body["returncode"])
     except Exception:
+        if not ready:
+            raise HTTPException(status_code=409, detail="The job is not rendering yet.")
         raise HTTPException(status_code=400, detail="returncode required")
     stopping = returncode != 0 and body.get("stopping") is True
+    if not ready and not stopping:
+        raise HTTPException(status_code=409, detail="The job is not rendering yet.")
+    # A worker that is being restarted hands back every job it holds, also
+    # the ones whose source this host is still preparing: refused, those
+    # stayed claimed by nobody until the lease ran out and each counted as a
+    # failure of the worker (a restart parked it for the breaker's 30 min).
     remote_worker.mark_done(job_dir, returncode, stopping=stopping)
     return {"ok": True}
 

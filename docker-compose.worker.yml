@@ -13,6 +13,9 @@ services:
     command: ["python", "-u", "worker.py"]
     working_dir: /app
     restart: unless-stopped
+    # On a stop the worker hands every running job back to the API so they are
+    # retried at once and do not count against it: give it time to say so.
+    stop_grace_period: 45s
     environment:
       WORKER_API_URL: ${WORKER_API_URL:?set WORKER_API_URL}
       WORKER_TOKEN: ${WORKER_TOKEN:?set WORKER_TOKEN}

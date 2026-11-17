@@ -648,6 +648,42 @@ def test_a_worker_restart_does_not_trip_the_breaker(api, monkeypatch):
     assert m._remote_breaker["until"] > time.time()
 
 
+def test_a_restarting_worker_can_hand_back_a_job_that_is_still_preparing(api, client):
+    job_id, d = _queued(api, enqueue=False)
+    claim = rw.begin(d, "w1")
+    h = dict(AUTH, **{"X-Worker-Claim": claim})
+    url = f"/internal/worker/jobs/{job_id}/done"
+    # Not rendering yet: only a hand-back is taken, never a result.
+    assert client.post(url, headers=h, json={"returncode": 0}).status_code == 409
+    assert client.post(url, headers=h, json={"returncode": -15}).status_code == 409
+    assert client.post(url, headers=h, json={}).status_code == 409
+    assert rw.read_done(d) is None
+    assert client.post(url, headers=h,
+                       json={"returncode": -15, "stopping": True}).status_code == 200
+    assert rw.read_done(d) == -15 and rw.read_stopping(d)
+
+
+def test_a_job_handed_back_while_preparing_does_not_trip_the_breaker(api, monkeypatch):
+    m = api
+    job_id, d = _queued(m, enqueue=False)
+    outcomes = []
+    monkeypatch.setattr(m, "_remote_outcome", outcomes.append)
+    m._running_jobs.add(job_id)
+    m._remote_jobs.add(job_id)
+    rw.begin(d, "w1")
+    rw.mark_done(d, -15, stopping=True)          # the worker left during the prepare
+    _fake_prepare(m, monkeypatch, d)
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(_):
+        await real_sleep(0)
+    monkeypatch.setattr(m.asyncio, "sleep", fast_sleep)
+    asyncio.run(m._run_job_remote(job_id, m.jobs[job_id]))
+    assert outcomes == []                        # says nothing about the worker
+    assert m.jobs[job_id]["status"] != "completed"
+    assert not rw.is_remote(d)
+
+
 def test_the_done_marker_keeps_why_the_worker_gave_up(tmp_path):
     d = str(tmp_path)
     rw.mark_done(d, -15, stopping=True)
