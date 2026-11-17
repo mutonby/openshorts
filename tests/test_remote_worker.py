@@ -629,6 +629,34 @@ def test_the_breaker_counts_a_window_not_a_streak(api, monkeypatch):
     assert m._remote_breaker["until"] > time.time()
 
 
+def test_a_worker_restart_does_not_trip_the_breaker(api, monkeypatch):
+    """A worker being restarted hands back its jobs: they run again here and
+    the worker is not parked for 30 minutes because of them."""
+    m = api
+    monkeypatch.setattr(m, "REMOTE_BREAKER_FAILURES", 4)
+    m._remote_breaker.update(recent=[], until=0.0)
+    for _ in range(4):
+        job_id, d = _queued(m, enqueue=False)
+        _run_remote_with(m, monkeypatch, d, job_id,
+                         lambda claim, d=d: rw.mark_done(d, -15, stopping=True))
+        assert m.jobs[job_id]["status"] == "failed" and m.jobs[job_id]["remote_failed"]
+    assert m._remote_breaker["until"] == 0.0 and m._remote_breaker["recent"] == []
+    # Four real failures still do.
+    for _ in range(4):
+        job_id, d = _queued(m, enqueue=False)
+        _run_remote_with(m, monkeypatch, d, job_id, lambda claim, d=d: rw.mark_done(d, 1))
+    assert m._remote_breaker["until"] > time.time()
+
+
+def test_the_done_marker_keeps_why_the_worker_gave_up(tmp_path):
+    d = str(tmp_path)
+    rw.mark_done(d, -15, stopping=True)
+    assert rw.read_done(d) == -15 and rw.read_stopping(d) is True
+    rw.mark_done(d, 1)
+    assert rw.read_stopping(d) is False
+    assert rw.read_stopping(str(tmp_path / "nope")) is False
+
+
 def test_a_failed_download_fails_the_job_without_any_worker(api, monkeypatch):
     m = api
     job_id, d = _queued(m, enqueue=False)

@@ -4906,6 +4906,7 @@ async def _run_job_remote(job_id, job_data):
     jobs[job_id]['status'] = 'processing'
     jobs[job_id]['logs'].append("Job started by worker.")
     handed = False               # the worker was given the job (not just a claim)
+    worker_stopped = False       # ...and gave it back because it is restarting
     log_mark = len(job_data['logs'])
     try:
         parsed = remote_worker.worker_args(cmd)
@@ -4951,6 +4952,7 @@ async def _run_job_remote(job_id, job_data):
             _refresh_partial_result(job_id, output_dir)
             if done is not None:
                 returncode = done
+                worker_stopped = remote_worker.read_stopping(output_dir)
             elif not remote_worker.is_remote(output_dir):
                 returncode = -15            # the claim was dropped under us
             elif (time.time() - remote_worker.last_seen(output_dir) > REMOTE_LEASE_SECONDS
@@ -4978,7 +4980,10 @@ async def _run_job_remote(job_id, job_data):
             # A job that completed is done with its worker even while this
             # instance is being stopped: no claim may outlive the job.
             remote_worker.clear(output_dir, purge=not ok)
-            if handed:
+            # A worker being restarted hands its jobs back: they run again and
+            # say nothing about the worker, so they do not trip the breaker
+            # (a restart used to park the worker for its full 30 minutes).
+            if handed and not worker_stopped:
                 _remote_outcome(ok)
             if not ok:
                 # What the worker printed is not this host's diagnosis: the
@@ -5195,10 +5200,12 @@ async def worker_done(job_id: str, request: Request):
     if data.get("state") != remote_worker.READY:
         raise HTTPException(status_code=409, detail="The job is not rendering yet.")
     try:
-        returncode = int((await _worker_body(request))["returncode"])
+        body = await _worker_body(request)
+        returncode = int(body["returncode"])
     except Exception:
         raise HTTPException(status_code=400, detail="returncode required")
-    remote_worker.mark_done(job_dir, returncode)
+    stopping = returncode != 0 and body.get("stopping") is True
+    remote_worker.mark_done(job_dir, returncode, stopping=stopping)
     return {"ok": True}
 
 
