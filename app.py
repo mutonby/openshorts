@@ -497,6 +497,7 @@ def _discard_rejected_source(input_path, job_output_dir, upload_slot=None, uploa
             pass
     if job_output_dir:
         shutil.rmtree(job_output_dir, ignore_errors=True)
+        _end_job_dir(os.path.basename(str(job_output_dir).rstrip(os.sep)))
 
 
 def _parse_source_range(start, end):
@@ -619,6 +620,33 @@ def _begin_submission(job_id, owner_id):
 
 def _end_submission(job_id):
     _submissions.pop(str(job_id), None)
+
+
+# job_id -> monotonic start for /api/process requests that created their job
+# dir and are not in `jobs` yet. The source can take minutes to stream in, and
+# the disk sweeps run meanwhile: a size cap over its limit deleted the half-
+# written upload and the empty dir under the request. Entries end when the job
+# is registered or refused; the age cap only covers a request that died.
+_dirs_in_flight: dict = {}
+_DIR_IN_FLIGHT_MAX_AGE = 3 * 3600
+
+
+def _begin_job_dir(job_id):
+    _dirs_in_flight[str(job_id)] = time.monotonic()
+
+
+def _end_job_dir(job_id):
+    _dirs_in_flight.pop(str(job_id), None)
+
+
+def _job_dir_in_flight(job_id) -> bool:
+    started = _dirs_in_flight.get(str(job_id))
+    if started is None:
+        return False
+    if time.monotonic() - started > _DIR_IN_FLIGHT_MAX_AGE:
+        _dirs_in_flight.pop(str(job_id), None)
+        return False
+    return True
 
 
 def _submissions_in_flight(owner_id) -> int:
@@ -2767,7 +2795,7 @@ def _job_is_active(job_id, now=None) -> bool:
     """True while a job is queued or running here, or its resume manifest says
     it has not reached a terminal state yet (the other instance's jobs during a
     handover included). The disk sweeps must never touch such a job."""
-    if job_id in _running_jobs or job_id in _delivering_jobs:
+    if job_id in _running_jobs or job_id in _delivering_jobs or _job_dir_in_flight(job_id):
         return True
     if (jobs.get(job_id) or {}).get('status') in ('queued', 'processing'):
         return True
@@ -2843,6 +2871,17 @@ def _upload_job_id(filename: str) -> str:
     return filename.split("_", 1)[0]
 
 
+def _upload_is_live(filename: str, now=None) -> bool:
+    """A source the sweeps must keep: its job is live, or it is an agent
+    upload slot (``pending_<upload_id>_<name>``) that has not expired, still
+    streaming in or waiting for /api/process. _sweep_pending_uploads expires
+    those slots."""
+    if filename.startswith("pending_"):
+        slot = pending_uploads.get(_upload_job_id(filename[len("pending_"):]))
+        return slot is not None and (time.time() if now is None else now) - slot["created"] <= UPLOAD_TTL_SECONDS
+    return _job_is_active(_upload_job_id(filename), now)
+
+
 def _output_jobs_size() -> int:
     """Bytes under OUTPUT_DIR that the size cap can free: the job dirs (and
     loose files), not the dot entries. Those are never purged by it, and one
@@ -2900,7 +2939,7 @@ def _sweep_expired_uploads(now):
         file_path = os.path.join(UPLOAD_DIR, filename)
         try:
             if (now - os.path.getmtime(file_path) > JOB_RETENTION_SECONDS
-                    and not _job_is_active(_upload_job_id(filename), now)):
+                    and not _upload_is_live(filename, now)):
                 os.remove(file_path)
         except Exception:
             pass
@@ -2921,7 +2960,7 @@ def _enforce_uploads_size_cap():
     files = []
     for name in os.listdir(UPLOAD_DIR):
         p = os.path.join(UPLOAD_DIR, name)
-        if os.path.isfile(p) and not _job_is_active(_upload_job_id(name)):
+        if os.path.isfile(p) and not _upload_is_live(name):
             try:
                 files.append((os.path.getmtime(p), p, os.path.getsize(p)))
             except OSError:
@@ -5317,6 +5356,7 @@ async def _quality_gate(url: str, force_low: bool):
 async def _drop_unstarted_job(reservation_id, job_output_dir):
     """Undo a submission refused after its minutes were reserved."""
     _end_submission(os.path.basename(str(job_output_dir or "").rstrip(os.sep)))
+    _end_job_dir(os.path.basename(str(job_output_dir or "").rstrip(os.sep)))
     if reservation_id:
         try:
             await _metering.release_reservation(reservation_id)
@@ -5451,6 +5491,13 @@ async def create_upload(request: Request):
     }
 
 
+def _remove_if_present(path):
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+
+
 @app.put("/api/uploads/{upload_id}")
 async def put_upload(upload_id: str, request: Request):
     """Receive the raw video body for a reserved slot. Streams to disk, capped
@@ -5466,16 +5513,16 @@ async def put_upload(upload_id: str, request: Request):
             size += len(chunk)
             if size > limit_bytes:
                 out.close()
-                os.remove(slot["path"])
+                _remove_if_present(slot["path"])
                 raise HTTPException(status_code=413, detail=f"File too large. Max size {MAX_FILE_SIZE_MB}MB")
             out.write(chunk)
     if size == 0:
-        os.remove(slot["path"])
+        _remove_if_present(slot["path"])
         raise HTTPException(status_code=400, detail="Empty body")
     slot.update({"bytes": size, "complete": True})
     duration = await asyncio.get_event_loop().run_in_executor(None, _media_duration_seconds, slot["path"])
     if duration <= 0:
-        os.remove(slot["path"])
+        _remove_if_present(slot["path"])
         slot["complete"] = False
         raise HTTPException(status_code=400, detail="The body is not a readable video file")
     return {"upload_id": upload_id, "bytes": size, "duration_seconds": round(duration, 1),
@@ -5738,6 +5785,7 @@ async def process_endpoint(
 
     job_id = str(uuid.uuid4())
     job_output_dir = os.path.join(OUTPUT_DIR, job_id)
+    _begin_job_dir(job_id)  # the sweeps keep its dir and source until it is in `jobs`
     os.makedirs(job_output_dir, exist_ok=True)
 
     # Prepare Command
@@ -5830,7 +5878,7 @@ async def process_endpoint(
         src = thumb_session["video_path"]
         src_duration = _media_duration_seconds(src)
         if MIN_SOURCE_SECONDS > 0 and 0 < src_duration < MIN_SOURCE_SECONDS:
-            shutil.rmtree(job_output_dir, ignore_errors=True)
+            _discard_rejected_source(None, job_output_dir)
             _reject_short_source(src_duration)
         input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{_clamp_upload_name(os.path.basename(src))}")
         try:
@@ -5851,7 +5899,7 @@ async def process_endpoint(
         src = upload_slot["path"]
         src_duration = _media_duration_seconds(src)
         if MIN_SOURCE_SECONDS > 0 and 0 < src_duration < MIN_SOURCE_SECONDS:
-            shutil.rmtree(job_output_dir, ignore_errors=True)
+            _discard_rejected_source(None, job_output_dir)
             _reject_short_source(src_duration)
         input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{upload_slot['filename']}")
         os.replace(src, input_path)
@@ -5872,15 +5920,13 @@ async def process_endpoint(
             while content := await file.read(1024 * 1024): # Read 1MB chunks
                 size += len(content)
                 if size > limit_bytes:
-                    os.remove(input_path)
-                    shutil.rmtree(job_output_dir)
+                    _discard_rejected_source(input_path, job_output_dir)
                     raise HTTPException(status_code=413, detail=f"File too large. Max size {MAX_FILE_SIZE_MB}MB")
                 buffer.write(content)
 
         upload_duration = _media_duration_seconds(input_path)
         if MIN_SOURCE_SECONDS > 0 and 0 < upload_duration < MIN_SOURCE_SECONDS:
-            os.remove(input_path)
-            shutil.rmtree(job_output_dir, ignore_errors=True)
+            _discard_rejected_source(input_path, job_output_dir)
             _reject_short_source(upload_duration)
 
         cmd.extend(["-i", input_path])
@@ -5983,6 +6029,7 @@ async def process_endpoint(
         # A free-plan job paid with top-up minutes queues with the paid plans.
         'topup': bool(getattr(request.state, "queue_topup", False)),
     }
+    _end_job_dir(job_id)  # `jobs` keeps it live now
 
     # Persist the owner so recovered jobs keep their multi-tenant guard after a
     # restart (see _recover_jobs_from_disk).

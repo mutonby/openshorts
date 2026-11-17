@@ -79,6 +79,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 - Call `transcribe_backends.release_models()` after any ASR (job processes and in-API transcriptions alike). Size `MAX_CONCURRENT_JOBS` by free VRAM first.
 - `DRAIN_TIMEOUT_SECONDS` must stay below the deployment's (Coolify) stop grace period. The image must ship `curl` for the platform health check.
 - A drain-cancelled job keeps its manifest and reservation and is resumed, never marked failed or completed.
+- The disk sweeps and size caps delete only what `_job_is_active` / `_upload_is_live` call dead: a submission counts as live from its `_begin_job_dir` (source still streaming in) and an agent upload slot until it expires.
 - The remote worker gets job options and the source, never a credential, and writes only plain non-dot output files into its job's directory (`remote_worker.job_options`, `safe_relpath`). A remote job holds no GPU slot (`_local_running`); new per-job state it needs lives as files in the job dir, not in memory.
 - Whatever is read back from a job directory (recipes, metadata, sidecars, subtitles, log lines) is data from possibly another machine: numbers as numbers, text as text, never pasted into an ffmpeg filter graph, a path or markup. A filter string that is not a plain chain of `editor._ALLOWED_FILTERS` is not run.
 

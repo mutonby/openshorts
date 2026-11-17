@@ -143,6 +143,62 @@ class TestUploadSweep:
         assert live.exists() and not dead.exists()
 
 
+class TestSubmissionsStillUploading:
+    """17-nov-2026: with the uploads dir over its cap (queued jobs hold their
+    sources), every sweep deleted the file of a submission still streaming in,
+    and its new job dir: it was not in `jobs` yet, so nothing said it was live."""
+
+    @pytest.fixture
+    def in_flight(self, disk, monkeypatch):
+        monkeypatch.setattr(app_module, "_dirs_in_flight", {})
+        monkeypatch.setattr(app_module, "pending_uploads", {})
+        return disk
+
+    def test_size_caps_keep_a_submission_still_uploading(self, in_flight, monkeypatch):
+        out, up = in_flight
+        d = _job_dir(out, "arriving", age=0)
+        f = _upload(up, "arriving", age=0)
+        app_module._begin_job_dir("arriving")
+        monkeypatch.setattr(app_module, "UPLOADS_MAX_GB", 1 / 1024 ** 3)
+        monkeypatch.setattr(app_module, "OUTPUT_MAX_GB", 1 / 1024 ** 3)
+        app_module._enforce_uploads_size_cap()
+        app_module._enforce_output_size_cap()
+        assert f.exists() and d.exists()
+
+    def test_once_registered_or_refused_it_is_an_ordinary_job(self, in_flight, monkeypatch):
+        out, up = in_flight
+        f = _upload(up, "refused", age=0)
+        app_module._begin_job_dir("refused")
+        app_module._discard_rejected_source(str(f), str(out / "refused"))
+        assert not app_module._job_dir_in_flight("refused")
+        dead = _upload(up, "dead", age=0)
+        dead.write_bytes(b"x" * 2048)
+        app_module._begin_job_dir("dead")
+        app_module._end_job_dir("dead")
+        monkeypatch.setattr(app_module, "UPLOADS_MAX_GB", 1 / 1024 ** 3)
+        app_module._enforce_uploads_size_cap()
+        assert not dead.exists()
+
+    def test_a_request_that_died_does_not_pin_its_dir_forever(self, in_flight, monkeypatch):
+        app_module._begin_job_dir("ghost")
+        app_module._dirs_in_flight["ghost"] -= app_module._DIR_IN_FLIGHT_MAX_AGE + 1
+        assert not app_module._job_is_active("ghost")
+
+    def test_an_open_agent_upload_slot_is_kept(self, in_flight, monkeypatch):
+        _, up = in_flight
+        live = up / "pending_u-live_clip.mp4"
+        live.write_bytes(b"x")
+        old = up / "pending_u-old_clip.mp4"
+        old.write_bytes(b"x")
+        now = time.time()
+        app_module.pending_uploads["u-live"] = {"path": str(live), "created": now}
+        app_module.pending_uploads["u-old"] = {
+            "path": str(old), "created": now - app_module.UPLOAD_TTL_SECONDS - 1}
+        monkeypatch.setattr(app_module, "UPLOADS_MAX_GB", 1 / 1024 ** 3)
+        app_module._enforce_uploads_size_cap()
+        assert live.exists() and not old.exists()
+
+
 class TestSettleWithoutEntry:
     def test_reservation_released_when_entry_vanished(self, monkeypatch):
         calls = []
