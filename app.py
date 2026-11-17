@@ -2379,6 +2379,25 @@ def _resume_candidates(held: set, now: float):
     return keep_reservations, picked
 
 
+# Free-plan jobs render at up to FREE_MAX_FPS (0 = source rate): the cut that
+# every later pass reads is made at that rate (ffmpeg_utils.cut_rate_filter),
+# so a 60 fps source costs about half the decoder and encoder time. Paid plans
+# keep the source's rate.
+def _free_max_fps() -> int:
+    try:
+        return max(0, int(os.environ.get("FREE_MAX_FPS", "30")))
+    except ValueError:
+        return 30
+
+
+def _apply_rate_cap(env) -> None:
+    cap = _free_max_fps() if env.get("WATERMARK") == "1" else 0
+    if cap:
+        env["CUT_MAX_FPS"] = str(cap)
+    else:
+        env.pop("CUT_MAX_FPS", None)
+
+
 def _register_resumed(picked) -> int:
     """Loop part of the resume scan: a record and a heap entry per picked
     manifest. The heap orders them by submission time, whatever order the
@@ -2409,6 +2428,7 @@ def _register_resumed(picked) -> int:
             env["WATERMARK"] = "1"
         else:
             env.pop("WATERMARK", None)
+        _apply_rate_cap(env)
         partial = m.get("partial")
         _apply_source_cut(env, partial)
         if m.get("source_cap_minutes"):
@@ -5899,6 +5919,7 @@ async def process_endpoint(
         # Free-plan clips carry a burned-in watermark (applied by the main.py
         # subprocess after each clip renders).
         env["WATERMARK"] = "1"
+    _apply_rate_cap(env)
 
     # Absolute-URL base for the webhook payload: explicit env wins (the API may
     # sit behind a proxy whose forwarded headers we can't trust), else what the

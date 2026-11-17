@@ -482,3 +482,21 @@ pool is sized for waiting: a probe mostly sleeps on the YouTube account's
 turn, and 4 processes asleep queued the rest (estimate p50 45 s). The cost
 line (`/api/process/estimate`) gives up after `ESTIMATE_PROBE_TIMEOUT` (20 s).
 
+
+## Frame rate of free jobs
+
+Every pass after the cut (tracking, scene detection, the reframe render,
+captions, hook, the watermarked copy) reads the cut, so its frame rate sets
+the decoder and encoder work of the whole job. A free-plan job is cut at up to
+`FREE_MAX_FPS` (default 30, `0` keeps the source rate): the API puts
+`CUT_MAX_FPS` in the job's environment next to `WATERMARK` (and it travels to
+the remote worker as a job option), and `ffmpeg_utils.cut_rate_filter` adds
+`-vf fps=` to both the GPU and CPU cut. The new rate is the source's divided by
+a whole number (60 -> 30, 59.94 -> 29.97, 50 -> 25), so the kept frames are
+evenly spaced; a source under 1.5x the cap is left alone. Paid plans keep the
+source rate.
+
+Skipping the source's non-reference frames while decoding (`-skip_frame
+noref`) was measured and rejected: it saves part of the first read, but the
+frames it keeps are unevenly spaced and a quarter of the 30 fps output came
+out as repeats (visible judder).

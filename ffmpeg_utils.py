@@ -11,6 +11,7 @@ audio codecs, filters) stay at each call site.
 """
 import os
 import subprocess
+from fractions import Fraction
 import threading
 import time
 
@@ -359,6 +360,57 @@ def _gpu_cut_ok(input_video):
     return _gpu_cut_sources[input_video]
 
 
+_source_rates = {}
+
+
+def _source_rate(path):
+    """Average frame rate of the first video stream as a Fraction, or None."""
+    if path in _source_rates:
+        return _source_rates[path]
+    rate = None
+    try:
+        out = subprocess.check_output(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=avg_frame_rate", "-of", "csv=p=0", path],
+            stderr=subprocess.DEVNULL, timeout=60, text=True).strip()
+        num, _, den = out.partition("/")
+        value = Fraction(int(num), int(den or 1))
+        rate = value if value > 0 else None
+    except Exception:
+        rate = None
+    _source_rates[path] = rate
+    return rate
+
+
+def cut_rate_filter(input_video):
+    """``["-vf", "fps=N/D"]`` when the job caps its frame rate and the source
+    is well above the cap, else ``[]``.
+
+    The cut is the file every later pass reads (tracking, scene detection, the
+    reframe render, captions, hook, watermark), so a 60 fps source cut at 30
+    halves the decode and encode of all of them. CUT_MAX_FPS is set per job by
+    the API (the free plan, FREE_MAX_FPS). The rate is the source's divided by
+    a whole number (60 -> 30, 59.94 -> 29.97, 50 -> 25, 120 -> 30), so every
+    kept frame is evenly spaced and motion stays smooth. A source under 1.5x
+    the cap (a 40 fps one) is left alone: halving it would cost more
+    smoothness than it saves.
+    """
+    try:
+        cap = float(os.environ.get("CUT_MAX_FPS", "0") or 0)
+    except ValueError:
+        cap = 0
+    if cap <= 0:
+        return []
+    rate = _source_rate(input_video)
+    if rate is None or rate < Fraction(cap) * Fraction(3, 2):
+        return []
+    n = 2
+    while rate / n > Fraction(cap) * Fraction(1001, 1000):
+        n += 1
+    target = (rate / n).limit_denominator(1001)
+    return ["-vf", f"fps={target.numerator}/{target.denominator}"]
+
+
 def cut_clip(input_video, clip_temp_path, start, end, clip_number):
     """Cut [start, end] out of the source into ``clip_temp_path``.
 
@@ -378,11 +430,13 @@ def cut_clip(input_video, clip_temp_path, start, end, clip_number):
     session cannot allocate on a GPU that other jobs are filling.
     """
     encode_args = video_encode_args(INTERMEDIATE)
+    rate = cut_rate_filter(input_video)
     command = [
         'ffmpeg', '-y',
         '-ss', str(start),
         '-to', str(end),
         '-i', input_video,
+        *rate,
         *encode_args,
         *audio_encode_args(),
         clip_temp_path
@@ -397,7 +451,7 @@ def cut_clip(input_video, clip_temp_path, start, end, clip_number):
             del gpu_args[i:i + 2]
         gpu_command = ['ffmpeg', '-y', '-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda',
                        '-ss', str(start), '-to', str(end), '-i', input_video,
-                       *gpu_args, *audio_encode_args(), clip_temp_path]
+                       *rate, *gpu_args, *audio_encode_args(), clip_temp_path]
 
     def _run_one(cmd):
         result = subprocess.run(cmd, stdout=subprocess.DEVNULL,
