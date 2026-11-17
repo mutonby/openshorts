@@ -2951,11 +2951,25 @@ def _sweep_expired_uploads(now):
             pass
 
 
+def _job_dir_is_fresh(job_id, now=None) -> bool:
+    """The job's output dir was written within OUTPUT_CAP_GRACE_SECONDS: its
+    clips just came out or someone is editing them, so the size caps leave
+    the job and its source alone."""
+    try:
+        mtime = os.path.getmtime(os.path.join(OUTPUT_DIR, job_id))
+    except OSError:
+        return False
+    return (time.time() if now is None else now) - mtime < OUTPUT_CAP_GRACE_SECONDS
+
+
 def _enforce_uploads_size_cap():
     """Delete the oldest source uploads while UPLOAD_DIR is over UPLOADS_MAX_GB.
 
     Sources are only needed while a job runs (and for the preview afterwards),
-    but they're the biggest files on disk — up to MAX_FILE_SIZE_MB each.
+    but they're the biggest files on disk — up to MAX_FILE_SIZE_MB each. The
+    source of a job whose clips are fresh stays (_job_dir_is_fresh): with the
+    queued jobs alone over the cap, every upload went minutes after its job
+    ended, and with it the source preview and every edit that cuts from it.
     """
     cap = UPLOADS_MAX_GB * 1024 ** 3
     if cap <= 0:
@@ -2966,7 +2980,8 @@ def _enforce_uploads_size_cap():
     files = []
     for name in os.listdir(UPLOAD_DIR):
         p = os.path.join(UPLOAD_DIR, name)
-        if os.path.isfile(p) and not _upload_is_live(name):
+        if (os.path.isfile(p) and not _upload_is_live(name)
+                and not _job_dir_is_fresh(_upload_job_id(name))):
             try:
                 files.append((os.path.getmtime(p), p, os.path.getsize(p)))
             except OSError:

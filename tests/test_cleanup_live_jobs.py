@@ -156,6 +156,19 @@ class TestUploadSweep:
         app_module._enforce_uploads_size_cap()
         assert live.exists() and not dead.exists()
 
+    def test_size_cap_keeps_the_source_of_a_job_that_just_finished(self, disk, monkeypatch):
+        """Its clips are minutes old: the preview of the source and the edits
+        that cut from it still need the file."""
+        out, up = disk
+        fresh = _upload(up, "fresh")
+        (out / "fresh").mkdir()
+        stale = _upload(up, "stale")
+        (out / "stale").mkdir()
+        _age(out / "stale", app_module.OUTPUT_CAP_GRACE_SECONDS + 60)
+        monkeypatch.setattr(app_module, "UPLOADS_MAX_GB", 1 / 1024 ** 3)
+        app_module._enforce_uploads_size_cap()
+        assert fresh.exists() and not stale.exists()
+
 
 class TestSubmissionsStillUploading:
     """17-nov-2026: with the uploads dir over its cap (queued jobs hold their
