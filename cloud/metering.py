@@ -200,6 +200,17 @@ def probe_url_minutes(url: str, allow_paid: bool = True) -> float:
     if reason:
         raise NotASingleVideo(f"This link is {reason}.")
 
+    # A YouTube video probed in the last hours (the download cache keeps its
+    # length): a video's length does not change, and asking again would spend
+    # a request of a YouTube account for an answer we already have.
+    import source_cache
+    known = source_cache.probe_get(url)
+    if known:
+        if known.get("max_height"):
+            _probe_facts[url] = {"at": time.time(), "max_height": int(known["max_height"]),
+                                 "duration": int(known["seconds"])}
+        return known["seconds"] / 60.0
+
     bgutil_http = os.environ.get("BGUTIL_BASE_URL", "").strip()
     bgutil_script = os.environ.get("BGUTIL_SCRIPT_PATH", "").strip()
     # Same client lists as the download (yt_clients.py): the authed defaults
@@ -249,10 +260,13 @@ def probe_url_minutes(url: str, allow_paid: bool = True) -> float:
     # One of the configured accounts (yt_account.Session), as a private file.
     session = yt_account.Session()
     try:
-        return _probe_with_proxies(url, proxies, strategies, static_errors,
-                                   paid, session.path)
+        minutes = _probe_with_proxies(url, proxies, strategies, static_errors,
+                                      paid, session.path)
     finally:
         session.close()
+    facts = _probe_facts.get(url) or {}
+    source_cache.probe_put(url, minutes * 60.0, facts.get("max_height"))
+    return minutes
 
 
 # --- The probe in its own process -------------------------------------------

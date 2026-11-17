@@ -85,6 +85,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 - The probe also carries `YOUTUBE_COOKIES`, like the download does; first attempt with cookies, second anonymous, on probe and download alike.
 - Keep the explicit `yt_clients.py` client list; never put `player_skip: webpage` back. `noplaylist` always; non-video URLs refused by an allowlist.
 - Every yt-dlp extraction that sends `YOUTUBE_COOKIES` takes its cookie file from a `yt_account.Session` (one of the configured accounts, `YOUTUBE_COOKIES_2`.. add more) and runs inside its `request()`, and none is sent while `yt_account.cooling_down()`: each account's budget is shared by every probe and download. A failure that is only the account limit is retried after the cooldown (`YT_ACCOUNT_LIMITED`), never reported as a broken video.
+- A YouTube video is fetched once per `SOURCE_CACHE_HOURS` (`source_cache.py`: source, transcript and probe by video id). Only whole sources over a free route go in (never ranged, never the per-GB proxy's 720p); a new dot entry of `output/` that holds data stays out of `app._output_jobs_size`.
 - `DOWNLOAD_SKIP_STATICS` only when the probe saw every static bot-checked. `PAID_PROXY_DAILY_MB` is the hard daily ceiling. Never keep `PROXY_URL` in a local `.env`.
 
 **Agent access**

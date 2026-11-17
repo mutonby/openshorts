@@ -128,3 +128,42 @@ outright.
   for when the cooldown ends, up to `YT_LIMIT_RETRIES` (3) times, on a counter
   of its own. The user sees "YouTube is limiting downloads right now".
 
+
+## Download cache (`source_cache.py`)
+
+Many users clip the same popular YouTube videos within hours of each other,
+and every repeat used to spend a request of a YouTube account at submit (the
+metering probe) and again at download. With `SOURCE_CACHE_DIR` set (off when
+empty; Cloud points it at `output/.source_cache`) a video is asked for once:
+
+- **Keyed by the YouTube id** (`source_cache.video_id`: watch, youtu.be,
+  shorts, live, embed; never `/clip/`, never another host). The rest of the
+  URL (`t=`, `si=`, `list=`) does not matter.
+- **The source.** `main.download_youtube_video` takes a fresh entry before
+  any network call: hard-linked into the job dir (one inode, a copy only
+  across filesystems), and the job prints `PROXY_ROUTE` with winner `cache`,
+  so `proxy_usage` counts the hits. A miss holds the id's lock
+  (`source_cache.claim`) while it downloads, so jobs on the same video wait
+  for that one download (`SOURCE_CACHE_WAIT_SECONDS`, 900, then they download
+  anyway). Only a whole source over a free route is kept
+  (`is_whole_free_download`): never a ranged fetch (just the paid minutes)
+  nor one won on the per-GB proxy (720p). Only a job's download
+  (`use_cache=True`) uses it: the API's in-process downloads (Thumbnail
+  Studio) run on a shared executor that must not wait on another job's lock. The job's own cut (`cap_source_duration`)
+  replaces its file with `os.replace`, so the cached copy stays whole.
+- **The transcript.** Stored next to the source after a job transcribes that
+  very file (same inode or same size, so never a cut one) and reused for the
+  same length (±0.5 s) and the same `TRANSCRIBE_BACKEND`.
+- **The probe.** `metering.probe_url_minutes` answers from `<id>.probe.json`
+  (length and best height, which also feeds `probe_facts` for the quality
+  gate) and records every YouTube probe there. A video's length does not
+  change; a video made private meanwhile fails at the download as before.
+- **Bounded.** An entry lives `SOURCE_CACHE_HOURS` (48) from when it was
+  stored; past `SOURCE_CACHE_MAX_GB` (150) the least recently used go first
+  (`prune`, on every store). It is a dot entry of `output/`: never served by
+  `/videos` (dot segments are refused), never swept, and not counted by the
+  output size cap (`app._output_jobs_size`), which could only purge finished
+  jobs for room it is not allowed to free.
+- Public video files keyed by id, no user or job attached. What is read back
+  is data: the title becomes a file name only through `source_cache.sanitize`
+  and a basename. Fail-open: any error is a miss and the job downloads.

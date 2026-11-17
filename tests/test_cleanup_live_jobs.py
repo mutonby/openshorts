@@ -104,6 +104,19 @@ class TestJobDirSweep:
         app_module._enforce_output_size_cap()
         assert live.exists() and not dead.exists()
 
+    def test_size_cap_does_not_count_the_download_cache(self, disk, monkeypatch):
+        """The cache has its own cap and this one may not delete it: counting
+        it would purge finished jobs for nothing."""
+        out, _ = disk
+        cache = out / ".source_cache"
+        cache.mkdir()
+        (cache / "q6fgVVmdpgY.mp4").write_bytes(b"x" * 8192)
+        done = _job_dir(out, "done")
+        (done / "clip.mp4").write_bytes(b"x" * 1024)
+        monkeypatch.setattr(app_module, "OUTPUT_MAX_GB", 4096 / 1024 ** 3)
+        app_module._enforce_output_size_cap()
+        assert done.exists() and (cache / "q6fgVVmdpgY.mp4").exists()
+
 
 class TestUploadSweep:
     def test_source_of_queued_job_survives(self, disk):

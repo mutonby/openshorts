@@ -2843,6 +2843,28 @@ def _upload_job_id(filename: str) -> str:
     return filename.split("_", 1)[0]
 
 
+def _output_jobs_size() -> int:
+    """Bytes under OUTPUT_DIR that the size cap can free: the job dirs (and
+    loose files), not the dot entries. Those are never purged by it, and one
+    of them is the download cache (``.source_cache``, source_cache.py) with a
+    cap of its own: counting it here would purge finished jobs to make room
+    for files this cap may not delete."""
+    total = 0
+    try:
+        names = os.listdir(OUTPUT_DIR)
+    except OSError:
+        return 0
+    for name in names:
+        if _not_a_job_dir(name):
+            continue
+        path = os.path.join(OUTPUT_DIR, name)
+        try:
+            total += _dir_size(path) if os.path.isdir(path) else os.path.getsize(path)
+        except OSError:
+            pass
+    return total
+
+
 def _not_a_job_dir(name) -> bool:
     """Dot entries of OUTPUT_DIR are the instances' shared state, never a job:
     the country database (``.geoip/``), the queue watch and mode files, the
@@ -2922,7 +2944,7 @@ def _enforce_output_size_cap():
     cap = OUTPUT_MAX_GB * 1024 ** 3
     if cap <= 0:
         return
-    used = _dir_size(OUTPUT_DIR)
+    used = _output_jobs_size()
     if used <= cap:
         return
     thumbs = os.path.basename(THUMBNAILS_DIR)

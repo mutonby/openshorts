@@ -865,14 +865,45 @@ def _content_block(error_text):
 
 
 def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
-                           cap_minutes=None, route_out=None):
+                           cap_minutes=None, route_out=None, use_cache=False):
     """Download ``url`` with only public addresses resolvable (ssrf_guard): the
     checked URL is not the only one yt-dlp talks to (redirects, URLs read out
     of an extracted page, a DNS answer that changes after the check)."""
     import ssrf_guard
-    with ssrf_guard.guarded():
-        return _download_youtube_video(url, output_dir, on_audio=on_audio, allow_paid=allow_paid,
-                                       cap_minutes=cap_minutes, route_out=route_out)
+    import source_cache
+    # A YouTube video another job downloaded whole in the last hours is taken
+    # from the download cache: no YouTube request, no account spent
+    # (source_cache.py). Only for a job process (``use_cache``): a miss can
+    # wait minutes for another job's download of the same video, which an
+    # in-process caller on a shared executor must not; nor with a cap, which
+    # expects the fetch itself to stop there.
+    cacheable = (use_cache and cap_minutes is None and source_cache.enabled()
+                 and bool(source_cache.video_id(url)))
+    if not cacheable:
+        with ssrf_guard.guarded():
+            return _download_youtube_video(url, output_dir, on_audio=on_audio,
+                                           allow_paid=allow_paid, cap_minutes=cap_minutes,
+                                           route_out=route_out)
+    hit = source_cache.fetch(url, output_dir)
+    if hit is None:
+        with source_cache.claim(url):
+            # The job we waited for may have just stored it.
+            hit = source_cache.fetch(url, output_dir)
+            if hit is None:
+                route = route_out if isinstance(route_out, dict) else {}
+                with ssrf_guard.guarded():
+                    path, title = _download_youtube_video(
+                        url, output_dir, on_audio=on_audio, allow_paid=allow_paid,
+                        cap_minutes=cap_minutes, route_out=route)
+                if source_cache.is_whole_free_download(route):
+                    source_cache.store(url, path, title)
+                return path, title
+    route = {"winner": "cache", "paid_bytes": 0, "attempts": []}
+    if isinstance(route_out, dict):
+        route_out.update(route)
+    print("PROXY_ROUTE=" + json.dumps(route, ensure_ascii=False))
+    return hit
+
 
 
 def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
@@ -1106,6 +1137,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             'merge_output_format': 'mp4', 'overwrites': True,
             'progress_hooks': [_progress_hook],
         }
+        _dl_bytes["ranged"] = ranged
         if ranged:
             from yt_dlp.utils import download_range_func
             dl_opts['download_ranges'] = download_range_func(None, [(0, _range_cap)])
@@ -1265,6 +1297,8 @@ Technical Details: {str(last_err)}
         "winner": attempt_log[-1]["label"] if attempt_log and attempt_log[-1].get("ok") else None,
         "paid_bytes": paid_bytes,
         "attempts": attempt_log,
+        # Only the paid minutes were fetched: not the whole source.
+        "ranged": bool(_dl_bytes.get("ranged")),
     }
     if isinstance(route_out, dict):
         route_out.update(route)
@@ -2662,7 +2696,7 @@ if __name__ == '__main__':
                      and not os.environ.get("MAX_SOURCE_MINUTES", "").strip()
                      and not os.path.exists(os.path.join(output_dir, TRANSCRIPT_CHECKPOINT)))
         input_video, video_title = download_youtube_video(
-            args.url, output_dir, on_audio=_on_audio if use_early else None)
+            args.url, output_dir, on_audio=_on_audio if use_early else None, use_cache=True)
     else:
         input_video = args.input
         video_title = os.path.splitext(os.path.basename(input_video))[0]
@@ -2805,12 +2839,24 @@ if __name__ == '__main__':
             if transcript is not None:
                 print(f"♻️ Reusing the transcript from the interrupted run "
                       f"({len(transcript['segments'])} segments) — skipping transcription.")
+        # Another job already transcribed this very source (download cache).
+        transcript_from_cache = False
+        if transcript is None and args.url:
+            import source_cache
+            transcript = source_cache.fetch_transcript(args.url, duration)
+            if transcript is not None:
+                transcript_from_cache = True
+                save_transcript_checkpoint(output_dir, transcript, input_video, duration)
         if transcript is None:
             try:
                 transcript = transcribe_video(input_video)
                 save_transcript_checkpoint(output_dir, transcript, input_video, duration)
             except NoAudioError as e:
                 print(f"🔇 {e} — switching to visual analysis.")
+        if transcript is not None and args.url and not transcript_from_cache:
+            # Kept only when this job's source is the cached file, uncut.
+            import source_cache
+            source_cache.store_transcript(args.url, duration, transcript, input_video)
 
         # Music-only or wordless footage transcribes to a handful of words.
         # Clip it by what is on screen instead, like a video with no audio.
