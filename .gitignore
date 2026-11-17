@@ -52,3 +52,8 @@ CLAUDE.local.md
 
 # Rust build output
 osrender/target/
+
+# livewatch (local config, clips, buffer)
+livewatch.toml
+livewatch_data/
+.livewatch_chat_tmp/

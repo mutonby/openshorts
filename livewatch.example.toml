@@ -1,0 +1,72 @@
+# livewatch: copy this file to livewatch.toml (git-ignored) and edit it.
+# Secrets go in a .env file next to it, never here:
+#   GEMINI_API_KEY=...        (optional: AI hooks/titles/hashtags; offline templates without it)
+#   UPLOADPOST_API_KEY=...    (needed to post: upload-post.com, connect your socials there)
+# Run:  python -m livewatch doctor   then   python -m livewatch run
+
+[general]
+data_dir = "livewatch_data"   # clips, logs and the rolling buffer
+buffer_seconds = 600          # rolling recording per live channel (~260 MB at 720p60)
+quality = "720p60,720p,best"  # 1080p60 doubles network and disk for little gain on a phone
+check_interval = 90           # seconds between "is it live?" checks per channel
+max_live_channels = 2         # recordings at once; each 720p60 is ~3.5 Mbit/s down. A channel
+                              # that falls behind steps itself down to 720p30/480p automatically
+
+[clip]
+pre_seconds = 30              # before the moment (setup matters for out-of-context clips)
+post_seconds = 12             # after it (the reaction)
+min_seconds = 15
+max_seconds = 75              # TikTok Creator Rewards only pays videos over 60 s: raise pre/post if you target it
+cooldown_seconds = 150        # per channel, between two clips
+max_clips_per_hour = 6        # per channel
+
+[detect]
+threshold = 3.5               # lower = more clips, higher = only the biggest moments
+warmup_seconds = 120          # learn each stream's normal chat speed first
+min_chat_rate = 0.3           # chats slower than this lean on audio spikes
+audio_weight = 1.0            # 0 ignores loudness; Kick relies on it (no chat reader)
+
+[style]
+caption_style = "rotate"      # ooc | chinese | brainrot | clean | rotate (cycle through all)
+captions = true               # word-by-word burned captions (faster-whisper on the CPU)
+hook = true                   # the big text on top
+whisper_model = "base"        # tiny = fastest, small = better on non-English, off = no captions
+fps = 30
+encoder = "auto"              # auto (QuickSync if it works) | qsv | x264
+
+[ai]
+model = "gemini-3.1-flash-lite"
+
+[post]
+enabled = false               # true = post every good clip automatically
+platforms = ["youtube", "tiktok", "instagram", "facebook", "x"]
+upload_post_user = ""         # your Upload-Post profile name
+min_gap_minutes = 20          # spacing between posts (bursts get throttled)
+daily_cap = 12
+skip_spoilers = true          # hold clips the AI flags as story cutscenes/endings
+base_hashtags = ["gta6", "gtavi", "gta", "gta6clips"]
+
+# One block per channel. platform = twitch | kick | youtube.
+# game_filter: only clip while the stream category contains one of these
+# (ignored on YouTube, which has no category).
+# facecam = [x, y, w, h] fractions of the frame -> facecam-on-top layout;
+# find it with:  python -m livewatch snapshot twitch <name>
+
+[[channel]]
+platform = "twitch"
+name = "summit1g"
+game_filter = ["Grand Theft Auto"]
+tags = ["summit1g"]
+
+[[channel]]
+platform = "kick"
+name = "adinross"
+game_filter = ["Grand Theft Auto"]
+tags = ["adinross", "kick"]
+
+[[channel]]
+platform = "youtube"
+name = "@IShowSpeed"
+tags = ["ishowspeed", "speed"]
+# caption_style = "chinese"
+# facecam = [0.0, 0.62, 0.28, 0.38]
