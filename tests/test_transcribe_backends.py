@@ -7,6 +7,9 @@ import pytest
 
 import transcribe_backends as tb
 
+# Host ASR slots use fcntl file locking (Linux only).
+_HAS_FLOCK = sys.platform != "win32"
+
 
 class FakeFloat(float):
     """Stands in for numpy scalar types (float subclasses) from onnx-asr."""
@@ -297,6 +300,7 @@ def test_release_models_drops_the_transnetv2_singleton_too(monkeypatch):
     assert fake._tn2_model is None
 
 
+@pytest.mark.skipif(not _HAS_FLOCK, reason="requires fcntl file locking (Linux only)")
 class TestHostAsrSlot:
     """Cross-process cap on GPU transcriptions (flock slots on the shared disk)."""
 

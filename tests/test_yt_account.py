@@ -18,6 +18,9 @@ import pytest
 
 import yt_account
 
+# Slot serialisation uses fcntl (Linux-only); skip those tests on Windows.
+_HAS_FLOCK = sys.platform != "win32"
+
 LIMITED = ("ERROR: [youtube] abc: Video unavailable. This content isn't available, try again "
            "later. Your account has been rate-limited by YouTube for up to an hour.")
 URL = "https://www.youtube.com/watch?v=e_04ZrNroTo"
@@ -97,6 +100,7 @@ def test_no_state_directory_never_blocks_a_request(monkeypatch):
     assert yt_account.cooling_down() == 0
 
 
+@pytest.mark.skipif(not _HAS_FLOCK, reason="requires fcntl file locking (Linux only)")
 def test_requests_take_a_slot_and_wait_for_one(monkeypatch):
     monkeypatch.setattr(yt_account, "SLOTS", 1)
     order = []
@@ -114,6 +118,7 @@ def test_requests_take_a_slot_and_wait_for_one(monkeypatch):
     assert order == ["first still holds it", "second in"]
 
 
+@pytest.mark.skipif(not _HAS_FLOCK, reason="requires fcntl file locking (Linux only)")
 def test_a_slot_that_never_frees_does_not_stall_a_job(monkeypatch):
     monkeypatch.setattr(yt_account, "SLOTS", 1)
     monkeypatch.setattr(yt_account, "MAX_WAIT", 0.3)

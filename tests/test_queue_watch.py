@@ -228,7 +228,7 @@ def test_new_instance_continues_the_incident(world):
 
 
 def test_other_instance_holding_the_lock_skips(world):
-    import fcntl
+    fcntl = pytest.importorskip("fcntl", reason="requires fcntl file locking (Linux only)")
     world.add(1, paid=True, since=T0 - 12 * MIN)
     with open(f"{world.dir}/{qw.LOCK_FILE}", "a") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)

@@ -9,12 +9,16 @@ one of the GPU slots.
 import asyncio
 import json
 import os
+import sys
 import time
 import uuid
 
 import pytest
 
 import remote_worker as rw
+
+# File locking (fcntl) is Linux-only; locking tests are skipped on Windows.
+_HAS_FLOCK = sys.platform != "win32"
 
 
 # --- what crosses the wire --------------------------------------------------
@@ -205,6 +209,7 @@ def test_a_job_has_an_upload_budget(tmp_path, monkeypatch):
     assert e.value.status == 429
 
 
+@pytest.mark.skipif(not _HAS_FLOCK, reason="requires fcntl file locking (Linux only)")
 def test_only_one_upload_request_per_job_at_a_time(tmp_path):
     d = str(tmp_path)
     rw.begin(d, "w")

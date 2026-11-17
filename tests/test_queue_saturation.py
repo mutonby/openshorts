@@ -7,6 +7,7 @@ import asyncio
 import itertools
 import json
 import os
+import sys
 import time
 from types import SimpleNamespace
 
@@ -796,6 +797,8 @@ def _worst_stall(coro_fn):
 class TestVolume:
     N = 3000
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="asyncio.sleep(0.005) timer resolution is too coarse on Windows to measure event-loop stall accurately")
     def test_resume_scan_reads_manifests_off_the_loop(self, out, sat, monkeypatch):
         for i in range(800):
             d = out / f"m{i}"

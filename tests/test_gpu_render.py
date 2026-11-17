@@ -1,6 +1,7 @@
 """gpu_render: filtergraph -> layers, sendcmd timing, slots and fallbacks (no GPU needed)."""
 import os
 import subprocess
+import sys
 
 import pytest
 
@@ -9,6 +10,8 @@ import gpu_render
 import reframe_v2
 import screencast_layout
 import split_layout
+
+_HAS_FLOCK = sys.platform != "win32"
 
 W, H, OW, OH = 1920, 1080, 1080, 1920
 
@@ -140,6 +143,7 @@ def test_render_timeout_falls_back(monkeypatch, tmp_path):
     assert not gpu_render.render("in.mp4", _scene(), W, H, OW, OH, 30, str(tmp_path / "o.mp4"))
 
 
+@pytest.mark.skipif(not _HAS_FLOCK, reason="fcntl is Linux/macOS only")
 def test_nvenc_slot_takes_a_free_lock(monkeypatch, tmp_path):
     import fcntl
     monkeypatch.setenv("NVENC_SLOTS", "2")
@@ -157,6 +161,7 @@ def test_nvenc_slot_takes_a_free_lock(monkeypatch, tmp_path):
     busy.close()
 
 
+@pytest.mark.skipif(not _HAS_FLOCK, reason="fcntl is Linux/macOS only")
 def test_nvenc_slot_wait_goes_to_the_job_log(monkeypatch, tmp_path):
     """Same line as bin/ffmpeg: seconds waited, for the job's JOB_CPU."""
     import fcntl

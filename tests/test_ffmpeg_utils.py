@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 
 import pytest
 
@@ -312,6 +313,7 @@ def _wrapped(tmp_path, threads, *args):
     return out.splitlines()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="bin/ffmpeg wrapper requires sh (POSIX only)")
 def test_wrapper_caps_decoder_and_filter_threads(tmp_path):
     argv = _wrapped(tmp_path, "3", "-y", "-ss", "1", "-i", "a b.mp4", "-i", "logo.png",
                     "-filter_complex", "[0:v][1:v]overlay", "-c:v", "h264_nvenc",
@@ -323,6 +325,7 @@ def test_wrapper_caps_decoder_and_filter_threads(tmp_path):
                     "-threads", "8", "out.mp4"]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="bin/ffmpeg wrapper requires sh (POSIX only)")
 def test_wrapper_keeps_what_the_caller_set(tmp_path):
     argv = _wrapped(tmp_path, "2", "-threads", "5", "-i", "a.mp4",
                     "-filter_threads", "1", "-i", "b.mp4", "out.mp4")
@@ -330,6 +333,7 @@ def test_wrapper_keeps_what_the_caller_set(tmp_path):
                     "-filter_threads", "1", "-threads", "2", "-i", "b.mp4", "out.mp4"]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="bin/ffmpeg wrapper requires sh (POSIX only)")
 @pytest.mark.parametrize("threads", [None, "", "0", "auto"])
 def test_wrapper_is_a_passthrough_when_unset(tmp_path, threads):
     assert _wrapped(tmp_path, threads, "-i", "a.mp4", "x y.mp4") == ["-i", "a.mp4", "x y.mp4"]
