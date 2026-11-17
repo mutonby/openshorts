@@ -29,3 +29,9 @@ to `SELF_ONLY` until your app is audited.
 ## Local credentials file
 
 The CLI also reads a local `.env` (git-ignored) with `KEY=VALUE` lines for the variables above, without overriding variables already set in the shell.
+
+## 9:16 hook template
+
+`python3 -m news_shorts.cli template CLIP --hook "Punchy line" --credit "Source : Channel (CC BY)"`
+adds a high-contrast hook card for the first 3 seconds (fade in/out) and a permanent source credit on a 1080x1920 canvas.
+Use the clip's `viral_hook_text` from the metadata as the hook, and keep the credit: it is the attribution the license requires.

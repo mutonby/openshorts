@@ -53,3 +53,16 @@ def test_real_publish_needs_env(monkeypatch):
     monkeypatch.delenv("TIKTOK_ACCESS_TOKEN", raising=False)
     with pytest.raises(RuntimeError):
         publish.publish_tiktok({"clip_path": "c.mp4"}, dry_run=False)
+
+
+def test_hook_card_text_fits_9_16_frame(tmp_path):
+    from PIL import Image, ImageDraw
+    from news_shorts import template
+
+    draw = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    lines = template._lines(draw, "PLAN SECRET POUR STOPPER MÉLENCHON EN 2027", template._font(92), template.W - 200)
+    assert len(lines) > 1
+    assert all(draw.textlength(l, font=template._font(92)) <= template.W - 200 for l in lines)
+    out = tmp_path / "h.png"
+    template.hook_card("Plan secret", str(out))
+    assert Image.open(out).size == (1080, 1920)

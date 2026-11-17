@@ -48,6 +48,11 @@ def main(argv=None):
     p = sub.add_parser("publish")
     p.add_argument("--platform", action="append", choices=["youtube", "tiktok"])
     p.add_argument("--no-dry-run", action="store_true", help="really publish (default: dry run)")
+    t = sub.add_parser("template", help="add a 3 s hook card + source credit (9:16)")
+    t.add_argument("clip_path")
+    t.add_argument("--hook", required=True, help="short punchy line shown in the first 3 seconds")
+    t.add_argument("--credit", required=True, help='e.g. "Source : BadMulch Live (CC BY)"')
+    t.add_argument("--out")
     sub.add_parser("list")
     args = ap.parse_args(argv)
     q = Queue(args.queue)
@@ -69,6 +74,10 @@ def main(argv=None):
         print(f"{len(cands)} licensed source(s) found; review with `list`")
     elif args.cmd == "approve":
         print("approved" if q.approve(args.clip_path) else "not found or not pending")
+    elif args.cmd == "template":
+        from news_shorts.template import render
+        out = args.out or args.clip_path.replace(".mp4", "_tiktok.mp4")
+        print(render(args.clip_path, args.hook, args.credit, out))
     elif args.cmd == "list":
         for i in q.load():
             print(i["status"], i["clip_path"], i["license"], i["source_url"])
