@@ -565,13 +565,32 @@ $("#secrets").addEventListener("click", async e => { const k = e.target.dataset.
   if (confirm(`Remove ${k} from .env?`)) { await act(() => api("/api/secrets", {method:"PUT", json: {[k]: ""}}), "Key removed"); loadSecrets(); } });
 
 /* ---------- loops ---------- */
+const HOW_TO_START = `Double-click <b>livewatch.bat</b> in the openshorts folder (or run <span class="mono">python -m livewatch ui</span>)
+  and <b>keep that window open</b>: closing it stops the dashboard. Then open <a href="http://127.0.0.1:8765/">http://127.0.0.1:8765</a>.`;
+let offline = false;
 async function tick() {
-  try { renderStatus(await api("/api/status")); } catch (e) {
-    $("#runpill").className = "pill bad"; $("#runpill").innerHTML = '<i class="dot"></i> UI server not reachable';
+  try {
+    renderStatus(await api("/api/status"));
+    if (offline) { offline = false; $("#offlineBanner")?.remove(); }
+  } catch (e) {
+    $("#runpill").className = "pill bad"; $("#runpill").innerHTML = '<i class="dot"></i> server not running';
+    if (!offline) {
+      offline = true;
+      const b = document.createElement("div"); b.id = "offlineBanner"; b.className = "banner bad";
+      b.innerHTML = `<b>The livewatch server is not running</b>, so this page cannot load anything. ${HOW_TO_START}
+        This page reconnects by itself once it is back.`;
+      $("main").prepend(b);
+    }
+    return;
   }
   pollLog();
 }
-tick(); setInterval(tick, 1000);
+if (location.protocol === "file:") {
+  document.querySelector("main").innerHTML = `<div class="banner bad"><b>This page was opened as a file.</b>
+    It only works through the livewatch server. ${HOW_TO_START}</div>`;
+} else {
+  tick(); setInterval(tick, 1000);
+}
 setInterval(() => { if (tab === "clips" && clips.some(c => postState(c) === "posting")) loadClips(); }, 4000);
 </script>
 </body>
