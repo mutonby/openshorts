@@ -6,7 +6,7 @@ import { track } from '../lib/analytics';
 import { stashPendingPlan, readPendingPlan, clearPendingPlan } from '../lib/pendingPlan';
 import { useBackFromStripe } from '../lib/backFromStripe';
 import SegmentedControl from './ui/SegmentedControl';
-import { FREE_CLIPS_PER_VIDEO, MAX_CLIPS_PER_VIDEO } from '../lib/clipProgress';
+import { FREE_CLIPS_PER_VIDEO, FREE_CLIPS_QUIET, MAX_CLIPS_PER_VIDEO } from '../lib/clipProgress';
 
 const PLAN_ORDER = ['starter', 'creator', 'pro'];
 const PLAN_BLURB = {
@@ -150,7 +150,7 @@ export default function PricingSection({ onRequireLogin }) {
           </div>
           <ul className="space-y-2 text-sm text-ink2 mb-6 flex-1">
             <li className="flex items-start gap-2"><Check size={16} className="text-ok shrink-0 mt-0.5" /> <span><b>{FREE_MINUTES} min</b> of video / month</span></li>
-            <li className="flex items-start gap-2"><Check size={16} className="text-ok shrink-0 mt-0.5" /> <span>The <b>{FREE_CLIPS_PER_VIDEO} best clips</b> of each video</span></li>
+            <li className="flex items-start gap-2"><Check size={16} className="text-ok shrink-0 mt-0.5" /> <span>The <b>{FREE_CLIPS_PER_VIDEO} to {FREE_CLIPS_QUIET} best clips</b> of each video</span></li>
             <li className="flex items-start gap-2"><Check size={16} className="text-ok shrink-0 mt-0.5" /> <span>YouTube URL or upload</span></li>
             <li className="flex items-start gap-2"><Cpu size={16} className="text-ok shrink-0 mt-0.5" /> <span>Same <b>GPU rendering</b>, about 50s per 8-min video</span></li>
             <li className="flex items-start gap-2"><KeyRound size={16} className="text-ok shrink-0 mt-0.5" /> <span>Gemini key included, no setup</span></li>

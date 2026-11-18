@@ -100,15 +100,45 @@ def limits() -> dict:
     }
 
 
-def free_clip_cap() -> int:
-    """Most clips a free-plan job renders (``FREE_MAX_CLIPS``), 0 for no cap.
-    A free job costs render time in proportion to its clips: this is the
-    setting that sizes the free queue's output to the hardware. Independent of
-    the saturation mode and of its kill switch."""
+def _env_clips(name: str) -> int:
     try:
-        return max(0, int(os.environ.get("FREE_MAX_CLIPS", "") or 0))
+        return max(0, int(os.environ.get(name, "") or 0))
     except ValueError:
         return 0
+
+
+# A measurement older than this says nothing about the queue now (the watch
+# takes one every few minutes; a stalled watch must not leave the cap lifted).
+QUIET_FIGURES_MAX_AGE = 900
+
+
+def queue_quiet(now=None) -> bool:
+    """Whether the whole free queue is short right now: every lane's estimated
+    wait under ``FREE_QUIET_MINUTES`` (default 10), by a recent measurement.
+    False whenever that is not known: the watch is off, killed or behind."""
+    if killed():
+        return False
+    measured = _state.get("measured_at")
+    now = time.time() if now is None else now
+    if measured is None or now - float(measured) > QUIET_FIGURES_MAX_AGE:
+        return False
+    limit = max(0.0, _env_float("FREE_QUIET_MINUTES", 10)) * 60
+    figures = _state.get("figures") or {}
+    return all(float((figures.get(lane) or {}).get("wait") or 0) < limit for lane in LANES)
+
+
+def free_clip_cap(now=None) -> int:
+    """Most clips a free-plan job renders, 0 for no cap. A free job costs
+    render time in proportion to its clips, so this is the setting that sizes
+    the free queue's output to the hardware: ``FREE_MAX_CLIPS`` while people
+    are waiting, and the larger ``FREE_QUIET_MAX_CLIPS`` (when set) while the
+    queue is short (``queue_quiet``), because the hardware is then idle and
+    more clips are what a new user judges the product by."""
+    busy = _env_clips("FREE_MAX_CLIPS")
+    quiet = _env_clips("FREE_QUIET_MAX_CLIPS")
+    if busy and quiet > busy and queue_quiet(now):
+        return quiet
+    return busy
 
 
 def enabled() -> bool:
@@ -192,6 +222,8 @@ def default_state() -> dict:
         # the starved-job expiry counts from here, so the jobs already
         # waiting at activation get the whole window, not a wave of expiries.
         "enabled_since": None,
+        # When ``figures`` were taken (``queue_quiet`` wants a recent one).
+        "measured_at": None,
     }
 
 
@@ -206,11 +238,12 @@ def _normalized(state) -> dict:
                          if k in out["brake"]})
     out["rejected_total"] = int(state.get("rejected_total") or 0)
     out["figures"] = dict(state.get("figures") or {})
-    if state.get("enabled_since") is not None:
-        try:
-            out["enabled_since"] = float(state["enabled_since"])
-        except (TypeError, ValueError):
-            pass
+    for stamp in ("enabled_since", "measured_at"):
+        if state.get(stamp) is not None:
+            try:
+                out[stamp] = float(state[stamp])
+            except (TypeError, ValueError):
+                pass
     return out
 
 
@@ -361,6 +394,7 @@ def decide(state: dict, figures: dict, now: float, lim: dict = None):
             b.update(active=False, off_at=now)
             events.append("brake_off")
     s["figures"] = {lane: dict((figures or {}).get(lane) or {}) for lane in LANES}
+    s["measured_at"] = now
     return s, events
 
 

@@ -4,7 +4,7 @@ import { track } from '../lib/analytics';
 import { getApiUrl } from '../config';
 import SourceCost from './SourceCost';
 import { useAuth } from '../contexts/AuthContext';
-import { FREE_CLIPS_PER_VIDEO, MAX_CLIPS_PER_VIDEO } from '../lib/clipProgress';
+import { FREE_CLIPS_PER_VIDEO, FREE_CLIPS_QUIET, MAX_CLIPS_PER_VIDEO } from '../lib/clipProgress';
 
 const SUPPORTED_PLATFORMS = [
     'YouTube', 'Vimeo', 'TikTok', 'X / Twitter', 'Twitch', 'Kick',
@@ -356,7 +356,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             <p className="col-span-1 sm:col-span-3 text-[11px] leading-relaxed text-muted">
                                 Targets, not guarantees: the AI returns fewer clips when the
                                 material doesn't hold them. Leave blank to let it decide.
-                                {plan === 'free' && ` The free plan makes the ${FREE_CLIPS_PER_VIDEO} best clips of each video; plans get every clip, up to ${MAX_CLIPS_PER_VIDEO}.`}
+                                {plan === 'free' && ` The free plan makes the ${FREE_CLIPS_PER_VIDEO} to ${FREE_CLIPS_QUIET} best clips of each video, fewer while its queue is busy; plans get every clip, up to ${MAX_CLIPS_PER_VIDEO}.`}
                             </p>
                             <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">
                                 <span className="text-xs text-ink2">vertical layout</span>

@@ -3152,7 +3152,8 @@ def _apply_brake_clips(job, cap=None, log=BRAKE_CLIPS_LOG):
 def _cap_clips_at_dispatch(job, priority):
     """The clip caps of a free job, decided when it is dispatched (here or to
     the remote worker) so a job already waiting gets today's setting: the
-    free plan's own cap (``FREE_MAX_CLIPS``; never a job that carries no mark
+    free plan's own cap (``FREE_MAX_CLIPS``, or ``FREE_QUIET_MAX_CLIPS`` while
+    the queue is short; never a job that carries no mark
     or whose owner bought a top-up) and the slow lane's brake, whichever is
     lower."""
     if not job or priority is None or priority < _queue_mode.FREE_PRIORITY:

@@ -26,7 +26,8 @@ def env(monkeypatch):
     for k in ("QUEUE_SATURATION_DISABLED", "QUEUE_RECENT_FIRST_MINUTES",
               "QUEUE_RECENT_FIRST_RELEASE_MINUTES", "SLOW_LANE_BRAKE_HOURS",
               "SLOW_LANE_BRAKE_RELEASE_HOURS", "SLOW_LANE_BRAKE_CLIPS",
-              "QUEUE_COUNTRY_HEADER", "FREE_SLOW_LANE_COUNTRIES"):
+              "QUEUE_COUNTRY_HEADER", "FREE_SLOW_LANE_COUNTRIES",
+              "FREE_MAX_CLIPS", "FREE_QUIET_MAX_CLIPS", "FREE_QUIET_MINUTES"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("BILLING_ENABLED", "1")
     qm.reset()
@@ -574,6 +575,63 @@ class TestBrakeClips:
                           ({"env": {}, "logs": [], "watermark": True, "topup": True}, FREE)):
             cap(job, prio)
             assert "CLIP_TARGET_MAX" not in job["env"]
+
+    def _measured(self, normal, slow, age=0.0):
+        s = qm.current()
+        s["figures"] = {"normal": {"queued": 1, "wait": normal},
+                        "slow": {"queued": 1, "wait": slow}}
+        s["measured_at"] = time.time() - age
+        qm.adopt(s)
+
+    def test_a_short_queue_lifts_the_free_cap(self, sat):
+        """Idle hardware: more clips are what a new user judges the product by."""
+        cap = app_module._cap_clips_at_dispatch
+        sat.setenv("FREE_MAX_CLIPS", "2")
+        sat.setenv("FREE_QUIET_MAX_CLIPS", "4")
+        self._measured(normal=120, slow=300)
+        job = {"env": {}, "logs": [], "watermark": True}
+        cap(job, FREE)
+        assert job["env"]["CLIP_TARGET_MIN"] == job["env"]["CLIP_TARGET_MAX"] == "4"
+        assert job["logs"][-1] == app_module.FREE_CLIPS_LOG.format(n=4)
+
+    def test_people_waiting_in_any_lane_keep_the_cap_low(self, sat):
+        sat.setenv("FREE_MAX_CLIPS", "2")
+        sat.setenv("FREE_QUIET_MAX_CLIPS", "4")
+        for normal, slow in ((120, 3600), (900, 0), (600, 600)):
+            self._measured(normal=normal, slow=slow)
+            assert qm.free_clip_cap() == 2, (normal, slow)
+        sat.setenv("FREE_QUIET_MINUTES", "30")
+        assert qm.free_clip_cap() == 4
+
+    def test_the_cap_is_not_lifted_on_a_stale_or_missing_measurement(self, sat):
+        sat.setenv("FREE_MAX_CLIPS", "2")
+        sat.setenv("FREE_QUIET_MAX_CLIPS", "4")
+        assert qm.free_clip_cap() == 2                      # never measured
+        self._measured(normal=0, slow=0, age=qm.QUIET_FIGURES_MAX_AGE + 60)
+        assert qm.free_clip_cap() == 2                      # the watch is behind
+        self._measured(normal=0, slow=0)
+        assert qm.free_clip_cap() == 4
+        sat.setenv("QUEUE_SATURATION_DISABLED", "1")
+        assert qm.free_clip_cap() == 2                      # nobody is measuring
+
+    def test_the_quiet_cap_only_ever_raises_a_cap(self, sat):
+        self._measured(normal=0, slow=0)
+        sat.setenv("FREE_QUIET_MAX_CLIPS", "4")
+        assert qm.free_clip_cap() == 0                      # no cap to lift
+        sat.setenv("FREE_MAX_CLIPS", "5")
+        assert qm.free_clip_cap() == 5                      # never lowers it
+        sat.setenv("FREE_QUIET_MAX_CLIPS", "nonsense")
+        assert qm.free_clip_cap() == 5
+
+    def test_a_decision_stamps_its_measurement(self, sat):
+        state, _ = qm.decide(qm.default_state(), {"normal": {"queued": 0, "wait": 0},
+                                                  "slow": {"queued": 0, "wait": 0}}, 1000.0)
+        assert state["measured_at"] == 1000.0
+        qm.adopt(state)
+        sat.setenv("FREE_MAX_CLIPS", "2")
+        sat.setenv("FREE_QUIET_MAX_CLIPS", "4")
+        assert qm.free_clip_cap(now=1060.0) == 4
+        assert qm.free_clip_cap(now=1000.0 + qm.QUIET_FIGURES_MAX_AGE + 1) == 2
 
     def test_the_lower_of_the_free_cap_and_the_brake_wins(self, sat):
         cap = app_module._cap_clips_at_dispatch

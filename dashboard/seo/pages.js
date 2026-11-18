@@ -682,7 +682,7 @@ ${faqBlock([
   },
   {
     q: 'How many clips does it generate per video?',
-    a: 'Between 3 and 15, each 15 to 60 seconds long. The number depends on how much of the source actually holds up as a standalone clip rather than on a fixed quota. On the free plan of OpenShorts Cloud a video gives its 2 best clips.',
+    a: 'Between 3 and 15, each 15 to 60 seconds long. The number depends on how much of the source actually holds up as a standalone clip rather than on a fixed quota. On the free plan of OpenShorts Cloud a video gives its 2 to 4 best clips.',
   },
   {
     q: 'Is there a free clipping website that needs no install?',
@@ -709,7 +709,7 @@ ${faqBlock([
     },
     {
       q: 'How many clips does it generate per video?',
-      a: 'Between 3 and 15 clips, each 15 to 60 seconds long. On the free plan of OpenShorts Cloud a video gives its 2 best clips.',
+      a: 'Between 3 and 15 clips, each 15 to 60 seconds long. On the free plan of OpenShorts Cloud a video gives its 2 to 4 best clips.',
     },
     {
       q: 'Is there a free clipping website that needs no install?',

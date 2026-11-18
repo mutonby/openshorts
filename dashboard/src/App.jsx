@@ -5,7 +5,7 @@ import MediaInput from './components/MediaInput';
 import McpConnectCard from './components/McpConnectCard';
 import ResultCard from './components/ResultCard';
 import ProcessingAnimation from './components/ProcessingAnimation';
-import { clipProgress, FREE_CLIPS_PER_VIDEO, MAX_CLIPS_PER_VIDEO } from './lib/clipProgress';
+import { clipProgress, FREE_CLIPS_PER_VIDEO, FREE_CLIPS_QUIET, MAX_CLIPS_PER_VIDEO } from './lib/clipProgress';
 // import Gallery from './components/Gallery';
 import ThumbnailStudio from './components/ThumbnailStudio';
 import SaaShortsTab from './components/SaaShortsTab';
@@ -2458,17 +2458,17 @@ function App() {
                         className="w-full text-left px-3 py-2.5 rounded-input bg-paper3 border border-brass/40 hover:border-brass text-sm transition-colors"
                       >
                         <span className="text-ink">
-                          {results?.clips?.length <= FREE_CLIPS_PER_VIDEO
-                            ? `The free plan makes the ${FREE_CLIPS_PER_VIDEO} best clips of each video.`
+                          {results?.clips?.length <= FREE_CLIPS_QUIET
+                            ? `The free plan makes the ${FREE_CLIPS_PER_VIDEO} to ${FREE_CLIPS_QUIET} best clips of each video.`
                             : 'Like these clips?'}
                         </span>{' '}
                         <span className="text-muted">
-                          {results?.clips?.length <= FREE_CLIPS_PER_VIDEO
+                          {results?.clips?.length <= FREE_CLIPS_QUIET
                             ? `Plans get every clip, up to ${MAX_CLIPS_PER_VIDEO} per video, and these lose the watermark on the spot.`
                             : 'Upgrade and these exact clips lose the watermark on the spot, and stay for good.'}
                         </span>{' '}
                         <span className="text-brass font-medium">
-                          {results?.clips?.length <= FREE_CLIPS_PER_VIDEO ? 'Get every clip →' : 'Remove the watermark →'}
+                          {results?.clips?.length <= FREE_CLIPS_QUIET ? 'Get every clip →' : 'Remove the watermark →'}
                         </span>
                       </button>
                     )}

@@ -499,6 +499,15 @@ get the setting of the moment, here and on the remote worker. The job's log
 says it (`FREE_CLIPS_LOG`, kept by `log_view`). With the brake on, the lower
 of the two caps applies.
 
+The cap is for when people are waiting. With `FREE_QUIET_MAX_CLIPS` set (and
+larger), a free job gets that many while the whole free queue is short
+(`queue_mode.queue_quiet`): every lane's estimated wait, as the queue watch
+last measured it, under `FREE_QUIET_MINUTES` (default 10). No hysteresis on
+purpose: it is decided per job, and more clips per job lengthen the queue,
+which brings the lower cap back by itself. The measurement has to be recent
+(`QUIET_FIGURES_MAX_AGE`); with the saturation mode off or killed nobody
+measures and the lower cap stays.
+
 ## Frame rate of free jobs
 
 Every pass after the cut (tracking, scene detection, the reframe render,
