@@ -96,8 +96,8 @@ def schema() -> Dict[str, Any]:
             _f("enabled", "bool", "Post automatically", "Off: every clip is saved for review and you post "
                "it from the Clips tab.", default=d.post_enabled),
             _f("platforms", "multi", "Networks", choices=list(POST_PLATFORMS), default=d.post_platforms),
-            _f("upload_post_user", "text", "Upload-Post profile name", "The profile your socials are "
-               "connected to on upload-post.com.", default=""),
+            _f("upload_post_user", "text", "Upload-Post profile name", "Not your email: the name of "
+               "the profile your socials are connected to. Use Find my profiles below.", default=""),
             _f("min_gap_minutes", "int", "Minutes between posts", "Later clips are scheduled, not "
                "dropped. Bursts get reach throttled.", min=0, max=1440, default=d.min_gap_minutes),
             _f("daily_cap", "int", "Posts per day (max)", min=1, max=200, default=d.daily_cap),

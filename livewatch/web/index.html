@@ -85,7 +85,9 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 .toast div{background:var(--panel2);border:1px solid var(--line);border-left:4px solid var(--accent);padding:10px 14px;border-radius:8px;max-width:420px;box-shadow:0 6px 24px rgba(0,0,0,.4)}
 .toast div.bad{border-left-color:var(--red)}.toast div.ok{border-left-color:var(--green)}
 .empty{color:var(--muted);text-align:center;padding:40px}
-@media (max-width:800px){.stats{grid-template-columns:repeat(2,1fr)}.track{grid-template-columns:1fr}}
+@media (max-width:800px){.stats{grid-template-columns:repeat(2,1fr)}.track{grid-template-columns:1fr}
+  header{flex-wrap:wrap;gap:8px;padding:8px 12px}nav{order:3;width:100%;margin:0;flex-wrap:nowrap;overflow-x:auto}
+  nav button{white-space:nowrap}.btn{white-space:nowrap}}
 </style>
 </head>
 <body>
@@ -504,7 +506,50 @@ function fieldHtml(f, v, path) {
 function renderSections() {
   $("#sections").innerHTML = schemaDef.sections.map(s => `<div class="card"><h2>${esc(s.title)}</h2>
     ${s.fields.map(f => fieldHtml(f, val(s.id, f), s.id + "." + f.key)).join("")}</div>`).join("");
+  const userField = $('[data-path="post.upload_post_user"]');
+  if (userField) userField.closest("label").insertAdjacentHTML("afterend", `<div class="net" id="upBox">
+    <div class="row"><b>Your Upload-Post profiles</b><div class="grow"></div>
+      <button class="btn sm" id="upFind" type="button">Find my profiles</button></div>
+    <div id="upList" class="small muted" style="margin-top:8px">The profile name is not your email: it is the name of a profile
+      you create on Upload-Post, which your TikTok, YouTube, Instagram… accounts are connected to.
+      Add your Upload-Post API key below, then press <b>Find my profiles</b>.</div>
+    <div class="row" style="margin-top:10px"><input type="text" id="upNew" placeholder="new profile name, e.g. gta6clips" style="flex:1">
+      <button class="btn sm" id="upCreate" type="button">Create profile</button></div></div>`);
 }
+const NET_ICON = {tiktok:"TikTok", instagram:"Instagram", youtube:"YouTube", facebook:"Facebook", x:"X", threads:"Threads", bluesky:"Bluesky", linkedin:"LinkedIn"};
+async function findProfiles() {
+  const box = $("#upList"); box.textContent = "Asking Upload-Post…";
+  try {
+    const r = await api("/api/uploadpost/profiles");
+    if (!r.profiles.length) { box.innerHTML = "No profiles yet on this Upload-Post account. Create one below, then connect your socials to it."; return; }
+    const cur = $('[data-path="post.upload_post_user"]').value;
+    box.innerHTML = (cur && !r.profiles.some(p => p.username === cur)
+        ? `<div style="color:var(--amber);margin-bottom:6px">“${esc(cur)}” is not one of your profiles: posting would fail. Pick one below.</div>` : "") +
+      r.profiles.map(p => `<div class="row" style="padding:6px 0;border-top:1px solid var(--line)">
+        <b class="mono">${esc(p.username)}</b>
+        <span>${p.connected.length ? p.connected.map(n => `<span class="chip posted">${esc(NET_ICON[n] || n)}</span>`).join(" ") : '<span class="chip held">nothing connected yet</span>'}</span>
+        <div class="grow"></div>
+        <button class="btn sm" type="button" data-connect="${esc(p.username)}">Connect socials</button>
+        <button class="btn sm primary" type="button" data-use="${esc(p.username)}">${p.username === cur ? "In use ✓" : "Use this"}</button></div>`).join("");
+  } catch (e) { box.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`; }
+}
+$("#sections").addEventListener("click", async e => {
+  if (e.target.id === "upFind") return findProfiles();
+  if (e.target.id === "upCreate") {
+    const name = $("#upNew").value.trim(); if (!name) return toast("Type a profile name first", "bad");
+    const r = await act(() => api("/api/uploadpost/profiles", {method:"POST", json:{username: name}}), `Profile ${name} created`);
+    if (r) { $('[data-path="post.upload_post_user"]').value = r.username; $("#upNew").value = ""; findProfiles();
+      toast("Now press Connect socials, then Save settings", "ok"); }
+  }
+  const use = e.target.dataset.use;
+  if (use) { $('[data-path="post.upload_post_user"]').value = use; findProfiles(); toast(`Using ${use}: press Save settings to keep it`, "ok"); }
+  const con = e.target.dataset.connect;
+  if (con) {
+    const w = window.open("", "_blank");
+    const r = await act(() => api("/api/uploadpost/connect", {method:"POST", json:{username: con}}));
+    if (r && w) w.location = r.url; else if (r) location.href = r.url; else if (w) w.close();
+  }
+});
 function renderChannelsEditor() {
   const list = cfg.channel || [];
   $("#chanList").innerHTML = list.map((ch, i) => `<div class="chanrow" data-i="${i}">

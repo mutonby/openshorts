@@ -92,6 +92,68 @@ def test_music_library_rotation(tmp_path):
     assert [t["name"] for t in lib.describe()] == [b]
 
 
+# -------------------------------------------------------------------- upload-post
+class _Resp:
+    def __init__(self, status, data=None, text=""):
+        self.status_code, self._d = status, data
+        self.text = text or (json.dumps(data) if data is not None else "")
+        self.content = self.text.encode()
+
+    def json(self):
+        if self._d is None:
+            raise ValueError
+        return self._d
+
+
+class _UP:
+    def __init__(self, *responses):
+        self.responses, self.calls = list(responses), []
+
+    def get(self, url, **kw):
+        self.calls.append(("GET", url, kw))
+        return self.responses.pop(0)
+
+    def post(self, url, **kw):
+        self.calls.append(("POST", url, kw))
+        return self.responses.pop(0)
+
+
+def test_upload_post_profiles():
+    from livewatch import poster
+    sess = _UP(_Resp(200, {"success": True, "profiles": [
+        {"username": "gta6clips", "social_accounts": {"tiktok": {"handle": "x"}, "youtube": "",
+                                                      "instagram": {"id": 1}}},
+        {"username": "empty", "social_accounts": {}}, {"nope": 1}]}))
+    profs = poster.list_profiles("k", session=sess)
+    assert profs == [{"username": "gta6clips", "connected": ["tiktok", "instagram"]},
+                     {"username": "empty", "connected": []}]
+    assert sess.calls[0][2]["headers"]["Authorization"] == "Apikey k"
+    with pytest.raises(poster.UploadPostError, match="401"):
+        poster.list_profiles("bad", session=_UP(_Resp(401, {"message": "Invalid API key"})))
+
+
+def test_upload_post_create_and_connect():
+    from livewatch import poster
+    assert poster.create_profile("k", "gta6clips", session=_UP(_Resp(201, {}))) == "gta6clips"
+    assert poster.create_profile("k", "gta6clips", session=_UP(_Resp(409, text="Username already in use")))
+    with pytest.raises(poster.UploadPostError):
+        poster.create_profile("k", "me@mail.com", session=_UP())  # an email is not a profile name
+    with pytest.raises(poster.UploadPostError, match="no free profile"):
+        poster.create_profile("k", "another", session=_UP(_Resp(403, text="profile_limit_reached")))
+    sess = _UP(_Resp(200, {"access_url": "https://connect.upload-post.com/abc"}))
+    assert poster.connect_url("k", "gta6clips", "http://127.0.0.1:8765/", session=sess) \
+        == "https://connect.upload-post.com/abc"
+    assert sess.calls[0][2]["json"]["redirectUrl"] == "http://127.0.0.1:8765/"
+    with pytest.raises(poster.UploadPostError):
+        poster.connect_url("k", "gta6clips", session=_UP(_Resp(200, {"access_url": "javascript:x"})))
+
+
+def test_controller_upload_post_needs_a_key(ctl):
+    with pytest.raises(ApiError) as e:
+        ctl.upload_profiles()
+    assert e.value.status == 400 and "API key" in e.value.message
+
+
 # -------------------------------------------------------------------------- procs
 def test_terminate_kills_the_whole_tree_on_windows(monkeypatch):
     from livewatch import procs

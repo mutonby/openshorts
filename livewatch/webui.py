@@ -359,6 +359,43 @@ class Controller:
             os.startfile(str(d))  # type: ignore[attr-defined]
         return {"ok": True, "path": str(d)}
 
+    # ---------------------------------------------------------- upload-post
+    def _upload_key(self) -> str:
+        key = os.environ.get("UPLOADPOST_API_KEY", "")
+        if not key:
+            raise ApiError(400, "add your Upload-Post API key first (Settings > API keys)")
+        return key
+
+    def upload_profiles(self) -> dict:
+        try:
+            profiles = poster.list_profiles(self._upload_key())
+        except poster.UploadPostError as e:
+            raise ApiError(502, str(e))
+        except OSError as e:
+            raise ApiError(502, f"could not reach Upload-Post: {e}")
+        current = self._safe_settings().upload_post_user
+        return {"profiles": profiles, "current": current,
+                "current_ok": any(p["username"] == current for p in profiles)}
+
+    def create_upload_profile(self, body: dict) -> dict:
+        try:
+            name = poster.create_profile(self._upload_key(), str((body or {}).get("username", "")))
+        except poster.UploadPostError as e:
+            raise ApiError(400, str(e))
+        except OSError as e:
+            raise ApiError(502, f"could not reach Upload-Post: {e}")
+        return {"ok": True, "username": name}
+
+    def upload_connect_url(self, body: dict, return_url: str) -> dict:
+        try:
+            url = poster.connect_url(self._upload_key(), str((body or {}).get("username", "")),
+                                     return_url)
+        except poster.UploadPostError as e:
+            raise ApiError(400, str(e))
+        except OSError as e:
+            raise ApiError(502, f"could not reach Upload-Post: {e}")
+        return {"url": url}
+
     # ---------------------------------------------------------------- music
     def library(self) -> music.Library:
         s = self._safe_settings()
@@ -523,6 +560,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"clips": ctl.clips()})
             if path == "/api/music":
                 return self._json(ctl.music_list())
+            if path == "/api/uploadpost/profiles":
+                return self._json(ctl.upload_profiles())
             m = re.match(r"^/media/(.+)/short\.mp4$", path)
             if m:
                 d = ctl.clip_dir(unquote(m.group(1)))
@@ -549,6 +588,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(ctl.cancel_replay())
             if path == "/api/open":
                 return self._json(ctl.open_folder())
+            if path == "/api/uploadpost/profiles":
+                return self._json(ctl.create_upload_profile(self._json_body()))
+            if path == "/api/uploadpost/connect":
+                return self._json(ctl.upload_connect_url(
+                    self._json_body(), f"http://127.0.0.1:{self.port}/"))
             if path == "/api/music":
                 name = unquote(self.headers.get("X-Filename") or "")
                 data = self._body(MAX_UPLOAD)
