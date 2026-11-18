@@ -153,3 +153,69 @@ class TestMxVerdict:
     def test_empty_email_is_no_mx(self):
         pytest.importorskip("dns")
         assert asyncio.run(ep.mx_verdict("")) == ep.MX_NONE
+
+
+class TestMxIpBlocklist:
+    """Nov-2026 fronts MX to their own mail.<front> name; the IP gives them away."""
+
+    def setup_method(self):
+        ep._mx_cache.clear()
+
+    @staticmethod
+    def _mx(*hosts):
+        from types import SimpleNamespace
+        return [SimpleNamespace(exchange=h) for h in hosts]
+
+    def test_ip_list_loaded_from_file(self):
+        assert "45.55.106.248" in ep._DISPOSABLE_MX_IPS
+        # Shared providers must never be on it.
+        assert not any(ip.startswith("162.159.") for ip in ep._DISPOSABLE_MX_IPS)
+
+    def test_own_named_mx_on_farm_ip_is_disposable(self, monkeypatch):
+        pytest.importorskip("dns")
+
+        async def res(name, rtype):
+            if rtype == "MX":
+                return self._mx("mail.brand-new-front.example.")
+            return ["45.55.106.248"]
+
+        monkeypatch.setattr(ep, "_resolve", res)
+        assert asyncio.run(ep.mx_verdict("abc123@brand-new-front.example")) == ep.MX_DISPOSABLE
+
+    def test_real_mx_ip_is_fine(self, monkeypatch):
+        pytest.importorskip("dns")
+
+        async def res(name, rtype):
+            if rtype == "MX":
+                return self._mx("mail.realcompany.example.")
+            return ["203.0.113.10"]
+
+        monkeypatch.setattr(ep, "_resolve", res)
+        assert asyncio.run(ep.mx_verdict("ana@realcompany.example")) == ep.MX_OK
+
+    def test_mx_host_that_fails_to_resolve_fails_open(self, monkeypatch):
+        pytest.importorskip("dns")
+
+        async def res(name, rtype):
+            if rtype == "MX":
+                return self._mx("mail.realcompany.example.")
+            raise RuntimeError("resolver down")
+
+        monkeypatch.setattr(ep, "_resolve", res)
+        assert asyncio.run(ep.mx_verdict("ana@realcompany.example")) == ep.MX_OK
+
+    def test_implicit_mx_on_farm_ip_is_disposable(self, monkeypatch):
+        dns = pytest.importorskip("dns")
+        import dns.resolver
+
+        async def res(name, rtype):
+            if rtype == "MX":
+                raise dns.resolver.NoAnswer()
+            return ["95.216.191.158"]
+
+        monkeypatch.setattr(ep, "_resolve", res)
+        assert asyncio.run(ep.mx_verdict("x@no-mx-front.example")) == ep.MX_DISPOSABLE
+
+    def test_new_farm_domains_blocked_by_name(self):
+        assert ep.is_disposable("rekewar535@micropaste.com") is True
+        assert ep.is_disposable("gegohef955@fulldiets.com") is True

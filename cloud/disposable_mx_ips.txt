@@ -1,0 +1,74 @@
+# IPv4 addresses of disposable/temp-mail SMTP hosts (one per line).
+# Comments (#) and blank lines ignored. Matched against the A records of a
+# sign-up domain's MX hosts (or of the domain itself when it has no MX).
+# Why IPs and not just MX names (disposable_mx.txt): since 10-nov-2026 the
+# temp-mail fronts point MX at their own "mail.<front-domain>", a name no list
+# can know in advance, but every one of those names resolves to the same
+# provider host. Audit 18-nov-2026: 3.521 accounts on these hosts, 0 payers.
+# NEVER add a shared provider here (Cloudflare Email Routing 162.159.205.x,
+# Google, Outlook, Amazon SES inbound, Firefox Relay, SimpleLogin...): it
+# would lock out every legit custom domain behind it.
+# temp-mail.org style fronts (artegin.com, jysnk.com, fulldiets.com...), 1.338 accounts in a week
+45.55.106.248
+# wabblywabble.com / wallywatts.com fronts (also matched by name in disposable_mx.txt)
+142.132.166.12
+188.166.111.252
+116.202.9.167
+46.101.111.206
+# temp-mail.io (forward3.mail.temp-mail.io)
+95.216.191.158
+# tmaily.com
+159.195.145.63
+# emailnox.live / emailinbo.live
+116.203.2.77
+116.202.179.9
+# laoia.com / zefvo.com
+45.79.100.107
+# erinn.biz (choco.la, digdig.org, addrin.uk...)
+160.251.81.146
+# dummyinbox.com
+5.161.233.5
+# tempail.com
+173.230.139.246
+# fex.plus (mailto.plus, merepost.com)
+193.108.118.7
+# den.yt (forexzig.com, fxzig.com)
+172.245.213.219
+# temp-mail-pro.com
+47.88.24.103
+# smtp.is (web-library.net, euploading.com)
+49.12.18.190
+# 10minutemail (onldm.net, jbsze.net)
+52.25.207.32
+# anogz.com / vbgvd.com
+143.110.211.229
+# hidingpost / hidepost / hidesit
+92.255.56.148
+# deepmails.org (123mails.org, mailsbay.com...)
+47.251.66.253
+# oneb.net (tokmail.net, etubemail.com...)
+40.160.59.197
+# tempmail.cloud
+168.231.117.125
+# arrivalserver.com (proveity.com, raligaan.com)
+5.161.181.213
+# dropmail.me
+94.130.108.80
+# tempmail.world
+157.90.174.2
+# tempmailbox.email
+156.67.218.25
+# tempmailnova.com
+16.170.6.246
+# yopmail
+87.98.164.155
+# fordemy / animoby.com / appbott.com... (12 fronts)
+108.61.160.115
+# tempamail.com
+87.99.130.219
+# tmail.delivery (tempmail.click, mbox.to...)
+15.222.160.229
+# allfreemail.net
+51.38.251.14
+# unblock.news (tmpnator.live, psnator.com...)
+165.22.255.46

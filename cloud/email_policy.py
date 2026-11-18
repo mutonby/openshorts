@@ -80,6 +80,12 @@ def disposable_count() -> int:
 _MX_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "disposable_mx.txt")
 _DISPOSABLE_MX = _load_list(_MX_FILE)
+# Same idea one level down: fronts that MX to their own "mail.<front>" name
+# (temp-mail.org style, nov-2026) all resolve to a handful of provider IPs.
+_MX_IPS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "disposable_mx_ips.txt")
+_DISPOSABLE_MX_IPS = _load_list(_MX_IPS_FILE)
+_MX_IP_HOSTS_MAX = 3     # a domain lists 1-3 MX hosts; never resolve dozens
 
 MX_OK = "ok"
 MX_NONE = "no_mx"
@@ -125,13 +131,35 @@ async def _resolve(domain: str, rtype: str):
     return await _get_resolver().resolve(domain, rtype)
 
 
+async def _hosts_on_disposable_ip(hosts) -> bool:
+    """True if any of these mail hosts resolves to a known temp-mail IP.
+
+    Fails open: a host that doesn't resolve (or a resolver error) just doesn't
+    count, so a DNS blip never turns a real domain into a disposable one."""
+    if not _DISPOSABLE_MX_IPS:
+        return False
+    for host in list(hosts)[:_MX_IP_HOSTS_MAX]:
+        host = str(host).rstrip(".").lower()
+        if not host:
+            continue
+        try:
+            answers = await _resolve(host, "A")
+        except Exception:
+            continue
+        if any(str(a) in _DISPOSABLE_MX_IPS for a in answers):
+            return True
+    return False
+
+
 async def _implicit_mx(domain: str):
     """RFC 5321 implicit MX: no MX record → deliverable if A or AAAA exists."""
     import dns.resolver
 
     for rtype in ("A", "AAAA"):
         try:
-            await _resolve(domain, rtype)
+            answers = await _resolve(domain, rtype)
+            if rtype == "A" and any(str(a) in _DISPOSABLE_MX_IPS for a in answers):
+                return MX_DISPOSABLE, _MX_CACHE_TTL
             return MX_OK, _MX_CACHE_TTL
         except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
             continue
@@ -160,7 +188,10 @@ async def mx_verdict(email: str) -> str:
     ttl = _MX_CACHE_TTL
     try:
         answers = await _resolve(domain, "MX")
-        verdict = classify_mx_hosts(r.exchange for r in answers)
+        hosts = [r.exchange for r in answers]
+        verdict = classify_mx_hosts(hosts)
+        if verdict == MX_OK and await _hosts_on_disposable_ip(hosts):
+            verdict = MX_DISPOSABLE
     except dns.resolver.NXDOMAIN:
         verdict, ttl = MX_NONE, _MX_ERROR_TTL
     except dns.resolver.NoAnswer:
