@@ -80,9 +80,19 @@ class Controller:
     def settings(self) -> config.Settings:
         return config.from_dict(self.raw_config(), base_dir=self.base)
 
-    def save_config(self, raw: dict) -> dict:
+    def config_version(self) -> str:
+        """Fingerprint of the settings file as it is now (path + content)."""
+        import hashlib
+        body = self.config_path.read_bytes() if self.config_path.is_file() else b""
+        return hashlib.sha1(str(self.config_path).encode() + b"\0" + body).hexdigest()[:16]
+
+    def save_config(self, raw: dict, version: Optional[str] = None) -> dict:
         if not isinstance(raw, dict):
             raise ApiError(400, "settings must be an object")
+        if version is not None and version != self.config_version():
+            # a page loaded from another (or an older) settings file must not overwrite this one
+            raise ApiError(409, "the settings file changed since this page loaded it; "
+                                "press Discard changes to reload, then edit again")
         try:
             config.from_dict(raw, base_dir=self.base)  # the watcher's own validation
             text = tomlwrite.dumps(raw)
@@ -93,7 +103,7 @@ class Controller:
         tmp.write_text(text, encoding="utf-8")
         tmp.replace(self.config_path)
         running = bool(self.svc and not self.svc.finished.is_set())
-        return {"ok": True, "restart_needed": running}
+        return {"ok": True, "restart_needed": running, "version": self.config_version()}
 
     def logger(self, s: Optional[config.Settings] = None) -> Logger:
         s = s or self._safe_settings()
@@ -505,7 +515,8 @@ class Handler(BaseHTTPRequestHandler):
                 except config.ConfigError as e:
                     cfg_error = str(e)
                 return self._json({"raw": ctl.raw_config(), "schema": schema(),
-                                   "error": cfg_error, "path": str(ctl.config_path)})
+                                   "error": cfg_error, "path": str(ctl.config_path),
+                                   "version": ctl.config_version()})
             if path == "/api/secrets":
                 return self._json(ctl.secrets())
             if path == "/api/clips":
@@ -565,7 +576,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if method == "PUT":
             if path == "/api/config":
-                return self._json(ctl.save_config(self._json_body()))
+                body = self._json_body()
+                if not isinstance(body, dict) or "raw" not in body or not isinstance(body.get("version"), str):
+                    raise ApiError(400, "reload the page: it is older than the server")
+                return self._json(ctl.save_config(body["raw"], body["version"]))
             if path == "/api/secrets":
                 return self._json(ctl.save_secrets(self._json_body()))
             m = re.match(r"^/api/clips/(.+)/posts$", path)

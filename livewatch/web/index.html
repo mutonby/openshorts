@@ -480,10 +480,11 @@ drop.ondragleave = () => drop.classList.remove("over");
 drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); upload(e.dataTransfer.files); };
 
 /* ---------- settings ---------- */
-let cfg = null, schemaDef = null;
+let cfg = null, schemaDef = null, cfgVersion = null;
 async function loadConfig() {
   const r = await act(() => api("/api/config")); if (!r) return;
-  cfg = r.raw || {}; schemaDef = r.schema; $("#cfgPath").textContent = r.path;
+  cfg = r.raw || {}; schemaDef = r.schema; cfgVersion = r.version; $("#cfgPath").textContent = r.path;
+  $("#saveMsg").textContent = "";
   $("#setBanner").innerHTML = r.error ? `<div class="banner bad"><b>The saved settings have a problem:</b> ${esc(r.error)}</div>` : "";
   renderSections(); renderChannelsEditor(); loadSecrets();
 }
@@ -544,7 +545,7 @@ $("#chanList").addEventListener("click", e => { const d = e.target.dataset.del; 
   cfg = collect(); cfg.channel.splice(+d, 1); renderChannelsEditor(); });
 $("#saveCfg").onclick = async () => {
   const raw = collect();
-  try { const r = await api("/api/config", {method:"PUT", json: raw}); cfg = raw;
+  try { const r = await api("/api/config", {method:"PUT", json: {raw, version: cfgVersion}}); cfg = raw; cfgVersion = r.version;
     $("#saveMsg").innerHTML = `<span style="color:var(--green)">Saved.</span>${r.restart_needed ? " Stop and Start the watcher to apply." : ""}`;
     toast("Settings saved", "ok"); renderChannelsEditor();
   } catch (e) { $("#saveMsg").innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`; toast(e.message, "bad"); }

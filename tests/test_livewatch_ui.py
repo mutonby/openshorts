@@ -171,6 +171,20 @@ def test_controller_config_save_and_validation(ctl):
     assert ctl.settings().threshold == 4.5  # a refused save leaves the file alone
 
 
+def test_a_stale_page_cannot_overwrite_newer_settings(ctl):
+    seen = ctl.config_version()
+    raw = ctl.raw_config()
+    raw["detect"] = {"threshold": 6.0}
+    out = ctl.save_config(raw, seen)          # the page's own version: accepted
+    assert out["version"] != seen
+    old_form = ctl.raw_config()
+    old_form["general"]["data_dir"] = "replaydata"
+    with pytest.raises(ApiError) as e:        # loaded before that save: refused
+        ctl.save_config(old_form, seen)
+    assert e.value.status == 409
+    assert ctl.settings().data_dir.name == "data"
+
+
 def test_controller_secrets_go_to_env_file(ctl, monkeypatch):
     out = ctl.save_secrets({"GEMINI_API_KEY": "abcd1234efgh5678"})
     assert out["GEMINI_API_KEY"]["set"] and out["GEMINI_API_KEY"]["hint"].endswith("5678")
@@ -270,11 +284,16 @@ def test_http_config_and_clip_media(server):
     st, body, _ = _req(port, "/api/config")
     data = json.loads(body)
     assert st == 200 and data["raw"]["channel"][0]["name"] == "abc" and data["schema"]["sections"]
-    raw = data["raw"]
+    raw, ver = data["raw"], data["version"]
     raw["detect"] = {"threshold": 5.0}
-    assert _req(port, "/api/config", "PUT", raw, {"X-Livewatch": "1"})[0] == 200
-    st, body, _ = _req(port, "/api/config", "PUT", {"detect": {"threshold": 0}}, {"X-Livewatch": "1"})
+    st, body, _ = _req(port, "/api/config", "PUT", {"raw": raw, "version": ver}, {"X-Livewatch": "1"})
+    assert st == 200
+    ver = json.loads(body)["version"]
+    st, body, _ = _req(port, "/api/config", "PUT", {"raw": {"detect": {"threshold": 0}}, "version": ver},
+                       {"X-Livewatch": "1"})
     assert st == 400 and "threshold" in json.loads(body)["error"]
+    assert _req(port, "/api/config", "PUT", {"raw": raw, "version": "stale"}, {"X-Livewatch": "1"})[0] == 409
+    assert _req(port, "/api/config", "PUT", raw, {"X-Livewatch": "1"})[0] == 400  # old page format
     cid, _ = _fake_clip(ctl)
     st, body, hdr = _req(port, f"/media/{cid}/short.mp4", headers={"Range": "bytes=100-199"})
     assert st == 206 and len(body) == 100 and hdr["Content-Range"] == "bytes 100-199/5000"
