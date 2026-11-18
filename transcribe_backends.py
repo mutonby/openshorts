@@ -70,17 +70,27 @@ ASR_WAIT = {"s": 0.0}
 # eight jobs, one of them a 3 MB clip, slept waiting for one. 0 turns it off.
 ASR_LONG_SECONDS = float(os.environ.get("ASR_LONG_SECONDS", "1800") or 0)
 
-# The host slot this process holds right now, so a transcription that stops
-# using the GPU (whisper fell back to the CPU) can hand it back early.
-_HELD_HOST_SLOT = None
+
+class GpuUnavailable(Exception):
+    """The transcription would have to leave the card, and this process may
+    only transcribe on it (``require_gpu``)."""
 
 
-def release_host_slot():
-    """Hand back the host slot this process holds, if any, before the
-    ``with`` block ends: for work that no longer runs on the card."""
-    slot = _HELD_HOST_SLOT
-    if slot is not None:
-        slot.release()
+# Set by require_gpu(): a CUDA failure raises GpuUnavailable instead of
+# retrying whisper on the CPU.
+_gpu_only = False
+
+
+def require_gpu():
+    """From now on this process transcribes on the card or not at all.
+
+    For ``main.py --prepare-only``: a transcript prepared for another host is
+    only worth it on the GPU. Prepare processes that fell back to CPU
+    whisper filled the host's RAM and CPU while the renderer could have
+    transcribed for itself, and each kept its CUDA context on the card until
+    it exited (prod, 18-nov-2026)."""
+    global _gpu_only
+    _gpu_only = True
 
 
 class host_asr_slot:
@@ -115,7 +125,6 @@ class host_asr_slot:
         return self.slots
 
     def __enter__(self):
-        global _HELD_HOST_SLOT
         if self.slots <= 0:
             return self
         try:
@@ -135,7 +144,6 @@ class host_asr_slot:
                 try:
                     fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     self._fh = fh
-                    _HELD_HOST_SLOT = self
                     ASR_WAIT["s"] += time.monotonic() - started
                     return self
                 except OSError:
@@ -150,7 +158,6 @@ class host_asr_slot:
 
     def release(self):
         """Give the slot back (idempotent; ``__exit__`` calls it too)."""
-        global _HELD_HOST_SLOT
         if self._fh is not None:
             try:
                 import fcntl
@@ -159,8 +166,6 @@ class host_asr_slot:
                 pass
             self._fh.close()
             self._fh = None
-        if _HELD_HOST_SLOT is self:
-            _HELD_HOST_SLOT = None
 
     def __exit__(self, *exc):
         self.release()
@@ -249,11 +254,12 @@ def _whisper_device():
 
 
 def _run_whisper_once(media_path, **params):
-    if _whisper_force_cpu:
-        # Off the card for good in this process: the host slot only guards
-        # the GPU, and holding it through a CPU decode starves every job
-        # that would transcribe on the card in seconds.
-        release_host_slot()
+    # A CPU decode keeps the host slot: the process still holds its CUDA
+    # context (~825 MB) until it exits, so the slot still stands for memory
+    # on the card. Handing it back let the next process in, which hit the
+    # same OOM and fell to the CPU too (prod, 18-nov-2026).
+    if _gpu_only and _whisper_device() == "cpu":
+        raise GpuUnavailable("whisper is configured for the CPU")
     gate = _ASR_GATE if _whisper_device() != "cpu" else _NULL_GATE
     # The model is fetched inside the gate: release_models() drains the gate
     # before unloading, so a transcription can never start on a model that is
@@ -289,6 +295,10 @@ def run_whisper_transcription(media_path, **params):
     except RuntimeError as e:
         if _whisper_force_cpu or "cuda" not in str(e).lower():
             raise
+        if _gpu_only:
+            with _whisper_lock:
+                _whisper_model = None
+            raise GpuUnavailable(f"whisper GPU failed ({e})") from e
         print(f"⚠️ [ASR] whisper GPU failed ({e}) — retrying on CPU", flush=True)
         _whisper_force_cpu = True
         with _whisper_lock:
@@ -706,8 +716,8 @@ def _whisper_span(audio, language):
     the user-facing progress lines are not printed once per span.
     """
     params = dict(WHISPER_TRANSCRIBE_PARAMS, language=language, vad_filter=False)
-    if _whisper_force_cpu:
-        release_host_slot()
+    if _gpu_only and _whisper_device() == "cpu":
+        raise GpuUnavailable("whisper is configured for the CPU")
     gate = _ASR_GATE if _whisper_device() != "cpu" else _NULL_GATE
     with gate:
         model, _device = _get_whisper_model()

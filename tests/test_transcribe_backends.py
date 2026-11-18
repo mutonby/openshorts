@@ -545,7 +545,7 @@ def test_repair_failure_keeps_parakeet_text(monkeypatch):
 
 # --- 18-nov-2026: two long videos jammed both host slots for an hour ---------
 
-class TestLongMediaAndEarlyRelease:
+class TestLongMediaSlots:
     def test_long_media_never_takes_the_last_slot(self, tmp_path):
         long_a = tb.host_asr_slot(slots=2, lock_dir=str(tmp_path), poll=0.01,
                                   media_seconds=3000, long_seconds=1800)
@@ -569,27 +569,18 @@ class TestLongMediaAndEarlyRelease:
         assert tb.host_asr_slot(slots=3, media_seconds=9999, long_seconds=0).usable_slots() == 3
         assert tb.host_asr_slot(slots=3, media_seconds=9999, long_seconds=1800).usable_slots() == 2
 
-    def test_release_host_slot_frees_it_before_the_block_ends(self, tmp_path):
-        with tb.host_asr_slot(slots=1, lock_dir=str(tmp_path), poll=0.01) as held:
-            assert tb._HELD_HOST_SLOT is held
-            tb.release_host_slot()
-            assert held._fh is None and tb._HELD_HOST_SLOT is None
-            with tb.host_asr_slot(slots=1, lock_dir=str(tmp_path), poll=0.01,
-                                  timeout=0.05) as other:
-                assert other._fh is not None
-        tb.release_host_slot()  # nothing held: a no-op
-
-    def test_whisper_on_the_cpu_hands_the_slot_back(self, tmp_path, monkeypatch):
+    def test_whisper_on_the_cpu_keeps_the_slot(self, tmp_path, monkeypatch):
+        # Its CUDA context stays on the card until the process exits: handing
+        # the slot back let the next process in to hit the same OOM.
         class _Model:
             def transcribe(self, path, **params):
-                assert tb._HELD_HOST_SLOT is None  # released before decoding
                 return iter([]), SimpleNamespace(duration=0, language="hi")
 
         monkeypatch.setattr(tb, "_whisper_force_cpu", True)
         monkeypatch.setattr(tb, "_get_whisper_model", lambda: (_Model(), "cpu"))
         with tb.host_asr_slot(slots=1, lock_dir=str(tmp_path), poll=0.01) as held:
             tb._run_whisper_once("x.mp4")
-            assert held._fh is None
+            assert held._fh is not None
 
     def test_whisper_on_the_gpu_keeps_the_slot(self, tmp_path, monkeypatch):
         class _Model:
@@ -679,3 +670,56 @@ def test_media_seconds_reads_the_container(monkeypatch):
     monkeypatch.setattr(tb.subprocess, "run",
                         lambda *a, **k: SimpleNamespace(stdout="N/A\n"))
     assert tb.media_seconds("x.mp4") is None
+
+
+# --- 18-nov-2026: prepare processes fell back to CPU whisper on the GPU host --
+
+class TestRequireGpu:
+    @pytest.fixture(autouse=True)
+    def _gpu_only(self, monkeypatch):
+        monkeypatch.setattr(tb, "_gpu_only", True)
+        monkeypatch.setattr(tb, "_whisper_force_cpu", False)
+        monkeypatch.setattr(tb, "_whisper_model", None)
+
+    def test_a_cuda_failure_raises_instead_of_going_to_the_cpu(self, monkeypatch):
+        calls = []
+
+        def once(path, **params):
+            calls.append(path)
+            raise RuntimeError("CUDA failed with error out of memory")
+        monkeypatch.setattr(tb, "_run_whisper_once", once)
+        with pytest.raises(tb.GpuUnavailable):
+            tb.run_whisper_transcription("x.mp4")
+        assert calls == ["x.mp4"]                # no second, CPU attempt
+        assert tb._whisper_force_cpu is False
+
+    def test_a_cpu_whisper_config_is_refused(self, monkeypatch):
+        monkeypatch.setattr(tb, "_whisper_device", lambda: "cpu")
+        monkeypatch.setattr(tb, "_get_whisper_model",
+                            lambda: pytest.fail("no model on the CPU"))
+        with pytest.raises(tb.GpuUnavailable):
+            tb._run_whisper_once("x.mp4")
+        with pytest.raises(tb.GpuUnavailable):
+            tb._whisper_span(None, "en")
+
+    def test_other_errors_are_not_turned_into_gpu_unavailable(self, monkeypatch):
+        def once(path, **params):
+            raise RuntimeError("bad input file")
+        monkeypatch.setattr(tb, "_run_whisper_once", once)
+        with pytest.raises(RuntimeError, match="bad input"):
+            tb.run_whisper_transcription("x.mp4")
+
+
+def test_without_require_gpu_a_cuda_failure_still_retries_on_the_cpu(monkeypatch):
+    monkeypatch.setattr(tb, "_gpu_only", False)
+    monkeypatch.setattr(tb, "_whisper_force_cpu", False)
+    calls = []
+
+    def once(path, **params):
+        calls.append(tb._whisper_force_cpu)
+        if not tb._whisper_force_cpu:
+            raise RuntimeError("CUDA failed with error out of memory")
+        return [], SimpleNamespace(duration=0, language="en")
+    monkeypatch.setattr(tb, "_run_whisper_once", once)
+    assert tb.run_whisper_transcription("x.mp4")[0] == []
+    assert calls == [False, True]

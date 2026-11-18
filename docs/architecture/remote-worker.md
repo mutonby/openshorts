@@ -162,7 +162,10 @@ What limits a CPU worker is rarely its slots:
   otherwise transcribes there, on the card, inside the same `ASR_HOST_SLOTS`
   as any job, and only if a slot frees up within `PREPARE_TRANSCRIPT_WAIT`
   seconds (45): when the card's own jobs keep them busy the worker
-  transcribes for itself, so neither host waits for the other. The claim then announces `transcript_size`, the worker fetches
+  transcribes for itself, so neither host waits for the other. It
+  transcribes on the card or not at all (`transcribe_backends.require_gpu`):
+  a CUDA failure leaves the transcript to the worker instead of falling back
+  to CPU whisper on the API host. The claim then announces `transcript_size`, the worker fetches
   it (`GET .../transcript`, re-serialised as data and shape-checked on both
   sides, `remote_worker.valid_transcript`), puts it at the same place in its
   own job directory and its main.py reuses it exactly like a resumed run.

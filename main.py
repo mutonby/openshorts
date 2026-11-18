@@ -2069,7 +2069,9 @@ def prepare_transcript(input_video, output_dir, url, mode):
             transcript = source_cache.fetch_transcript(url, duration)
             from_cache = transcript is not None
         if transcript is None and mode == "1":
-            from transcribe_backends import NoAudioError
+            from transcribe_backends import NoAudioError, GpuUnavailable, require_gpu
+            # Here only on the card: on the CPU the renderer does it better.
+            require_gpu()
             try:
                 wait = float(os.environ.get("PREPARE_TRANSCRIPT_WAIT", "") or 45)
             except ValueError:
@@ -2080,6 +2082,9 @@ def prepare_transcript(input_video, output_dir, url, mode):
                 return False
             except TimeoutError:
                 print("⏭️ No free transcription slot here: the renderer transcribes.")
+                return False
+            except GpuUnavailable as e:
+                print(f"⏭️ Not transcribing here off the GPU ({e}): the renderer transcribes.")
                 return False
         if transcript is None or not transcript.get("segments"):
             return False
@@ -2139,8 +2144,9 @@ def transcribe_video(video_path, slot_timeout=None):
     # clips into its render still held 5.9 GB of the 20 GB card; eight such
     # jobs filled it and NVENC / TransNetV2 failed with CUDA OOM (30-60% of
     # jobs failing per hour at peak). Nothing after this point transcribes.
-    # A long source never takes the last slot (ASR_LONG_SECONDS), and whisper
-    # hands the slot back if it falls to the CPU.
+    # A long source never takes the last slot (ASR_LONG_SECONDS). Whisper
+    # keeps the slot even if it falls to the CPU: its CUDA context stays on
+    # the card until the process exits.
     with host_asr_slot(timeout=slot_timeout, media_seconds=media_seconds(video_path)):
         try:
             transcript = transcribe_media(video_path)

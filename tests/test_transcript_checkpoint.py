@@ -105,6 +105,9 @@ class TestPrepareOnly:
     @pytest.fixture
     def prep(self, tmp_path, monkeypatch):
         monkeypatch.setattr(main.cv2, "VideoCapture", _FakeCapture)
+        import transcribe_backends
+        # prepare_transcript pins the process to the GPU; undo it per test.
+        monkeypatch.setattr(transcribe_backends, "_gpu_only", False)
         calls = []
 
         def transcribe(path, slot_timeout=None):
@@ -148,5 +151,15 @@ class TestPrepareOnly:
         def busy(path, slot_timeout=None):
             raise TimeoutError("no free transcription slot")
         monkeypatch.setattr(main, "transcribe_video", busy)
+        assert not main.prepare_transcript(SRC, str(tmp_path), "https://youtu.be/x", "1")
+        assert _load(tmp_path) is None
+
+    def test_it_transcribes_on_the_gpu_or_leaves_it(self, tmp_path, prep, monkeypatch):
+        import transcribe_backends as tb
+
+        def off_the_card(path, slot_timeout=None):
+            assert tb._gpu_only                  # pinned before transcribing
+            raise tb.GpuUnavailable("whisper GPU failed (CUDA out of memory)")
+        monkeypatch.setattr(main, "transcribe_video", off_the_card)
         assert not main.prepare_transcript(SRC, str(tmp_path), "https://youtu.be/x", "1")
         assert _load(tmp_path) is None

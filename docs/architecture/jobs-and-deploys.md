@@ -40,8 +40,9 @@ Guards that keep the card from filling:
   `ASR_HOST_SLOTS`, default 2): flock files `output/.asr-gpu-N.lock`, shared by
   every job process and by both containers of a deploy. A source of at least
   `ASR_LONG_SECONDS` (1800) never takes the last slot, so short ones never
-  wait behind long ones only. The slot guards the card, so whisper hands it
-  back as soon as it falls to the CPU (`release_host_slot`).
+  wait behind long ones only. Whisper keeps the slot when it falls to the
+  CPU: the process holds its CUDA context until it exits, and handing the
+  slot back let the next process in to hit the same OOM.
 - **Parakeet leaves the card before the whisper fallback**
   (`transcribe_backends._drop_parakeet`): its arena (~7 GB on a long video)
   made whisper hit CUDA OOM and the whole transcription ran on the CPU. A
