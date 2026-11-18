@@ -613,6 +613,8 @@ class Service:
         write_meta(d, meta)  # visible in the UI before the upload finishes
         self.current_step = f"{who}: posting"
         meta["posted"] = self.maybe_post(d, text)
+        if (meta["posted"] or {}).get("networks"):
+            meta["posted"] = self._schedule_retry(d, meta["posted"])
         if (meta["posted"] or {}).get("status") in ("posted", "partial"):
             self.counts["posted"] += 1
         write_meta(d, meta)
@@ -644,20 +646,36 @@ class Service:
         return deliver(clip_dir, s, self.log)
 
     # ----------------------------------------------------------- post queue
-    def _enqueue(self, clip_dir: Path, when: datetime):
+    def _enqueue(self, clip_dir: Path, when: datetime, only: Optional[List[str]] = None):
         with self._post_lock:
-            self._post_queue.append((when, Path(clip_dir)))
+            self._post_queue.append((when, Path(clip_dir), only))
             self._post_queue.sort(key=lambda x: x[0])
 
+    def _schedule_retry(self, clip_dir: Path, posted: dict) -> dict:
+        """Networks that hit a temporary upload limit are retried later, alone."""
+        later = sorted(n for n, r in (posted.get("networks") or {}).items()
+                       if r.get("status") == "deferred")
+        if later:
+            when = datetime.now(timezone.utc) + timedelta(hours=publish.RETRY_LATER_HOURS)
+            posted["retry_at"], posted["retry_only"] = when.isoformat(), later
+            self._enqueue(clip_dir, when, later)
+        else:
+            posted.pop("retry_at", None)
+            posted.pop("retry_only", None)
+        return posted
+
     def _requeue_from_disk(self):
-        """Clips that were waiting for their slot when livewatch last stopped."""
+        """Clips that were waiting for their slot (or for a retry) when livewatch last stopped."""
         root = self.settings.data_dir / "clips"
         for m in root.glob("*/*/meta.json") if root.is_dir() else []:
             try:
                 posted = json.loads(m.read_text(encoding="utf-8")).get("posted") or {}
                 if posted.get("status") == "queued":
                     self._enqueue(m.parent, datetime.fromisoformat(posted["at"]))
-            except (OSError, ValueError, KeyError):
+                elif posted.get("retry_at") and posted.get("retry_only"):
+                    self._enqueue(m.parent, datetime.fromisoformat(posted["retry_at"]),
+                                  list(posted["retry_only"]))
+            except (OSError, ValueError, KeyError, TypeError):
                 continue
 
     def _poster(self):
@@ -665,13 +683,16 @@ class Service:
             due = None
             with self._post_lock:
                 if self._post_queue and self._post_queue[0][0] <= datetime.now(timezone.utc):
-                    due = self._post_queue.pop(0)[1]
+                    due = self._post_queue.pop(0)
             if due is not None:
+                _, clip_dir, only = due
                 try:
-                    meta = json.loads((due / "meta.json").read_text(encoding="utf-8"))
-                    meta["posted"] = deliver(due, self.settings, self.log)
-                    write_meta(due, meta)
-                    if meta["posted"].get("status") in ("posted", "partial"):
+                    meta = json.loads((clip_dir / "meta.json").read_text(encoding="utf-8"))
+                    res = deliver(clip_dir, self.settings, self.log, only=only)
+                    meta["posted"] = merge_posted(meta.get("posted"), res) if only else res
+                    meta["posted"] = self._schedule_retry(clip_dir, meta["posted"])
+                    write_meta(clip_dir, meta)
+                    if res.get("status") in ("posted", "partial"):
                         self.counts["posted"] += 1
                 except Exception as e:  # noqa: BLE001 - logged, the queue goes on
                     self.log(f"queued post failed: {e}")
@@ -688,6 +709,26 @@ class Service:
             p = meta.get("posted") or {}
             wr.writerow([meta["moment"], meta["channel"], meta["score"], meta["text"]["style"],
                          meta["text"]["title"], str(out), p.get("status", ""), p.get("request_id", "")])
+
+
+def merge_posted(old: Optional[dict], new: dict) -> dict:
+    """A retry's result folded into the clip's earlier one: networks that were
+    already posted keep their result, the retried ones get the new one."""
+    if not isinstance(old, dict) or not old.get("networks"):
+        return new
+    nets = dict(old["networks"])
+    nets.update(new.get("networks") or {})
+    states = {r.get("status") for r in nets.values()}
+    ok = {"posted", "sent to phone"}
+    if states <= ok:
+        status = "posted"
+    elif states & (ok | {"private"}):
+        status = "partial"
+    elif states <= {"deferred"}:
+        status = "deferred"
+    else:
+        status = "failed"
+    return {**old, **new, "status": status, "networks": nets}
 
 
 def write_meta(d: Path, meta: dict) -> None:

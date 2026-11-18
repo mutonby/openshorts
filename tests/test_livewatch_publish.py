@@ -300,14 +300,14 @@ def test_posts_are_spaced_through_the_queue(tmp_path, monkeypatch):
     assert queued["status"] == "queued"
     when = datetime.fromisoformat(queued["at"])
     assert timedelta(minutes=29) < when - datetime.now(timezone.utc) <= timedelta(minutes=30)
-    assert svc._post_queue == [(when, d2)]
+    assert svc._post_queue == [(when, d2, None)]
     # a restart picks the queued clip up again from its meta.json
     meta = json.loads((d1 / "meta.json").read_text(encoding="utf-8"))
     meta["posted"] = queued
     (d1 / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
     svc2 = service.Service(s)
     svc2._requeue_from_disk()
-    assert [p for _, p in svc2._post_queue] == [d1]
+    assert [p for _, p, _ in svc2._post_queue] == [d1]
     assert svc.maybe_post(d1, viral.ClipText("h", "t", "d", spoiler=True))["why"] == "spoiler"
 
 
@@ -332,3 +332,47 @@ def test_youtube_connect_callback(tmp_path, monkeypatch):
     with pytest.raises(ApiError):  # a state is single-use
         ctl.youtube_callback(state, "code-1")
     monkeypatch.delenv("YOUTUBE_REFRESH_TOKEN", raising=False)
+
+
+def test_youtube_upload_limit_is_retried_later_and_merged(tmp_path, video, monkeypatch):
+    from livewatch import service, viral
+    limit = Fake([("POST", publish.GOOGLE_TOKEN, Resp(200, {"access_token": "at"})),
+                  ("POST", publish.YT_UPLOAD, Resp(400, {"error": {"message":
+                   "The user has exceeded the number of videos they may upload."}}))])
+    with pytest.raises(publish.UploadLimit):
+        publish.youtube_upload(video, "t", "d", [], client_id="c", client_secret="s", refresh_token="r",
+                               session=limit)
+    # publish(): the limit is "deferred", not "failed"; the phone handoff still goes out
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1:A")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
+
+    def hit(*a, **k):
+        raise publish.UploadLimit("YouTube's upload limit for this channel was reached")
+    monkeypatch.setattr(publish, "youtube_upload", hit)
+    monkeypatch.setattr(publish, "telegram_handoff", lambda *a, **k: {"message_id": 1})
+    res = publish.publish(video, {"youtube": {"title": "T"}, "tiktok": {"description": "C"}},
+                          {"youtube": "api", "tiktok": "phone"}, tags=[], log=lambda m: None)
+    assert res["status"] == "partial" and res["networks"]["youtube"]["status"] == "deferred"
+    assert "retrying in 3 h" in res["networks"]["youtube"]["why"]
+
+    # the service parks YouTube alone for 3 hours, survives a restart, and merges the retry
+    s = config.from_dict({"general": {"data_dir": str(tmp_path / "data")},
+                          "channel": [{"platform": "twitch", "name": "abc"}]})
+    d = _clip(tmp_path, s)
+    svc = service.Service(s)
+    posted = svc._schedule_retry(d, dict(res))
+    when, path, only = svc._post_queue[0]
+    assert path == d and only == ["youtube"]
+    assert timedelta(hours=2, minutes=59) < when - datetime.now(timezone.utc) <= timedelta(hours=3)
+    meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+    meta["posted"] = posted
+    (d / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    svc2 = service.Service(s)
+    svc2._requeue_from_disk()
+    assert [(p, o) for _, p, o in svc2._post_queue] == [(d, ["youtube"])]
+    merged = service.merge_posted(posted, {"status": "posted", "networks": {
+        "youtube": {"status": "posted", "url": "https://youtube.com/shorts/x"}}})
+    assert merged["status"] == "posted"
+    assert merged["networks"]["tiktok"] == {"status": "sent to phone"}  # not posted twice
+    assert merged["networks"]["youtube"]["url"].endswith("/x")
+    assert svc._schedule_retry(d, merged).get("retry_at") is None

@@ -51,6 +51,19 @@ class PublishError(RuntimeError):
     pass
 
 
+class UploadLimit(PublishError):
+    """The network refused because of a temporary per-account upload limit:
+    retry later, it is not a broken video."""
+
+
+RETRY_LATER_HOURS = 3
+
+
+def _limit_hit(text: str) -> bool:
+    t = (text or "").lower()
+    return "exceeded the number of videos" in t or "uploadlimitexceeded" in t
+
+
 def _http(session):
     if session is None:
         import requests as session
@@ -122,11 +135,15 @@ def youtube_upload(video: Path, title: str, description: str, tags: List[str], *
                   headers={"Authorization": f"Bearer {token}", "X-Upload-Content-Length": str(size),
                            "X-Upload-Content-Type": "video/mp4"})
     if r.status_code != 200 or not r.headers.get("Location"):
+        if _limit_hit(_msg(r)) or _limit_hit(r.text):
+            raise UploadLimit("YouTube's upload limit for this channel was reached")
         raise PublishError(f"YouTube refused the upload: {_msg(r)}")
     with open(video, "rb") as fh:
         r = http.put(r.headers["Location"], data=fh, timeout=900,
                      headers={"Authorization": f"Bearer {token}", "Content-Type": "video/mp4"})
     if r.status_code not in (200, 201):
+        if _limit_hit(_msg(r)) or _limit_hit(r.text):
+            raise UploadLimit("YouTube's upload limit for this channel was reached")
         raise PublishError(f"YouTube upload failed: {_msg(r)}")
     body = r.json() or {}
     vid = body.get("id", "")
@@ -496,6 +513,11 @@ def publish(video: Path, posts: Dict[str, Dict[str, str]], routes: Dict[str, str
                                         tunnel_factory=tunnel_factory)
                 results[net] = {"status": "posted", "id": res["id"]}
                 log(f"   instagram: posted a Reel on @{res['username']}")
+        except UploadLimit as e:
+            results[net] = {"status": "deferred",
+                            "why": f"{e}; retrying in {RETRY_LATER_HOURS} h (verifying the channel at "
+                                   "youtube.com/verify raises the limit)"}
+            log(f"   {net}: {e}, retrying in {RETRY_LATER_HOURS} h")
         except Exception as e:  # noqa: BLE001 - reported per network
             results[net] = {"status": "failed", "error": str(e)[:300]}
             log(f"   {net}: failed: {e}")
@@ -527,6 +549,8 @@ def publish(video: Path, posts: Dict[str, Dict[str, str]], routes: Dict[str, str
         status = "posted"
     elif states & (ok | {"private"}):
         status = "partial"
+    elif states <= {"deferred"}:
+        status = "deferred"
     else:
         status = "failed"
     return {"status": status, "networks": results}
