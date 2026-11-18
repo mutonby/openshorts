@@ -424,6 +424,14 @@ coordinates them:
 - Each instance writes its id to `output/.instance` at startup. An instance that
   sees another id there is the old one and **drains**: it finishes the jobs it is
   running, starts none, and leaves queued manifests on disk.
+- The marker line is `<id> <generation>`, the generation being the deploy's
+  (`DEPLOY_GENERATION`, else the timestamp at the end of Coolify's container
+  name). Only an instance of a newer (or unknown) deploy in the marker makes
+  another drain: the old container of a deploy that the kernel killed while it
+  drained (host out of memory) and Docker restarted no longer takes the queue
+  from the new one. It boots drained, adopts no manifest, keeps every
+  reservation on disk out of the orphan refund, and a new instance that finds
+  an older deploy's line in the marker writes its own back.
 - A running job heartbeats its `.resume.json` every 10 s. The resume scan
   (startup + every 30 s) re-enqueues only manifests nobody heartbeated for 60 s,
   so no job runs twice and none is lost. Max 2 resume attempts, and only a run

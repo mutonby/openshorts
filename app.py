@@ -1933,6 +1933,27 @@ MAX_RESUME_ATTEMPTS = 2
 #     under the Coolify stop grace period — before letting uvicorn exit.
 INSTANCE_ID = os.environ.get("INSTANCE_ID") or socket.gethostname()
 _INSTANCE_MARKER = ".instance"
+
+
+def _deploy_generation(env=os.environ) -> str:
+    """Which deploy this container belongs to, comparable as text: the newer
+    deploy has the larger value. DEPLOY_GENERATION, else the timestamp Coolify
+    puts at the end of the container name (<app>-20261118T204041). Empty when
+    unknown (self-host): the marker then works as before, the last to boot is
+    the newer one."""
+    gen = (env.get("DEPLOY_GENERATION") or "").strip()
+    if gen:
+        return gen
+    m = re.search(r"-(\d{8}T\d{6})$", env.get("COOLIFY_CONTAINER_NAME") or "")
+    return m.group(1) if m else ""
+
+
+# 18-nov-2026: the old container of a deploy, draining, had its process killed
+# by the kernel (host out of memory); Docker restarted it, it booted and wrote
+# the marker, and the NEW container read that as "a newer instance is up" and
+# drained for good: nobody started jobs. The marker now carries the deploy
+# generation, and only a newer (or unknown) deploy makes an instance drain.
+DEPLOY_GENERATION = _deploy_generation()
 HEARTBEAT_EVERY = 10                 # seconds between manifest heartbeats
 HEARTBEAT_STALE_AFTER = 60           # no heartbeat for this long = nobody has it
 RESUME_SCAN_INTERVAL = 30            # seconds between looks for stale manifests
@@ -2184,18 +2205,48 @@ async def _wait_for_shared_gpu():
 def _write_instance_marker():
     try:
         os.makedirs(OUTPUT_DIR, exist_ok=True)
+        # "<id> <generation>": an instance from before the generation existed
+        # reads the whole line as an id that is not its own, and drains.
+        line = f"{INSTANCE_ID} {DEPLOY_GENERATION}".strip()
         with open(os.path.join(OUTPUT_DIR, _INSTANCE_MARKER), "w") as f:
-            f.write(INSTANCE_ID)
+            f.write(line)
     except Exception as e:
         print(f"⚠️ Could not write instance marker: {e}")
 
 
-def _read_instance_marker():
+def _read_instance_marker_full():
+    """``(id, generation)`` of the instance in the marker; (None, "") if none."""
     try:
         with open(os.path.join(OUTPUT_DIR, _INSTANCE_MARKER)) as f:
-            return f.read().strip()
+            parts = f.read().split()
     except Exception:
-        return None
+        return None, ""
+    if not parts:
+        return None, ""
+    return parts[0], (parts[1] if len(parts) > 1 else "")
+
+
+def _read_instance_marker():
+    return _read_instance_marker_full()[0]
+
+
+def _marker_holder_is_newer(other_gen: str) -> bool:
+    """Whether the instance in the marker belongs to a newer (or the same)
+    deploy than this one. Without our own generation (self-host) the old rule
+    holds: whoever wrote the marker last is the newer one. A marker with no
+    generation, read by an instance that has one, was written by code from
+    before generations, which can only be an older deploy."""
+    if not DEPLOY_GENERATION:
+        return True
+    if not other_gen:
+        return False
+    return other_gen >= DEPLOY_GENERATION
+
+
+def _newer_deploy_holds_marker() -> bool:
+    other, gen = _read_instance_marker_full()
+    return bool(other) and other != INSTANCE_ID and bool(DEPLOY_GENERATION) \
+        and bool(gen) and gen > DEPLOY_GENERATION
 
 
 def _begin_drain(reason):
@@ -2207,11 +2258,17 @@ def _begin_drain(reason):
 
 
 def _check_instance_marker():
-    """A different id in the marker means a newer instance is up: drain."""
-    other = _read_instance_marker()
+    """Another instance of a newer (or the same) deploy in the marker: drain.
+    One of an older deploy (its container restarted after we took over)
+    gets the marker taken back instead."""
+    other, gen = _read_instance_marker_full()
     if other and other != INSTANCE_ID:
-        _begin_drain(f"newer instance {other} is up")
-        return True
+        if _marker_holder_is_newer(gen):
+            _begin_drain(f"newer instance {other} is up")
+            return True
+        print(f"🚦 Instance {other} of an older deploy ({gen or 'no generation'}) took "
+              f"the marker: taking it back ({DEPLOY_GENERATION}).")
+        _write_instance_marker()
     return False
 
 
@@ -2353,6 +2410,20 @@ def _legacy_submitted_at(job_id, manifest_mtime=None):
     except OSError:
         pass
     return manifest_mtime if manifest_mtime else time.time()
+
+
+def _manifest_reservation_ids() -> set:
+    """Reservation ids of every resume manifest on disk, read-only."""
+    out = set()
+    for job_id in _manifest_names():
+        try:
+            with open(_manifest_path(job_id)) as f:
+                m = json.load(f)
+        except Exception:
+            continue
+        if isinstance(m, dict) and m.get("reservation_id"):
+            out.add(str(m["reservation_id"]))
+    return out
 
 
 def _resume_candidates(held: set, now: float):
@@ -4259,11 +4330,19 @@ async def lifespan(app: FastAPI):
     # Re-enqueue jobs that were mid-processing when we stopped (redeploy). Their
     # reservations must survive the orphan sweep so the resumed run can settle them.
     _booted_at = datetime.now(timezone.utc)
-    _resumed_reservation_ids = _resume_interrupted_jobs()
-    # Deploy handover: claim the marker (any older instance sees it and drains),
-    # keep watching it in case a newer one appears, keep looking for manifests
-    # left behind, and drain instead of dying on docker stop.
-    _write_instance_marker()
+    if _newer_deploy_holds_marker():
+        # This container is the old one of a deploy, restarted (crash, OOM
+        # kill) after the new one took over: the queue is the new one's.
+        _begin_drain(f"a newer deploy holds the marker ({_read_instance_marker()})")
+        # Adopt nothing, but keep every reservation on disk out of the orphan
+        # refund below: those jobs are the newer instance's, alive.
+        _resumed_reservation_ids = _manifest_reservation_ids()
+    else:
+        _resumed_reservation_ids = _resume_interrupted_jobs()
+        # Deploy handover: claim the marker (any older instance sees it and
+        # drains), keep watching it in case a newer one appears, keep looking
+        # for manifests left behind, and drain instead of dying on docker stop.
+        _write_instance_marker()
     _install_drain_signal_handler()
     asyncio.create_task(_handover_watch())
     asyncio.create_task(_resume_scan())

@@ -340,3 +340,56 @@ class TestGpuHasRoom:
     def test_no_nvidia_smi_falls_back_to_count(self, out, monkeypatch):
         monkeypatch.setattr(app_module, "MAX_CONCURRENT_JOBS", 8)
         assert app_module.gpu_has_room(4, 0, None)
+
+
+class TestDeployGeneration:
+    """18-nov-2026: the old container of a deploy, killed by the kernel while it
+    drained, was restarted by Docker, wrote the marker at boot, and the new
+    container drained for good on reading it: nobody started jobs."""
+
+    def test_the_generation_comes_from_the_container_name(self):
+        gen = app_module._deploy_generation
+        assert gen({"COOLIFY_CONTAINER_NAME": "abc-20261118T204041"}) == "20261118T204041"
+        assert gen({"DEPLOY_GENERATION": "x9", "COOLIFY_CONTAINER_NAME": "a-20261118T204041"}) == "x9"
+        assert gen({}) == ""
+
+    def test_an_older_deploy_in_the_marker_does_not_drain_us(self, out, monkeypatch):
+        monkeypatch.setattr(app_module, "DEPLOY_GENERATION", "20261118T204041")
+        (out / app_module._INSTANCE_MARKER).write_text("oldhost 20261118T194736")
+        assert app_module._check_instance_marker() is False
+        assert app_module._draining is False
+        assert app_module._read_instance_marker() == app_module.INSTANCE_ID   # taken back
+
+    def test_a_marker_from_before_generations_is_an_older_deploy(self, out, monkeypatch):
+        monkeypatch.setattr(app_module, "DEPLOY_GENERATION", "20261118T204041")
+        (out / app_module._INSTANCE_MARKER).write_text("oldhost")
+        assert app_module._check_instance_marker() is False
+        assert app_module._draining is False
+
+    def test_a_newer_deploy_still_drains_us(self, out, monkeypatch):
+        monkeypatch.setattr(app_module, "DEPLOY_GENERATION", "20261118T194736")
+        (out / app_module._INSTANCE_MARKER).write_text("newhost 20261118T204041")
+        assert app_module._newer_deploy_holds_marker() is True
+        assert app_module._check_instance_marker() is True
+        assert app_module._draining is True
+
+    def test_without_generations_the_last_writer_wins_as_before(self, out, monkeypatch):
+        monkeypatch.setattr(app_module, "DEPLOY_GENERATION", "")
+        (out / app_module._INSTANCE_MARKER).write_text("other")
+        assert app_module._newer_deploy_holds_marker() is False
+        assert app_module._check_instance_marker() is True
+
+    def test_the_marker_line_keeps_older_code_draining(self, out, monkeypatch):
+        monkeypatch.setattr(app_module, "DEPLOY_GENERATION", "20261118T204041")
+        app_module._write_instance_marker()
+        line = (out / app_module._INSTANCE_MARKER).read_text()
+        assert line == f"{app_module.INSTANCE_ID} 20261118T204041"
+        # Code from before reads the whole line as an id that is not its own.
+        assert line.strip() != app_module.INSTANCE_ID
+
+    def test_a_restarted_old_instance_keeps_the_new_ones_reservations(self, out):
+        _manifest(out, "j1")
+        m = json.loads((out / "j1" / app_module._RESUME_FILE).read_text())
+        m["reservation_id"] = "res-9"
+        (out / "j1" / app_module._RESUME_FILE).write_text(json.dumps(m))
+        assert app_module._manifest_reservation_ids() == {"res-9"}
