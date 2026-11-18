@@ -78,7 +78,9 @@ def schema() -> Dict[str, Any]:
                choices=list(CAPTION_STYLES) + ["rotate"], default=d.caption_style),
             _f("description_style", "choice", "Post description style", "The caption under Reels, "
                "TikToks, Facebook and Threads. normal = describes the moment, weird = cryptic lines "
-               "that make people comment (unproven: use rotate and compare). YouTube and X always "
+               "that make people comment, japanese = Japanese promo-style lines like many viral Reels "
+               "(e.g. '#GTA6 話題の最新作がついに解禁…'). Both are unproven: use rotate and compare views. "
+               "YouTube and X always "
                "get the plain English title.", choices=list(DESCRIPTION_STYLES) + ["rotate"],
                default=d.description_style),
             _f("cta", "bool", "Floating follow badge", "A white badge near the bottom that fades in and "

@@ -21,7 +21,7 @@ except ModuleNotFoundError:  # pragma: no cover - 3.10 and older
 PLATFORMS = ("twitch", "kick", "youtube")
 CAPTION_STYLES = ("news", "ooc", "brainrot", "clean")  # on-video hook/headline, always English
 LAYOUTS = ("card", "blur")
-DESCRIPTION_STYLES = ("normal", "weird")              # caption under Reels/TikToks
+DESCRIPTION_STYLES = ("normal", "weird", "japanese")  # caption under Reels/TikToks
 POST_PLATFORMS = ("youtube", "tiktok", "instagram", "facebook", "x", "threads", "bluesky")
 VIA_API = ("api", "phone", "upload-post", "off")      # youtube_via, instagram_via
 VIA_OTHER = ("phone", "upload-post", "off")           # every other network

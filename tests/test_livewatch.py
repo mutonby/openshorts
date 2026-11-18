@@ -44,7 +44,7 @@ def test_config_defaults_and_channels(tmp_path):
 
 def test_description_style_and_removed_chinese_style(tmp_path):
     s = config.from_dict({"style": {"description_style": "rotate"}}, base_dir=tmp_path)
-    assert [s.description_for(n) for n in range(3)] == ["normal", "weird", "normal"]
+    assert [s.description_for(n) for n in range(4)] == ["normal", "weird", "japanese", "normal"]
     # a config written when "chinese" existed still loads, as plain English
     old = config.from_dict({"style": {"caption_style": "chinese", "description_style": "chinese"},
                             "channel": [{"platform": "twitch", "name": "a",
@@ -301,7 +301,22 @@ def test_description_styles_only_change_the_social_caption(desc):
         assert t.social_description and t.description_style == desc
         assert posts["instagram"]["description"].startswith(t.social_description)
         assert posts["tiktok"]["description"].startswith(t.social_description)
-        assert not viral.has_cjk(t.social_description)
+        assert viral.is_japanese(t.social_description) == (desc == "japanese")
+        assert viral.has_cjk(t.social_description) == (desc == "japanese")
+
+
+def test_japanese_descriptions_must_really_be_japanese():
+    good = dict(GOOD, social_description="#GTA6 話題の最新作がついに解禁 衝撃の瞬間を一挙公開!")
+    t = viral.parse_gemini_response(_gemini_payload(good), "news", "japanese")
+    assert t.social_description.startswith("#GTA6 話題") and t.description_style == "japanese"
+    for wrong in ("这一幕我直接看傻了", "the man in the red car knows"):  # Chinese, English
+        t = viral.parse_gemini_response(_gemini_payload(dict(GOOD, social_description=wrong)), "news", "japanese")
+        assert t.social_description == ""   # the offline Japanese line is used instead
+    w = viral.write_text(CTX, "news", desc_style="japanese")
+    assert viral.is_japanese(w.social_description)
+    posts = viral.platform_posts(w, ["instagram", "youtube"])
+    assert posts["instagram"]["description"].startswith(w.social_description)
+    assert not viral.has_cjk(posts["youtube"]["title"] + posts["youtube"]["description"])
 
 
 def test_non_english_ai_text_is_rejected():

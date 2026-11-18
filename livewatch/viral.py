@@ -38,7 +38,7 @@ from typing import Dict, List, Optional, Sequence
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 HOOK_STYLES = ("news", "ooc", "brainrot", "clean")
-DESCRIPTION_STYLES = ("normal", "weird")
+DESCRIPTION_STYLES = ("normal", "weird", "japanese")
 # networks whose caption is the description (and so takes description_style)
 CAPTION_NETWORKS = ("instagram", "tiktok", "facebook", "threads")
 
@@ -65,6 +65,15 @@ STYLE_GUIDE = {
 }
 DESCRIPTION_GUIDE = {
     "normal": "1-3 short English lines about the moment, with 1-3 fitting emojis.",
+    "japanese": (
+        "JAPANESE PROMO COPY, the style seen under many viral Reels: ONE uppercase English "
+        "hashtag-style word (e.g. #GTA6, #HIGHLIGHT, #SURPRISE), a space, then one or two short "
+        "lines of natural Japanese written like an advertising blurb for a launch or event: "
+        "excited, polished, vague (talked-about, finally revealed, a moment that steals your eyes, "
+        "don't miss it), ending with '!'. It must be correct, natural Japanese with hiragana and "
+        "katakana, not Chinese. Do not describe the clip literally. Examples: '#GTA6 "
+        "話題の最新作がついに解禁 思わず二度見してしまう衝撃の瞬間を一挙公開!', '#HIGHLIGHT "
+        "今週の注目ハイライトを厳選 最後まで目が離せない展開に注目!'."),
     "weird": (
         "WEIRD out-of-context English: 1-2 lowercase lines that sound unrelated, oddly "
         "specific or ominous, so people stop and comment asking what it means. Do not "
@@ -86,6 +95,21 @@ FALLBACK_HOOKS = {
               "The moment chat exploded"],
 }
 FALLBACK_DESCRIPTIONS = {
+    "japanese": ["#GTA6 話題の最新作がついに解禁 思わず二度見してしまう衝撃の瞬間を一挙公開!",
+                 "#NEWDROP 待望の新作がついに登場 誰もが息をのむ奇跡の一瞬をお届けします!",
+                 "#VICECITY 夜の街に広がる非日常 一度見たら忘れられない光景をチェック!",
+                 "#LIMITED 期間限定の特別な体験 今だけの貴重な瞬間をお見逃しなく!",
+                 "#TRENDING SNSで話題沸騰中 思わず笑顔になれるハッピーな瞬間を集めました!",
+                 "#MUSTSEE ファン必見の名シーンがついに公開 何度でも見返したくなる映像です!",
+                 "#HIGHLIGHT 今週の注目ハイライトを厳選 最後まで目が離せない展開に注目!",
+                 "#SURPRISE まさかの展開に会場騒然 予想を超える瞬間をあなたの目で確かめて!",
+                 "#NEWS 最新情報をいち早くお届け 気になるあの話題の真相に迫ります!",
+                 "#SPEED スピード感あふれる迫力の映像 手に汗握る瞬間を体感してください!",
+                 "#REACTION 思わず声が出てしまうリアクションに注目 見た人みんなが共感する瞬間!",
+                 "#COLLECTION 人気の名場面を一挙まとめ 保存して何度でも楽しんでください!",
+                 "#OPEN グランドオープン記念 特別な瞬間をみんなでシェアしよう!",
+                 "#CHAOS 予測不能なハプニングが続出 笑いが止まらない名シーンをどうぞ!",
+                 "#NIGHTDRIVE 夜景と疾走感が織りなす極上の時間 心奪われる一瞬をお楽しみください!"],
     "weird": ["the man in the red car knows what he did", "day 47 of asking the npc to stop",
               "he was never seen at the pier again", "my landlord when the rent is 3 minutes late",
               "nobody asked but here we are", "this is how the trust issues started",
@@ -228,6 +252,14 @@ def _english(text: str) -> bool:
     return bool(text) and not has_cjk(text)
 
 
+_KANA = re.compile(r"[぀-ヿ]")
+
+
+def is_japanese(text: str) -> bool:
+    """Japanese, not Chinese: kana (hiragana/katakana) is only used in Japanese."""
+    return bool(_KANA.search(text or ""))
+
+
 # --------------------------------------------------------------------------- #
 # offline writer
 # --------------------------------------------------------------------------- #
@@ -331,8 +363,9 @@ def parse_gemini_response(payload: dict, style: str, desc_style: str = "normal")
         return None  # everything is English
     social = data.get("social_description")
     social = _limit(social, 600) if isinstance(social, str) and desc_style != "normal" else ""
-    if not _english(social):
-        social = ""  # not English: the offline line is used instead
+    ok = is_japanese(social) if desc_style == "japanese" else _english(social)
+    if not ok:
+        social = ""  # wrong language for the style: the offline line is used instead
     tags = data.get("hashtags") if isinstance(data.get("hashtags"), list) else []
     try:
         pw = int(data.get("postworthy", 6))

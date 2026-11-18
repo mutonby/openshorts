@@ -35,7 +35,7 @@ verified = true               # blue badge next to the name
 [style]
 layout = "card"               # card = news-page post (logo, headline, full stream frame) | blur
 caption_style = "news"        # headline: news | ooc | brainrot | clean | rotate
-description_style = "rotate"  # caption under Reels/TikToks: normal | weird | rotate
+description_style = "rotate"  # caption under Reels/TikToks: normal | weird | japanese | rotate
                               # (weird = cryptic lines that make people comment; unproven, so compare)
 captions = true               # word-by-word burned captions (faster-whisper on the CPU)
 hook = true                   # the big text on top

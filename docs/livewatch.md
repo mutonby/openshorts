@@ -143,15 +143,21 @@ emojis.
 - **rotate**: cycles through all three.
 
 `description_style` sets the caption under Reels, TikToks, Facebook and
-Threads posts: `normal` | `weird` | `rotate`.
+Threads posts: `normal` | `weird` | `japanese` | `rotate`.
 
 - **normal**: describes the moment.
 - **weird**: cryptic, unrelated-sounding lines that make people stop and
-  comment, such as "the man in the red car knows what he did". Whether this
+  comment, such as "the man in the red car knows what he did".
+- **japanese**: Japanese advertising-style lines, like those under many viral
+  Reels, such as "#GTA6 話題の最新作がついに解禁 思わず二度見してしまう衝撃の瞬間を一挙公開!".
+  Gemini writes them in natural Japanese; anything that is not Japanese (no
+  kana) is replaced by one of 15 built-in lines. Nothing shows this trend
+  boosts reach, and it may steer a Reel toward Japanese viewers. Whether this
   helps reach is unproven, so use `rotate` and compare views per style.
 
-YouTube and X always get the plain English title, which is what search and
-the feed read.
+Whether `weird` or `japanese` helps reach is unproven, so use `rotate` and
+compare views per style. YouTube and X always get the plain English title,
+which is what search and the feed read.
 
 Gemini sees the transcript, the chat lines from the moment and the stream
 title. It also flags story spoilers: Rockstar takes down standalone cutscene
