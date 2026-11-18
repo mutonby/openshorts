@@ -4900,6 +4900,13 @@ async def _paid_proxy_budget_exceeded() -> bool:
         return False
 
 
+# job id -> (metadata mtime, size, clips announced) of the last read that
+# published every announced clip. Ticked every 2 s for every running job,
+# local and remote; the metadata JSON is large, so it is parsed again only
+# when it changed or a new clip was announced.
+_partial_seen: Dict[str, tuple] = {}
+
+
 def _refresh_partial_result(job_id, output_dir):
     """While a job runs: the clips main.py has announced so far, so the user
     sees each one as it lands."""
@@ -4910,7 +4917,12 @@ def _refresh_partial_result(job_id, output_dir):
         target_json = json_files[0]
         # It might be being written to: a partial file fails json.load and
         # the next look reads it whole.
-        if os.path.getsize(target_json) <= 0:
+        st = os.stat(target_json)
+        if st.st_size <= 0:
+            return
+        announced = len((jobs.get(job_id) or {}).get('ready_files') or {})
+        seen_key = (st.st_mtime_ns, st.st_size, announced)
+        if _partial_seen.get(job_id) == seen_key:
             return
         with open(target_json, 'r') as f:
             data = json.load(f)
@@ -4933,6 +4945,10 @@ def _refresh_partial_result(job_id, output_dir):
                 ready_clips.append(clip)
         if ready_clips:
             jobs[job_id]['result'] = {'clips': ready_clips, 'cost_analysis': cost_analysis}
+        if len(ready_clips) >= announced:
+            if len(_partial_seen) > 5000:
+                _partial_seen.clear()
+            _partial_seen[job_id] = seen_key
     except Exception:
         # Ignore read errors during processing
         pass

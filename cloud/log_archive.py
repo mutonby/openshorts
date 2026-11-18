@@ -81,6 +81,7 @@ class _Sink:
         self.fh = None
         self.fh_start = None
         self.dropping = False
+        self._flushed_at = 0.0
         os.makedirs(self.dir, exist_ok=True)
 
     def chunk_start(self, now=None):
@@ -124,7 +125,11 @@ class _Sink:
                 stamp = datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
                 fh = self._open(self.chunk_start(now))
                 fh.write("".join(f"{stamp} {line}\n" for line in lines.split("\n")))
-                fh.flush()
+                # One flush a second at most, not one per line: the API logs
+                # every request. A crash loses under a second of the spool.
+                if now - self._flushed_at >= 1.0:
+                    fh.flush()
+                    self._flushed_at = now
         except Exception:
             pass
 

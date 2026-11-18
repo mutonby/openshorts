@@ -39,6 +39,25 @@ def _config():
     return api, client_id, os.environ.get("OPENPANEL_CLIENT_SECRET", "").strip()
 
 
+# One client for every event, kept open. A client per event built a new TLS
+# context and handshake each time: with an event on most requests that was a
+# good share of the API's one core. Bound to the loop it was made on (tests
+# and the MCP stdio entry point run their own loops).
+_client = None
+_client_loop = None
+
+
+def _shared_client():
+    global _client, _client_loop
+    loop = asyncio.get_running_loop()
+    if _client is None or _client_loop is not loop or _client.is_closed:
+        _client = httpx.AsyncClient(
+            timeout=_TIMEOUT,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10))
+        _client_loop = loop
+    return _client
+
+
 async def _post(payload):
     cfg = _config()
     if not cfg:
@@ -48,8 +67,7 @@ async def _post(payload):
     if secret:
         headers["openpanel-client-secret"] = secret
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
-            await c.post(f"{api}/track", json=payload, headers=headers)
+        await _shared_client().post(f"{api}/track", json=payload, headers=headers)
     except Exception:
         pass  # analytics must never surface into a job
 

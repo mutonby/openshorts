@@ -142,3 +142,30 @@ def test_public_config_may_be_reused_by_the_browser():
     res = TestClient(app_module.app).get("/api/config")
     assert res.status_code == 200
     assert "max-age=" in res.headers.get("cache-control", "")
+
+
+def test_partial_result_is_parsed_again_only_when_something_changed(tmp_path, monkeypatch):
+    import json as _json
+    job_id = "j-partial"
+    (tmp_path / "x_metadata.json").write_text(_json.dumps({"shorts": [{"n": 0}, {"n": 1}]}))
+    (tmp_path / "clip0.mp4").write_bytes(b"x")
+    monkeypatch.setitem(app_module.jobs, job_id, {"ready_files": {0: "clip0.mp4"}})
+    app_module._partial_seen.pop(job_id, None)
+    loads = {"n": 0}
+    real_load = app_module.json.load
+
+    def _counting_load(f):
+        loads["n"] += 1
+        return real_load(f)
+    monkeypatch.setattr(app_module.json, "load", _counting_load)
+
+    for _ in range(3):
+        app_module._refresh_partial_result(job_id, str(tmp_path))
+    assert loads["n"] == 1
+    assert len(app_module.jobs[job_id]["result"]["clips"]) == 1
+
+    (tmp_path / "clip1.mp4").write_bytes(b"x")
+    app_module.jobs[job_id]["ready_files"][1] = "clip1.mp4"   # a new clip announced
+    app_module._refresh_partial_result(job_id, str(tmp_path))
+    assert loads["n"] == 2
+    assert len(app_module.jobs[job_id]["result"]["clips"]) == 2
