@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from . import captions, music, poster, procs, render, transcribe, viral
+from . import captions, music, poster, procs, publish, render, transcribe, viral
 from .chat import TwitchChatReader, YouTubeChatReader
 from .config import Channel, Settings, matches_game
 from .detector import Peak, PeakDetector
@@ -34,6 +34,19 @@ from .recorder import (BEHIND, Recorder, Segment, SegmentBuffer, quality_steps,
                        segment_loudness)
 
 MIN_FREE_GB = 2.0
+
+
+def keep_awake(on: bool) -> None:
+    """Windows: keep the PC from sleeping while this thread watches (sleep cuts
+    every recording). The screen may still turn off. No-op elsewhere."""
+    if procs.IS_WINDOWS:
+        try:
+            import ctypes
+            ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+            flags = ES_CONTINUOUS | (ES_SYSTEM_REQUIRED if on else 0)
+            ctypes.windll.kernel32.SetThreadExecutionState(flags)
+        except (AttributeError, OSError):
+            pass
 
 
 def _log_line(msg: str) -> str:
@@ -127,6 +140,7 @@ class ClipJob:
     duration: float = 0.0
     created: float = field(default_factory=time.time)
     desc_style: str = "normal"
+    moment: Optional[float] = None   # seconds into the clip where the peak is
 
 
 class ChannelWatch:
@@ -223,6 +237,9 @@ class Service:
         self.clip_counter = 0
         self.ledger = poster.PostLedger(settings.data_dir / "post_ledger.json")
         self.worker = threading.Thread(target=self._worker, daemon=True, name="clip-worker")
+        self._post_queue: List[tuple] = []
+        self._post_lock = threading.Lock()
+        self.poster = threading.Thread(target=self._poster, daemon=True, name="poster")
         self.index_path = settings.data_dir / "clips.csv"
         # for the web UI
         self.started_at: Optional[float] = None
@@ -278,7 +295,8 @@ class Service:
             "counts": dict(self.counts), "threshold": s.threshold,
             "encoder": render.pick_encoder(s.encoder),
             "ai": "gemini" if s.gemini_api_key else "offline",
-            "posting": bool(s.post_enabled and s.upload_post_api_key and s.upload_post_user),
+            "posting": bool(s.post_enabled),
+            "posts_queued": len(self._post_queue),
         }
 
     # ------------------------------------------------------------ lifecycle
@@ -292,20 +310,36 @@ class Service:
                  + ", ".join(c.key for c in s.channels))
         self.log(f"encoder={render.pick_encoder(s.encoder)} whisper={s.whisper_model} "
                  f"ai={'gemini' if s.gemini_api_key else 'offline templates'} "
-                 f"posting={'on' if s.post_enabled and s.upload_post_api_key else 'off'}")
+                 f"posting={'on' if s.post_enabled else 'off (review)'}")
+        if s.post_enabled:
+            routes = publish.route(s.post_platforms, s.youtube_via, s.instagram_via, s.others_via)
+            self.log("posting: " + ", ".join(f"{n} via {v}" for n, v in routes.items()))
+            for why in publish.missing(routes, publish.credentials(), s.upload_post_user):
+                self.log(f"posting not ready: {why}")
         self._cleanup_old_buffers()
         self.started_at = time.time()
         self.worker.start()
+        self._requeue_from_disk()
+        self.poster.start()
         t_end = time.time() + duration if duration else None
         try:
+            keep_awake(True)
+            last_error = 0.0
             while not self.stop_event.is_set():
                 if t_end and time.time() >= t_end:
                     break
-                self._tick()
+                try:
+                    self._tick()
+                except Exception as e:  # one bad tick must never end a day of watching
+                    if time.time() - last_error > 60:
+                        self.log(f"watcher error (it keeps running): {type(e).__name__}: {e}")
+                        self.log(traceback.format_exc(limit=4))
+                    last_error = time.time()
                 self.stop_event.wait(1.0)
         except KeyboardInterrupt:
             self.log("stopping (Ctrl+C)")
         finally:
+            keep_awake(False)
             self.shutdown()
             self.log("stopped")
             self.finished.set()
@@ -431,7 +465,7 @@ class Service:
         stamp = datetime.fromtimestamp(peak.ts).strftime("%Y%m%d-%H%M%S")
         job_dir = s.data_dir / "clips" / w.channel.key.replace(":", "_") / stamp
         job = ClipJob(w.channel, peak, start, end, w.info, style, job_dir,
-                      desc_style=s.description_for(self.clip_counter))
+                      desc_style=s.description_for(self.clip_counter), moment=peak.ts - start)
         w.pending.append(job)
         self.counts["peaks"] += 1
         self.log(f"{w.channel.key}: PEAK score {peak.score} ({peak.reason}) "
@@ -491,11 +525,16 @@ class Service:
                 wav.unlink(missing_ok=True)
             except Exception as e:
                 self.log(f"{job.channel.key}: transcription skipped: {e}")
+        frames = []
+        if s.gemini_api_key:  # the writer looks at the clip, so its hook matches it
+            moment = job.moment if job.moment is not None else s.pre_seconds
+            frames = render.extract_frames(
+                job.raw, render.frame_times(job.raw_offset, job.duration, moment))
         ctx = viral.ClipContext(
             streamer=job.channel.display, platform=job.channel.platform,
             category=job.info.category, stream_title=job.info.title,
             transcript=" ".join(w.text for w in words), chat=job.peak.messages,
-            language=lang, seed=f"{job.channel.key}{job.peak.ts}")
+            language=lang, seed=f"{job.channel.key}{job.peak.ts}", frames=frames)
         self.current_step = f"{who}: writing hook, title and hashtags"
         text = viral.write_text(ctx, job.style, s.gemini_api_key, s.ai_model,
                                 base_tags=s.base_hashtags, channel_tags=job.channel.tags,
@@ -533,22 +572,21 @@ class Service:
         if text.social_description:
             self.log(f"   [{text.description_style} description] {text.social_description[:100]}")
         self.counts["clips"] += 1
-        meta["posted"] = {"status": "posting"} if s.post_enabled else None
+        meta["posted"] = None
         write_meta(d, meta)  # visible in the UI before the upload finishes
         self.current_step = f"{who}: posting"
-        meta["posted"] = self.maybe_post(out, text, posts)
-        if (meta["posted"] or {}).get("status") in ("posted", "scheduled"):
+        meta["posted"] = self.maybe_post(d, text)
+        if (meta["posted"] or {}).get("status") in ("posted", "partial"):
             self.counts["posted"] += 1
         write_meta(d, meta)
         self._index(meta, out)
         return out
 
-    def maybe_post(self, video: Path, text: viral.ClipText, posts: dict) -> Optional[dict]:
+    def maybe_post(self, clip_dir: Path, text: viral.ClipText) -> Optional[dict]:
+        """Post now, queue for later (spacing), or say why the clip is held."""
         s = self.settings
         if not s.post_enabled:
-            return {"status": "held", "why": "posting is off (post.enabled = false)"}
-        if not (s.upload_post_api_key and s.upload_post_user):
-            return {"status": "held", "why": "UPLOADPOST_API_KEY or post.upload_post_user missing"}
+            return {"status": "held", "why": "automatic posting is off (Settings > Posting)"}
         if s.skip_spoilers and text.spoiler:
             self.log("   held: looks like a story spoiler (Rockstar removes those)")
             return {"status": "held", "why": "spoiler"}
@@ -560,7 +598,48 @@ class Service:
         if when is None:
             self.log("   held: daily_cap reached")
             return {"status": "held", "why": "daily cap"}
-        return post_now(video, posts, s, self.ledger, when, self.log)
+        if when > now + timedelta(minutes=1):
+            self.ledger.record(when)  # the slot is taken now, so the next clip queues after it
+            self._enqueue(clip_dir, when)
+            self.log(f"   queued: posts at {when.astimezone():%H:%M} (min_gap_minutes)")
+            return {"status": "queued", "at": when.isoformat()}
+        self.ledger.record(now)
+        return deliver(clip_dir, s, self.log)
+
+    # ----------------------------------------------------------- post queue
+    def _enqueue(self, clip_dir: Path, when: datetime):
+        with self._post_lock:
+            self._post_queue.append((when, Path(clip_dir)))
+            self._post_queue.sort(key=lambda x: x[0])
+
+    def _requeue_from_disk(self):
+        """Clips that were waiting for their slot when livewatch last stopped."""
+        root = self.settings.data_dir / "clips"
+        for m in root.glob("*/*/meta.json") if root.is_dir() else []:
+            try:
+                posted = json.loads(m.read_text(encoding="utf-8")).get("posted") or {}
+                if posted.get("status") == "queued":
+                    self._enqueue(m.parent, datetime.fromisoformat(posted["at"]))
+            except (OSError, ValueError, KeyError):
+                continue
+
+    def _poster(self):
+        while not self.stop_event.is_set():
+            due = None
+            with self._post_lock:
+                if self._post_queue and self._post_queue[0][0] <= datetime.now(timezone.utc):
+                    due = self._post_queue.pop(0)[1]
+            if due is not None:
+                try:
+                    meta = json.loads((due / "meta.json").read_text(encoding="utf-8"))
+                    meta["posted"] = deliver(due, self.settings, self.log)
+                    write_meta(due, meta)
+                    if meta["posted"].get("status") in ("posted", "partial"):
+                        self.counts["posted"] += 1
+                except Exception as e:  # noqa: BLE001 - logged, the queue goes on
+                    self.log(f"queued post failed: {e}")
+                continue
+            self.stop_event.wait(10)
 
     def _index(self, meta: dict, out: Path):
         new = not self.index_path.exists()
@@ -581,16 +660,36 @@ def write_meta(d: Path, meta: dict) -> None:
     tmp.replace(d / "meta.json")
 
 
-def post_now(video: Path, posts: dict, s: Settings, ledger: poster.PostLedger,
-             when: datetime, log) -> dict:
-    try:
-        res = poster.post_video(video, posts, api_key=s.upload_post_api_key,
-                                user=s.upload_post_user, when=when)
-    except Exception as e:
-        log(f"   post failed: {e}")
-        return {"status": "failed", "error": str(e)[:300]}
-    ledger.record(when)
-    sched = when > datetime.now(timezone.utc) + timedelta(minutes=1)
-    log(f"   posted to {', '.join(posts)}" + (f" (scheduled {when:%H:%M} UTC)" if sched else ""))
-    return {"status": "scheduled" if sched else "posted", "at": when.isoformat(),
-            "request_id": res.get("request_id"), "platforms": list(posts)}
+def deliver(clip_dir: Path, s: Settings, log, only: Optional[List[str]] = None) -> dict:
+    """Post a finished clip to its networks the free way (see ``publish``).
+
+    ``only``: post to these networks (the dashboard's ticks); default all of the
+    clip's networks. Networks whose account is not set up are reported as
+    skipped with the reason, never silently dropped.
+    """
+    meta = json.loads((Path(clip_dir) / "meta.json").read_text(encoding="utf-8"))
+    posts = meta.get("posts") or {}
+    nets = [p for p in posts if only is None or p in only]
+    routes = publish.route(nets, s.youtube_via, s.instagram_via, s.others_via)
+    creds = publish.credentials()
+    ready, skipped = {}, {}
+    for net, via in routes.items():
+        why = publish.missing({net: via}, creds, s.upload_post_user)
+        if why:
+            skipped[net] = {"status": "skipped", "why": why[0]}
+        else:
+            ready[net] = via
+    for net, r in skipped.items():
+        log(f"   {net}: skipped, {r['why']}")
+    if not ready:
+        return {"status": "held", "why": "; ".join(sorted({r["why"] for r in skipped.values()}))
+                or "no network selected", "networks": skipped,
+                "at": datetime.now(timezone.utc).isoformat()}
+    tags = (meta.get("text") or {}).get("hashtags") or []
+    res = publish.publish(Path(clip_dir) / "short.mp4", posts, ready, tags=tags,
+                          upload_post_user=s.upload_post_user, log=log)
+    res["networks"].update(skipped)
+    if skipped and res["status"] == "posted":
+        res["status"] = "partial"
+    res["at"] = datetime.now(timezone.utc).isoformat()
+    return res

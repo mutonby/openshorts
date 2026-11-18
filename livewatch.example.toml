@@ -1,7 +1,8 @@
 # livewatch: copy this file to livewatch.toml (git-ignored) and edit it.
 # Secrets go in a .env file next to it, never here:
 #   GEMINI_API_KEY=...        (optional: AI hooks/titles/hashtags; offline templates without it)
-#   UPLOADPOST_API_KEY=...    (needed to post: upload-post.com, connect your socials there)
+#   Posting accounts (YouTube, Instagram, Telegram) are set up in the dashboard:
+#   python -m livewatch ui > Settings > Posting accounts. All free.
 # Run:  python -m livewatch doctor   then   python -m livewatch run
 
 [general]
@@ -46,8 +47,11 @@ model = "gemini-3.1-flash-lite"
 
 [post]
 enabled = false               # true = post every good clip automatically
-platforms = ["youtube", "tiktok", "instagram", "facebook", "x"]
-upload_post_user = ""         # your Upload-Post profile name
+platforms = ["youtube", "instagram", "tiktok"]
+youtube_via = "api"           # api = free official YouTube API (set up in the dashboard)
+instagram_via = "api"         # api = free official Instagram API (set up in the dashboard)
+others_via = "phone"          # TikTok etc.: Short + caption sent to your phone by your Telegram bot
+upload_post_user = ""         # only if a network is set to "upload-post" (paid: free plan = 10/month)
 min_gap_minutes = 20          # spacing between posts (bursts get throttled)
 daily_cap = 12
 skip_spoilers = true          # hold clips the AI flags as story cutscenes/endings

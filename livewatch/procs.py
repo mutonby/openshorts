@@ -82,6 +82,17 @@ def ytdlp() -> str:
     return shutil.which("yt-dlp") or "yt-dlp"
 
 
+def cloudflared() -> Optional[str]:
+    found = shutil.which("cloudflared")
+    if found:
+        return found
+    for p in (r"C:\Program Files (x86)\cloudflared\cloudflared.exe",
+              r"C:\Program Files\cloudflared\cloudflared.exe"):
+        if os.path.isfile(p):
+            return p
+    return None
+
+
 def streamlink_cmd() -> List[str]:
     exe = shutil.which("streamlink")
     return [exe] if exe else [sys.executable, "-m", "streamlink"]

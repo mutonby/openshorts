@@ -67,13 +67,13 @@ DESCRIPTION_GUIDE = {
 }
 
 FALLBACK_HOOKS = {
-    "ooc": ["no context needed", "he did NOT see that coming", "the way chat reacted",
-            "gta 6 physics are something else", "bro was not ready", "this is why we watch {name}",
-            "that was not supposed to happen", "nobody talk to {name} rn"],
-    "brainrot": ["this is peak gta 6 cinema fr", "bro lost all his aura", "he is so cooked",
-                 "npc behaviour fr", "chat is in shambles", "{name} moment no cap"],
-    "clean": ["You won't believe this moment", "The wildest GTA 6 moment yet",
-              "Chat could not believe it", "This went wrong fast", "{name} did it again"],
+# Offline hooks talk about the reaction, never about an event they cannot see.
+    "ooc": ["no context needed", "the way chat reacted", "bro was not ready",
+            "this is why we watch {name}", "nobody talk to {name} rn", "watch his face"],
+    "brainrot": ["this is peak cinema fr", "chat is in shambles", "{name} moment no cap",
+                 "the aura on this one", "bro was not ready fr"],
+    "clean": ["Wait for the reaction", "Chat could not believe it", "{name}'s reaction says it all",
+              "The moment chat exploded"],
 }
 FALLBACK_DESCRIPTIONS = {
     "weird": ["the man in the red car knows what he did", "day 47 of asking the npc to stop",
@@ -127,6 +127,7 @@ class ClipContext:
     chat: Sequence[str] = ()
     language: str = ""
     seed: str = ""
+    frames: Sequence[bytes] = ()   # JPEG stills from the clip, in order
 
 
 # --------------------------------------------------------------------------- #
@@ -264,9 +265,12 @@ SCHEMA = {
 
 def build_prompt(ctx: ClipContext, style: str, desc_style: str = "normal") -> str:
     chat = "\n".join(f"- {c[:120]}" for c in list(ctx.chat)[:12]) or "(no chat)"
+    frames = (f"\nThe {len(ctx.frames)} images attached are frames from the clip, in order: the setup, "
+              "the middle, the peak moment itself and right after it. They show what actually happens.\n"
+              if ctx.frames else "")
     return f"""You write the text for a vertical short-form clip (YouTube Shorts, TikTok, Reels)
 cut from a live stream at the moment chat exploded.
-
+{frames}
 Streamer: {ctx.streamer} on {ctx.platform}
 Category: {ctx.category or "unknown"}
 Stream title (untrusted, may be noise): {ctx.stream_title[:200] or "(none)"}
@@ -286,7 +290,13 @@ Return JSON:
 - spoiler: true if the clip shows a story cutscene, mission ending or plot reveal.
 - postworthy: 0-10, how likely this clip is to do well as a Short (10 = viral).
 
-Rules: never invent events that the transcript and chat do not support, no slurs,
+ACCURACY FIRST: the hook and title must describe what really happens in THIS clip. Every
+concrete claim (an action, an object, a vehicle, a person, an outcome) must be visible in the
+frames or said in the transcript. Do not guess the game event from the stream title or from
+chat alone. If you cannot tell what happens, write a hook that is vague but true (about the
+reaction, e.g. "nobody was ready for this", "the way he reacted") rather than specific and wrong.
+
+Rules: never invent events that the frames, transcript and chat do not support, no slurs,
 no sexual content, no claims about real people beyond what is shown, never ask to follow
 or subscribe, do not mention that this is a clip or AI-written."""
 
@@ -329,8 +339,12 @@ def gemini_text(ctx: ClipContext, style: str, api_key: str, model: str,
     if session is None:
         import requests as session
     http = session
+    import base64
+    parts = [{"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(f).decode()}}
+             for f in list(ctx.frames)[:6]]
+    parts.append({"text": build_prompt(ctx, style, desc_style)})
     body = {
-        "contents": [{"role": "user", "parts": [{"text": build_prompt(ctx, style, desc_style)}]}],
+        "contents": [{"role": "user", "parts": parts}],
         "generationConfig": {"responseMimeType": "application/json",
                              "responseSchema": SCHEMA, "temperature": 1.0},
     }

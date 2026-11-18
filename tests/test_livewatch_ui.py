@@ -184,6 +184,72 @@ def test_video_id():
         assert video_id(bad) is None
 
 
+def test_parse_source_youtube_and_twitch():
+    from livewatch.replay import ReplayError, parse_source, twitch_vod_id
+    assert parse_source("https://youtu.be/02veXbcADjw") == \
+        ("youtube", "02veXbcADjw", "https://www.youtube.com/watch?v=02veXbcADjw")
+    assert parse_source("https://www.twitch.tv/videos/2931785916?t=1h2m") == \
+        ("twitch", "2931785916", "https://www.twitch.tv/videos/2931785916")
+    assert twitch_vod_id("https://www.twitch.tv/summit1g/v/2931785916") == "2931785916"
+    assert twitch_vod_id("https://evil.example/videos/2931785916") is None
+    with pytest.raises(ReplayError, match="VOD link"):
+        parse_source("https://www.twitch.tv/summit1g")
+    with pytest.raises(ReplayError):
+        parse_source("https://vimeo.com/123")
+
+
+def test_loudness_only_peaks_and_viewer_clips():
+    from livewatch.replay import clips_to_peaks
+    import random
+    rng = random.Random(2)
+    loud = [(float(s), -28 + rng.uniform(-2, 2)) for s in range(0, 1800)]
+    loud[900:905] = [(float(s), -6.0) for s in range(900, 905)]
+    peaks = find_peaks([], config.from_dict({}), 0, 1800, max_clips=3, loudness=loud)
+    assert 896 <= peaks[0].ts <= 906 and peaks[0].audio_z > 5   # the spike ranks first
+    assert all(p.score < peaks[0].score / 3 for p in peaks[1:])  # the rest is noise level
+    # a window of steady, loud gameplay with no spike gives nothing to clip
+    flat = [(float(s), -12 + rng.uniform(-1, 1)) for s in range(0, 1800)]
+    assert find_peaks([], config.from_dict({}), 300, 1800, max_clips=3, loudness=flat) == []
+    clips = [{"start": 600, "duration": 30, "views": 5000}, {"start": 610, "duration": 20, "views": 10},
+             {"start": 5000, "duration": 30, "views": 99}]
+    cp = clips_to_peaks(clips, 0, 1800)
+    assert [round(p.ts) for p in cp] == [620, 623] and cp[0].score > cp[1].score
+    merged = find_peaks([], config.from_dict({}), 0, 1800, max_clips=5, loudness=loud, extra=cp)
+    assert [round(p.ts) for p in merged][0] == 620           # 5000 views beats a loud spike
+    assert len([p for p in merged if 590 <= p.ts <= 640]) == 1  # one moment, not two
+
+
+def test_frames_reach_gemini_and_frame_times():
+    from livewatch import render, viral
+    times = render.frame_times(5.0, 42.0, 30.0)
+    assert times == [11.3, 23.9, 35.0, 38.0]
+    assert render.frame_times(0, 10, 30)[-1] <= 9.5
+
+    class S:
+        def __init__(self):
+            self.body = None
+
+        def post(self, url, **kw):
+            self.body = kw["json"]
+
+            class R:
+                status_code = 200
+
+                def json(self_inner):
+                    return {"candidates": [{"content": {"parts": [{"text": json.dumps(
+                        {"hook": "he crashed the car", "title": "t", "description": "d",
+                         "social_description": "", "hashtags": [], "spoiler": False,
+                         "postworthy": 7})}]}}]}
+            return R()
+
+    s = S()
+    ctx = viral.ClipContext(streamer="a", platform="twitch", frames=[b"\xff\xd8jpg1", b"\xff\xd8jpg2"])
+    viral.gemini_text(ctx, "ooc", "k", "m", session=s)
+    parts = s.body["contents"][0]["parts"]
+    assert [p["inline_data"]["mime_type"] for p in parts[:2]] == ["image/jpeg"] * 2
+    assert "ACCURACY FIRST" in parts[-1]["text"] and "frames from the clip" in parts[-1]["text"]
+
+
 def _replay_line(offset_ms, text, user="u1", ts_usec=1794954481602076):
     item = {"liveChatTextMessageRenderer": {"message": {"runs": [{"text": text}]},
                                             "timestampUsec": str(ts_usec),
@@ -342,6 +408,12 @@ def _req(port, path, method="GET", body=None, headers=None, host=None):
             return r.status, r.read(), dict(r.headers)
     except urllib.error.HTTPError as e:
         return e.code, e.read(), dict(e.headers)
+
+
+def test_a_second_copy_cannot_take_the_same_port(server):
+    ctl, port = server
+    with pytest.raises(OSError):
+        make_server(ctl, port)
 
 
 def test_http_pages_and_guards(server):

@@ -178,6 +178,32 @@ def render_short(raw: Path, out_path: Path, start: float, duration: float, *,
     return out_path
 
 
+def extract_frames(raw: Path, times: Sequence[float], width: int = 512) -> List[bytes]:
+    """JPEG stills of ``raw`` at ``times`` (seconds), for the text writer to look at."""
+    out = []
+    for t in times:
+        cmd = [procs.ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin",
+               "-ss", f"{max(0.0, t):.2f}", "-i", str(raw), "-frames:v", "1",
+               "-vf", f"scale={width}:-2", "-q:v", "5", "-f", "image2pipe", "-c:v", "mjpeg", "-"]
+        try:
+            r = procs.run(cmd, low_priority=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if r.returncode == 0 and r.stdout and r.stdout[:2] == b"\xff\xd8":
+            out.append(r.stdout)
+    return out
+
+
+def frame_times(offset: float, duration: float, moment: float) -> List[float]:
+    """Where to look in a clip: early setup, middle, the moment itself, its aftermath.
+
+    ``moment`` is seconds into the clip where the peak is (``pre_seconds``).
+    """
+    moment = min(max(0.0, moment), duration)
+    picks = [duration * 0.15, duration * 0.45, moment, min(duration - 0.5, moment + 3.0)]
+    return [round(offset + max(0.0, p), 2) for p in picks]
+
+
 def extract_audio(raw: Path, out_wav: Path, start: float, duration: float) -> Path:
     """16 kHz mono WAV of the clip, for the transcriber."""
     cmd = [procs.ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y",

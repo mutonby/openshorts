@@ -22,6 +22,8 @@ PLATFORMS = ("twitch", "kick", "youtube")
 CAPTION_STYLES = ("ooc", "brainrot", "clean")          # on-video hook, always English
 DESCRIPTION_STYLES = ("normal", "weird")              # caption under Reels/TikToks
 POST_PLATFORMS = ("youtube", "tiktok", "instagram", "facebook", "x", "threads", "bluesky")
+VIA_API = ("api", "phone", "upload-post", "off")      # youtube_via, instagram_via
+VIA_OTHER = ("phone", "upload-post", "off")           # every other network
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,100}$")
 
@@ -115,7 +117,12 @@ class Settings:
     ai_model: str = "gemini-3.1-flash-lite"
     # post
     post_enabled: bool = False
-    post_platforms: List[str] = field(default_factory=lambda: ["youtube", "tiktok", "instagram"])
+    post_platforms: List[str] = field(default_factory=lambda: ["youtube", "instagram", "tiktok"])
+    # how each network is posted: api (free, official) | phone (Telegram handoff) |
+    # upload-post (paid service) | off
+    youtube_via: str = "api"
+    instagram_via: str = "api"
+    others_via: str = "phone"
     upload_post_user: str = ""
     min_gap_minutes: int = 20
     daily_cap: int = 12
@@ -303,6 +310,11 @@ def from_dict(data: dict, base_dir: Path = Path(".")) -> Settings:
             raise ConfigError(f"unknown post platforms: {', '.join(bad)}")
         s.post_platforms = plats
     s.upload_post_user = str(p.get("upload_post_user", s.upload_post_user)).strip()
+    for key, allowed in (("youtube_via", VIA_API), ("instagram_via", VIA_API), ("others_via", VIA_OTHER)):
+        v = str(p.get(key, getattr(s, key))).strip().lower()
+        if v not in allowed:
+            raise ConfigError(f"post.{key} must be one of {', '.join(allowed)}")
+        setattr(s, key, v)
     s.min_gap_minutes = _num(p, "min_gap_minutes", s.min_gap_minutes, 0, 1440, int)
     s.daily_cap = _num(p, "daily_cap", s.daily_cap, 1, 200, int)
     s.skip_spoilers = bool(p.get("skip_spoilers", s.skip_spoilers))

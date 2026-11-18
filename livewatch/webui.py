@@ -17,13 +17,14 @@ from __future__ import annotations
 
 import json
 import mimetypes
+from html import escape as html_escape
 import os
 import re
 import shutil
 import threading
 import time
 import webbrowser
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, Optional
@@ -34,9 +35,9 @@ try:
 except ModuleNotFoundError:  # pragma: no cover
     import tomli as tomllib  # type: ignore
 
-from . import __version__, config, music, poster, render, tomlwrite, transcribe
+from . import __version__, config, music, poster, procs, publish, render, tomlwrite, transcribe
 from .settings_schema import SECRET_KEYS, schema
-from .service import Logger, Service, post_now, write_meta
+from .service import Logger, Service, deliver, write_meta
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 CLIP_ID = re.compile(r"^[A-Za-z0-9_.@-]{1,120}/[A-Za-z0-9_-]{1,40}$")
@@ -69,6 +70,7 @@ class Controller:
         self.replay_error = ""
         self._loggers: Dict[str, Logger] = {}
         self._posting: Dict[str, threading.Thread] = {}
+        self._oauth: Dict[str, tuple] = {}
         config.load_dotenv(self.env_path)
 
     # ------------------------------------------------------------- config
@@ -232,8 +234,8 @@ class Controller:
             "version": __version__, "config_error": cfg_error,
             "config_exists": self.config_path.is_file(), "config_path": str(self.config_path),
             "ai": "gemini" if os.environ.get("GEMINI_API_KEY") else "offline templates",
-            "posting": bool(s.post_enabled and os.environ.get("UPLOADPOST_API_KEY")
-                            and s.upload_post_user),
+            "posting": bool(s.post_enabled and not self.posting_issues(s)),
+            "posting_issues": self.posting_issues(s) if s.post_enabled else [],
             "post_enabled": s.post_enabled, "whisper": transcribe.available() or "missing",
             "music_mode": s.music_mode, "music_tracks": len(music.Library(s.music_dir).tracks())
             if s.music_dir else 0,
@@ -255,6 +257,7 @@ class Controller:
             return None
         running = bool(self.replay_thread and self.replay_thread.is_alive())
         return {"running": running, "url": r.url, "step": r.step, "progress": round(r.progress, 3),
+                "platform": r.platform, "signal": r.signal,
                 "title": r.meta.get("title", ""), "channel": r.meta.get("channel", ""),
                 "results": r.results, "error": self.replay_error}
 
@@ -355,37 +358,109 @@ class Controller:
         return {"ok": True}
 
     def post_clip(self, clip_id: str, platforms: Optional[list] = None) -> dict:
+        """Post a clip now (the dashboard's Post button), the free way."""
         d = self.clip_dir(clip_id)
         s = self.settings()
-        if not (os.environ.get("UPLOADPOST_API_KEY") and s.upload_post_user):
-            raise ApiError(400, "add your Upload-Post API key (Settings > Keys) and profile name "
-                                "(Settings > Posting) first")
         if clip_id in self._posting and self._posting[clip_id].is_alive():
             raise ApiError(409, "this clip is already being posted")
         meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
-        posts = meta.get("posts") or {}
-        if platforms:
-            posts = {p: v for p, v in posts.items() if p in platforms}
-        if not posts:
+        nets = [p for p in (meta.get("posts") or {}) if not platforms or p in platforms]
+        if not nets:
             raise ApiError(400, "no networks selected")
-        s.upload_post_api_key = os.environ.get("UPLOADPOST_API_KEY", "")
+        routes = publish.route(nets, s.youtube_via, s.instagram_via, s.others_via)
+        problems = publish.missing(routes, publish.credentials(), s.upload_post_user)
+        if problems and len(problems) >= len(routes):
+            raise ApiError(400, "set up first: " + "; ".join(problems))
         ledger = poster.PostLedger(s.data_dir / "post_ledger.json")
-        when = ledger.slot(datetime.now(timezone.utc), timedelta(minutes=s.min_gap_minutes),
-                           s.daily_cap)
-        if when is None:
-            raise ApiError(429, "daily post cap reached (Settings > Posting)")
         log = self.logger(s)
 
         def run():
             meta["posted"] = {"status": "posting"}
             write_meta(d, meta)
-            meta["posted"] = post_now(d / "short.mp4", posts, s, ledger, when, log)
-            write_meta(d, meta)
+            fresh = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+            fresh["posted"] = deliver(d, s, log, only=nets)
+            ledger.record(datetime.now(timezone.utc))
+            write_meta(d, fresh)
 
         th = threading.Thread(target=run, daemon=True, name=f"post-{clip_id}")
         self._posting[clip_id] = th
         th.start()
-        return {"ok": True, "scheduled_for": when.isoformat()}
+        return {"ok": True, "routes": routes, "warnings": problems}
+
+    # ------------------------------------------------------- posting accounts
+    def posting_issues(self, s: config.Settings) -> list:
+        routes = publish.route(s.post_platforms, s.youtube_via, s.instagram_via, s.others_via)
+        return publish.missing(routes, publish.credentials(), s.upload_post_user)
+
+    def accounts(self) -> dict:
+        c = publish.credentials()
+        s = self._safe_settings()
+        return {"routes": publish.route(s.post_platforms, s.youtube_via, s.instagram_via, s.others_via),
+                "youtube": {"client": bool(c["yt_id"] and c["yt_secret"]), "connected": bool(c["yt_refresh"])},
+                "instagram": {"token": bool(c["ig_token"])},
+                "telegram": {"token": bool(c["tg_token"]), "chat": bool(c["tg_chat"])},
+                "cloudflared": bool(procs.cloudflared())}
+
+    def youtube_connect(self, redirect_uri: str) -> dict:
+        c = publish.credentials()
+        if not (c["yt_id"] and c["yt_secret"]):
+            raise ApiError(400, "save your YouTube Client ID and Client Secret first")
+        url, state, verifier = publish.youtube_auth_url(c["yt_id"], redirect_uri)
+        self._oauth[state] = (verifier, redirect_uri, time.time())
+        return {"url": url}
+
+    def youtube_callback(self, state: str, code: str, error: str = "") -> str:
+        pending = self._oauth.pop(state or "", None)
+        if error:
+            raise ApiError(400, f"Google said: {error}")
+        if not pending or time.time() - pending[2] > 900 or not code:
+            raise ApiError(400, "this sign-in link expired: press Connect YouTube again")
+        c = publish.credentials()
+        try:
+            refresh = publish.youtube_exchange_code(c["yt_id"], c["yt_secret"], code, pending[1], pending[0])
+        except publish.PublishError as e:
+            raise ApiError(400, str(e))
+        self.save_secrets({"YOUTUBE_REFRESH_TOKEN": refresh})
+        return "YouTube is connected. You can close this tab and go back to livewatch."
+
+    def check_account(self, net: str) -> dict:
+        c = publish.credentials()
+        need = {"youtube": ("yt_refresh", "press Connect YouTube first"),
+                "instagram": ("ig_token", "paste and save your Instagram access token first"),
+                "telegram": ("tg_token", "paste and save your Telegram bot token first")}.get(net)
+        if need and not c[need[0]]:
+            raise ApiError(400, need[1])
+        try:
+            if net == "youtube":
+                publish.youtube_access_token(c["yt_id"], c["yt_secret"], c["yt_refresh"])
+                return {"ok": True, "message": "YouTube sign-in works"}
+            if net == "instagram":
+                me = publish.instagram_me(c["ig_token"])
+                return {"ok": True, "message": f"Instagram: @{me['username']} (id {me['id']})"}
+            if net == "telegram":
+                if not c["tg_chat"]:
+                    found = publish.telegram_find_chat(c["tg_token"])
+                    self.save_secrets({"TELEGRAM_CHAT_ID": found["chat_id"]})
+                    c["tg_chat"] = found["chat_id"]
+                publish.telegram_send_text(c["tg_token"], c["tg_chat"],
+                                           "livewatch is connected: new Shorts for TikTok will arrive here.")
+                return {"ok": True, "message": "Test message sent to your Telegram"}
+        except publish.PublishError as e:
+            raise ApiError(400, str(e))
+        except OSError as e:
+            raise ApiError(502, f"network error: {e}")
+        raise ApiError(404, "unknown account")
+
+    def refresh_instagram_token(self) -> None:
+        """Instagram tokens last 60 days; renew it daily so it never runs out."""
+        tok = os.environ.get("INSTAGRAM_ACCESS_TOKEN", "")
+        if tok:
+            try:
+                new = publish.instagram_refresh(tok)
+            except OSError:
+                return
+            if new and new != tok:
+                self.save_secrets({"INSTAGRAM_ACCESS_TOKEN": new})
 
     def delete_clip(self, clip_id: str) -> dict:
         d = self.clip_dir(clip_id)
@@ -604,6 +679,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(ctl.upload_profiles())
             if path == "/api/config/backups":
                 return self._json({"backups": ctl.backups()})
+            if path == "/api/accounts":
+                return self._json(ctl.accounts())
+            if path == "/oauth/youtube":
+                one = lambda k: (q.get(k) or [""])[0]  # noqa: E731
+                try:
+                    text = ctl.youtube_callback(one("state"), one("code"), one("error"))
+                    ok = True
+                except ApiError as e:
+                    text, ok = e.message, False
+                body = (f"<!doctype html><meta charset=utf-8><title>livewatch</title>"
+                        f"<body style='font:16px system-ui;background:#0e1013;color:#e6e9ee;padding:40px'>"
+                        f"<h2>{'✅' if ok else '❌'} {html_escape(text)}</h2>"
+                        f"<a style='color:#a48bff' href='/'>Back to livewatch</a></body>").encode()
+                self.send_response(200 if ok else 400)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             m = re.match(r"^/media/(.+)/short\.mp4$", path)
             if m:
                 d = ctl.clip_dir(unquote(m.group(1)))
@@ -632,6 +726,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(ctl.open_folder())
             if path == "/api/uploadpost/profiles":
                 return self._json(ctl.create_upload_profile(self._json_body()))
+            if path == "/api/accounts/youtube/connect":
+                return self._json(ctl.youtube_connect(f"http://127.0.0.1:{self.port}/oauth/youtube"))
+            m = re.match(r"^/api/accounts/(youtube|instagram|telegram)/check$", path)
+            if m:
+                return self._json(ctl.check_account(m.group(1)))
             if path == "/api/config/restore":
                 body = self._json_body()
                 return self._json(ctl.restore_backup(body.get("name") if isinstance(body, dict) else ""))
@@ -687,22 +786,56 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(404, "not found")
 
 
+class _ExclusiveServer(ThreadingHTTPServer):
+    """One livewatch per port. The stock server sets SO_REUSEADDR, which on
+    Windows lets a second copy bind the same port and silently share it: two
+    watchers would then record and clip the same streams."""
+    allow_reuse_address = False
+
+    def server_bind(self):
+        import socket
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def make_server(ctl: Controller, port: int = 8765) -> ThreadingHTTPServer:
     handler = type("BoundHandler", (Handler,), {"ctl": ctl, "port": port})
-    srv = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    srv = _ExclusiveServer(("127.0.0.1", port), handler)
     srv.daemon_threads = True
     # an ephemeral port (0) is known only after binding
     handler.port = srv.server_address[1]
     return srv
 
 
-def serve(config_path: Path, port: int = 8765, open_browser: bool = True) -> None:
+def serve(config_path: Path, port: int = 8765, open_browser: bool = True,
+          autostart: bool = False) -> None:
     ctl = Controller(config_path)
-    srv = make_server(ctl, port)
+    try:
+        srv = make_server(ctl, port)
+    except OSError:
+        print(f"Port {port} is busy: livewatch is probably already running. "
+              f"Open http://127.0.0.1:{port}/ instead.", flush=True)
+        raise SystemExit(3)
     url = f"http://127.0.0.1:{srv.server_address[1]}/"
     print(f"livewatch UI on {url}  (Ctrl+C to quit)", flush=True)
+    if autostart:
+        try:
+            ctl.start()
+            print("watcher started", flush=True)
+        except ApiError as e:
+            print(f"watcher not started: {e.message}", flush=True)
     if open_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+
+    def renew_tokens():
+        while True:
+            try:
+                ctl.refresh_instagram_token()
+            except Exception:  # noqa: BLE001 - best effort, retried tomorrow
+                pass
+            time.sleep(24 * 3600)
+    threading.Thread(target=renew_tokens, daemon=True, name="token-renew").start()
     try:
         srv.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:

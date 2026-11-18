@@ -58,3 +58,4 @@ livewatch.toml
 livewatch_data/
 .livewatch_chat_tmp/
 livewatch_backups/
+livewatch_restarts.log

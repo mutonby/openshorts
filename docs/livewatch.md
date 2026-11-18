@@ -71,7 +71,7 @@ python -m livewatch run
 |---|---|
 | `ui [--port N]` | the dashboard |
 | `run [--minutes N]` | watch, clip, post (Ctrl+C stops after finishing the queue) |
-| `replay <youtube link> [--minutes 30] [--start 0] [--max-clips 5] [--post / --no-post]` | test the pipeline on an ended stream |
+| `replay <youtube or twitch VOD link> [--minutes 30] [--start 0] [--max-clips 5] [--post / --no-post]` | test the pipeline on an ended stream |
 | `doctor` | check tools, encoder, keys, config, disk |
 | `chat twitch <name>` | show a live chat's peak score, to tune `threshold` |
 | `snapshot twitch <name>` | save a frame with a 10% grid, to read the `facecam` box |
@@ -135,24 +135,39 @@ title. It also flags story spoilers: Rockstar takes down standalone cutscene
 and ending videos, so `skip_spoilers` holds those back. It rates each clip
 0-10, and clips under 4 are held.
 
-## Replay test (ended YouTube streams)
+## Replay test (ended YouTube streams and Twitch VODs)
 
 Replay checks your outputs and publishing without waiting for anyone to go
-live. Give it a link to a YouTube video that was a live stream with chat. It
-then:
+live. Give it a YouTube video link or a Twitch VOD link
+(`twitch.tv/videos/<number>`). It finds the moments in the window you chose
+from whatever the video offers:
 
-1. Downloads the chat replay up to the end of the window you chose. YouTube
-   serves it at roughly 10-15x real time, so 30 minutes of stream take about
-   2-3 minutes.
-2. Runs the same peak detector over the chat.
-3. Downloads only the seconds around the best peaks, never the whole
-   multi-hour video.
-4. Makes each one into a Short with your current settings, and posts it if
-   you ticked "Publish".
+- **YouTube chat replay**, when the stream kept one. It downloads at roughly
+  10-15x real time, so 30 minutes of stream take about 2-3 minutes.
+- **Loudness**, when there is no chat. Many channels, IShowSpeed's for
+  example, turn chat replay off, and Twitch VODs never have one. Only the
+  audio of the window is downloaded (about 20 MB per 30 minutes).
+- **Twitch viewer clips**, when `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET`
+  are set: the moments viewers clipped from that VOD, through Twitch's
+  official API. Create a free app at dev.twitch.tv/console and paste its ID
+  and secret in Settings > API keys.
 
-On the reference laptop, 20 minutes of a GTA RP stream gave 3 Shorts in under
-7 minutes. Replays find peaks from chat only: the full audio is never
-downloaded, so there is no loudness signal.
+It then downloads only the seconds around the best moments, never the whole
+multi-hour video. Each one becomes a Short with your current settings, and
+is posted if you ticked "Publish".
+
+On the reference laptop, 20 minutes of a GTA RP stream with chat gave 3
+Shorts in under 7 minutes.
+
+## Hooks that match the clip
+
+With a Gemini key, the writer is sent 4 frames from the clip: the setup, the
+middle, the peak and right after it. It also gets the transcript and the
+chat. Every concrete claim in the hook and title must be visible in the
+frames or said in the transcript. When it cannot tell what happened, it
+writes about the reaction instead ("nobody was ready for this"). Offline
+hooks, without a key, never describe an event; they are always about the
+reaction.
 
 ## Background music
 
@@ -171,18 +186,41 @@ your own.
 
 ## Posting
 
-Posting goes through Upload-Post, one request per clip carrying every
-network: YouTube Shorts, TikTok, Instagram Reels, Facebook Reels, X, Threads
-and Bluesky. Each network gets its own text:
+Posting is free. Each network is posted with your own free developer access,
+set up once in **Settings > Posting accounts**, where each step is explained:
+
+| Network | `post.*_via` | How |
+|---|---|---|
+| YouTube Shorts | `youtube_via = "api"` | Official YouTube Data API (`videos.insert`) with your own Google Cloud project and a "Desktop app" OAuth client. **Connect YouTube** opens Google's sign-in and keeps a refresh token. |
+| Instagram Reels | `instagram_via = "api"` | Official Instagram API with Instagram Login, using a token you generate for your own Creator/Business account in a Meta developer app. The token renews itself daily. |
+| TikTok and the rest | `others_via = "phone"` | Your Telegram bot sends the Short and each network's caption to your phone, ready to paste. |
+
+Things to know:
+
+- **YouTube:** publish the Google OAuth app ("In production"), or Google signs
+  you out every 7 days. Some reports say Google keeps API uploads from
+  unaudited projects **private**. If that happens, the clip shows "youtube:
+  private" with a link, so you can make it public in YouTube Studio or apply
+  for Google's free audit.
+- **Instagram:** Instagram downloads the Reel from a public link. For each
+  post, livewatch serves only that one file, at a random address, through a
+  temporary Cloudflare quick tunnel (`cloudflared`), then closes it. The
+  dashboard is never exposed.
+- **TikTok:** its API keeps posts from apps it hasn't audited private, so the
+  phone handoff is the free way to post publicly.
+- **Upload-Post:** any network can still go through it
+  (`*_via = "upload-post"`) if you pay for it. Its free plan allows 10
+  uploads a month.
+
+Each network gets its own text:
 
 - YouTube: a title of 100 characters or less with `#shorts`.
 - Instagram: 5 hashtags.
-- Threads: 1 topic tag.
-- X and Bluesky: kept short.
+- TikTok: the description plus hashtags.
 
-Posts are spaced by `min_gap_minutes` (later ones are scheduled, not dropped)
-and capped by `daily_cap`. Bursts of near-identical uploads get an account's
-reach throttled.
+Posts are spaced by `min_gap_minutes`, and capped by `daily_cap`. Later clips
+wait in a queue, which survives a restart, instead of being dropped. Bursts
+of near-identical uploads get an account's reach throttled.
 
 ## Rules that matter for getting paid
 

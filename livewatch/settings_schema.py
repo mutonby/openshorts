@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from .config import CAPTION_STYLES, DESCRIPTION_STYLES, PLATFORMS, POST_PLATFORMS, Settings
+from .config import (CAPTION_STYLES, DESCRIPTION_STYLES, PLATFORMS, POST_PLATFORMS, VIA_API,
+                     VIA_OTHER, Settings)
 
 QUALITIES = ["720p60,720p,best", "1080p60,1080p,best", "720p,480p,best", "480p,360p,best"]
 WHISPER = ["off", "tiny", "base", "small", "medium"]
@@ -96,8 +97,19 @@ def schema() -> Dict[str, Any]:
             _f("enabled", "bool", "Post automatically", "Off: every clip is saved for review and you post "
                "it from the Clips tab.", default=d.post_enabled),
             _f("platforms", "multi", "Networks", choices=list(POST_PLATFORMS), default=d.post_platforms),
-            _f("upload_post_user", "text", "Upload-Post profile name", "Not your email: the name of "
-               "the profile your socials are connected to. Use Find my profiles below.", default=""),
+            _f("youtube_via", "choice", "YouTube Shorts are posted by", "api = free, official YouTube "
+               "API with your own Google project (set it up in Posting accounts below).",
+               choices=list(VIA_API), default=d.youtube_via),
+            _f("instagram_via", "choice", "Instagram Reels are posted by", "api = free, official "
+               "Instagram API with your own Meta app (Posting accounts below).",
+               choices=list(VIA_API), default=d.instagram_via),
+            _f("others_via", "choice", "TikTok and the other networks are posted by", "phone = the "
+               "Short and its caption arrive on your phone through your Telegram bot; you post in a "
+               "few taps. TikTok's API keeps automated posts private, so this is the free way.",
+               choices=list(VIA_OTHER), default=d.others_via),
+            _f("upload_post_user", "text", "Upload-Post profile name (only if you pay for it)",
+               "Only used by networks set to upload-post. The free plan allows 10 uploads a month.",
+               default=""),
             _f("min_gap_minutes", "int", "Minutes between posts", "Later clips are scheduled, not "
                "dropped. Bursts get reach throttled.", min=0, max=1440, default=d.min_gap_minutes),
             _f("daily_cap", "int", "Posts per day (max)", min=1, max=200, default=d.daily_cap),
@@ -123,10 +135,21 @@ def schema() -> Dict[str, Any]:
     secrets = [
         _f("GEMINI_API_KEY", "secret", "Gemini API key", "Free at Google AI Studio. Better hooks and "
            "titles, spoiler and quality checks."),
-        _f("UPLOADPOST_API_KEY", "secret", "Upload-Post API key", "Needed to post. Connect your "
-           "socials at upload-post.com."),
+        _f("UPLOADPOST_API_KEY", "secret", "Upload-Post API key (optional, paid)", "Only for "
+           "networks set to upload-post. Not needed for the free setup."),
+        _f("TWITCH_CLIENT_ID", "secret", "Twitch Client ID (optional)", "From a free app at "
+           "dev.twitch.tv/console (any name, redirect http://localhost). Lets Twitch replays use "
+           "the moments viewers clipped, the best signal for VODs."),
+        _f("TWITCH_CLIENT_SECRET", "secret", "Twitch Client Secret (optional)", "From the same "
+           "Twitch app (New Secret)."),
     ]
     return {"sections": sections, "channel": channel, "secrets": secrets}
 
 
-SECRET_KEYS: List[str] = ["GEMINI_API_KEY", "UPLOADPOST_API_KEY"]
+SECRET_KEYS: List[str] = ["GEMINI_API_KEY", "UPLOADPOST_API_KEY", "TWITCH_CLIENT_ID",
+                          "TWITCH_CLIENT_SECRET", "YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET",
+                          "YOUTUBE_REFRESH_TOKEN", "INSTAGRAM_ACCESS_TOKEN", "TELEGRAM_BOT_TOKEN",
+                          "TELEGRAM_CHAT_ID"]
+# set up from the Posting accounts panel, not typed in the API keys list
+ACCOUNT_KEYS = ["YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "INSTAGRAM_ACCESS_TOKEN",
+                "TELEGRAM_BOT_TOKEN"]

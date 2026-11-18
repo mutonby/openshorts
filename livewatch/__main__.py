@@ -5,7 +5,7 @@
   doctor     check tools, encoder, keys and the config
   chat       print a channel's live chat score for a while (tune threshold)
   clip       turn part of a local video into a Short with the same pipeline
-  replay     run the whole pipeline on an ended YouTube stream (test outputs/posting)
+  replay     run the whole pipeline on an ended YouTube stream or Twitch VOD
   post       post a clip that was held back (``clips/<channel>/<time>``)
   snapshot   save a frame of a live channel with a 10% grid (to set facecam)
 """
@@ -16,7 +16,7 @@ import json
 import shutil
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 
 from . import __version__, config, procs, render
@@ -51,7 +51,7 @@ def cmd_ui(args):
         if example.is_file():
             shutil.copyfile(example, path)
             print(f"created {path} from the example; edit it in the Settings tab")
-    serve(path, port=args.port, open_browser=not args.no_browser)
+    serve(path, port=args.port, open_browser=not args.no_browser, autostart=args.autostart)
 
 
 def cmd_doctor(args):
@@ -83,11 +83,14 @@ def cmd_doctor(args):
             line(True, f"config: {len(s.channels)} channel(s), style {s.caption_style}"
                        f"{' (rotating)' if s.rotate_styles else ''}")
             line(bool(s.gemini_api_key), "GEMINI_API_KEY", "optional: offline hooks are used without it")
-            if s.post_enabled:
-                line(bool(s.upload_post_api_key), "UPLOADPOST_API_KEY", "needed to post")
-                line(bool(s.upload_post_user), "post.upload_post_user", "the Upload-Post profile name")
-            else:
-                line(False, "posting", "optional: off; clips are saved for review")
+            from . import publish
+            routes = publish.route(s.post_platforms, s.youtube_via, s.instagram_via, s.others_via)
+            issues = publish.missing(routes, publish.credentials(), s.upload_post_user)
+            line(not issues, "posting accounts: " + ", ".join(f"{n} via {v}" for n, v in routes.items()),
+                 ("optional: " if not s.post_enabled else "") + "; ".join(issues))
+            if "instagram" in routes and routes["instagram"] == "api":
+                line(bool(procs.cloudflared()), "cloudflared (Instagram)",
+                     "winget install Cloudflare.cloudflared")
             free = shutil.disk_usage(s.data_dir.parent if not s.data_dir.exists() else s.data_dir).free / 1e9
             line(free > 5, f"disk: {free:.1f} GB free", "keep 5 GB+ free")
         except config.ConfigError as e:
@@ -177,25 +180,16 @@ def cmd_replay(args):
 
 
 def cmd_post(args):
-    from . import poster
-    from .service import post_now, Logger
+    from .service import Logger, deliver, write_meta
     s = _load(args)
     d = Path(args.clip_dir)
     meta_path = d / "meta.json"
     if not meta_path.is_file() or not (d / "short.mp4").is_file():
         sys.exit(f"{d} has no short.mp4 + meta.json")
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    if not (s.upload_post_api_key and s.upload_post_user):
-        sys.exit("set UPLOADPOST_API_KEY and post.upload_post_user first")
-    ledger = poster.PostLedger(s.data_dir / "post_ledger.json")
-    when = ledger.slot(datetime.now(timezone.utc), timedelta(minutes=s.min_gap_minutes), s.daily_cap)
-    if when is None:
-        sys.exit("daily_cap reached; try later")
-    posts = meta.get("posts") or {}
-    if args.platforms:
-        posts = {p: v for p, v in posts.items() if p in args.platforms}
-    meta["posted"] = post_now(d / "short.mp4", posts, s, ledger, when, Logger(None))
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    meta["posted"] = deliver(d, s, Logger(None), only=args.platforms or None)
+    write_meta(d, meta)
+    print(json.dumps(meta["posted"], indent=2))
 
 
 def cmd_snapshot(args):
@@ -229,6 +223,8 @@ def main(argv=None):
     u = sub.add_parser("ui", help="open the web dashboard (start/stop, live view, clips, settings)")
     u.add_argument("--port", type=int, default=8765)
     u.add_argument("--no-browser", action="store_true")
+    u.add_argument("--autostart", action="store_true",
+                   help="start watching right away (livewatch.bat uses it after a restart)")
     u.set_defaults(fn=cmd_ui)
 
     sub.add_parser("doctor", help="check the setup").set_defaults(fn=cmd_doctor)
@@ -255,7 +251,7 @@ def main(argv=None):
     k.add_argument("--no-post", action="store_true")
     k.set_defaults(fn=cmd_clip)
 
-    rp = sub.add_parser("replay", help="run the pipeline on an ended YouTube stream")
+    rp = sub.add_parser("replay", help="run the pipeline on an ended YouTube stream or Twitch VOD")
     rp.add_argument("url")
     rp.add_argument("--minutes", type=float, default=30, help="how much of the stream to analyse")
     rp.add_argument("--start", type=float, default=0, help="start at this minute")
