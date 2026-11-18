@@ -121,8 +121,10 @@ pulled back to this host to play one file. It happens only when:
   follows (`Sec-Fetch-Mode: no-cors` or `navigate`). An API client, a `HEAD`
   and a script's `fetch` are served here as before: a fetch redirected across
   two hosts reaches storage without an origin and is refused;
-- the caller got in as the owner (media token or credentials). A signed link
-  expires and a storage link does not, so one is never traded for the other;
+- the caller is the owner (media token or credentials), also when the link
+  is signed: the dashboard plays a fresh job through the signed links of its
+  status, with the owner's cookie. A signed link by itself expires and a
+  storage link does not, so one is never traded for the other;
 - a `user_videos` row of that owner and job names exactly that file. The rows
   are each clip's *served* file: on the free plan the marked copy, never the
   clean twin that sits next to it in the bucket;

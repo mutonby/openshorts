@@ -4516,18 +4516,27 @@ async def _authorize_media(kind: str, path: str, scope) -> Optional[str]:
     params = request.query_params
     cleaned = path.replace("\\", "/").strip("/")
     sig = params.get("sig")
-    if sig and media_auth.verify_path_signature(f"{kind}/{cleaned}", params.get("exp"), sig, secret):
-        return "signature"
+    signed = bool(sig and media_auth.verify_path_signature(
+        f"{kind}/{cleaned}", params.get("exp"), sig, secret))
     segment = cleaned.split("/", 1)[0]
+    tokens = [t for t in (params.get("mt"), request.cookies.get(media_auth.MEDIA_COOKIE_NAME)) if t]
+    if signed and not tokens:
+        return "signature"
     owner = await _media_owner(kind, segment)
     if owner is not None:
-        for candidate in (params.get("mt"), request.cookies.get(media_auth.MEDIA_COOKIE_NAME)):
-            if candidate and media_auth.verify_user_token(candidate, secret) == owner:
+        # Also behind a valid signature: the dashboard plays a fresh job
+        # through the signed links of its status, with the owner's cookie.
+        for candidate in tokens:
+            if media_auth.verify_user_token(candidate, secret) == owner:
                 return "owner"
+        if signed:
+            return "signature"
         if request.headers.get("authorization") or request.headers.get("x-api-key"):
             user = await _user_from_request(request)
             if user is not None and str(user.id) == owner:
                 return "owner"
+    if signed:
+        return "signature"
     if kind == "videos" and await _media_legacy_ok(segment):
         if segment not in _media_legacy_logged and len(_media_legacy_logged) < 10000:
             _media_legacy_logged.add(segment)
@@ -4568,8 +4577,9 @@ async def _media_redirect(path: str, scope, granted: Optional[str] = None) -> Op
     """``redirect`` hook of the /videos mount. It runs after the guard and
     the authorization, for a browser's own GET only: an API client, a HEAD and
     a script's fetch keep getting the file from this host as before. And only
-    for the owner (media token or credentials): a signed link expires, and the
-    storage link it would be traded for does not."""
+    for the owner (media token or credentials, with or without a signature):
+    a signed link by itself expires, and the storage link it would be traded
+    for does not."""
     if granted != "owner" or scope.get("method") != "GET":
         return None
     mode = Request(scope).headers.get("sec-fetch-mode", "").strip().lower()

@@ -112,6 +112,13 @@ class TestThePlayerGoesToStorage:
         # The answer depends on who asks and how: it must not be reused.
         assert resp.headers["cache-control"] == "no-store"
 
+    def test_the_signed_links_of_the_dashboard_go_there_with_the_owners_cookie(self, cloud):
+        """A fresh job is played through the signed links of its status."""
+        cookie = f"{media_auth.MEDIA_COOKIE_NAME}={media_auth.mint_user_token(OWNER, SECRET)}"
+        resp = _get(media_auth.sign_media_url(CLIP, SECRET), {**PLAYER, "cookie": cookie})
+        assert resp.status_code == 307
+        assert resp.headers["location"].startswith(f"{BASE}/{_key(CLIP_NAME)}?v=")
+
     def test_a_link_the_browser_follows_by_itself_goes_there_too(self, cloud):
         resp = _get(_owner_url(), {"sec-fetch-mode": "navigate", "sec-fetch-dest": "document"})
         assert resp.status_code == 307
@@ -139,9 +146,14 @@ class TestWhoIsStillServedHere:
     def test_a_head_is_answered_here(self, cloud):
         assert _request("HEAD", _owner_url(), PLAYER).status_code == 200
 
-    def test_a_signed_link_is_never_traded_for_a_storage_link(self, cloud):
+    def test_a_signed_link_by_itself_is_never_traded_for_a_storage_link(self, cloud):
         """The signature expires; the storage link would not."""
         resp = _get(media_auth.sign_media_url(CLIP, SECRET), PLAYER)
+        assert resp.status_code == 200 and resp.content == BODY
+
+    def test_a_signed_link_with_someone_elses_cookie_is_served_here(self, cloud):
+        cookie = f"{media_auth.MEDIA_COOKIE_NAME}={media_auth.mint_user_token(OTHER, SECRET)}"
+        resp = _get(media_auth.sign_media_url(CLIP, SECRET), {**PLAYER, "cookie": cookie})
         assert resp.status_code == 200 and resp.content == BODY
 
     def test_a_stranger_is_refused_before_anything_else(self, cloud):
