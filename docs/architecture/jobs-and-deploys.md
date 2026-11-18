@@ -65,6 +65,13 @@ MD5 + audio):
 
 Speed at equal quality:
 
+- **A full card is not "no NVENC"** (`ffmpeg_utils.nvenc_available`): the
+  probe's CUDA out-of-memory or timeout is retried (`NVENC_PROBE_ATTEMPTS`,
+  `NVENC_PROBE_BACKOFF`), and if the card stays full the libx264 verdict
+  lasts `NVENC_REPROBE_SECONDS` (60), not the whole job. Only a host without
+  the encoder is libx264 for good. On 18-nov-2026 one probe in five hit a VRAM
+  peak and the cached "no" sent 6 of 14 jobs entirely to libx264: 100% CPU,
+  full swap, and the OOM killer took the API.
 - **Cut on the card** (`ffmpeg_utils.cut_clip`, NVDEC → NVENC with
   `-hwaccel_output_format cuda`) for 8-bit 4:2:0 sources; byte-identical to the
   CPU cut. Other sources and a failed GPU cut decode on the CPU.

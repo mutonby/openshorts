@@ -333,3 +333,83 @@ def test_wrapper_keeps_what_the_caller_set(tmp_path):
 @pytest.mark.parametrize("threads", [None, "", "0", "auto"])
 def test_wrapper_is_a_passthrough_when_unset(tmp_path, threads):
     assert _wrapped(tmp_path, threads, "-i", "a.mp4", "x y.mp4") == ["-i", "a.mp4", "x y.mp4"]
+
+
+# --- 18-nov-2026: a probe at a VRAM peak sent whole jobs to libx264 ----------
+
+_OOM = ("[h264_nvenc] cuCtxCreate(...) failed -> CUDA_ERROR_OUT_OF_MEMORY: "
+        "out of memory\nNo capable devices found\n")
+
+
+def _fake_run(results):
+    """subprocess.run stand-in returning (returncode, stderr) in order."""
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        rc, err = results[min(len(calls), len(results)) - 1]
+        if rc == "timeout":
+            raise subprocess.TimeoutExpired(cmd, 30)
+        return subprocess.CompletedProcess(cmd, rc, stderr=err)
+    return run, calls
+
+
+def test_probe_tells_a_full_card_from_a_missing_encoder(monkeypatch):
+    run, _ = _fake_run([(187, _OOM)])
+    monkeypatch.setattr(ffmpeg_utils.subprocess, "run", run)
+    assert ffmpeg_utils._probe_nvenc() is None
+    run, _ = _fake_run([("timeout", "")])
+    monkeypatch.setattr(ffmpeg_utils.subprocess, "run", run)
+    assert ffmpeg_utils._probe_nvenc() is None
+    run, _ = _fake_run([(1, "Unknown encoder 'h264_nvenc'\n")])
+    monkeypatch.setattr(ffmpeg_utils.subprocess, "run", run)
+    assert ffmpeg_utils._probe_nvenc() is False
+    run, _ = _fake_run([(0, "")])
+    monkeypatch.setattr(ffmpeg_utils.subprocess, "run", run)
+    assert ffmpeg_utils._probe_nvenc() is True
+
+
+def test_a_full_card_is_probed_again_and_nvenc_wins(monkeypatch):
+    run, calls = _fake_run([(187, _OOM), (0, "")])
+    monkeypatch.setattr(ffmpeg_utils.subprocess, "run", run)
+    monkeypatch.setattr(ffmpeg_utils.time, "sleep", lambda s: None)
+    monkeypatch.setenv("FFMPEG_ENCODER", "auto")
+    assert video_encode_args(QUALITY)[:2] == ["-c:v", "h264_nvenc"]
+    assert len(calls) == 2
+    # A real verdict is kept: no more probes.
+    video_encode_args(QUALITY)
+    assert len(calls) == 2
+
+
+def test_a_card_full_on_every_attempt_is_not_libx264_for_good(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(ffmpeg_utils.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(ffmpeg_utils.time, "sleep", lambda s: None)
+    monkeypatch.setattr(ffmpeg_utils, "NVENC_PROBE_ATTEMPTS", 3)
+    monkeypatch.setattr(ffmpeg_utils, "NVENC_REPROBE_SECONDS", 60.0)
+    run, calls = _fake_run([(187, _OOM)] * 3 + [(0, "")])
+    monkeypatch.setattr(ffmpeg_utils.subprocess, "run", run)
+    monkeypatch.setenv("FFMPEG_ENCODER", "auto")
+
+    assert video_encode_args(QUALITY)[:2] == ["-c:v", "libx264"]
+    assert len(calls) == 3                       # every attempt used
+    now[0] += 30
+    assert video_encode_args(QUALITY)[:2] == ["-c:v", "libx264"]
+    assert len(calls) == 3                       # within the window: no probe
+    now[0] += 31
+    assert video_encode_args(QUALITY)[:2] == ["-c:v", "h264_nvenc"]
+    assert len(calls) == 4
+    now[0] += 3600
+    video_encode_args(QUALITY)
+    assert len(calls) == 4                       # kept for good once it works
+
+
+def test_no_nvenc_on_the_host_is_kept_without_retries(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(ffmpeg_utils.time, "sleep", sleeps.append)
+    run, calls = _fake_run([(1, "Unknown encoder 'h264_nvenc'\n")])
+    monkeypatch.setattr(ffmpeg_utils.subprocess, "run", run)
+    monkeypatch.setenv("FFMPEG_ENCODER", "auto")
+    for _ in range(3):
+        assert video_encode_args(DELIVERY)[:2] == ["-c:v", "libx264"]
+    assert len(calls) == 1 and sleeps == []
