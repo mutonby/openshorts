@@ -6,6 +6,7 @@ import { track } from '../lib/analytics';
 import { stashPendingPlan, readPendingPlan, clearPendingPlan } from '../lib/pendingPlan';
 import { useBackFromStripe } from '../lib/backFromStripe';
 import SegmentedControl from './ui/SegmentedControl';
+import { FREE_CLIPS_PER_VIDEO, MAX_CLIPS_PER_VIDEO } from '../lib/clipProgress';
 
 const PLAN_ORDER = ['starter', 'creator', 'pro'];
 const PLAN_BLURB = {
@@ -149,6 +150,7 @@ export default function PricingSection({ onRequireLogin }) {
           </div>
           <ul className="space-y-2 text-sm text-ink2 mb-6 flex-1">
             <li className="flex items-start gap-2"><Check size={16} className="text-ok shrink-0 mt-0.5" /> <span><b>{FREE_MINUTES} min</b> of video / month</span></li>
+            <li className="flex items-start gap-2"><Check size={16} className="text-ok shrink-0 mt-0.5" /> <span>The <b>{FREE_CLIPS_PER_VIDEO} best clips</b> of each video</span></li>
             <li className="flex items-start gap-2"><Check size={16} className="text-ok shrink-0 mt-0.5" /> <span>YouTube URL or upload</span></li>
             <li className="flex items-start gap-2"><Cpu size={16} className="text-ok shrink-0 mt-0.5" /> <span>Same <b>GPU rendering</b>, about 50s per 8-min video</span></li>
             <li className="flex items-start gap-2"><KeyRound size={16} className="text-ok shrink-0 mt-0.5" /> <span>Gemini key included, no setup</span></li>
@@ -187,6 +189,7 @@ export default function PricingSection({ onRequireLogin }) {
               </div>
               <ul className="space-y-2 text-sm text-ink2 mb-6 flex-1">
                 <li className="flex items-start gap-2"><Check size={16} className="text-ok shrink-0 mt-0.5" /> <span><b>{entry.minutes} min</b> of video / month</span></li>
+                <li className="flex items-start gap-2"><Check size={16} className="text-ok shrink-0 mt-0.5" /> <span><b>Every clip</b> of each video, up to {MAX_CLIPS_PER_VIDEO}</span></li>
                 <li className="flex items-start gap-2"><Check size={16} className="text-ok shrink-0 mt-0.5" /> <span><b>No watermark</b>, no 7-day clip expiry</span></li>
                 <li className="flex items-start gap-2"><Cpu size={16} className="text-ok shrink-0 mt-0.5" /> <span><b>GPU rendering</b>, about 50s per 8-min video</span></li>
                 <li className="flex items-start gap-2"><Send size={16} className="text-ok shrink-0 mt-0.5" /> <span><b>Auto-post every clip</b> to TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads &amp; Bluesky</span></li>

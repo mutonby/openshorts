@@ -5,6 +5,7 @@ import MediaInput from './components/MediaInput';
 import McpConnectCard from './components/McpConnectCard';
 import ResultCard from './components/ResultCard';
 import ProcessingAnimation from './components/ProcessingAnimation';
+import { clipProgress, FREE_CLIPS_PER_VIDEO, MAX_CLIPS_PER_VIDEO } from './lib/clipProgress';
 // import Gallery from './components/Gallery';
 import ThumbnailStudio from './components/ThumbnailStudio';
 import SaaShortsTab from './components/SaaShortsTab';
@@ -397,6 +398,10 @@ function App() {
   const [logs, setLogs] = useState([]);
   // When each server log line arrived (epoch s, parallel to logs), from /api/status.
   const [logTimes, setLogTimes] = useState([]);
+  // Clips picked and finished so far, read from the running job's log, so the
+  // results panel can say "3/5" instead of an open-ended wait.
+  const progress = useMemo(() => clipProgress(logs), [logs]);
+  const clipsMaking = status === 'processing' && progress.total > 0;
   // Collapsed on phones: the log tail is the least useful thing on a 360px
   // screen and it was pushing the actual clips a full scroll down.
   const [logsVisible, setLogsVisible] = useState(() => {
@@ -2370,7 +2375,11 @@ function App() {
                 <div className="mb-4 sm:mb-6 shrink-0 space-y-3">
                   <h2 className="font-display lowercase text-lg sm:text-xl text-ink flex flex-wrap items-center gap-2">
                     <span className="mr-auto">Generated Shorts</span>
-                    {results?.clips?.length > 0 && (
+                    {clipsMaking ? (
+                      <span className="readout bg-paper3 px-2.5 py-1 rounded-full text-brass">
+                        {progress.ready}/{progress.total} Clips
+                      </span>
+                    ) : results?.clips?.length > 0 && (
                       <span className="readout bg-paper3 px-2.5 py-1 rounded-full">
                         {results.clips.length} Clips
                       </span>
@@ -2381,6 +2390,18 @@ function App() {
                       </span>
                     )}
                   </h2>
+                  {clipsMaking && (
+                    <div
+                      className="h-1 rounded-full bg-paper3 overflow-hidden"
+                      role="progressbar" aria-valuemin={0} aria-valuemax={progress.total} aria-valuenow={progress.ready}
+                      aria-label="Clips ready"
+                    >
+                      <div
+                        className="h-full bg-brass transition-all duration-500"
+                        style={{ width: `${(progress.ready / progress.total) * 100}%` }}
+                      />
+                    </div>
+                  )}
                   {results?.clips?.length > 0 && status === 'complete' && (
                     <div className="flex flex-col sm:flex-row sm:justify-end items-stretch sm:items-center gap-2">
                       <button
@@ -2436,9 +2457,19 @@ function App() {
                         onClick={() => openUpsell({ source: 'results_banner' })}
                         className="w-full text-left px-3 py-2.5 rounded-input bg-paper3 border border-brass/40 hover:border-brass text-sm transition-colors"
                       >
-                        <span className="text-ink">Like these clips?</span>{' '}
-                        <span className="text-muted">Upgrade and these exact clips lose the watermark on the spot, and stay for good.</span>{' '}
-                        <span className="text-brass font-medium">Remove the watermark →</span>
+                        <span className="text-ink">
+                          {results?.clips?.length <= FREE_CLIPS_PER_VIDEO
+                            ? `The free plan makes the ${FREE_CLIPS_PER_VIDEO} best clips of each video.`
+                            : 'Like these clips?'}
+                        </span>{' '}
+                        <span className="text-muted">
+                          {results?.clips?.length <= FREE_CLIPS_PER_VIDEO
+                            ? `Plans get every clip, up to ${MAX_CLIPS_PER_VIDEO} per video, and these lose the watermark on the spot.`
+                            : 'Upgrade and these exact clips lose the watermark on the spot, and stay for good.'}
+                        </span>{' '}
+                        <span className="text-brass font-medium">
+                          {results?.clips?.length <= FREE_CLIPS_PER_VIDEO ? 'Get every clip →' : 'Remove the watermark →'}
+                        </span>
                       </button>
                     )}
                     {showAutopilotNudge && (
@@ -2564,7 +2595,9 @@ function App() {
                     status === 'processing' ? (
                       <div className="h-full min-h-[140px] flex flex-col items-center justify-center text-muted space-y-3 text-center px-4">
                         <Loader2 size={28} className="animate-spin text-brass" />
-                        <p className="text-sm lowercase">Waiting for clips...</p>
+                        <p className="text-sm lowercase">
+                          {clipsMaking ? `Making ${progress.total} ${progress.total === 1 ? 'clip' : 'clips'}...` : 'Waiting for clips...'}
+                        </p>
                         <p className="text-xs text-muted/80 max-w-[26ch] leading-snug">
                           They appear here one by one as each finishes rendering.
                         </p>

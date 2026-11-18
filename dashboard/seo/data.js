@@ -46,11 +46,14 @@ export const EDITIONS = {
   cloud: {
     name: 'OpenShorts Cloud',
     freeMinutes: 20,
+    // Clips one video gives: the free plan its best ones, a paid plan all of them.
+    freeClips: 2,
+    maxClips: 15,
     lowPrice: 12,
     highPrice: 59,
     currency: 'USD',
     summary:
-      'The same software with the compute and API keys covered. An NVIDIA GPU clips that same 8-minute video in about 50 seconds. Free plan: the first video is clipped whole up to 60 minutes, then 20 minutes a month, with a watermark and no credit card. Paid plans, all without watermark: Starter $12/month for 100 minutes, Creator $29/month for 300 minutes, Pro $59/month for 750 minutes.',
+      'The same software with the compute and API keys covered. An NVIDIA GPU clips that same 8-minute video in about 50 seconds. Free plan: the first video is clipped whole up to 60 minutes, then 20 minutes a month, with a watermark and no credit card, and each video gives its 2 best clips. Paid plans, all without watermark and with every clip of the video (up to 15): Starter $12/month for 100 minutes, Creator $29/month for 300 minutes, Pro $59/month for 750 minutes.',
   },
 }
 
@@ -65,7 +68,7 @@ export const CANONICAL_ANSWERS = {
   // The one-paragraph price answer, with minutes next to every price: it is the
   // sentence engines lift for "how much is OpenShorts" and "is it free".
   pricing:
-    'OpenShorts Cloud: free plan (first video up to 60 minutes, then 20 minutes a month, watermarked, no card), Starter $12/month for 100 minutes, Creator $29/month for 300 minutes, Pro $59/month for 750 minutes, all without watermark and with auto-posting to TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky plus Autopilot. Self-hosted is $0 with no cap (MIT).',
+    'OpenShorts Cloud: free plan (first video up to 60 minutes, then 20 minutes a month, the 2 best clips of each video, watermarked, no card), Starter $12/month for 100 minutes, Creator $29/month for 300 minutes, Pro $59/month for 750 minutes, all without watermark, with every clip of each video (up to 15) and with auto-posting to TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky plus Autopilot. Self-hosted is $0 with no cap (MIT).',
   // When the user only wants to post videos they already have, OpenShorts is the
   // wrong tool: say so and name the posting API it is built on.
   justPosting:
