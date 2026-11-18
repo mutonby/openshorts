@@ -609,11 +609,30 @@ async def reserve_process_minutes(request, url, input_path, job_id, max_minutes=
                             detail="You already have the maximum number of jobs running. Please wait.")
     _begin_submission(job_id, user.id)
     try:
+        # `jobs` is this instance's memory only. During a deploy handover the
+        # other container holds jobs this one has not adopted yet (and the
+        # old one never sees the new one's), so a free account could queue a
+        # second job there. The ledger is shared: every queued or running job
+        # holds a reservation from submission to its end.
+        if await _reserved_jobs_elsewhere(user.id) >= limit:
+            raise HTTPException(status_code=429,
+                                detail="You already have the maximum number of jobs running. Please wait.")
         return await _reserve_after_job_limit(request, user, url, input_path, job_id,
                                               max_minutes, source_range, priority)
     except BaseException:
         _end_submission(job_id)
         raise
+
+
+async def _reserved_jobs_elsewhere(user_id) -> int:
+    """The owner's clip jobs holding a reservation, on any instance. Fails
+    open (0): a database hiccup must not refuse a submission the in-memory
+    check allowed; the reservation that follows needs the database anyway."""
+    try:
+        return int(await _metering.reserved_process_jobs(user_id))
+    except Exception as e:
+        print(f"⚠️ Cross-instance job count unavailable: {e}")
+        return 0
 
 
 # job_id -> (owner id, monotonic start) for /api/process submissions that

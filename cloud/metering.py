@@ -876,6 +876,20 @@ async def free_actions_today(user_id, job_type: str) -> int:
         )).scalar_one() or 0)
 
 
+async def reserved_process_jobs(user_id) -> int:
+    """How many clip jobs of this user hold a reservation right now: queued or
+    running on ANY instance (a deploy's two containers share this table, not
+    their memory). A reservation lives from submission to the job's end."""
+    async with database.session() as session:
+        return int((await session.execute(
+            select(func.count(UsageLedger.id)).where(and_(
+                UsageLedger.user_id == user_id,
+                UsageLedger.status == "reserved",
+                UsageLedger.job_type == "process",
+            ))
+        )).scalar_one() or 0)
+
+
 async def free_actions_total(user_id, job_type: str) -> int:
     """How many zero-minute ``job_type`` rows this user has, ever."""
     async with database.session() as session:
