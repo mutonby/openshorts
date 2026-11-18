@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>livewatch</title>
+<style>
+:root{--bg:#0e1013;--panel:#161a1f;--panel2:#1d2229;--line:#2a3038;--text:#e6e9ee;--muted:#8b94a1;
+--accent:#7c5cff;--accent2:#a48bff;--green:#2fbf71;--red:#ef5350;--amber:#f2b134;--blue:#4aa3ff;--radius:10px}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--text);
+font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--accent2)}button,input,select,textarea{font:inherit;color:inherit}
+header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:14px;padding:10px 20px;
+background:rgba(14,16,19,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.logo{font-weight:800;letter-spacing:.3px;font-size:17px}.logo span{color:var(--accent2)}
+nav{display:flex;gap:4px;margin-left:10px;flex-wrap:wrap}
+nav button{background:none;border:0;padding:7px 12px;border-radius:8px;color:var(--muted);cursor:pointer}
+nav button.on{background:var(--panel2);color:var(--text)}nav button:hover{color:var(--text)}
+.grow{flex:1}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:99px;font-size:12px;
+background:var(--panel2);border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.pill.ok{color:var(--green);border-color:#1f5b3c}.pill.bad{color:var(--red);border-color:#6b2b2a}
+.pill.warn{color:var(--amber);border-color:#6a5220}.pill.live{color:#fff;background:#c62828;border-color:#c62828}
+.dot{width:8px;height:8px;border-radius:50%;background:currentColor;display:inline-block}
+.btn{border:1px solid var(--line);background:var(--panel2);padding:7px 14px;border-radius:8px;cursor:pointer}
+.btn:hover{border-color:#3a424d}.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{background:#6a49f5}.btn.danger{color:var(--red)}.btn.green{background:var(--green);border-color:var(--green);color:#06210f;font-weight:600}
+.btn:disabled{opacity:.45;cursor:not-allowed}.btn.sm{padding:4px 10px;font-size:12px}
+main{padding:20px;max-width:1400px;margin:0 auto}
+.tab{display:none}.tab.on{display:block}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px}
+.grid{display:grid;gap:14px}.g2{grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
+.g3{grid-template-columns:repeat(auto-fill,minmax(270px,1fr))}
+h2{font-size:15px;margin:0 0 12px}h3{font-size:13px;margin:0 0 8px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.6px}
+.muted{color:var(--muted)}.small{font-size:12px}.mono{font-family:ui-monospace,Consolas,monospace}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px}
+.stat b{display:block;font-size:24px}.stat span{color:var(--muted);font-size:12px}
+.banner{border-radius:var(--radius);padding:12px 14px;margin-bottom:14px;border:1px solid}
+.banner.bad{background:#2a1515;border-color:#6b2b2a}.banner.info{background:#18162a;border-color:#3c3370}
+.chan .top{display:flex;align-items:center;gap:8px;margin-bottom:6px}.chan .name{font-weight:700;font-size:15px}
+.plat{font-size:11px;padding:2px 7px;border-radius:5px;font-weight:700;text-transform:uppercase}
+.plat.twitch{background:#2b1d4a;color:#b9a3ff}.plat.kick{background:#14361f;color:#53fc18}.plat.youtube{background:#3a1515;color:#ff6b6b}
+.chan canvas{width:100%;height:70px;display:block;margin-top:8px;background:var(--panel2);border-radius:8px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:12px;margin-top:6px}.kv span:nth-child(odd){color:var(--muted)}
+.bar{height:6px;background:var(--panel2);border-radius:9px;overflow:hidden}.bar i{display:block;height:100%;background:var(--accent)}
+.log{background:#0a0c0f;border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;height:calc(100vh - 210px);
+overflow:auto;font:12px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
+.log .peak{color:var(--amber)}.log .ready{color:var(--green)}.log .err{color:var(--red)}.log .live{color:#ff8a80}
+.minilog{height:220px}
+.clip video{width:100%;aspect-ratio:9/16;background:#000;border-radius:8px;display:block}
+.clip .hook{font-weight:700;margin:10px 0 4px}.clip .title{color:var(--muted);font-size:12px;margin-bottom:8px}
+.chips{display:flex;gap:5px;flex-wrap:wrap;margin:6px 0}
+.chip{font-size:11px;padding:2px 7px;border-radius:5px;background:var(--panel2);color:var(--muted);border:1px solid var(--line)}
+.chip.posted{color:var(--green);border-color:#1f5b3c}.chip.held{color:var(--amber);border-color:#6a5220}.chip.failed{color:var(--red);border-color:#6b2b2a}
+label.f{display:block;margin-bottom:14px}label.f>b{display:block;font-weight:600;margin-bottom:4px}
+label.f>.help{display:block;color:var(--muted);font-size:12px;margin-top:4px}
+input[type=text],input[type=number],input[type=password],input[type=url],select,textarea{width:100%;background:var(--panel2);
+border:1px solid var(--line);border-radius:8px;padding:8px 10px;outline:none}
+input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+textarea{resize:vertical;min-height:70px}
+.toggle{display:inline-flex;align-items:center;gap:8px;cursor:pointer}
+.toggle input{width:36px;height:20px;appearance:none;background:var(--line);border-radius:99px;position:relative;cursor:pointer;transition:.15s}
+.toggle input:checked{background:var(--accent)}
+.toggle input::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.15s}
+.toggle input:checked::after{left:18px}
+.checks{display:flex;gap:12px;flex-wrap:wrap}.checks label{display:inline-flex;gap:5px;align-items:center}
+.chanrow{border:1px solid var(--line);border-radius:var(--radius);padding:12px;margin-bottom:10px;background:var(--panel2)}
+.chanrow .grid{grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
+.chanrow label.f{margin-bottom:0}
+.fc{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+.savebar{position:sticky;bottom:0;background:rgba(14,16,19,.95);border-top:1px solid var(--line);padding:12px 0;margin-top:10px;display:flex;gap:10px;align-items:center}
+dialog{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:14px;padding:0;width:min(760px,95vw);max-height:90vh}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+.dlg-h{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center}
+.dlg-b{padding:16px 18px;overflow:auto;max-height:calc(90vh - 130px)}.dlg-f{padding:12px 18px;border-top:1px solid var(--line);display:flex;gap:8px;justify-content:flex-end}
+.net{border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px}
+.net .row{justify-content:space-between}
+.track{display:grid;grid-template-columns:1fr 260px auto auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+.track audio{width:100%;height:32px}
+.drop{border:2px dashed var(--line);border-radius:var(--radius);padding:26px;text-align:center;color:var(--muted);cursor:pointer}
+.drop.over{border-color:var(--accent);color:var(--text)}
+.toast{position:fixed;right:20px;bottom:20px;z-index:20;display:flex;flex-direction:column;gap:8px}
+.toast div{background:var(--panel2);border:1px solid var(--line);border-left:4px solid var(--accent);padding:10px 14px;border-radius:8px;max-width:420px;box-shadow:0 6px 24px rgba(0,0,0,.4)}
+.toast div.bad{border-left-color:var(--red)}.toast div.ok{border-left-color:var(--green)}
+.empty{color:var(--muted);text-align:center;padding:40px}
+@media (max-width:800px){.stats{grid-template-columns:repeat(2,1fr)}.track{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">live<span>watch</span></div>
+  <nav id="nav">
+    <button data-tab="dash" class="on">Dashboard</button>
+    <button data-tab="replay">Replay test</button>
+    <button data-tab="clips">Clips</button>
+    <button data-tab="music">Music</button>
+    <button data-tab="settings">Settings</button>
+    <button data-tab="log">Log</button>
+  </nav>
+  <div class="grow"></div>
+  <span id="runpill" class="pill"><i class="dot"></i> stopped</span>
+  <button class="btn" id="checkBtn" title="Ask every channel whether it is live now">Check now</button>
+  <button class="btn green" id="startBtn">Start</button>
+  <button class="btn danger" id="stopBtn" style="display:none">Stop</button>
+</header>
+
+<main>
+<!-- DASHBOARD -->
+<section class="tab on" id="tab-dash">
+  <div id="dashBanner"></div>
+  <div class="row" id="chips"></div>
+  <div class="stats">
+    <div class="stat"><b id="cPeaks">0</b><span>peaks found</span></div>
+    <div class="stat"><b id="cClips">0</b><span>Shorts made</span></div>
+    <div class="stat"><b id="cPosted">0</b><span>posted / scheduled</span></div>
+    <div class="stat"><b id="cQueue">0</b><span>in the queue</span></div>
+  </div>
+  <div class="card" id="stepCard" style="display:none;margin-bottom:14px"><span class="muted">Working on:</span> <b id="step"></b></div>
+  <h3>Channels</h3>
+  <div class="grid g2" id="chans"></div>
+  <h3 style="margin-top:22px">Latest activity</h3>
+  <div class="log minilog" id="miniLog"></div>
+</section>
+
+<!-- REPLAY -->
+<section class="tab" id="tab-replay">
+  <div class="grid g2">
+    <div class="card">
+      <h2>Test on an ended YouTube stream</h2>
+      <p class="muted small" style="margin-top:-6px">Downloads the stream's chat replay, finds the peaks like it would live,
+        downloads only the seconds around each peak and makes the Shorts, with your current settings. Chat replay
+        downloads at roughly 10-15x real time (30 minutes take about 2-3 minutes). Only videos that were live streams with chat
+        have a chat replay.</p>
+      <label class="f"><b>Stream link</b><input type="url" id="rpUrl" placeholder="https://www.youtube.com/watch?v=..."></label>
+      <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:10px">
+        <label class="f"><b>Start at minute</b><input type="number" id="rpStart" value="0" min="0"></label>
+        <label class="f"><b>Minutes to analyse</b><input type="number" id="rpMin" value="30" min="1" max="600"></label>
+        <label class="f"><b>Max Shorts</b><input type="number" id="rpMax" value="3" min="1" max="20"></label>
+      </div>
+      <label class="toggle"><input type="checkbox" id="rpPost"> Publish the Shorts too (uses your Posting settings and keys)</label>
+      <div class="row" style="margin-top:16px">
+        <button class="btn primary" id="rpGo">Run replay</button>
+        <button class="btn danger" id="rpCancel" style="display:none">Cancel</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Progress</h2>
+      <div id="rpStatus" class="muted">Nothing running.</div>
+    </div>
+  </div>
+</section>
+
+<!-- CLIPS -->
+<section class="tab" id="tab-clips">
+  <div class="row" style="margin-bottom:14px">
+    <select id="clipFilter" style="width:auto">
+      <option value="">All clips</option><option value="held">Not posted yet</option>
+      <option value="posted">Posted / scheduled</option><option value="failed">Failed</option>
+    </select>
+    <span class="muted small" id="clipCount"></span><div class="grow"></div>
+    <button class="btn" id="openClips">Open clips folder</button>
+  </div>
+  <div class="grid g3" id="clips"></div>
+</section>
+
+<!-- MUSIC -->
+<section class="tab" id="tab-music">
+  <div class="card" style="margin-bottom:14px">
+    <h2>Background music library</h2>
+    <p class="muted small" style="margin-top:-6px">Tracks are mixed softly under a Short, fade in and out, and dip whenever the
+      streamer talks. Each Short takes the track used least recently. Turn music on in <a href="#" data-goto="settings">Settings &gt; Background music</a>.
+      <b>Use royalty-free music only</b> (YouTube Audio Library, Pixabay Music, your own): copyrighted songs get Shorts claimed and Reels muted.</p>
+    <div class="row"><span class="pill" id="musicMode"></span><span class="muted small mono" id="musicFolder"></span></div>
+  </div>
+  <div class="drop" id="drop">Drop audio files here or click to choose (mp3, m4a, wav, ogg, flac; 50 MB max)
+    <input type="file" id="musicFile" accept=".mp3,.m4a,.aac,.wav,.ogg,.opus,.flac" multiple hidden></div>
+  <div class="card" style="margin-top:14px"><div id="tracks"></div></div>
+</section>
+
+<!-- SETTINGS -->
+<section class="tab" id="tab-settings">
+  <div id="setBanner"></div>
+  <div class="grid g2" id="sections"></div>
+  <div class="card" style="margin-top:14px">
+    <div class="row"><h2 style="margin:0">Channels</h2><div class="grow"></div><button class="btn" id="addChan">+ Add channel</button></div>
+    <p class="muted small">Twitch and YouTube peaks come from chat and loudness; Kick from loudness only.</p>
+    <div id="chanList"></div>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <h2>API keys</h2>
+    <p class="muted small" style="margin-top:-6px">Saved in <span class="mono">.env</span> next to your config, never in the settings file. Leave a box empty to keep the current key.</p>
+    <div class="grid g2" id="secrets"></div>
+    <button class="btn" id="saveSecrets">Save keys</button>
+  </div>
+  <div class="savebar"><button class="btn primary" id="saveCfg">Save settings</button>
+    <button class="btn" id="reloadCfg">Discard changes</button><span id="saveMsg" class="small"></span>
+    <div class="grow"></div><span class="muted small mono" id="cfgPath"></span></div>
+</section>
+
+<!-- LOG -->
+<section class="tab" id="tab-log">
+  <div class="row" style="margin-bottom:10px"><input type="text" id="logFilter" placeholder="Filter (e.g. PEAK, posted, failed, a channel name)" style="max-width:420px">
+    <label class="toggle"><input type="checkbox" id="logFollow" checked> Follow</label></div>
+  <div class="log" id="fullLog"></div>
+</section>
+</main>
+
+<dialog id="postDlg">
+  <div class="dlg-h"><b id="dlgTitle">Post</b><div class="grow"></div><button class="btn sm" onclick="postDlg.close()">Close</button></div>
+  <div class="dlg-b" id="dlgBody"></div>
+  <div class="dlg-f"><span class="muted small" id="dlgMsg" style="margin-right:auto"></span>
+    <button class="btn" id="dlgSave">Save text</button><button class="btn primary" id="dlgPost">Post now</button></div>
+</dialog>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const NETS = {youtube:"YouTube", tiktok:"TikTok", instagram:"Instagram", facebook:"Facebook", x:"X", threads:"Threads", bluesky:"Bluesky"};
+
+async function api(path, opts = {}) {
+  const o = {method: opts.method || "GET", headers: {}};
+  if (o.method !== "GET") o.headers["X-Livewatch"] = "1";
+  if (opts.json !== undefined) { o.headers["Content-Type"] = "application/json"; o.body = JSON.stringify(opts.json); }
+  if (opts.body !== undefined) { o.body = opts.body; Object.assign(o.headers, opts.headers || {}); }
+  const r = await fetch(path, o);
+  let data = {};
+  try { data = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+function toast(msg, kind = "") {
+  const d = document.createElement("div"); d.className = kind; d.textContent = msg;
+  $("#toast").appendChild(d); setTimeout(() => d.remove(), 5000);
+}
+async function act(fn, okMsg) { try { const r = await fn(); if (okMsg) toast(okMsg, "ok"); return r; } catch (e) { toast(e.message, "bad"); } }
+
+/* ---------- tabs ---------- */
+let tab = "dash";
+function show(t) {
+  tab = t; $$("#nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
+  $$(".tab").forEach(s => s.classList.toggle("on", s.id === "tab-" + t));
+  if (t === "clips") loadClips(); if (t === "music") loadMusic(); if (t === "settings") loadConfig();
+  if (t === "log") renderFullLog();
+}
+$("#nav").addEventListener("click", e => { if (e.target.dataset.tab) show(e.target.dataset.tab); });
+document.addEventListener("click", e => { const g = e.target.closest("[data-goto]"); if (g) { e.preventDefault(); show(g.dataset.goto); } });
+
+/* ---------- status ---------- */
+let status = null;
+$("#startBtn").onclick = () => act(() => api("/api/start", {method:"POST"}), "Watcher started");
+$("#stopBtn").onclick = () => act(() => api("/api/stop", {method:"POST"}), "Stopping: the clip queue is finished first");
+$("#checkBtn").onclick = () => act(() => api("/api/check", {method:"POST"}), "Checking every channel now");
+
+function chip(label, value, kind = "") { return `<span class="pill ${kind}">${esc(label)}: <b>${esc(value)}</b></span>`; }
+function renderStatus(s) {
+  status = s;
+  const pill = $("#runpill");
+  pill.className = "pill " + (s.stopping ? "warn" : s.running ? "ok" : "");
+  pill.innerHTML = `<i class="dot"></i> ${s.stopping ? "stopping…" : s.running ? "running" : "stopped"}`;
+  $("#startBtn").style.display = s.running ? "none" : ""; $("#stopBtn").style.display = s.running ? "" : "none";
+  $("#stopBtn").disabled = s.stopping; $("#checkBtn").disabled = !s.running;
+  let banner = "";
+  if (s.config_error) banner += `<div class="banner bad"><b>Settings problem:</b> ${esc(s.config_error)} <a href="#" data-goto="settings">Fix it</a></div>`;
+  else if (!s.channels.length) banner += `<div class="banner info">No channels yet. <a href="#" data-goto="settings">Add the streamers you want to clip</a>, then press Start.
+    Want to see results first? Try the <a href="#" data-goto="replay">Replay test</a> on an ended YouTube stream.</div>`;
+  $("#dashBanner").innerHTML = banner;
+  $("#chips").innerHTML = [
+    chip("Encoder", s.encoder === "qsv" ? "Intel QuickSync" : "CPU (x264)"),
+    chip("AI text", s.ai, s.ai === "gemini" ? "ok" : "warn"),
+    chip("Posting", s.posting ? "automatic" : (s.post_enabled ? "on, keys missing" : "off (review)"), s.posting ? "ok" : (s.post_enabled ? "bad" : "")),
+    chip("Captions", s.whisper, s.whisper === "missing" ? "bad" : ""),
+    chip("Music", s.music_mode === "off" ? "off" : `${s.music_mode}, ${s.music_tracks} tracks`, s.music_mode !== "off" && !s.music_tracks ? "warn" : ""),
+    chip("Disk free", s.disk_free_gb + " GB", s.disk_free_gb < 5 ? "bad" : ""),
+  ].join(" ");
+  $("#cPeaks").textContent = s.counts.peaks; $("#cClips").textContent = s.counts.clips;
+  $("#cPosted").textContent = s.counts.posted; $("#cQueue").textContent = s.queue;
+  $("#stepCard").style.display = s.current_step ? "" : "none"; $("#step").textContent = s.current_step || "";
+  renderChannels(s);
+  renderReplay(s.replay);
+}
+
+function renderChannels(s) {
+  const host = $("#chans");
+  const keys = s.channels.map(c => c.key).join("|");
+  if (host.dataset.keys !== keys) {
+    host.dataset.keys = keys;
+    host.innerHTML = s.channels.map((c, i) => `<div class="card chan" data-i="${i}">
+      <div class="top"><span class="plat ${esc(c.platform)}">${esc(c.platform)}</span>
+      <a class="name" href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.display)}</a><div class="grow"></div><span class="lp"></span></div>
+      <div class="state small"></div><div class="meta small muted"></div><div class="rec"></div></div>`).join("") ||
+      `<div class="empty card">No channels configured.</div>`;
+  }
+  s.channels.forEach((c, i) => {
+    const el = host.querySelector(`[data-i="${i}"]`); if (!el) return;
+    el.querySelector(".lp").innerHTML = c.recording ? `<span class="pill live"><i class="dot"></i> REC</span>`
+      : c.live ? `<span class="pill warn">live</span>` : `<span class="pill">offline</span>`;
+    el.querySelector(".state").textContent = c.state || "";
+    el.querySelector(".meta").textContent = c.live ? `${c.category || "?"} · ${c.title || ""}` : (c.game_filter.length ? "only while playing: " + c.game_filter.join(", ") : "");
+    const rec = el.querySelector(".rec");
+    if (!c.recording) { rec.innerHTML = ""; return; }
+    if (!rec.querySelector("canvas")) rec.innerHTML = `<div class="kv"></div><canvas width="600" height="140"></canvas>`;
+    rec.querySelector(".kv").innerHTML = `
+      <span>Quality</span><span>${esc(c.quality)}</span>
+      <span>Buffer</span><span>${Math.round(c.buffer_seconds / 60 * 10) / 10} min</span>
+      <span>Chat</span><span>${c.chat_messages == null ? "no reader (loudness only)" : c.chat_messages + " messages"}</span>
+      <span>Score</span><span><b>${c.score}</b> / ${s.threshold} (chat ${c.chat_z}, audio ${c.audio_z})${c.warming_up ? ` · learning the chat, ${c.warming_up}s left` : ""}</span>`;
+    drawSpark(rec.querySelector("canvas"), c.history || [], s.threshold);
+  });
+}
+
+function drawSpark(cv, hist, thr) {
+  const ctx = cv.getContext("2d"), W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+  const max = Math.max(thr * 1.4, ...hist, 1);
+  const y = v => H - 8 - (v / max) * (H - 16);
+  ctx.strokeStyle = "#f2b134"; ctx.setLineDash([6, 6]); ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(0, y(thr)); ctx.lineTo(W, y(thr)); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle = "#8b94a1"; ctx.font = "20px system-ui"; ctx.fillText("clip line", 8, y(thr) - 6);
+  if (hist.length < 2) return;
+  const step = W / (180 - 1), x0 = W - (hist.length - 1) * step;
+  const grad = ctx.createLinearGradient(0, 0, 0, H); grad.addColorStop(0, "rgba(124,92,255,.45)"); grad.addColorStop(1, "rgba(124,92,255,0)");
+  ctx.beginPath(); hist.forEach((v, i) => { const X = x0 + i * step; i ? ctx.lineTo(X, y(v)) : ctx.moveTo(X, y(v)); });
+  ctx.strokeStyle = "#a48bff"; ctx.lineWidth = 3; ctx.stroke();
+  ctx.lineTo(W, H); ctx.lineTo(x0, H); ctx.closePath(); ctx.fillStyle = grad; ctx.fill();
+}
+
+/* ---------- log ---------- */
+let logSeq = 0, logBoot = null; const logLines = [];
+function cls(t) { return /PEAK/.test(t) ? "peak" : /Short ready|posted to/.test(t) ? "ready" : /fail|error|refus|dropped|behind/i.test(t) ? "err" : /LIVE/.test(t) ? "live" : ""; }
+function line(t) { return `<div class="${cls(t)}">${esc(t)}</div>`; }
+async function pollLog() {
+  try {
+    let r = await api("/api/log?since=" + logSeq);
+    if (r.boot !== logBoot) {  // the server restarted (or another data folder): start over
+      logBoot = r.boot; logLines.length = 0; logSeq = 0;
+      if (r.seq) r = await api("/api/log?since=0");
+    }
+    r.lines.forEach(l => logLines.push(l.text)); logSeq = r.seq;
+    if (logLines.length > 3000) logLines.splice(0, logLines.length - 3000);
+    if (r.lines.length) {
+      const mini = $("#miniLog"); mini.innerHTML = logLines.slice(-60).map(line).join(""); mini.scrollTop = mini.scrollHeight;
+      if (tab === "log") renderFullLog();
+      if (r.lines.some(l => /Short ready/.test(l.text)) && tab === "clips") loadClips();
+    }
+  } catch (e) {}
+}
+function renderFullLog() {
+  const f = $("#logFilter").value.toLowerCase(), el = $("#fullLog");
+  el.innerHTML = logLines.filter(t => !f || t.toLowerCase().includes(f)).slice(-1500).map(line).join("");
+  if ($("#logFollow").checked) el.scrollTop = el.scrollHeight;
+}
+$("#logFilter").oninput = renderFullLog;
+
+/* ---------- replay ---------- */
+$("#rpGo").onclick = () => act(() => api("/api/replay", {method:"POST", json:{
+  url: $("#rpUrl").value.trim(), start: +$("#rpStart").value, minutes: +$("#rpMin").value,
+  max_clips: +$("#rpMax").value, post: $("#rpPost").checked}}), "Replay started");
+$("#rpCancel").onclick = () => act(() => api("/api/replay/cancel", {method:"POST"}), "Cancelling");
+function renderReplay(r) {
+  $("#rpGo").disabled = !!(r && r.running); $("#rpCancel").style.display = r && r.running ? "" : "none";
+  if (!r) return;
+  const res = (r.results || []).map(x => x.file ? `<div class="ready">✓ Short at ${fmt(x.at)} — <a href="#" data-goto="clips">see it in Clips</a></div>`
+    : `<div class="err">✗ at ${fmt(x.at)}: ${esc(x.error)}</div>`).join("");
+  $("#rpStatus").innerHTML = `
+    ${r.title ? `<div><b>${esc(r.channel)}</b> — ${esc(r.title)}</div>` : ""}
+    <div style="margin:10px 0"><span class="muted">Step:</span> <b>${esc(r.step || "starting")}</b></div>
+    ${r.running && /chat/.test(r.step) ? `<div class="bar"><i style="width:${Math.round(r.progress * 100)}%"></i></div>` : ""}
+    ${r.error ? `<div class="banner bad" style="margin-top:10px">${esc(r.error)}</div>` : ""}
+    <div class="log" style="height:auto;max-height:240px;margin-top:10px">${res || '<span class="muted">No Shorts yet.</span>'}</div>`;
+}
+function fmt(sec) { sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(s).padStart(2, "0"); }
+
+/* ---------- clips ---------- */
+let clips = [];
+function postState(c) { const p = c.posted || {}; return c.posting_now || p.status === "posting" ? "posting" : p.status || "held"; }
+async function loadClips() {
+  const r = await act(() => api("/api/clips")); if (!r) return; clips = r.clips; renderClips();
+}
+function renderClips() {
+  const f = $("#clipFilter").value;
+  const list = clips.filter(c => !f || (f === "posted" ? ["posted", "scheduled"].includes(postState(c)) : postState(c) === f));
+  $("#clipCount").textContent = `${list.length} of ${clips.length}`;
+  $("#clips").innerHTML = list.map(c => {
+    const st = postState(c), t = c.text || {}, p = c.posted || {};
+    const k = st === "posted" || st === "scheduled" ? "posted" : st === "failed" ? "failed" : "held";
+    return `<div class="card clip" data-id="${esc(c.id)}">
+      ${c.has_video ? `<video src="/media/${encodeURI(c.id)}/short.mp4" controls preload="metadata" playsinline></video>` : `<div class="empty">rendering…</div>`}
+      <div class="hook">${esc(t.hook)}</div><div class="title">${esc(t.title)}</div>
+      <div class="chips"><span class="chip ${k}">${esc(st)}${p.why ? ": " + esc(p.why) : ""}${p.error ? ": " + esc(p.error).slice(0, 80) : ""}</span>
+        <span class="chip">${esc(c.streamer)}</span><span class="chip">score ${esc(c.score)}</span>
+        <span class="chip">hook: ${esc(t.style)}</span><span class="chip">desc: ${esc(t.description_style || "normal")}</span>
+        <span class="chip">${esc(t.source)}</span>${c.music ? `<span class="chip">♪ ${esc(c.music)}</span>` : ""}</div>
+      <div class="small muted">${new Date(c.created * 1000).toLocaleString()} · ${esc(c.duration)}s ${c.reason ? "· " + esc(c.reason) : ""}</div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn sm primary" data-act="post">Review &amp; post</button>
+        <button class="btn sm" data-act="open">Folder</button><div class="grow"></div>
+        <button class="btn sm danger" data-act="del">Delete</button></div></div>`;
+  }).join("") || `<div class="empty card">No clips yet. Start the watcher or run a <a href="#" data-goto="replay">Replay test</a>.</div>`;
+}
+$("#clipFilter").onchange = renderClips;
+$("#openClips").onclick = () => act(() => api("/api/open", {method:"POST"}));
+$("#clips").addEventListener("click", async e => {
+  const b = e.target.closest("button[data-act]"); if (!b) return;
+  const id = b.closest(".clip").dataset.id, c = clips.find(x => x.id === id);
+  if (b.dataset.act === "open") act(() => api(`/api/clips/${encodeURI(id)}/open`, {method:"POST"}));
+  if (b.dataset.act === "del" && confirm("Delete this clip and its files permanently? This cannot be undone.")) {
+    await act(() => api(`/api/clips/${encodeURI(id)}`, {method:"DELETE"}), "Clip deleted"); loadClips();
+  }
+  if (b.dataset.act === "post") openPost(c);
+});
+
+let dlgClip = null;
+function openPost(c) {
+  dlgClip = c; $("#dlgTitle").textContent = `${c.streamer} — ${c.text?.hook || ""}`; $("#dlgMsg").textContent = "";
+  const posts = c.posts || {};
+  $("#dlgBody").innerHTML = (c.chat?.length ? `<p class="small muted">Chat at the moment: ${c.chat.map(esc).join(" · ")}</p>` : "") +
+    Object.keys(posts).map(p => `<div class="net" data-net="${esc(p)}">
+      <div class="row"><label class="toggle"><input type="checkbox" checked> <b>${esc(NETS[p] || p)}</b></label>
+      <span class="small muted">${p === "youtube" ? "title max 100" : p === "x" ? "max 280" : ""}</span></div>
+      <label class="f" style="margin:8px 0 6px"><span class="small muted">${["x","threads","bluesky"].includes(p) ? "Post text" : "Title"}</span>
+        <input type="text" class="t" value="${esc(posts[p].title)}"></label>
+      ${["x","threads","bluesky"].includes(p) ? "" : `<label class="f" style="margin:0"><span class="small muted">${p === "youtube" ? "Description" : "Caption"}</span>
+        <textarea class="d">${esc(posts[p].description)}</textarea></label>`}</div>`).join("") ||
+    `<p class="muted">No networks in this clip's posts. Pick networks in Settings &gt; Posting for new clips.</p>`;
+  postDlg.showModal();
+}
+function dlgPosts() {
+  const out = {}, sel = [];
+  $$("#dlgBody .net").forEach(n => { const p = n.dataset.net;
+    out[p] = {title: $(".t", n).value, description: $(".d", n)?.value || ""};
+    if ($("input[type=checkbox]", n).checked) sel.push(p); });
+  return {out, sel};
+}
+$("#dlgSave").onclick = async () => { const {out} = dlgPosts();
+  await act(() => api(`/api/clips/${encodeURI(dlgClip.id)}/posts`, {method:"PUT", json: out}), "Text saved"); loadClips(); };
+$("#dlgPost").onclick = async () => { const {out, sel} = dlgPosts(); if (!sel.length) return toast("Tick at least one network", "bad");
+  const ok = await act(() => api(`/api/clips/${encodeURI(dlgClip.id)}/posts`, {method:"PUT", json: out}));
+  if (!ok) return;
+  const r = await act(() => api(`/api/clips/${encodeURI(dlgClip.id)}/post`, {method:"POST", json:{platforms: sel}}));
+  if (r) { toast(`Posting to ${sel.map(p => NETS[p]).join(", ")}${new Date(r.scheduled_for) > new Date(Date.now() + 60000) ? " (scheduled " + new Date(r.scheduled_for).toLocaleTimeString() + ")" : ""}`, "ok");
+    postDlg.close(); setTimeout(loadClips, 800); }
+};
+
+/* ---------- music ---------- */
+async function loadMusic() {
+  const r = await act(() => api("/api/music")); if (!r) return;
+  $("#musicFolder").textContent = r.folder;
+  $("#musicMode").textContent = "Music: " + (status?.music_mode || "off");
+  $("#tracks").innerHTML = r.tracks.map(t => `<div class="track" data-name="${esc(t.name)}">
+    <div><b>${esc(t.name)}</b><div class="small muted">${fmt(t.duration)} · ${(t.size / 1048576).toFixed(1)} MB${t.last_used ? " · last used " + new Date(t.last_used * 1000).toLocaleString() : ""}</div></div>
+    <audio controls preload="none" src="/music/${encodeURIComponent(t.name)}"></audio>
+    <label class="toggle"><input type="checkbox" data-act="toggle" ${t.enabled ? "checked" : ""}> in rotation</label>
+    <button class="btn sm danger" data-act="del">Delete</button></div>`).join("") ||
+    `<div class="empty">No tracks yet. Free, safe sources: YouTube Audio Library, Pixabay Music.</div>`;
+}
+$("#tracks").addEventListener("click", async e => {
+  const el = e.target.closest("[data-act]"); if (!el) return;
+  const name = el.closest(".track").dataset.name, enc = encodeURIComponent(name);
+  if (el.dataset.act === "toggle") await act(() => api(`/api/music/${enc}/${el.checked ? "enable" : "disable"}`, {method:"POST"}));
+  if (el.dataset.act === "del" && confirm(`Delete ${name} from the library? The file is removed permanently.`)) {
+    await act(() => api(`/api/music/${enc}`, {method:"DELETE"}), "Track deleted"); loadMusic(); }
+});
+async function upload(files) {
+  for (const f of files) {
+    await act(() => api("/api/music", {method:"POST", body: f, headers: {"X-Filename": encodeURIComponent(f.name), "Content-Type": "application/octet-stream"}}), `Added ${f.name}`);
+  }
+  loadMusic();
+}
+const drop = $("#drop");
+drop.onclick = () => $("#musicFile").click();
+$("#musicFile").onchange = e => upload(e.target.files);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); upload(e.dataTransfer.files); };
+
+/* ---------- settings ---------- */
+let cfg = null, schemaDef = null;
+async function loadConfig() {
+  const r = await act(() => api("/api/config")); if (!r) return;
+  cfg = r.raw || {}; schemaDef = r.schema; $("#cfgPath").textContent = r.path;
+  $("#setBanner").innerHTML = r.error ? `<div class="banner bad"><b>The saved settings have a problem:</b> ${esc(r.error)}</div>` : "";
+  renderSections(); renderChannelsEditor(); loadSecrets();
+}
+function val(sec, f) { const t = cfg[sec] || {}; return f.key in t ? t[f.key] : f.default; }
+function fieldHtml(f, v, path) {
+  const id = "f_" + path.replace(/[^a-z0-9]/gi, "_");
+  let input = "";
+  if (f.type === "bool") input = `<label class="toggle"><input type="checkbox" id="${id}" data-path="${esc(path)}" data-type="bool" ${v ? "checked" : ""}> ${v ? "on" : "off"}</label>`;
+  else if (f.type === "choice") input = `<select id="${id}" data-path="${esc(path)}" data-type="choice">${f.choices.map(c => `<option value="${esc(c)}" ${c === v ? "selected" : ""}>${esc(c || "(global)")}</option>`).join("")}</select>`;
+  else if (f.type === "multi") input = `<div class="checks" data-path="${esc(path)}" data-type="multi">${f.choices.map(c => `<label><input type="checkbox" value="${esc(c)}" ${(v || []).includes(c) ? "checked" : ""}> ${esc(NETS[c] || c)}</label>`).join("")}</div>`;
+  else if (f.type === "list") input = `<input type="text" id="${id}" data-path="${esc(path)}" data-type="list" value="${esc((v || []).join(", "))}">`;
+  else if (f.type === "int" || f.type === "float") input = `<input type="number" id="${id}" data-path="${esc(path)}" data-type="${f.type}" value="${esc(v)}" ${f.min != null ? `min="${f.min}"` : ""} ${f.max != null ? `max="${f.max}"` : ""} step="${f.step || (f.type === "int" ? 1 : "any")}">`;
+  else if (f.type === "facecam") input = `<div class="fc" data-path="${esc(path)}" data-type="facecam">${["x","y","w","h"].map((n, i) => `<input type="number" step="0.01" min="0" max="1" placeholder="${n}" value="${v ? esc(v[i]) : ""}">`).join("")}</div>`;
+  else input = `<input type="text" id="${id}" data-path="${esc(path)}" data-type="text" value="${esc(v)}">`;
+  return `<label class="f"><b>${esc(f.label)}</b>${input}${f.help ? `<span class="help">${esc(f.help)}</span>` : ""}</label>`;
+}
+function renderSections() {
+  $("#sections").innerHTML = schemaDef.sections.map(s => `<div class="card"><h2>${esc(s.title)}</h2>
+    ${s.fields.map(f => fieldHtml(f, val(s.id, f), s.id + "." + f.key)).join("")}</div>`).join("");
+}
+function renderChannelsEditor() {
+  const list = cfg.channel || [];
+  $("#chanList").innerHTML = list.map((ch, i) => `<div class="chanrow" data-i="${i}">
+    <div class="row" style="margin-bottom:8px"><b>${esc(ch.label || ch.name || "New channel")}</b><div class="grow"></div>
+    <button class="btn sm danger" data-del="${i}">Remove</button></div>
+    <div class="grid">${schemaDef.channel.map(f => fieldHtml(f, f.key in ch ? ch[f.key] : f.default, `channel.${i}.${f.key}`)).join("")}</div></div>`).join("") ||
+    `<div class="empty">No channels. Add one to start clipping.</div>`;
+}
+function readInput(el) {
+  const t = el.dataset.type;
+  if (t === "bool") return el.checked;
+  if (t === "multi") return $$("input:checked", el).map(x => x.value);
+  if (t === "list") return el.value.split(",").map(x => x.trim().replace(/^#/, "")).filter(Boolean);
+  if (t === "int") return el.value === "" ? undefined : parseInt(el.value, 10);
+  if (t === "float") return el.value === "" ? undefined : parseFloat(el.value);
+  if (t === "facecam") { const v = $$("input", el).map(x => x.value); return v.every(x => x === "") ? null : v.map(x => parseFloat(x || "0")); }
+  return el.value;
+}
+function collect() {
+  const out = JSON.parse(JSON.stringify(cfg));
+  $$("#tab-settings [data-path]").forEach(el => {
+    const parts = el.dataset.path.split("."), v = readInput(el);
+    if (parts[0] === "channel") {
+      out.channel = out.channel || []; const ch = out.channel[+parts[1]] = out.channel[+parts[1]] || {};
+      if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length && parts[2] !== "game_filter")) delete ch[parts[2]]; else ch[parts[2]] = v;
+    } else {
+      out[parts[0]] = out[parts[0]] || {};
+      if (v === undefined) delete out[parts[0]][parts[1]]; else out[parts[0]][parts[1]] = v;
+    }
+  });
+  return out;
+}
+$("#tab-settings").addEventListener("change", e => { if (e.target.type === "checkbox" && e.target.closest(".toggle") && e.target.dataset.type === "bool")
+  e.target.parentElement.lastChild.textContent = e.target.checked ? " on" : " off"; });
+$("#addChan").onclick = () => { cfg = collect(); cfg.channel = cfg.channel || [];
+  cfg.channel.push({platform: "twitch", name: "", game_filter: ["Grand Theft Auto"]}); renderChannelsEditor(); };
+$("#chanList").addEventListener("click", e => { const d = e.target.dataset.del; if (d === undefined) return;
+  cfg = collect(); cfg.channel.splice(+d, 1); renderChannelsEditor(); });
+$("#saveCfg").onclick = async () => {
+  const raw = collect();
+  try { const r = await api("/api/config", {method:"PUT", json: raw}); cfg = raw;
+    $("#saveMsg").innerHTML = `<span style="color:var(--green)">Saved.</span>${r.restart_needed ? " Stop and Start the watcher to apply." : ""}`;
+    toast("Settings saved", "ok"); renderChannelsEditor();
+  } catch (e) { $("#saveMsg").innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`; toast(e.message, "bad"); }
+};
+$("#reloadCfg").onclick = loadConfig;
+async function loadSecrets() {
+  const s = await act(() => api("/api/secrets")); if (!s) return;
+  $("#secrets").innerHTML = schemaDef.secrets.map(f => `<label class="f"><b>${esc(f.label)}</b>
+    <input type="password" data-secret="${esc(f.key)}" placeholder="${s[f.key].set ? "set: " + esc(s[f.key].hint) : "not set"}" autocomplete="off">
+    <span class="help">${esc(f.help)} ${s[f.key].set ? `<a href="#" data-clear="${esc(f.key)}">remove</a>` : ""}</span></label>`).join("");
+}
+$("#saveSecrets").onclick = async () => {
+  const vals = {}; $$("[data-secret]").forEach(el => { if (el.value.trim()) vals[el.dataset.secret] = el.value.trim(); });
+  if (!Object.keys(vals).length) return toast("Type a key first");
+  await act(() => api("/api/secrets", {method:"PUT", json: vals}), "Keys saved"); loadSecrets();
+};
+$("#secrets").addEventListener("click", async e => { const k = e.target.dataset.clear; if (!k) return; e.preventDefault();
+  if (confirm(`Remove ${k} from .env?`)) { await act(() => api("/api/secrets", {method:"PUT", json: {[k]: ""}}), "Key removed"); loadSecrets(); } });
+
+/* ---------- loops ---------- */
+async function tick() {
+  try { renderStatus(await api("/api/status")); } catch (e) {
+    $("#runpill").className = "pill bad"; $("#runpill").innerHTML = '<i class="dot"></i> UI server not reachable';
+  }
+  pollLog();
+}
+tick(); setInterval(tick, 1000);
+setInterval(() => { if (tab === "clips" && clips.some(c => postState(c) === "posting")) loadClips(); }, 4000);
+</script>
+</body>
+</html>

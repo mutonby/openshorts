@@ -142,7 +142,9 @@ def build_filter(layout: str, fps: int, facecam: Optional[Sequence[float]],
 def render_short(raw: Path, out_path: Path, start: float, duration: float, *,
                  layout: str = "blur", facecam: Optional[Sequence[float]] = None,
                  ass_path: Optional[Path] = None, fps: int = 30, encoder: str = "auto",
-                 timeout: float = 1800) -> Path:
+                 music=None, timeout: float = 1800) -> Path:
+    """``music``: a ``music.Mix`` to lay under the clip's own audio, or None."""
+    from .music import audio_graph
     raw, out_path = Path(raw).resolve(), Path(out_path).resolve()
     cwd = out_path.parent
     enc = pick_encoder(encoder)
@@ -151,13 +153,15 @@ def render_short(raw: Path, out_path: Path, start: float, duration: float, *,
         layout = "blur"
     fonts = _filter_path(FONTS_DIR, cwd) if FONTS_DIR.is_dir() else None
     ass_name = _filter_path(Path(ass_path).resolve(), cwd) if ass_path else None
+    agraph = audio_graph(info["audio"], duration, music)
     graph = build_filter(layout, fps, facecam, ass_name, fonts, enc)
     cmd = [procs.ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-           "-ss", f"{max(0.0, start):.3f}", "-t", f"{duration:.3f}", "-i", str(raw),
-           "-filter_complex", graph, "-map", "[vout]"]
-    if info["audio"]:
-        cmd += ["-map", "0:a:0", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000",
-                "-c:a", "aac", "-b:a", "160k", "-ac", "2"]
+           "-ss", f"{max(0.0, start):.3f}", "-t", f"{duration:.3f}", "-i", str(raw)]
+    if music:
+        cmd += ["-stream_loop", "-1", "-ss", f"{music.offset:.2f}", "-i", str(music.path)]
+    cmd += ["-filter_complex", graph + (";" + agraph if agraph else ""), "-map", "[vout]"]
+    if agraph:
+        cmd += ["-map", "[aout]", "-c:a", "aac", "-b:a", "160k", "-ac", "2"]
     # -t on the output too: the fps filter can carry the last frame past the
     # input cut when the source's timestamps are uneven (joined chunks)
     cmd += encoder_args(enc) + ["-r", str(fps), "-t", f"{duration:.3f}", "-movflags", "+faststart",
@@ -167,7 +171,7 @@ def render_short(raw: Path, out_path: Path, start: float, duration: float, *,
         # a driver hiccup on QuickSync should not lose the clip
         cmd = cmd[:cmd.index("-c:v")] + encoder_args("x264") + cmd[cmd.index("-r"):]
         graph_x = build_filter(layout, fps, facecam, ass_name, fonts, "x264")
-        cmd[cmd.index("-filter_complex") + 1] = graph_x
+        cmd[cmd.index("-filter_complex") + 1] = graph_x + (";" + agraph if agraph else "")
         r = procs.run(cmd, low_priority=True, timeout=timeout, text=True, cwd=str(cwd))
     if r.returncode != 0 or not out_path.exists() or out_path.stat().st_size < 10_000:
         raise RenderError(f"render failed: {_tail(r.stderr)}")

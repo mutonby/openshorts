@@ -8,7 +8,6 @@ look. libass cannot draw colour emoji, so emoji are dropped from burned text
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import List, Sequence
 
@@ -38,7 +37,6 @@ class Look:
 
 
 WHITE, BLACK, YELLOW, GREEN, RED = "&H00FFFFFF", "&H00000000", "&H0000E5FF", "&H0000FF7F", "&H003C3CFF"
-CJK_FONT = "Microsoft YaHei"
 
 LOOKS = {
     "ooc": Look("Montserrat ExtraBold", 66, BLACK, WHITE, WHITE, True,
@@ -47,16 +45,7 @@ LOOKS = {
                   "Montserrat ExtraBold", 80, WHITE, YELLOW, False),
     "brainrot": Look("Anton", 92, WHITE, BLACK, BLACK, False,
                      "Anton", 100, WHITE, GREEN, True),
-    "chinese": Look(CJK_FONT, 96, YELLOW, BLACK, BLACK, False,
-                    "Montserrat ExtraBold", 80, WHITE, YELLOW, True),
 }
-
-_CJK = re.compile(r"[　-〿㐀-鿿＀-￯]")
-
-
-def has_cjk(text: str) -> bool:
-    return bool(_CJK.search(text or ""))
-
 
 def ass_time(t: float) -> str:
     t = max(0.0, t)
@@ -74,9 +63,6 @@ def escape(text: str) -> str:
 
 
 def wrap(text: str, max_chars: int) -> List[str]:
-    if has_cjk(text) and " " not in text.strip():
-        n = max(1, max_chars // 2)
-        return [text[i:i + n] for i in range(0, len(text), n)]
     lines, cur = [], ""
     for word in text.split():
         if cur and len(cur) + 1 + len(word) > max_chars:
@@ -112,7 +98,7 @@ def build_ass(words: Sequence[Word], hook: str, duration: float, style: str = "o
               layout: str = "blur", show_captions: bool = True, show_hook: bool = True) -> str:
     look = LOOKS.get(style, LOOKS["ooc"])
     hook_y, cap_y = LAYOUT_BANDS.get(layout, LAYOUT_BANDS["blur"])
-    hook_font = CJK_FONT if has_cjk(hook) else look.hook_font
+    hook_font = look.hook_font
     border_style = 3 if look.hook_box else 1
     hook_outline_w = 14 if look.hook_box else 7
     header = f"""[Script Info]
@@ -133,8 +119,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     events = []
     hook_text = escape(hook)
     if show_hook and hook_text:
-        per_line = 10 if has_cjk(hook_text) and " " not in hook_text else 20
-        lines = wrap(hook_text, per_line * (2 if has_cjk(hook_text) and " " not in hook_text else 1))
+        lines = wrap(hook_text, 20)
         body = r"\N".join(lines[:3])
         pop = r"{\fscx80\fscy80\t(0,120,\fscx100\fscy100)" + rf"\pos({W // 2},{hook_y})" + "}"
         events.append(f"Dialogue: 1,{ass_time(0)},{ass_time(duration)},Hook,,0,0,0,,{pop}{body}")

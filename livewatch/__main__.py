@@ -1,9 +1,11 @@
 """Command line: ``python -m livewatch <command>``.
 
+  ui         open the web dashboard: start/stop, live view, clips, settings, music
   run        watch the channels in livewatch.toml, clip peaks, post them
   doctor     check tools, encoder, keys and the config
   chat       print a channel's live chat score for a while (tune threshold)
   clip       turn part of a local video into a Short with the same pipeline
+  replay     run the whole pipeline on an ended YouTube stream (test outputs/posting)
   post       post a clip that was held back (``clips/<channel>/<time>``)
   snapshot   save a frame of a live channel with a 10% grid (to set facecam)
 """
@@ -39,6 +41,17 @@ def cmd_run(args):
     from .service import Service
     s = _load(args)
     Service(s).run(duration=args.minutes * 60 if args.minutes else None)
+
+
+def cmd_ui(args):
+    from .webui import serve
+    path = Path(args.config)
+    if not path.exists():
+        example = Path(__file__).resolve().parent.parent / "livewatch.example.toml"
+        if example.is_file():
+            shutil.copyfile(example, path)
+            print(f"created {path} from the example; edit it in the Settings tab")
+    serve(path, port=args.port, open_browser=not args.no_browser)
 
 
 def cmd_doctor(args):
@@ -144,6 +157,25 @@ def cmd_clip(args):
     print(out)
 
 
+def cmd_replay(args):
+    from .replay import Replay, ReplayError
+    from .service import Logger
+    s = _load(args) if Path(args.config).exists() else config.from_dict({})
+    log = Logger(s.data_dir / "livewatch.log") if s.data_dir.exists() or s.data_dir.parent.exists() \
+        else Logger(None)
+    post = True if args.post else (False if args.no_post else None)
+    try:
+        rep = Replay(s, args.url, minutes=args.minutes, start_minute=args.start,
+                     max_clips=args.max_clips, post=post, log=log)
+        results = rep.run()
+    except ReplayError as e:
+        sys.exit(f"replay: {e}")
+    except KeyboardInterrupt:
+        sys.exit("replay: cancelled")
+    for r in results:
+        print(r.get("file") or f"failed at {r['at']:.0f}s: {r.get('error')}")
+
+
 def cmd_post(args):
     from . import poster
     from .service import post_now, Logger
@@ -194,6 +226,11 @@ def main(argv=None):
     r.add_argument("--minutes", type=float, default=0, help="stop after this long (0 = forever)")
     r.set_defaults(fn=cmd_run)
 
+    u = sub.add_parser("ui", help="open the web dashboard (start/stop, live view, clips, settings)")
+    u.add_argument("--port", type=int, default=8765)
+    u.add_argument("--no-browser", action="store_true")
+    u.set_defaults(fn=cmd_ui)
+
     sub.add_parser("doctor", help="check the setup").set_defaults(fn=cmd_doctor)
 
     c = sub.add_parser("chat", help="watch a chat's peak score")
@@ -217,6 +254,16 @@ def main(argv=None):
     k.add_argument("--facecam", type=float, nargs=4, metavar=("X", "Y", "W", "H"))
     k.add_argument("--no-post", action="store_true")
     k.set_defaults(fn=cmd_clip)
+
+    rp = sub.add_parser("replay", help="run the pipeline on an ended YouTube stream")
+    rp.add_argument("url")
+    rp.add_argument("--minutes", type=float, default=30, help="how much of the stream to analyse")
+    rp.add_argument("--start", type=float, default=0, help="start at this minute")
+    rp.add_argument("--max-clips", type=int, default=5)
+    g = rp.add_mutually_exclusive_group()
+    g.add_argument("--post", action="store_true", help="post the clips (overrides the config)")
+    g.add_argument("--no-post", action="store_true", help="never post (overrides the config)")
+    rp.set_defaults(fn=cmd_replay)
 
     po = sub.add_parser("post", help="post a held clip")
     po.add_argument("clip_dir")

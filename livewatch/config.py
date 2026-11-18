@@ -19,7 +19,8 @@ except ModuleNotFoundError:  # pragma: no cover - 3.10 and older
     import tomli as tomllib  # type: ignore
 
 PLATFORMS = ("twitch", "kick", "youtube")
-CAPTION_STYLES = ("ooc", "chinese", "brainrot", "clean")
+CAPTION_STYLES = ("ooc", "brainrot", "clean")          # on-video hook, always English
+DESCRIPTION_STYLES = ("normal", "weird")              # caption under Reels/TikToks
 POST_PLATFORMS = ("youtube", "tiktok", "instagram", "facebook", "x", "threads", "bluesky")
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,100}$")
@@ -99,11 +100,17 @@ class Settings:
     # style
     caption_style: str = "ooc"
     rotate_styles: bool = False
+    description_style: str = "normal"
+    rotate_descriptions: bool = False
     captions: bool = True
     hook: bool = True
     whisper_model: str = "base"
     fps: int = 30
     encoder: str = "auto"  # auto | qsv | x264
+    # music
+    music_mode: str = "off"        # off | always | quiet (only clips with little speech)
+    music_volume_db: float = -20.0
+    music_dir: Optional[Path] = None  # default: <data_dir>/music
     # ai
     ai_model: str = "gemini-3.1-flash-lite"
     # post
@@ -126,6 +133,11 @@ class Settings:
         if self.rotate_styles:
             return CAPTION_STYLES[n % len(CAPTION_STYLES)]
         return self.caption_style
+
+    def description_for(self, n: int = 0) -> str:
+        if self.rotate_descriptions:
+            return DESCRIPTION_STYLES[n % len(DESCRIPTION_STYLES)]
+        return self.description_style
 
 
 def load_dotenv(path: Path) -> None:
@@ -188,6 +200,8 @@ def parse_channel(raw: dict) -> Channel:
             raise ConfigError(f"{name}: facecam fractions must stay inside the frame")
         facecam = [x, y, w, h]
     style = str(raw.get("caption_style", "")).strip().lower()
+    if style == "chinese":  # removed style in older configs: fall back to the global one
+        style = ""
     if style and style not in CAPTION_STYLES:
         raise ConfigError(f"{name}: caption_style must be one of {', '.join(CAPTION_STYLES)}")
     return Channel(
@@ -240,12 +254,24 @@ def from_dict(data: dict, base_dir: Path = Path(".")) -> Settings:
     s.audio_weight = _num(d, "audio_weight", s.audio_weight, 0, 5)
 
     style = str(st.get("caption_style", s.caption_style)).strip().lower()
+    if style == "chinese":  # removed style in older configs
+        style = "ooc"
     if style == "rotate":
         s.rotate_styles = True
     elif style in CAPTION_STYLES:
         s.caption_style = style
     else:
         raise ConfigError(f"caption_style must be one of {', '.join(CAPTION_STYLES + ('rotate',))}")
+    dstyle = str(st.get("description_style", s.description_style)).strip().lower()
+    if dstyle == "chinese":  # removed style
+        dstyle = "normal"
+    if dstyle == "rotate":
+        s.rotate_descriptions = True
+    elif dstyle in DESCRIPTION_STYLES:
+        s.description_style = dstyle
+    else:
+        raise ConfigError("description_style must be one of "
+                          f"{', '.join(DESCRIPTION_STYLES + ('rotate',))}")
     s.captions = bool(st.get("captions", s.captions))
     s.hook = bool(st.get("hook", s.hook))
     s.whisper_model = str(st.get("whisper_model", s.whisper_model))
@@ -256,6 +282,16 @@ def from_dict(data: dict, base_dir: Path = Path(".")) -> Settings:
     s.encoder = str(st.get("encoder", s.encoder)).lower()
     if s.encoder not in ("auto", "qsv", "x264"):
         raise ConfigError("encoder must be auto, qsv or x264")
+
+    mu = data.get("music", {}) or {}
+    s.music_mode = str(mu.get("mode", s.music_mode)).strip().lower()
+    if s.music_mode not in ("off", "always", "quiet"):
+        raise ConfigError("music mode must be off, always or quiet")
+    s.music_volume_db = _num(mu, "volume_db", s.music_volume_db, -40, 0)
+    folder = str(mu.get("folder", "") or "").strip()
+    s.music_dir = Path(folder) if folder else s.data_dir / "music"
+    if not s.music_dir.is_absolute():
+        s.music_dir = (base_dir / s.music_dir).resolve()
 
     s.ai_model = str(ai.get("model", os.environ.get("GEMINI_MODEL", s.ai_model)))
 

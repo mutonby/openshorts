@@ -37,9 +37,26 @@ def run(cmd: List[str], low_priority: bool = False, timeout: Optional[float] = N
                           preexec_fn=_preexec(low_priority), timeout=timeout, **kw)
 
 
+def kill_tree(pid: int) -> None:
+    """Windows: end a process and its children (yt-dlp.exe and streamlink.exe
+    are launchers whose real work runs in a child that a plain terminate()
+    leaves behind, still holding its files open)."""
+    if IS_WINDOWS:
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
 def terminate(proc: Optional[subprocess.Popen], grace: float = 5.0) -> None:
     if proc is None or proc.poll() is not None:
         return
+    if IS_WINDOWS:
+        kill_tree(proc.pid)
+        try:
+            proc.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            pass
+        if proc.poll() is not None:
+            return
     try:
         proc.terminate()
         proc.wait(timeout=grace)

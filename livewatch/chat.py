@@ -114,6 +114,20 @@ def parse_youtube_chat_line(line: str):
     return out
 
 
+def parse_youtube_replay_line(line: str):
+    """[(seconds into the video, ChatMessage)] from one line of an ended stream's chat replay.
+
+    A replay line carries ``videoOffsetTimeMsec``: where in the recording the
+    message appeared, which is what clips are cut by.
+    """
+    try:
+        data = json.loads(line)
+        offset = int((data.get("replayChatItemAction") or {}).get("videoOffsetTimeMsec")) / 1000.0
+    except (ValueError, TypeError, AttributeError):
+        return []
+    return [(offset, m) for m in parse_youtube_chat_line(line)]
+
+
 # --------------------------------------------------------------------------- #
 # Readers
 # --------------------------------------------------------------------------- #

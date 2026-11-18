@@ -27,12 +27,19 @@ min_chat_rate = 0.3           # chats slower than this lean on audio spikes
 audio_weight = 1.0            # 0 ignores loudness; Kick relies on it (no chat reader)
 
 [style]
-caption_style = "rotate"      # ooc | chinese | brainrot | clean | rotate (cycle through all)
+caption_style = "rotate"      # hook on the video (English): ooc | brainrot | clean | rotate
+description_style = "rotate"  # caption under Reels/TikToks: normal | weird | rotate
+                              # (weird = cryptic lines that make people comment; unproven, so compare)
 captions = true               # word-by-word burned captions (faster-whisper on the CPU)
 hook = true                   # the big text on top
 whisper_model = "base"        # tiny = fastest, small = better on non-English, off = no captions
 fps = 30
 encoder = "auto"              # auto (QuickSync if it works) | qsv | x264
+
+[music]
+mode = "off"                  # off | always | quiet (only clips with little speech)
+volume_db = -20               # soft bed; it dips further while the streamer talks
+folder = ""                   # empty = livewatch_data/music. Royalty-free tracks only!
 
 [ai]
 model = "gemini-3.1-flash-lite"
@@ -68,5 +75,5 @@ tags = ["adinross", "kick"]
 platform = "youtube"
 name = "@IShowSpeed"
 tags = ["ishowspeed", "speed"]
-# caption_style = "chinese"
+# caption_style = "brainrot"
 # facecam = [0.0, 0.62, 0.28, 0.38]

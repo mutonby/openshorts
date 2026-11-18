@@ -19,13 +19,14 @@ import subprocess
 import threading
 import time
 import traceback
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from . import captions, poster, procs, render, transcribe, viral
+from . import captions, music, poster, procs, render, transcribe, viral
 from .chat import TwitchChatReader, YouTubeChatReader
 from .config import Channel, Settings, matches_game
 from .detector import Peak, PeakDetector
@@ -40,13 +41,38 @@ def _log_line(msg: str) -> str:
 
 
 class Logger:
+    """Prints, appends to the log file and keeps the last lines for the web UI."""
+
+    KEEP = 2000
+
     def __init__(self, path: Optional[Path]):
         self.path = path
         self._lock = threading.Lock()
+        self.seq = 0
+        self.boot = f"{time.time():.6f}"  # a page that saw another Logger starts over
+        self.lines: "deque[tuple]" = deque(maxlen=self.KEEP)
+        # earlier sessions' last lines, so the UI does not open on an empty log
+        if path and Path(path).is_file():
+            try:
+                with open(path, "rb") as fh:
+                    fh.seek(max(0, Path(path).stat().st_size - 200_000))
+                    tail = fh.read().decode("utf-8", "replace").splitlines()[1:]
+                for ln in tail[-300:]:
+                    self.seq += 1
+                    self.lines.append((self.seq, ln))
+            except OSError:
+                pass
+
+    def since(self, seq: int) -> List[tuple]:
+        """(seq, line) entries newer than ``seq``."""
+        with self._lock:
+            return [e for e in self.lines if e[0] > seq]
 
     def __call__(self, msg: str):
         line = _log_line(msg)
         with self._lock:
+            self.seq += 1
+            self.lines.append((self.seq, line))
             try:
                 print(line, flush=True)
             except UnicodeEncodeError:
@@ -100,6 +126,7 @@ class ClipJob:
     raw_offset: float = 0.0
     duration: float = 0.0
     created: float = field(default_factory=time.time)
+    desc_style: str = "normal"
 
 
 class ChannelWatch:
@@ -183,10 +210,10 @@ class ChannelWatch:
 
 
 class Service:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, log: Optional[Logger] = None):
         self.settings = settings
         settings.data_dir.mkdir(parents=True, exist_ok=True)
-        self.log = Logger(settings.data_dir / "livewatch.log")
+        self.log = log or Logger(settings.data_dir / "livewatch.log")
         self.watches: Dict[str, ChannelWatch] = {}
         self.next_check: Dict[str, float] = {}
         self.checking: Dict[str, object] = {}
@@ -197,12 +224,69 @@ class Service:
         self.ledger = poster.PostLedger(settings.data_dir / "post_ledger.json")
         self.worker = threading.Thread(target=self._worker, daemon=True, name="clip-worker")
         self.index_path = settings.data_dir / "clips.csv"
+        # for the web UI
+        self.started_at: Optional[float] = None
+        self.finished = threading.Event()
+        self.state: Dict[str, str] = {c.key: "not checked yet" for c in settings.channels}
+        self.last_info: Dict[str, LiveInfo] = {}
+        self.history: Dict[str, deque] = {}
+        self.current_step = ""
+        self.counts = {"peaks": 0, "clips": 0, "posted": 0, "failed": 0}
+
+    # ------------------------------------------------------------- control
+    def stop(self):
+        """Ask the loop to stop; queued clips are still finished."""
+        self.stop_event.set()
+
+    def check_now(self):
+        for key in self.next_check:
+            self.next_check[key] = 0
+
+    def status(self) -> dict:
+        """A snapshot for the web UI (read from other threads; values only)."""
+        s = self.settings
+        chans = []
+        for ch in s.channels:
+            key = ch.key
+            w = self.watches.get(key)
+            info = w.info if w else self.last_info.get(key)
+            item = {
+                "key": key, "platform": ch.platform, "name": ch.name, "display": ch.display,
+                "url": ch.url, "state": self.state.get(key, ""),
+                "live": bool(info and info.live), "recording": w is not None,
+                "category": info.category if info else "", "title": info.title if info else "",
+                "game_filter": ch.game_filter,
+            }
+            if w:
+                sc, cz, az = w.detector.last_score
+                warm = max(0.0, s.warmup_seconds - (time.time() - (w.detector._first or time.time())))
+                item.update({
+                    "quality": w.qualities[w.level].split(",")[0],
+                    "buffer_seconds": round(len(w.buffer) * 10),
+                    "chat_messages": w.chat.count if w.chat else None,
+                    "score": round(sc, 2), "chat_z": round(cz, 2), "audio_z": round(az, 2),
+                    "warming_up": round(warm), "pending": len(w.pending),
+                    "since": w.started,
+                    "history": [round(v, 2) for _, v in list(self.history.get(key, []))[-180:]],
+                })
+            chans.append(item)
+        return {
+            "running": not self.finished.is_set() and self.started_at is not None,
+            "stopping": self.stop_event.is_set() and not self.finished.is_set(),
+            "started_at": self.started_at, "channels": chans,
+            "queue": self.jobs.qsize(), "current_step": self.current_step,
+            "counts": dict(self.counts), "threshold": s.threshold,
+            "encoder": render.pick_encoder(s.encoder),
+            "ai": "gemini" if s.gemini_api_key else "offline",
+            "posting": bool(s.post_enabled and s.upload_post_api_key and s.upload_post_user),
+        }
 
     # ------------------------------------------------------------ lifecycle
     def run(self, duration: Optional[float] = None):
         s = self.settings
         if not s.channels:
-            self.log("no [[channel]] in the config: nothing to watch")
+            self.log("no channels in the config: nothing to watch")
+            self.finished.set()
             return
         self.log(f"livewatch watching {len(s.channels)} channel(s): "
                  + ", ".join(c.key for c in s.channels))
@@ -210,6 +294,7 @@ class Service:
                  f"ai={'gemini' if s.gemini_api_key else 'offline templates'} "
                  f"posting={'on' if s.post_enabled and s.upload_post_api_key else 'off'}")
         self._cleanup_old_buffers()
+        self.started_at = time.time()
         self.worker.start()
         t_end = time.time() + duration if duration else None
         try:
@@ -222,6 +307,8 @@ class Service:
             self.log("stopping (Ctrl+C)")
         finally:
             self.shutdown()
+            self.log("stopped")
+            self.finished.set()
 
     def shutdown(self):
         self.stop_event.set()
@@ -262,6 +349,7 @@ class Service:
 
         for key, w in list(self.watches.items()):
             peak = w.detector.evaluate(now)
+            self.history.setdefault(key, deque(maxlen=600)).append((now, w.detector.last_score[0]))
             if peak:
                 self._on_peak(w, peak)
             self._flush_pending(w)
@@ -283,33 +371,50 @@ class Service:
                 self._flush_pending(w, force=True)
                 w.stop()
                 del self.watches[key]
+                self.state[key] = "stream ended"
                 self.next_check[key] = now + 20
+
+    def _set_state(self, key: str, state: str, log: bool = True):
+        """Remember a channel's state; log it only when it changes."""
+        if self.state.get(key) != state:
+            self.state[key] = state
+            if log:
+                self.log(f"{key}: {state}")
 
     def _on_live_info(self, ch: Channel, info: LiveInfo):
         key = ch.key
+        self.last_info[key] = info
         w = self.watches.get(key)
         game_ok = ch.platform == "youtube" or matches_game(info.category, ch.game_filter)
         if w:
             if info.live:
                 w.info = info
                 if not game_ok:
-                    self.log(f"{key}: category is now {info.category!r}, not in game_filter; pausing")
                     self._flush_pending(w, force=True)
                     w.stop()
                     del self.watches[key]
+                    self._set_state(key, f"paused: now playing {info.category or '?'}")
             return
         if not info.live:
+            err = info.error or ""
+            if err and "No playable streams" not in err and "No plugin" not in err:
+                self._set_state(key, f"check failed: {err[:100]}")
+            else:
+                self._set_state(key, "offline", log=False)
             return
         if not game_ok:
-            self.log(f"{key}: live but playing {info.category!r}; waiting for {ch.game_filter}")
+            self._set_state(key, f"live, waiting for {', '.join(ch.game_filter)} "
+                                 f"(playing {info.category or '?'})")
             return
         if len(self.watches) >= self.settings.max_live_channels:
-            self.log(f"{key}: live, but already recording {len(self.watches)} channels (max_live_channels)")
+            self._set_state(key, f"live, not recording: already {len(self.watches)} "
+                                 f"recordings (max_live_channels)")
             return
         free_gb = shutil.disk_usage(self.settings.data_dir).free / 1e9
         if free_gb < MIN_FREE_GB:
-            self.log(f"{key}: live, but only {free_gb:.1f} GB free on disk; not recording")
+            self._set_state(key, f"live, not recording: only {free_gb:.1f} GB free on disk")
             return
+        self.state[key] = "recording"
         self.log(f"{key}: LIVE - {info.category or '?'} - {info.title[:80]}")
         w = ChannelWatch(self, ch, info)
         self.watches[key] = w
@@ -325,8 +430,10 @@ class Service:
         style = s.style_for(w.channel, self.clip_counter)
         stamp = datetime.fromtimestamp(peak.ts).strftime("%Y%m%d-%H%M%S")
         job_dir = s.data_dir / "clips" / w.channel.key.replace(":", "_") / stamp
-        job = ClipJob(w.channel, peak, start, end, w.info, style, job_dir)
+        job = ClipJob(w.channel, peak, start, end, w.info, style, job_dir,
+                      desc_style=s.description_for(self.clip_counter))
         w.pending.append(job)
+        self.counts["peaks"] += 1
         self.log(f"{w.channel.key}: PEAK score {peak.score} ({peak.reason}) "
                  f"chat: {' | '.join(peak.messages[:3])[:120]}")
 
@@ -363,8 +470,11 @@ class Service:
             try:
                 self.process(job)
             except Exception as e:
+                self.counts["failed"] += 1
                 self.log(f"{job.channel.key}: clip failed: {e}")
                 self.log(traceback.format_exc(limit=3))
+            finally:
+                self.current_step = ""
 
     def process(self, job: ClipJob) -> Path:
         s = self.settings
@@ -372,7 +482,9 @@ class Service:
         d = job.dir
         d.mkdir(parents=True, exist_ok=True)
         words, lang = [], ""
+        who = job.channel.key
         if s.whisper_model != "off" and (s.captions or s.gemini_api_key):
+            self.current_step = f"{who}: transcribing"
             try:
                 wav = render.extract_audio(job.raw, d / "audio.wav", job.raw_offset, job.duration)
                 words, lang = transcribe.transcribe(str(wav), s.whisper_model, job.channel.language)
@@ -384,16 +496,25 @@ class Service:
             category=job.info.category, stream_title=job.info.title,
             transcript=" ".join(w.text for w in words), chat=job.peak.messages,
             language=lang, seed=f"{job.channel.key}{job.peak.ts}")
+        self.current_step = f"{who}: writing hook, title and hashtags"
         text = viral.write_text(ctx, job.style, s.gemini_api_key, s.ai_model,
-                                base_tags=s.base_hashtags, channel_tags=job.channel.tags)
+                                base_tags=s.base_hashtags, channel_tags=job.channel.tags,
+                                desc_style=job.desc_style)
         layout = "facecam" if job.channel.facecam else "blur"
         ass = d / "captions.ass"
         ass.write_text(captions.build_ass(words, text.hook, job.duration, job.style, layout,
                                           s.captions, s.hook), encoding="utf-8")
+        mix = None
+        if music.wants_music(s.music_mode, len(words), job.duration) and s.music_dir:
+            mix = music.Library(s.music_dir).pick(job.duration, s.music_volume_db,
+                                                   seed=f"{job.channel.key}{job.peak.ts}")
+            if mix is None:
+                self.log(f"{who}: music is on but the library is empty ({s.music_dir})")
+        self.current_step = f"{who}: rendering the Short"
         out = render.render_short(job.raw, d / "short.mp4", job.raw_offset, job.duration,
                                   layout=layout, facecam=job.channel.facecam,
                                   ass_path=ass if (s.captions or s.hook) else None,
-                                  fps=s.fps, encoder=s.encoder)
+                                  fps=s.fps, encoder=s.encoder, music=mix)
         if not s.keep_raw_clips:
             job.raw.unlink(missing_ok=True)
         posts = viral.platform_posts(text, s.post_platforms)
@@ -404,12 +525,21 @@ class Service:
             "chat": job.peak.messages, "category": job.info.category,
             "stream_title": job.info.title, "language": lang,
             "transcript": ctx.transcript, "text": text.to_dict(), "posts": posts,
+            "music": mix.path.name if mix else None,
             "posted": None,
         }
         self.log(f"{job.channel.key}: Short ready in {time.time() - t0:.0f}s -> {out}")
         self.log(f"   [{text.style}/{text.source}] hook: {text.hook} | title: {text.title}")
+        if text.social_description:
+            self.log(f"   [{text.description_style} description] {text.social_description[:100]}")
+        self.counts["clips"] += 1
+        meta["posted"] = {"status": "posting"} if s.post_enabled else None
+        write_meta(d, meta)  # visible in the UI before the upload finishes
+        self.current_step = f"{who}: posting"
         meta["posted"] = self.maybe_post(out, text, posts)
-        (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        if (meta["posted"] or {}).get("status") in ("posted", "scheduled"):
+            self.counts["posted"] += 1
+        write_meta(d, meta)
         self._index(meta, out)
         return out
 
@@ -442,6 +572,13 @@ class Service:
             p = meta.get("posted") or {}
             wr.writerow([meta["moment"], meta["channel"], meta["score"], meta["text"]["style"],
                          meta["text"]["title"], str(out), p.get("status", ""), p.get("request_id", "")])
+
+
+def write_meta(d: Path, meta: dict) -> None:
+    """meta.json written whole, through a temp file, so a reader never sees half."""
+    tmp = d / "meta.json.tmp"
+    tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(d / "meta.json")
 
 
 def post_now(video: Path, posts: dict, s: Settings, ledger: poster.PostLedger,

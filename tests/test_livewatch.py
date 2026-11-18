@@ -27,7 +27,7 @@ def test_config_defaults_and_channels(tmp_path):
         "channel": [
             {"platform": "twitch", "name": "SomeStreamer", "game_filter": "Grand Theft Auto"},
             {"platform": "kick", "name": "kicker", "facecam": [0, 0.6, 0.3, 0.4]},
-            {"platform": "youtube", "name": "@Handle", "caption_style": "chinese"},
+            {"platform": "youtube", "name": "@Handle", "caption_style": "brainrot"},
         ],
     }, base_dir=tmp_path)
     assert s.data_dir == (tmp_path / "data").resolve()
@@ -37,8 +37,22 @@ def test_config_defaults_and_channels(tmp_path):
     assert tw.url == "https://www.twitch.tv/somestreamer" and tw.game_filter == ["Grand Theft Auto"]
     assert kk.url == "https://kick.com/kicker" and kk.facecam == [0.0, 0.6, 0.3, 0.4]
     assert yt.url == "https://www.youtube.com/@Handle/live"
-    assert s.style_for(yt) == "chinese"
-    assert [s.style_for(tw, n) for n in range(4)] == list(config.CAPTION_STYLES)
+    assert s.style_for(yt) == "brainrot"
+    assert [s.style_for(tw, n) for n in range(3)] == list(config.CAPTION_STYLES)
+    assert s.description_for(5) == "normal"
+
+
+def test_description_style_and_removed_chinese_style(tmp_path):
+    s = config.from_dict({"style": {"description_style": "rotate"}}, base_dir=tmp_path)
+    assert [s.description_for(n) for n in range(3)] == ["normal", "weird", "normal"]
+    # a config written when "chinese" existed still loads, as plain English
+    old = config.from_dict({"style": {"caption_style": "chinese", "description_style": "chinese"},
+                            "channel": [{"platform": "twitch", "name": "a",
+                                         "caption_style": "chinese"}]}, base_dir=tmp_path)
+    assert old.caption_style == "ooc" and old.description_style == "normal"
+    assert old.style_for(old.channels[0]) == "ooc"
+    with pytest.raises(config.ConfigError):
+        config.from_dict({"style": {"description_style": "klingon"}}, base_dir=tmp_path)
 
 
 @pytest.mark.parametrize("bad", [
@@ -268,10 +282,36 @@ def test_offline_text_every_style(style):
     assert t.hook and t.title and t.description
     assert t.hashtags[0] == "gta6" and "Streamer".lower() in [h.lower() for h in t.hashtags]
     assert len(t.hashtags) == len({h.lower() for h in t.hashtags})
-    if style == "chinese":
-        assert captions.has_cjk(t.title) and " | " in t.title
+    assert not viral.has_cjk(t.hook + t.title)  # on-video text is always English
     assert t.to_dict() == viral.write_text(CTX, style, base_tags=["gta6"],
                                            channel_tags=["streamer"]).to_dict()
+
+
+@pytest.mark.parametrize("desc", viral.DESCRIPTION_STYLES)
+def test_description_styles_only_change_the_social_caption(desc):
+    t = viral.write_text(CTX, "ooc", desc_style=desc, base_tags=["gta6"])
+    posts = viral.platform_posts(t, ["youtube", "instagram", "tiktok", "x"])
+    assert not viral.has_cjk(t.hook + t.title + t.description)
+    assert not viral.has_cjk(posts["youtube"]["title"] + posts["youtube"]["description"]
+                                + posts["x"]["title"])
+    if desc == "normal":
+        assert t.social_description == ""
+        assert posts["instagram"]["description"].startswith(t.description.split("\n")[0])
+    else:
+        assert t.social_description and t.description_style == desc
+        assert posts["instagram"]["description"].startswith(t.social_description)
+        assert posts["tiktok"]["description"].startswith(t.social_description)
+        assert not viral.has_cjk(t.social_description)
+
+
+def test_non_english_ai_text_is_rejected():
+    zh = dict(GOOD, hook="这一幕我直接看傻了")
+    assert viral.parse_gemini_response(_gemini_payload(zh), "ooc") is None
+    odd = dict(GOOD, social_description="主播当场破防了")
+    t = viral.parse_gemini_response(_gemini_payload(odd), "ooc", "weird")
+    assert t is not None and t.social_description == ""  # the offline weird line is used instead
+    tags = dict(GOOD, hashtags=["gta6", "游戏"])
+    assert viral.parse_gemini_response(_gemini_payload(tags), "ooc").hashtags == ["gta6"]
 
 
 @pytest.mark.parametrize("line,ok", [
@@ -363,8 +403,8 @@ def test_clean_words_drops_hallucinations():
 def test_build_ass_hook_and_karaoke():
     words = [Word(0.2 + i * 0.3, 0.45 + i * 0.3, w) for i, w in
              enumerate(["no", "way", "he", "{did}", "that", "😭"])]
-    ass = captions.build_ass(words, "这一幕我直接看傻了😭", 10, style="chinese")
-    assert "Style: Hook,Microsoft YaHei" in ass
+    ass = captions.build_ass(words, "he really thought nobody saw that 😭", 10, style="ooc")
+    assert "Style: Hook,Montserrat ExtraBold" in ass and "nobody saw that" in ass
     assert "😭" not in ass and "{did}" not in ass and "(DID)" in ass
     dialogue = [l for l in ass.splitlines() if l.startswith("Dialogue:")]
     assert len(dialogue) == 1 + 5  # hook + one event per spoken word
@@ -384,7 +424,6 @@ def test_shift_words_and_wrap():
     ws = captions.shift_words([Word(1, 2, "a"), Word(9, 12, "b"), Word(20, 21, "c")], 5, 6)
     assert ws == [Word(4, 6, "b")]
     assert captions.wrap("one two three four five six", 9) == ["one two", "three", "four five", "six"]
-    assert captions.wrap("这一幕我直接看傻了", 10) == ["这一幕我直", "接看傻了"]
 
 
 # ------------------------------------------------------------------------ posting
