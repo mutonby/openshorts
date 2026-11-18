@@ -3704,12 +3704,18 @@ def _archive_clip_edit_bg(job_id: str, clip_index: int, filename: str):
     if not user_id:
         return
     output_dir = os.path.join(OUTPUT_DIR, job_id)
+    # The local file is already the new one and storage is not yet: nobody is
+    # sent there for this job until the upload has reported back.
+    from cloud import media_redirect
+    media_redirect.hold(job_id)
 
     async def _run():
         try:
             await cloud.videos.archive_clip_edit(user_id, job_id, clip_index, output_dir, filename)
         except Exception as e:
             print(f"⚠️  R2 edit archive error for {job_id}: {e}")
+        finally:
+            media_redirect.forget(job_id)
 
     asyncio.create_task(_run())
 
@@ -4500,32 +4506,33 @@ def _media_denied():
         "download_url), or send your API key in the Authorization header."))
 
 
-async def _authorize_media(kind: str, path: str, scope) -> None:
-    """``authorize`` hook of the /videos and /thumbnails mounts."""
+async def _authorize_media(kind: str, path: str, scope) -> Optional[str]:
+    """``authorize`` hook of the /videos and /thumbnails mounts. Returns what
+    let the caller in (``_media_redirect`` only acts for the owner)."""
     secret = _media_secret()
     if not secret:
-        return
+        return None
     request = Request(scope)
     params = request.query_params
     cleaned = path.replace("\\", "/").strip("/")
     sig = params.get("sig")
     if sig and media_auth.verify_path_signature(f"{kind}/{cleaned}", params.get("exp"), sig, secret):
-        return
+        return "signature"
     segment = cleaned.split("/", 1)[0]
     owner = await _media_owner(kind, segment)
     if owner is not None:
         for candidate in (params.get("mt"), request.cookies.get(media_auth.MEDIA_COOKIE_NAME)):
             if candidate and media_auth.verify_user_token(candidate, secret) == owner:
-                return
+                return "owner"
         if request.headers.get("authorization") or request.headers.get("x-api-key"):
             user = await _user_from_request(request)
             if user is not None and str(user.id) == owner:
-                return
+                return "owner"
     if kind == "videos" and await _media_legacy_ok(segment):
         if segment not in _media_legacy_logged and len(_media_legacy_logged) < 10000:
             _media_legacy_logged.add(segment)
             print(f"🔓 Unsigned /videos link to a pre-signing job served ({segment[:8]}…)")
-        return
+        return "legacy"
     raise _media_denied()
 
 
@@ -4536,6 +4543,57 @@ def _signed_media_url(url_path: str, base: str = "") -> str:
     if not secret:
         return f"{base.rstrip('/')}{url_path}" if base and url_path.startswith("/") else url_path
     return media_auth.sign_absolute_url(base, url_path, secret)
+
+
+# What a browser sends for a player, an image or a link it follows by itself.
+# A script's fetch says "cors" and gets the bytes from here: across two hosts
+# its redirect arrives at storage with no origin, and storage would refuse it.
+_MEDIA_REDIRECT_MODES = frozenset({"no-cors", "navigate"})
+
+
+async def _storage_media_url(owner, job_id: str, filename: str) -> Optional[str]:
+    """The archived copy of a job's file, when storage holds exactly that file
+    (``cloud/media_redirect``); None in self-host and whenever this host has
+    to serve it."""
+    if not BILLING_ENABLED or not owner:
+        return None
+    if not _JOB_ID_RE.match(job_id or "") or not filename or "/" in filename or "\\" in filename:
+        return None
+    from cloud import media_redirect
+    return await media_redirect.storage_url(
+        owner, job_id, filename, local_path=os.path.join(OUTPUT_DIR, job_id, filename))
+
+
+async def _media_redirect(path: str, scope, granted: Optional[str] = None) -> Optional[str]:
+    """``redirect`` hook of the /videos mount. It runs after the guard and
+    the authorization, for a browser's own GET only: an API client, a HEAD and
+    a script's fetch keep getting the file from this host as before. And only
+    for the owner (media token or credentials): a signed link expires, and the
+    storage link it would be traded for does not."""
+    if granted != "owner" or scope.get("method") != "GET":
+        return None
+    mode = Request(scope).headers.get("sec-fetch-mode", "").strip().lower()
+    if mode not in _MEDIA_REDIRECT_MODES:
+        return None
+    job_id, _, filename = path.replace("\\", "/").strip("/").partition("/")
+    if not filename:
+        return None
+    return await _storage_media_url(await _media_owner("videos", job_id), job_id, filename)
+
+
+@app.get("/api/media-url")
+async def media_url(job_id: str, filename: str, request: Request):
+    """Where the caller can fetch one of their own clips from storage:
+    ``{"url": ...}``, or null when only this host has that file as it is now.
+    The dashboard's download asks here first, so the bytes of a finished clip
+    do not go through the API."""
+    user = await _user_from_request(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    owner = await _media_owner("videos", job_id) if _JOB_ID_RE.match(job_id or "") else None
+    if owner is None or owner != str(user.id) or not _media_guard(f"{job_id}/{filename}"):
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"url": await _storage_media_url(owner, job_id, filename)}
 
 
 @app.post("/api/media-token")
@@ -4570,6 +4628,7 @@ app.mount("/videos", RestoringStaticFiles(
     directory=OUTPUT_DIR,
     guard=_media_guard,
     authorize=lambda path, scope: _authorize_media("videos", path, scope),
+    redirect=lambda path, scope, granted: _media_redirect(path, scope, granted),
     restorer=lambda job_id: _restore_for_public_path(job_id)), name="videos")
 
 # Mount static files for serving thumbnails

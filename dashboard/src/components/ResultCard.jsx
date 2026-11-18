@@ -120,10 +120,38 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     // button. Stream it instead and report progress.
     const [downloadPct, setDownloadPct] = useState(null);
 
+    // Where a download pulls its bytes from: the archived copy when storage
+    // holds exactly this file (the API is one busy process, and a clip through
+    // it was slow), else the API as before. A preview rendered in this tab
+    // (blob:) and anything the server does not vouch for stay as they were.
+    const downloadSource = async () => {
+        const local = String(currentVideoUrl || '');
+        const match = /\/videos\/[^/]+\/([^/?#]+)/.exec(local);
+        if (!isManaged || !jobId || local.startsWith('blob:') || !match) return null;
+        try {
+            const res = await apiFetch(
+                `/api/media-url?job_id=${encodeURIComponent(jobId)}&filename=${encodeURIComponent(decodeURIComponent(match[1]))}`);
+            if (!res.ok) return null;
+            return (await res.json()).url || null;
+        } catch {
+            return null;
+        }
+    };
+
     const downloadClip = async () => {
         try {
             setDownloadPct(0);
-            const response = await fetch(currentVideoUrl);
+            let response = null;
+            const archived = await downloadSource();
+            if (archived) {
+                try {
+                    response = await fetch(archived);
+                    if (!response.ok) response = null;
+                } catch {
+                    response = null;
+                }
+            }
+            if (!response) response = await fetch(currentVideoUrl);
             if (!response.ok) throw new Error('Download failed');
             const total = Number(response.headers.get('content-length')) || 0;
             let blob;
