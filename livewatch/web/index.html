@@ -214,12 +214,25 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       <div class="net" id="acIG">
         <div class="row"><b>Instagram Reels</b><div class="grow"></div><span class="st"></span></div>
         <details class="small muted" style="margin:8px 0"><summary>How to set it up (10 minutes, once)</summary><ol>
-          <li>Your Instagram must be a <b>Creator or Business</b> account (Instagram app: Settings &gt; Account type).</li>
-          <li>Open <a href="https://developers.facebook.com/apps/creation/" target="_blank" rel="noopener">developers.facebook.com</a>, create an app (type Business, use case "Manage messaging &amp; content on Instagram").</li>
-          <li>In the app: Instagram &gt; <b>API setup with Instagram login</b> &gt; Add account (your Instagram), then <b>Generate token</b>.</li>
-          <li>Paste the token here, Save, Check. It is renewed automatically every day, so it does not expire.</li>
-          <li>Each Reel is shared through a temporary private link (cloudflared) for the minute Instagram needs to fetch it.</li></ol></details>
-        <input type="password" data-acct="INSTAGRAM_ACCESS_TOKEN" placeholder="Instagram access token (IGAA…)">
+          <li>In the Instagram app: make your account <b>Professional</b> (Creator or Business) and <b>public</b>
+            (Settings &gt; Account type and tools). No Facebook Page is needed.</li>
+          <li>Open <a href="https://developers.facebook.com/apps/creation/" target="_blank" rel="noopener">developers.facebook.com/apps/creation</a>:
+            app name + your email &gt; Next &gt; use case <b>Other</b> &gt; Next &gt; type <b>Business</b> &gt; Next &gt;
+            "I don't want to connect a business portfolio yet" &gt; Next &gt; Go to dashboard.</li>
+          <li>In the dashboard, find the <b>Instagram</b> product and click <b>Set up</b>.</li>
+          <li>Left menu: <b>Instagram &gt; API setup with Instagram login</b> (or "…business login"). In
+            <b>1. Generate access tokens</b>, click <b>Add account</b> and log in with your Instagram.</li>
+          <li>If it asks you to accept an invite: on instagram.com open
+            <a href="https://www.instagram.com/accounts/manage_access/" target="_blank" rel="noopener">Settings &gt; Apps and websites</a>
+            &gt; <b>Tester invites</b> &gt; Accept, then go back to the dashboard.</li>
+          <li>Click <b>Generate token</b> next to your account, log in, tick the box, and copy the long token.</li>
+          <li>Paste it here, Save, then Check: it should show your @username. It lasts 60 days and livewatch renews it daily.</li></ol></details>
+        <input type="password" data-acct="INSTAGRAM_ACCESS_TOKEN" placeholder="Instagram access token (IGA… or EAA…)">
+        <input type="text" data-acct="INSTAGRAM_ACCOUNT_ID" placeholder="Instagram account ID (only for EAA… tokens)" style="margin-top:6px">
+        <div class="small muted" style="margin-top:4px">EAA… token (system user)? Add the account ID: open
+          <a href="https://business.facebook.com/settings/instagram-account-v2s" target="_blank" rel="noopener">Business Settings &gt; Accounts &gt; Instagram accounts</a>,
+          click your account and copy the number shown as <b>ID</b>. The system user also needs that Instagram account
+          assigned to it (Users &gt; System users &gt; Assign assets).</div>
         <div class="row" style="margin-top:8px"><button class="btn sm" data-save="INSTAGRAM">Save</button>
           <button class="btn sm" data-check="instagram">Check</button><span class="small muted" id="cfState"></span></div>
       </div>

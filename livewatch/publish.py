@@ -137,20 +137,58 @@ def youtube_upload(video: Path, title: str, description: str, tags: List[str], *
 # --------------------------------------------------------------------------- #
 # Instagram
 # --------------------------------------------------------------------------- #
-def instagram_me(token: str, session=None) -> dict:
-    r = _http(session).get(f"{IG_API}/{IG_VERSION}/me",
-                           params={"fields": "user_id,username", "access_token": token}, timeout=30)
-    if r.status_code != 200:
+FB_API = "https://graph.facebook.com"
+
+
+def is_facebook_token(token: str) -> bool:
+    """``EAA…`` tokens come from Facebook Login / a system user (graph.facebook.com);
+    ``IG…`` tokens from Instagram Login (graph.instagram.com). Both can publish."""
+    return (token or "").startswith("EAA")
+
+
+def _ig_host(token: str) -> str:
+    return FB_API if is_facebook_token(token) else IG_API
+
+
+def instagram_me(token: str, session=None, account_id: str = "") -> dict:
+    """{"id", "username"} of the Instagram account the token publishes to."""
+    http = _http(session)
+    if not is_facebook_token(token):
+        r = http.get(f"{IG_API}/{IG_VERSION}/me",
+                     params={"fields": "user_id,username", "access_token": token}, timeout=30)
+        if r.status_code != 200:
+            raise PublishError(f"Instagram refused the token: {_msg(r)}")
+        d = r.json() or {}
+        uid = str(d.get("user_id") or d.get("id") or "")
+        if not uid:
+            raise PublishError("Instagram did not return the account id")
+        return {"id": uid, "username": d.get("username", "")}
+    # Facebook-type token: the Instagram account is either given, or linked to a Page
+    if account_id:
+        r = http.get(f"{FB_API}/{IG_VERSION}/{account_id}",
+                     params={"fields": "id,username", "access_token": token}, timeout=30)
+        if r.status_code != 200:
+            raise PublishError(f"this token cannot use Instagram account {account_id}: {_msg(r)}")
+        d = r.json() or {}
+        return {"id": str(d.get("id") or account_id), "username": d.get("username", "")}
+    r = http.get(f"{FB_API}/{IG_VERSION}/me/accounts", timeout=30, params={
+        "fields": "instagram_business_account{id,username}", "access_token": token})
+    if r.status_code == 200:
+        for page in (r.json() or {}).get("data") or []:
+            ig = page.get("instagram_business_account") or {}
+            if ig.get("id"):
+                return {"id": str(ig["id"]), "username": ig.get("username", "")}
+    elif r.status_code in (400, 401) and "parse" in _msg(r).lower():
         raise PublishError(f"Instagram refused the token: {_msg(r)}")
-    d = r.json() or {}
-    uid = str(d.get("user_id") or d.get("id") or "")
-    if not uid:
-        raise PublishError("Instagram did not return the account id")
-    return {"id": uid, "username": d.get("username", "")}
+    raise PublishError("this is a Facebook-type token (EAA…): also paste your Instagram account ID "
+                       "(Meta Business Settings > Accounts > Instagram accounts > your account)")
 
 
 def instagram_refresh(token: str, session=None) -> Optional[str]:
-    """A fresh 60-day token (Instagram accepts it once the old one is a day old)."""
+    """A fresh 60-day token (Instagram accepts it once the old one is a day old).
+    Facebook system-user tokens do not expire, so they are left alone."""
+    if is_facebook_token(token):
+        return None
     r = _http(session).get(f"{IG_API}/refresh_access_token",
                            params={"grant_type": "ig_refresh_token", "access_token": token}, timeout=30)
     if r.status_code != 200:
@@ -234,47 +272,68 @@ class OneFileTunnel:
             self._srv.server_close()
 
 
-def instagram_publish(video: Path, caption: str, *, token: str, session=None,
-                      tunnel_factory: Callable = OneFileTunnel, poll_seconds: float = 10,
-                      max_wait: float = 600) -> dict:
-    """Publish a Reel. Returns {"id", "username"}."""
-    http = _http(session)
-    me = instagram_me(token, session=session)
-    base = f"{IG_API}/{IG_VERSION}/{me['id']}"
+def _instagram_container(http, base, host, video, caption, token, tunnel_factory,
+                         poll_seconds, max_wait) -> tuple:
+    """Create a Reel container from a temporary public link and wait for Instagram.
+
+    Returns (container id, status_code, Instagram's status text)."""
     with tunnel_factory(video) as tun:
         # A fresh quick-tunnel name takes a few seconds to exist in DNS. Asking this
         # PC's resolver too early makes it cache "not found" for a minute, so ask
         # Cloudflare's public DNS instead, as Instagram's servers will.
-        host = re.sub(r"^https://([^/]+)/.*$", r"\1", tun.url)
+        tunnel_host = re.sub(r"^https://([^/]+)/.*$", r"\1", tun.url)
         deadline = time.time() + 90
         while time.time() < deadline:
             try:
                 d = http.get("https://cloudflare-dns.com/dns-query", timeout=10,
-                             params={"name": host, "type": "A"},
+                             params={"name": tunnel_host, "type": "A"},
                              headers={"accept": "application/dns-json"}).json()
                 if d.get("Status") == 0 and d.get("Answer"):
                     break
             except Exception:
                 pass
             time.sleep(3)
-        time.sleep(3)
+        time.sleep(min(10, poll_seconds) if poll_seconds else 0)  # let it settle worldwide
         r = http.post(f"{base}/media", timeout=60, data={
             "media_type": "REELS", "video_url": tun.url, "caption": caption[:2200],
             "share_to_feed": "true", "access_token": token})
         if r.status_code != 200 or not (r.json() or {}).get("id"):
             raise PublishError(f"Instagram refused the Reel: {_msg(r)}")
         container = r.json()["id"]
-        waited, status = 0.0, ""
+        waited, status, text = 0.0, "", ""
         while waited < max_wait:
             time.sleep(poll_seconds)
-            waited += poll_seconds
-            s = http.get(f"{IG_API}/{IG_VERSION}/{container}", timeout=30,
+            waited += max(poll_seconds, 1)
+            s = http.get(f"{host}/{IG_VERSION}/{container}", timeout=30,
                          params={"fields": "status_code,status", "access_token": token})
-            status = ((s.json() or {}).get("status_code") or "") if s.status_code == 200 else ""
+            body = (s.json() or {}) if s.status_code == 200 else {}
+            status, text = body.get("status_code") or "", body.get("status") or ""
             if status in ("FINISHED", "ERROR", "EXPIRED"):
                 break
-        if status != "FINISHED":
-            raise PublishError(f"Instagram could not process the video ({status or 'timed out'})")
+        return container, status, text
+
+
+def instagram_publish(video: Path, caption: str, *, token: str, session=None,
+                      tunnel_factory: Callable = OneFileTunnel, poll_seconds: float = 10,
+                      max_wait: float = 600, account_id: str = "") -> dict:
+    """Publish a Reel. Returns {"id", "username"}."""
+    http = _http(session)
+    me = instagram_me(token, session=session, account_id=account_id)
+    host = _ig_host(token)
+    base = f"{host}/{IG_VERSION}/{me['id']}"
+    container, why = "", ""
+    # Instagram downloads the video itself; on a busy home connection (a stream
+    # recording at the same time) that download sometimes fails with a bare
+    # ERROR. The same file then goes through on a second try with a fresh link.
+    for attempt in (1, 2):
+        container, status, why = _instagram_container(http, base, host, video, caption, token,
+                                                      tunnel_factory, poll_seconds, max_wait)
+        if status == "FINISHED":
+            break
+        if attempt == 1 and status in ("ERROR", ""):
+            time.sleep(poll_seconds)
+            continue
+        raise PublishError(f"Instagram could not process the video ({why or status or 'timed out'})")
     r = http.post(f"{base}/media_publish", timeout=60,
                   data={"creation_id": container, "access_token": token})
     if r.status_code != 200 or not (r.json() or {}).get("id"):
@@ -348,7 +407,7 @@ def route(platforms: List[str], youtube_via: str, instagram_via: str, others_via
 def credentials() -> dict:
     g = os.environ.get
     return {"yt_id": g("YOUTUBE_CLIENT_ID", ""), "yt_secret": g("YOUTUBE_CLIENT_SECRET", ""),
-            "yt_refresh": g("YOUTUBE_REFRESH_TOKEN", ""), "ig_token": g("INSTAGRAM_ACCESS_TOKEN", ""),
+            "yt_refresh": g("YOUTUBE_REFRESH_TOKEN", ""), "ig_token": g("INSTAGRAM_ACCESS_TOKEN", ""), "ig_account": g("INSTAGRAM_ACCOUNT_ID", ""),
             "tg_token": g("TELEGRAM_BOT_TOKEN", ""), "tg_chat": g("TELEGRAM_CHAT_ID", ""),
             "up_key": g("UPLOADPOST_API_KEY", "") or g("UPLOAD_POST_API_KEY", "")}
 
@@ -401,7 +460,7 @@ def publish(video: Path, posts: Dict[str, Dict[str, str]], routes: Dict[str, str
                     log(f"   youtube: posted {res['url']}")
             elif net == "instagram":
                 caption = text.get("description") or text.get("title") or ""
-                res = instagram_publish(video, caption, token=creds["ig_token"], session=session,
+                res = instagram_publish(video, caption, token=creds["ig_token"], account_id=creds["ig_account"], session=session,
                                         tunnel_factory=tunnel_factory)
                 results[net] = {"status": "posted", "id": res["id"]}
                 log(f"   instagram: posted a Reel on @{res['username']}")

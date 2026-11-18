@@ -136,11 +136,47 @@ def test_instagram_publish_flow(video, monkeypatch):
     assert publish_call["creation_id"] == "cont5"
 
 
-def test_instagram_processing_error_is_reported(video, monkeypatch):
+def test_instagram_facebook_type_token(video, monkeypatch):
     monkeypatch.setattr(publish.time, "sleep", lambda s: None)
-    with pytest.raises(publish.PublishError, match="ERROR"):
-        publish.instagram_publish(video, "c", token="t", session=_ig_fake(("ERROR",)),
-                                  tunnel_factory=FakeTunnel, poll_seconds=0)
+    FB = f"{publish.FB_API}/{publish.IG_VERSION}"
+    # no account id and no linked Page: a clear message, not a crash
+    with pytest.raises(publish.PublishError, match="Instagram account ID"):
+        publish.instagram_me("EAAxyz", session=Fake([("GET", f"{FB}/me/accounts", Resp(200, {"data": []}))]))
+    # a Page-linked account is found by itself
+    me = publish.instagram_me("EAAxyz", session=Fake([("GET", f"{FB}/me/accounts", Resp(200, {"data": [
+        {"instagram_business_account": {"id": "1784", "username": "gtaclips"}}]}))]))
+    assert me == {"id": "1784", "username": "gtaclips"}
+    # with the account id, the whole Reel flow runs on graph.facebook.com
+    f = Fake([
+        ("GET", f"{FB}/1784", Resp(200, {"id": "1784", "username": "gtaclips"})),
+        ("GET", "https://cloudflare-dns.com/dns-query", Resp(200, {"Status": 0, "Answer": [{"data": "1.2.3.4"}]})),
+        ("POST", f"{FB}/1784/media_publish", Resp(200, {"id": "media1"})),
+        ("POST", f"{FB}/1784/media", Resp(200, {"id": "c1"})),
+        ("GET", f"{FB}/c1", Resp(200, {"status_code": "FINISHED"})),
+    ])
+    res = publish.instagram_publish(video, "cap", token="EAAxyz", account_id="1784", session=f,
+                                    tunnel_factory=FakeTunnel, poll_seconds=0)
+    assert res == {"id": "media1", "username": "gtaclips"}
+    assert not any(publish.IG_API in c[1] for c in f.calls)
+    assert publish.instagram_refresh("EAAxyz", session=Fake([])) is None  # system-user tokens do not expire
+
+
+def test_instagram_processing_error_is_retried_then_reported(video, monkeypatch):
+    monkeypatch.setattr(publish.time, "sleep", lambda s: None)
+    # one failed fetch, then success on the second try: published
+    f = _ig_fake(("ERROR", "FINISHED"))
+    assert publish.instagram_publish(video, "c", token="t", session=f, tunnel_factory=FakeTunnel,
+                                     poll_seconds=0)["id"] == "media9"
+    assert sum(1 for c in f.calls if c[1] == f"{IG}/1789/media") == 2
+    # failing twice: the error carries Instagram's own explanation
+    f = Fake([
+        ("GET", f"{IG}/me", Resp(200, {"user_id": "1789", "username": "g"})),
+        ("GET", "https://cloudflare-dns.com/dns-query", Resp(200, {"Status": 0, "Answer": [{}]})),
+        ("POST", f"{IG}/1789/media", Resp(200, {"id": "cont5"})),
+        ("GET", f"{IG}/cont5", Resp(200, {"status_code": "ERROR", "status": "Error: video download failed"})),
+    ])
+    with pytest.raises(publish.PublishError, match="video download failed"):
+        publish.instagram_publish(video, "c", token="t", session=f, tunnel_factory=FakeTunnel, poll_seconds=0)
 
 
 def test_one_file_tunnel_serves_only_its_file(video, monkeypatch):

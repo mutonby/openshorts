@@ -107,8 +107,22 @@ class LiveInfo:
     error: str = ""
 
 
-def check_live(channel: Channel, timeout: float = 60) -> LiveInfo:
-    """Is the channel live, and with what title/category (streamlink metadata)."""
+TRANSIENT = ("Unable to open URL", "Connection aborted", "RemoteDisconnected", "timed out",
+             "Max retries exceeded", "Read timed out")
+
+
+def check_live(channel: Channel, timeout: float = 60, retries: int = 1) -> LiveInfo:
+    """Is the channel live, with what title/category. A dropped connection is
+    retried once before it is reported (YouTube resets connections now and then)."""
+    info = _check_live_once(channel, timeout)
+    while retries > 0 and not info.live and any(t in info.error for t in TRANSIENT):
+        retries -= 1
+        time.sleep(5)
+        info = _check_live_once(channel, timeout)
+    return info
+
+
+def _check_live_once(channel: Channel, timeout: float) -> LiveInfo:
     cmd = procs.streamlink_cmd() + ["--json", channel.url]
     try:
         r = procs.run(cmd, timeout=timeout)

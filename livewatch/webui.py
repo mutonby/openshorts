@@ -101,6 +101,10 @@ class Controller:
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         dest = self.backup_dir / f"{self.config_path.stem}-{stamp}.toml"
+        n = 1
+        while dest.exists():  # Windows' clock ticks every ~15 ms: two saves can share a stamp
+            dest = self.backup_dir / f"{self.config_path.stem}-{stamp}-{n:03d}.toml"
+            n += 1
         shutil.copy2(self.config_path, dest)
         old = sorted(self.backup_dir.glob(f"{self.config_path.stem}-*.toml"))
         for p in old[:-self.BACKUPS_KEPT]:
@@ -435,7 +439,7 @@ class Controller:
                 publish.youtube_access_token(c["yt_id"], c["yt_secret"], c["yt_refresh"])
                 return {"ok": True, "message": "YouTube sign-in works"}
             if net == "instagram":
-                me = publish.instagram_me(c["ig_token"])
+                me = publish.instagram_me(c["ig_token"], account_id=c["ig_account"])
                 return {"ok": True, "message": f"Instagram: @{me['username']} (id {me['id']})"}
             if net == "telegram":
                 if not c["tg_chat"]:
@@ -626,18 +630,27 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         self._dispatch("DELETE")
 
+    def _refuse(self, message: str):
+        """Answer 403, after reading a small body: closing a socket with unread
+        request bytes makes Windows reset the connection before the answer arrives."""
+        n = int(self.headers.get("Content-Length") or 0)
+        if 0 < n <= MAX_JSON:
+            self.rfile.read(n)
+        self.close_connection = True
+        self._error(403, message)
+
     def _dispatch(self, method: str):
         if not self._host_ok():
-            self._error(403, "livewatch only answers on localhost")
+            self._refuse("livewatch only answers on localhost")
             return
         if method != "GET":
             if self.headers.get("X-Livewatch") != "1":
-                self._error(403, "missing X-Livewatch header")
+                self._refuse("missing X-Livewatch header")
                 return
             origin = self.headers.get("Origin")
             if origin and urlparse(origin).netloc.lower() not in (f"127.0.0.1:{self.port}",
                                                                     f"localhost:{self.port}"):
-                self._error(403, "cross-origin request refused")
+                self._refuse("cross-origin request refused")
                 return
         url = urlparse(self.path)
         path = url.path
