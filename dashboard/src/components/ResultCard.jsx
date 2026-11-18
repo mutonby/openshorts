@@ -181,6 +181,9 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             a.click();
             window.URL.revokeObjectURL(url);
             document.body.removeChild(a);
+            track('ClipDownloaded', { props: {
+                surface: 'results', clip_index: index, clips: clipCount,
+                score: Number.isFinite(clip.predicted_score) ? clip.predicted_score : undefined } });
         } catch (err) {
             console.error('Download error:', err);
             window.open(currentVideoUrl, '_blank');
@@ -880,6 +883,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         else setVideoErrored(true);
                     }}
                     onPlay={() => {
+                        if (!hasPlayed) track('ClipPlayed', { props: { clip_index: index, clips: clipCount } });
                         setHasPlayed(true);
                         const currentTime = videoRef.current ? videoRef.current.currentTime : 0;
                         onPlay && onPlay(clip.start + currentTime);

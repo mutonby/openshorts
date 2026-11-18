@@ -66,6 +66,7 @@ trabajo, es decir una hora después de la *última* subida de cualquier usuario.
 | Qué | Plazo | Nota |
 |---|---|---|
 | Log de aplicación (stdout del contenedor) | **7 días** en el log rotatorio de Docker | Requiere `max-size`/`max-file` en el runtime — ver "pendiente" abajo |
+| Copia del log de la API en almacenamiento privado (`cloud/log_archive.py`, solo con `LOG_ARCHIVE_BUCKET`) | **30 días** | Trozos gzip en un bucket sin acceso público; el plazo lo aplica la regla de ciclo de vida del bucket, no el código. Cubre el mismo plazo que las copias de PostgreSQL, así que una supresión también desaparece de los logs en 30 días |
 | Alertas operativas a Telegram | Las conserva Telegram | **No contienen email ni título de vídeo** desde el 4-sep-2026: identifican al usuario por los 8 primeros caracteres de su uuid (`cloud/alerts.user_ref`) |
 | Copias de seguridad cifradas de PostgreSQL | **30 días** | `ops/pg_backup.sh` — la política promete que una supresión desaparece de toda copia en 30 días, y esto es lo único que lo hace cierto |
 | Analítica (OpenPanel, solo con consentimiento) | Identificadores 13 meses; datos brutos 25 meses | Instancia propia |

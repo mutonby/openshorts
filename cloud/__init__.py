@@ -22,6 +22,10 @@ def setup_sync(app):
     """
     validate_required()
 
+    # Ship this process's log to private storage (off unless LOG_ARCHIVE_BUCKET).
+    from . import log_archive
+    log_archive.install()
+
     # SessionMiddleware backs the OAuth state handshake.
     from starlette.middleware.sessions import SessionMiddleware
     app.add_middleware(SessionMiddleware, secret_key=settings.jwt_secret)
@@ -52,6 +56,10 @@ def setup_sync(app):
     # its keys are set; no UI, no OpenAPI entry, no CORS.
     support_ops.load_keys()
     app.include_router(support_ops.router)
+    # What people do with their clips (edit tools, social post, zip download),
+    # reported server-side to product analytics (cloud/usage_events.py).
+    from .usage_events import UsageEventsMiddleware
+    app.add_middleware(UsageEventsMiddleware)
 
 
 async def setup_async(app, keep_reservation_ids=None, live_reservation_ids=None,

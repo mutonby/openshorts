@@ -38,6 +38,12 @@ import { firstTouchProps } from './attribution';
 //   - ClipTutorialCompleted— first Clip Generator job finished with clips
 //   - JobResumedAfterSignin— a job started signed-out was replayed after the
 //                          sign-in (App.jsx), instead of being dropped
+//   - ClipPlayed         — a result clip's first play (`clip_index`, `clips`)
+//   - ClipDownloaded     — one clip saved (`surface`: results | library;
+//                          `clip_index`, `score`)
+//   - ProjectReopened    — a past project opened again from the library
+// What people do to a clip on the server (edit tools, social post, the zip of
+// every clip) is reported by the API itself: cloud/usage_events.py.
 // The Started → Redirected → Subscribed chain is what separates "never reached
 // Stripe" from "reached Stripe and abandoned"; before 2-ago-2026 the modals
 // emitted only their own *Checkout event and the difference was invisible.

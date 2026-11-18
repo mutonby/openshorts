@@ -4308,6 +4308,9 @@ async def lifespan(app: FastAPI):
                      and not _queue_mode.killed())
     yield
     # Cleanup (optional: cancel worker)
+    if BILLING_ENABLED:
+        # Last chunk of this instance's log to storage (cloud/log_archive.py).
+        await asyncio.to_thread(cloud.log_archive.flush)
 
 app = FastAPI(lifespan=lifespan)
 

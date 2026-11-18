@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Download, Copy, Check, Play } from 'lucide-react';
+import { track } from '../lib/analytics';
 
 export default function GalleryCard({ clip }) {
     const [copied, setCopied] = useState(null);
@@ -59,6 +60,7 @@ export default function GalleryCard({ clip }) {
             a.click();
             window.URL.revokeObjectURL(url);
             document.body.removeChild(a);
+            track('ClipDownloaded', { props: { surface: 'library', clip_index: clip.index } });
         } catch (err) {
             console.error('Download error:', err);
             window.open(clip.url, '_blank');
