@@ -61,15 +61,29 @@ def schema() -> Dict[str, Any]:
             _f("audio_weight", "float", "Loudness weight", "0 ignores loudness. Kick relies on it "
                "(no chat reader).", min=0, max=5, step=0.1, default=d.audio_weight),
         ]},
+        {"id": "brand", "title": "Your page (card header)", "fields": [
+            _f("name", "text", "Page name", "Shown next to your logo, e.g. GTA6 Clips. Without a logo "
+               "only the @handle is shown.", default=""),
+            _f("handle", "text", "@handle", "Your social username, without the @.", default=""),
+            _f("verified", "bool", "Blue badge", "The badge next to the name, as on big clip pages.",
+               default=True),
+        ]},
         {"id": "style", "title": "Look and captions", "fields": [
-            _f("caption_style", "choice", "Hook style (on the video)", "ooc = out-of-context, "
-               "brainrot = slang, clean = descriptive, rotate = cycle through all three.",
+            _f("layout", "choice", "Video layout", "card = news-page post (your logo, name, headline "
+               "on top, the whole stream frame below: facecams are never cut). blur = the stream over "
+               "a blurred copy of itself.", choices=["card", "blur"], default=d.layout),
+            _f("caption_style", "choice", "Headline style", "news = news-page headline with an "
+               "emoji, like the big clip pages ('Kai Cenat loses it after… 😭'). ooc = out-of-context, "
+               "brainrot = slang, clean = descriptive, rotate = cycle through all of them.",
                choices=list(CAPTION_STYLES) + ["rotate"], default=d.caption_style),
             _f("description_style", "choice", "Post description style", "The caption under Reels, "
                "TikToks, Facebook and Threads. normal = describes the moment, weird = cryptic lines "
                "that make people comment (unproven: use rotate and compare). YouTube and X always "
                "get the plain English title.", choices=list(DESCRIPTION_STYLES) + ["rotate"],
                default=d.description_style),
+            _f("cta", "bool", "Floating follow badge", "A white badge near the bottom that fades in and "
+               "floats gently, with your logo.", default=d.cta),
+            _f("cta_text", "text", "Badge text", "80 characters at most; emoji work.", default=d.cta_text),
             _f("captions", "bool", "Word-by-word captions", default=d.captions),
             _f("hook", "bool", "Hook text on top", default=d.hook),
             _f("whisper_model", "choice", "Speech model", "tiny = fastest, base = good default, "

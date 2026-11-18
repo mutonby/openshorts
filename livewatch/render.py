@@ -113,8 +113,20 @@ def _filter_path(path: Path, cwd: Path) -> str:
 
 
 def build_filter(layout: str, fps: int, facecam: Optional[Sequence[float]],
-                 ass_name: Optional[str], fonts: Optional[str], encoder: str) -> str:
-    if layout == "facecam" and facecam:
+                 ass_name: Optional[str], fonts: Optional[str], encoder: str,
+                 card=None, cta=None) -> str:
+    """``card``: a ``card.CardLayout`` (the card frame is input 1).
+    ``cta``: (input index, y) of the floating follow badge."""
+    if layout == "card" and card is not None:
+        # the whole stream frame, never cropped (facecams sit in the corners)
+        # both timelines start at 0: a .ts recording cut mid-way keeps its own
+        # timestamps, and overlay would otherwise wait for frames that never line up
+        graph = (
+            f"[1:v]setpts=PTS-STARTPTS,fps={fps},format=yuv420p,setsar=1[bg];"
+            f"[0:v]setpts=PTS-STARTPTS,fps={fps},scale={W}:{card.video_h}:force_original_aspect_ratio=decrease,"
+            f"setsar=1[vid];"
+            f"[bg][vid]overlay=(W-w)/2:{card.video_y}:shortest=1[v0]")
+    elif layout == "facecam" and facecam:
         x, y, w, h = facecam
         top_h, bot_h = 640, H - 640
         graph = (
@@ -128,9 +140,15 @@ def build_filter(layout: str, fps: int, facecam: Optional[Sequence[float]],
             f"[0:v]fps={fps},split=2[a][b];"
             f"[a]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,"
             f"boxblur=8:2,scale={W}:{H},setsar=1[bg];"
-            f"[b]crop='min(iw,ih*1.39)':ih,scale={W}:-2,setsar=1[fg];"
+            f"[b]scale={W}:-2,setsar=1[fg];"  # full width: no side crop, facecams stay
             f"[bg][fg]overlay=(W-w)/2:(H-h)/2-30[v0]")
     last = "v0"
+    if cta:
+        idx, y = cta
+        # fades in after a second, then floats gently: 10 px up and down every 2.6 s
+        graph += (f";[{idx}:v]setpts=PTS-STARTPTS,format=rgba,fade=t=in:st=0.8:d=0.7:alpha=1[cta];"
+                  f"[{last}][cta]overlay=x=(W-w)/2:y='{y}+10*sin(2*PI*t/2.6)':shortest=1:eval=frame[vc]")
+        last = "vc"
     if ass_name:
         opt = f"ass={ass_name}" + (f":fontsdir={fonts}" if fonts else "")
         graph += f";[{last}]{opt}[v1]"
@@ -142,8 +160,10 @@ def build_filter(layout: str, fps: int, facecam: Optional[Sequence[float]],
 def render_short(raw: Path, out_path: Path, start: float, duration: float, *,
                  layout: str = "blur", facecam: Optional[Sequence[float]] = None,
                  ass_path: Optional[Path] = None, fps: int = 30, encoder: str = "auto",
-                 music=None, timeout: float = 1800) -> Path:
-    """``music``: a ``music.Mix`` to lay under the clip's own audio, or None."""
+                 music=None, card=None, cta=None, timeout: float = 1800) -> Path:
+    """``music``: a ``music.Mix`` to lay under the clip's own audio, or None.
+    ``card``: (card frame PNG, ``card.CardLayout``) for the card layout.
+    ``cta``: (badge PNG, y) for the floating follow badge."""
     from .music import audio_graph
     raw, out_path = Path(raw).resolve(), Path(out_path).resolve()
     cwd = out_path.parent
@@ -151,12 +171,25 @@ def render_short(raw: Path, out_path: Path, start: float, duration: float, *,
     info = probe(raw)
     if layout == "facecam" and not facecam:
         layout = "blur"
+    if layout == "card" and not card:
+        layout = "blur"
+    card_png, card_layout = card if layout == "card" else (None, None)
     fonts = _filter_path(FONTS_DIR, cwd) if FONTS_DIR.is_dir() else None
     ass_name = _filter_path(Path(ass_path).resolve(), cwd) if ass_path else None
-    agraph = audio_graph(info["audio"], duration, music)
-    graph = build_filter(layout, fps, facecam, ass_name, fonts, enc)
+    # inputs: 0 the stream, then the card frame, the follow badge, the music (each optional)
+    nxt = 1
+    if card_png:
+        nxt += 1
+    cta_spec = None
+    if cta:
+        cta_spec = (nxt, int(cta[1]))
+        nxt += 1
+    agraph = audio_graph(info["audio"], duration, music, music_input=nxt)
+    graph = build_filter(layout, fps, facecam, ass_name, fonts, enc, card_layout, cta_spec)
     cmd = [procs.ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
            "-ss", f"{max(0.0, start):.3f}", "-t", f"{duration:.3f}", "-i", str(raw)]
+    for png in ([card_png] if card_png else []) + ([cta[0]] if cta else []):
+        cmd += ["-loop", "1", "-framerate", str(fps), "-t", f"{duration:.3f}", "-i", str(Path(png).resolve())]
     if music:
         cmd += ["-stream_loop", "-1", "-ss", f"{music.offset:.2f}", "-i", str(music.path)]
     cmd += ["-filter_complex", graph + (";" + agraph if agraph else ""), "-map", "[vout]"]
@@ -170,7 +203,7 @@ def render_short(raw: Path, out_path: Path, start: float, duration: float, *,
     if r.returncode != 0 and enc == "qsv":
         # a driver hiccup on QuickSync should not lose the clip
         cmd = cmd[:cmd.index("-c:v")] + encoder_args("x264") + cmd[cmd.index("-r"):]
-        graph_x = build_filter(layout, fps, facecam, ass_name, fonts, "x264")
+        graph_x = build_filter(layout, fps, facecam, ass_name, fonts, "x264", card_layout, cta_spec)
         cmd[cmd.index("-filter_complex") + 1] = graph_x + (";" + agraph if agraph else "")
         r = procs.run(cmd, low_priority=True, timeout=timeout, text=True, cwd=str(cwd))
     if r.returncode != 0 or not out_path.exists() or out_path.stat().st_size < 10_000:

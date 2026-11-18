@@ -607,6 +607,19 @@ function fieldHtml(f, v, path) {
 function renderSections() {
   $("#sections").innerHTML = schemaDef.sections.map(s => `<div class="card"><h2>${esc(s.title)}</h2>
     ${s.fields.map(f => fieldHtml(f, val(s.id, f), s.id + "." + f.key)).join("")}</div>`).join("");
+  const brandField = $('[data-path="brand.verified"]');
+  if (brandField) brandField.closest("label").insertAdjacentHTML("afterend", `<div class="net" id="brandBox">
+    <div class="row"><b>Logo</b><div class="grow"></div>
+      <button class="btn sm primary" type="button" id="logoPick">Import logo</button>
+      <button class="btn sm danger" type="button" id="logoDel">Remove</button>
+      <input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp" hidden></div>
+    <div class="small muted" style="margin:6px 0">Square image (PNG or JPG). Without a logo the header shows your @handle only.</div>
+    <div class="row" style="align-items:flex-start;margin-top:8px">
+      <img id="logoImg" alt="" style="width:64px;height:64px;border-radius:12px;object-fit:cover;background:var(--panel)">
+      <div style="flex:1;min-width:180px"><div class="small muted">Preview (save settings first to see name/handle changes):</div>
+        <img id="cardPrev" alt="card preview" style="width:100%;max-width:260px;border-radius:10px;margin-top:6px;border:1px solid var(--line)">
+        <div><button class="btn sm" type="button" id="prevRefresh" style="margin-top:6px">Refresh preview</button></div></div></div></div>`);
+  refreshBrand();
   const userField = $('[data-path="post.upload_post_user"]');
   const p = cfg.post || {}, usesUP = [p.youtube_via, p.instagram_via, p.others_via].includes("upload-post");
   if (userField && !usesUP) userField.closest("label").style.display = "none";
@@ -619,6 +632,25 @@ function renderSections() {
     <div class="row" style="margin-top:10px"><input type="text" id="upNew" placeholder="new profile name, e.g. gta6clips" style="flex:1">
       <button class="btn sm" id="upCreate" type="button">Create profile</button></div></div>`);
 }
+function refreshBrand() {
+  const t = Date.now(), img = $("#logoImg"), prev = $("#cardPrev");
+  if (img) { img.style.visibility = "hidden"; img.onload = () => img.style.visibility = "visible";
+    img.onerror = () => img.style.visibility = "hidden"; img.src = "/brand/logo.png?t=" + t; }
+  if (prev) prev.src = "/brand/preview.png?t=" + t;
+}
+$("#sections").addEventListener("click", async e => {
+  if (e.target.id === "logoPick") $("#logoFile").click();
+  if (e.target.id === "prevRefresh") refreshBrand();
+  if (e.target.id === "logoDel" && confirm("Remove the logo? The header will show your @handle only.")) {
+    await act(() => api("/api/brand/logo", {method:"DELETE"}), "Logo removed"); refreshBrand(); }
+});
+$("#sections").addEventListener("change", async e => {
+  if (e.target.id !== "logoFile" || !e.target.files[0]) return;
+  await act(() => api("/api/brand/logo", {method:"POST", body: e.target.files[0],
+    headers: {"Content-Type": "application/octet-stream"}}), "Logo imported");
+  e.target.value = ""; refreshBrand();
+});
+$("#saveCfg").addEventListener("click", () => setTimeout(refreshBrand, 1500));
 const NET_ICON = {tiktok:"TikTok", instagram:"Instagram", youtube:"YouTube", facebook:"Facebook", x:"X", threads:"Threads", bluesky:"Bluesky", linkedin:"LinkedIn"};
 async function findProfiles() {
   const box = $("#upList"); box.textContent = "Asking Upload-Post…";

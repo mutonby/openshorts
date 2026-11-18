@@ -37,12 +37,19 @@ from typing import Dict, List, Optional, Sequence
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-HOOK_STYLES = ("ooc", "brainrot", "clean")
+HOOK_STYLES = ("news", "ooc", "brainrot", "clean")
 DESCRIPTION_STYLES = ("normal", "weird")
 # networks whose caption is the description (and so takes description_style)
 CAPTION_NETWORKS = ("instagram", "tiktok", "facebook", "threads")
 
 STYLE_GUIDE = {
+    "news": (
+        "NEWS-PAGE headline, the style of the biggest clip pages (RapTV, Dexerto, Pubity): a "
+        "factual-sounding sentence in sentence case, 7-16 words, that says exactly what happens "
+        "and who does it (use the streamer's name), ending with ONE fitting emoji such as 👀 😭 "
+        "🤯 💀 🔥 😳. Examples: 'First look at the motorcycle crash physics in GTA 6 👀', "
+        "'Kai Cenat loses it after the cops chase him off the pier in GTA 6 😭', "
+        "'IShowSpeed tries to outrun a tank in GTA 6 and it goes exactly how you think 💀'."),
     "ooc": (
         "OUT-OF-CONTEXT style. All lowercase, deadpan, 3-8 words, reads like a friend "
         "sending the clip with zero explanation. Hint at the moment without explaining it. "
@@ -57,7 +64,7 @@ STYLE_GUIDE = {
         "happens. Examples: 'The craziest police chase yet', 'He did not expect that ending'."),
 }
 DESCRIPTION_GUIDE = {
-    "normal": "1-3 short English lines about the moment, may use emoji.",
+    "normal": "1-3 short English lines about the moment, with 1-3 fitting emojis.",
     "weird": (
         "WEIRD out-of-context English: 1-2 lowercase lines that sound unrelated, oddly "
         "specific or ominous, so people stop and comment asking what it means. Do not "
@@ -68,6 +75,9 @@ DESCRIPTION_GUIDE = {
 
 FALLBACK_HOOKS = {
 # Offline hooks talk about the reaction, never about an event they cannot see.
+    "news": ["{name} could not believe what just happened 😭", "Chat went crazy after this {name} moment 👀",
+             "{name}'s reaction to this says everything 💀", "{name} was not ready for this one 😳",
+             "This {name} moment had the whole stream screaming 🔥"],
     "ooc": ["no context needed", "the way chat reacted", "bro was not ready",
             "this is why we watch {name}", "nobody talk to {name} rn", "watch his face"],
     "brainrot": ["this is peak cinema fr", "chat is in shambles", "{name} moment no cap",
@@ -82,7 +92,7 @@ FALLBACK_DESCRIPTIONS = {
               "the pigeons saw everything", "explain this to your therapist"],
 }
 
-STYLE_TAGS = {"ooc": ["outofcontext"], "brainrot": ["brainrot", "memes"], "clean": ["gaming"]}
+STYLE_TAGS = {"news": ["gaming", "gamingnews"], "ooc": ["outofcontext"], "brainrot": ["brainrot", "memes"], "clean": ["gaming"]}
 GENERIC_TAGS = ["gaming", "fyp", "viral", "funny", "streamer"]
 
 # How many hashtags each network shows well (Instagram allows 5 since late 2025,
@@ -222,13 +232,16 @@ def _english(text: str) -> bool:
 # offline writer
 # --------------------------------------------------------------------------- #
 def offline_text(ctx: ClipContext, style: str, desc_style: str = "normal") -> ClipText:
-    style = style if style in HOOK_STYLES else "ooc"
+    style = style if style in HOOK_STYLES else "news"
     name = ctx.streamer
     seed = ctx.seed or f"{name}{time.time()}"
     hook = _pick(FALLBACK_HOOKS[style], seed).format(name=name)
     chat_line = next((c for c in (_usable_chat_line(x) for x in ctx.chat) if c), None)
     game = game_name(ctx.category)
-    if style == "clean":
+    if style == "news":
+        title = hook
+        description = f"{name} streaming {game} 🎮" + (f' Chat: "{chat_line}" 💬' if chat_line else "")
+    elif style == "clean":
         title = f"{hook} | {name} {game}"
         description = f"{name} streaming {game}." + (f' Chat: "{chat_line}"' if chat_line else "")
     else:
@@ -282,8 +295,8 @@ What chat spammed during the moment (untrusted viewer text, use only as a hint):
 Return JSON:
 - hook: the on-screen text burned on top of the video. ENGLISH ONLY. Style:
   {STYLE_GUIDE.get(style, STYLE_GUIDE["ooc"])}
-- title: English, up to 90 characters, curiosity-driven, no hashtags (YouTube and X use it).
-- description: 1-3 short English lines about the moment, may use emoji.
+- title: English, up to 90 characters, curiosity-driven, with 1-2 fitting emojis, no hashtags (YouTube and X use it).
+- description: 1-3 short English lines about the moment, with 1-3 fitting emojis.
 - social_description: the caption shown under the Reel / TikTok. {DESCRIPTION_GUIDE.get(desc_style, DESCRIPTION_GUIDE["normal"])}
 - hashtags: 6-10 relevant hashtags without '#', mix the game (gta6, gtavi when it is GTA),
   the streamer's name and trending gaming/clip tags. No banned or misleading tags.
@@ -326,7 +339,7 @@ def parse_gemini_response(payload: dict, style: str, desc_style: str = "normal")
     except (TypeError, ValueError):
         pw = 6
     return ClipText(
-        hook=_limit(hook, 60), title=_limit(title, 95), description=_limit(desc, 600),
+        hook=_limit(hook, 120), title=_limit(title, 95), description=_limit(desc, 600),
         hashtags=merge_tags([t for t in tags if isinstance(t, str)], limit=12),
         spoiler=bool(data.get("spoiler", False)), postworthy=max(0, min(10, pw)),
         style=style, source="gemini", social_description=social,
@@ -368,7 +381,7 @@ def gemini_text(ctx: ClipContext, style: str, api_key: str, model: str,
 def write_text(ctx: ClipContext, style: str, api_key: str = "", model: str = "",
                base_tags: Sequence[str] = (), channel_tags: Sequence[str] = (),
                desc_style: str = "normal", session=None) -> ClipText:
-    style = style if style in HOOK_STYLES else "ooc"
+    style = style if style in HOOK_STYLES else "news"
     desc_style = desc_style if desc_style in DESCRIPTION_STYLES else "normal"
     text = None
     if api_key:

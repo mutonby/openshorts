@@ -38,7 +38,7 @@ def test_config_defaults_and_channels(tmp_path):
     assert kk.url == "https://kick.com/kicker" and kk.facecam == [0.0, 0.6, 0.3, 0.4]
     assert yt.url == "https://www.youtube.com/@Handle/live"
     assert s.style_for(yt) == "brainrot"
-    assert [s.style_for(tw, n) for n in range(3)] == list(config.CAPTION_STYLES)
+    assert [s.style_for(tw, n) for n in range(4)] == list(config.CAPTION_STYLES)
     assert s.description_for(5) == "normal"
 
 

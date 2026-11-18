@@ -175,13 +175,13 @@ def wants_music(mode: str, words: int, seconds: float) -> bool:
     return False
 
 
-def audio_graph(has_voice: bool, duration: float, mix: Optional[Mix]) -> str:
+def audio_graph(has_voice: bool, duration: float, mix: Optional[Mix], music_input: int = 1) -> str:
     """The audio part of the render filtergraph, ending in [aout]."""
     norm = "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000"
     if not mix:
         return f"[0:a]{norm}[aout]" if has_voice else ""
     fade_out = max(0.0, duration - 2.0)
-    music = (f"[1:a]aresample=48000,aformat=channel_layouts=stereo,volume={mix.volume_db:.1f}dB,"
+    music = (f"[{music_input}:a]aresample=48000,aformat=channel_layouts=stereo,volume={mix.volume_db:.1f}dB,"
              f"afade=t=in:st=0:d=1.5,afade=t=out:st={fade_out:.2f}:d=2")
     if not has_voice:
         return f"{music},{norm}[aout]"

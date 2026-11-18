@@ -27,8 +27,14 @@ warmup_seconds = 120          # learn each stream's normal chat speed first
 min_chat_rate = 0.3           # chats slower than this lean on audio spikes
 audio_weight = 1.0            # 0 ignores loudness; Kick relies on it (no chat reader)
 
+[brand]                       # the card header; import the logo in the dashboard (Settings > Your page)
+name = ""                     # e.g. "GTA6 Clips"
+handle = ""                   # your @username, without the @
+verified = true               # blue badge next to the name
+
 [style]
-caption_style = "rotate"      # hook on the video (English): ooc | brainrot | clean | rotate
+layout = "card"               # card = news-page post (logo, headline, full stream frame) | blur
+caption_style = "news"        # headline: news | ooc | brainrot | clean | rotate
 description_style = "rotate"  # caption under Reels/TikToks: normal | weird | rotate
                               # (weird = cryptic lines that make people comment; unproven, so compare)
 captions = true               # word-by-word burned captions (faster-whisper on the CPU)

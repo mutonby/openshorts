@@ -9,7 +9,7 @@ look. libass cannot draw colour emoji, so emoji are dropped from burned text
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Sequence
+from typing import List, Optional, Sequence
 
 from .transcribe import Word
 from .viral import strip_emoji
@@ -39,6 +39,8 @@ class Look:
 WHITE, BLACK, YELLOW, GREEN, RED = "&H00FFFFFF", "&H00000000", "&H0000E5FF", "&H0000FF7F", "&H003C3CFF"
 
 LOOKS = {
+    "news": Look("Montserrat ExtraBold", 66, BLACK, WHITE, WHITE, True,
+                 "Montserrat ExtraBold", 76, WHITE, YELLOW, False),
     "ooc": Look("Montserrat ExtraBold", 66, BLACK, WHITE, WHITE, True,
                 "Montserrat ExtraBold", 84, WHITE, YELLOW, True),
     "clean": Look("Montserrat ExtraBold", 64, BLACK, WHITE, WHITE, True,
@@ -95,9 +97,13 @@ def chunk_words(words: Sequence[Word], max_words: int = 3, max_chars: int = 16,
 
 
 def build_ass(words: Sequence[Word], hook: str, duration: float, style: str = "ooc",
-              layout: str = "blur", show_captions: bool = True, show_hook: bool = True) -> str:
+              layout: str = "blur", show_captions: bool = True, show_hook: bool = True,
+              cap_y: Optional[int] = None) -> str:
+    """``cap_y`` overrides where captions sit (the card layout puts them under
+    the video, and draws its headline itself, so it passes show_hook=False)."""
     look = LOOKS.get(style, LOOKS["ooc"])
-    hook_y, cap_y = LAYOUT_BANDS.get(layout, LAYOUT_BANDS["blur"])
+    hook_y, band_y = LAYOUT_BANDS.get(layout, LAYOUT_BANDS["blur"])
+    cap_y = cap_y if cap_y is not None else band_y
     hook_font = look.hook_font
     border_style = 3 if look.hook_box else 1
     hook_outline_w = 14 if look.hook_box else 7

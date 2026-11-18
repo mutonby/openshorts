@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from . import captions, music, poster, procs, publish, render, transcribe, viral
+from . import captions, card, music, poster, procs, publish, render, transcribe, viral
 from .chat import TwitchChatReader, YouTubeChatReader
 from .config import Channel, Settings, matches_game
 from .detector import Peak, PeakDetector
@@ -553,21 +553,44 @@ class Service:
         text = viral.write_text(ctx, job.style, s.gemini_api_key, s.ai_model,
                                 base_tags=s.base_hashtags, channel_tags=job.channel.tags,
                                 desc_style=job.desc_style)
-        layout = "facecam" if job.channel.facecam else "blur"
+        layout = s.layout if s.layout == "card" else ("facecam" if job.channel.facecam else "blur")
+        card_spec, cap_y = None, None
+        if layout == "card":
+            info = render.probe(job.raw)
+            aspect = (info["width"] / info["height"]) if info["width"] and info["height"] else 16 / 9
+            brand = card.Brand(name=s.brand_name or job.channel.display, handle=s.brand_handle,
+                               verified=s.brand_verified,
+                               logo=s.logo_path if s.logo_path.is_file() else None)
+            card_layout = card.render_card(text.hook if s.hook else "", brand, d / "card.png", aspect)
+            card_spec, cap_y = (d / "card.png", card_layout), card_layout.caption_y
         ass = d / "captions.ass"
         ass.write_text(captions.build_ass(words, text.hook, job.duration, job.style, layout,
-                                          s.captions, s.hook), encoding="utf-8")
+                                          s.captions, s.hook and layout != "card", cap_y=cap_y),
+                       encoding="utf-8")
         mix = None
         if music.wants_music(s.music_mode, len(words), job.duration) and s.music_dir:
             mix = music.Library(s.music_dir).pick(job.duration, s.music_volume_db,
                                                    seed=f"{job.channel.key}{job.peak.ts}")
             if mix is None:
                 self.log(f"{who}: music is on but the library is empty ({s.music_dir})")
+        cta_spec = None
+        if s.cta:
+            try:
+                card.render_cta(s.cta_text, d / "cta.png",
+                                s.logo_path if s.logo_path.is_file() else None)
+                cta_spec = (d / "cta.png", card.CTA_Y)
+            except Exception as e:  # noqa: BLE001 - a badge never costs a clip
+                self.log(f"{who}: follow badge skipped: {e}")
         self.current_step = f"{who}: rendering the Short"
         out = render.render_short(job.raw, d / "short.mp4", job.raw_offset, job.duration,
                                   layout=layout, facecam=job.channel.facecam,
                                   ass_path=ass if (s.captions or s.hook) else None,
-                                  fps=s.fps, encoder=s.encoder, music=mix)
+                                  fps=s.fps, encoder=s.encoder, music=mix, card=card_spec,
+                                  cta=cta_spec)
+        if card_spec:
+            card_spec[0].unlink(missing_ok=True)
+        if cta_spec:
+            cta_spec[0].unlink(missing_ok=True)
         if not s.keep_raw_clips:
             job.raw.unlink(missing_ok=True)
         posts = viral.platform_posts(text, s.post_platforms)

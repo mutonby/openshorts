@@ -515,6 +515,36 @@ class Controller:
             raise ApiError(502, f"could not reach Upload-Post: {e}")
         return {"url": url}
 
+    # ---------------------------------------------------------------- brand
+    def logo_path(self) -> Path:
+        return self._safe_settings().logo_path
+
+    def save_logo(self, data: bytes) -> dict:
+        from . import card
+        try:
+            card.save_logo(data, self.logo_path())
+        except ValueError as e:
+            raise ApiError(400, str(e))
+        return {"ok": True}
+
+    def remove_logo(self) -> dict:
+        self.logo_path().unlink(missing_ok=True)
+        return {"ok": True}
+
+    def card_preview(self, headline: str = "") -> bytes:
+        """A sample card with the saved brand, as PNG bytes (dashboard preview)."""
+        import tempfile
+        from . import card
+        s = self._safe_settings()
+        brand = card.Brand(name=s.brand_name or "Your page", handle=s.brand_handle,
+                           verified=s.brand_verified,
+                           logo=s.logo_path if s.logo_path.is_file() else None)
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "preview.png"
+            card.render_card(headline[:200] or "First look at the motorcycle crash physics in GTA 6 👀",
+                             brand, out, video_box=(1080, 608))
+            return out.read_bytes()
+
     # ---------------------------------------------------------------- music
     def library(self) -> music.Library:
         s = self._safe_settings()
@@ -694,6 +724,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"backups": ctl.backups()})
             if path == "/api/accounts":
                 return self._json(ctl.accounts())
+            if path == "/brand/logo.png":
+                f = ctl.logo_path()
+                if not f.is_file():
+                    raise ApiError(404, "no logo")
+                return self._send_file(f, "image/png")
+            if path == "/brand/preview.png":
+                png = ctl.card_preview((q.get("headline") or [""])[0])
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(png)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(png)
+                return
             if path == "/oauth/youtube":
                 one = lambda k: (q.get(k) or [""])[0]  # noqa: E731
                 try:
@@ -739,6 +783,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(ctl.open_folder())
             if path == "/api/uploadpost/profiles":
                 return self._json(ctl.create_upload_profile(self._json_body()))
+            if path == "/api/brand/logo":
+                return self._json(ctl.save_logo(self._body(8 * 1024 * 1024 + 1024)))
             if path == "/api/accounts/youtube/connect":
                 return self._json(ctl.youtube_connect(f"http://127.0.0.1:{self.port}/oauth/youtube"))
             m = re.match(r"^/api/accounts/(youtube|instagram|telegram)/check$", path)
@@ -789,6 +835,8 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(404, "not found")
 
         if method == "DELETE":
+            if path == "/api/brand/logo":
+                return self._json(ctl.remove_logo())
             m = re.match(r"^/api/clips/(.+)$", path)
             if m:
                 return self._json(ctl.delete_clip(unquote(m.group(1))))

@@ -272,6 +272,32 @@ class OneFileTunnel:
             self._srv.server_close()
 
 
+def light_copy(video: Path, max_mbps: float = 2.0) -> Path:
+    """A smaller copy of ``video`` for Instagram to download (it re-compresses
+    every Reel anyway). The original when it is already light or ffmpeg fails."""
+    video = Path(video)
+    try:
+        size_mb = video.stat().st_size / 1e6
+        r = procs.run([procs.ffprobe(), "-v", "error", "-show_entries", "format=duration",
+                       "-of", "csv=p=0", str(video)], timeout=30, text=True)
+        dur = float((r.stdout or "0").strip() or 0)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return video
+    if dur <= 0 or size_mb * 8 / dur <= max_mbps * 1.3:
+        return video
+    out = video.with_name(video.stem + ".ig.mp4")
+    cmd = [procs.ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(video),
+           "-c:v", "libx264", "-preset", "veryfast", "-b:v", f"{max_mbps:.1f}M",
+           "-maxrate", f"{max_mbps * 1.5:.1f}M", "-bufsize", f"{max_mbps * 3:.0f}M",
+           "-pix_fmt", "yuv420p", "-profile:v", "high", "-c:a", "aac", "-b:a", "128k",
+           "-movflags", "+faststart", str(out)]
+    try:
+        ok = procs.run(cmd, low_priority=True, timeout=600).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        ok = False
+    return out if ok and out.is_file() and out.stat().st_size > 10_000 else video
+
+
 def _instagram_container(http, base, host, video, caption, token, tunnel_factory,
                          poll_seconds, max_wait) -> tuple:
     """Create a Reel container from a temporary public link and wait for Instagram.
@@ -322,18 +348,24 @@ def instagram_publish(video: Path, caption: str, *, token: str, session=None,
     host = _ig_host(token)
     base = f"{host}/{IG_VERSION}/{me['id']}"
     container, why = "", ""
-    # Instagram downloads the video itself; on a busy home connection (a stream
-    # recording at the same time) that download sometimes fails with a bare
-    # ERROR. The same file then goes through on a second try with a fresh link.
-    for attempt in (1, 2):
-        container, status, why = _instagram_container(http, base, host, video, caption, token,
-                                                      tunnel_factory, poll_seconds, max_wait)
-        if status == "FINISHED":
-            break
-        if attempt == 1 and status in ("ERROR", ""):
-            time.sleep(poll_seconds)
-            continue
-        raise PublishError(f"Instagram could not process the video ({why or status or 'timed out'})")
+    # Instagram downloads the video from this PC; on a home connection that is also
+    # recording streams, that download sometimes fails (error codes 0, 2207077,
+    # 2207082...). A lighter copy halves the download, and up to three tries a
+    # minute apart let a busy moment pass.
+    light = light_copy(video)
+    try:
+        for attempt in (1, 2, 3):
+            container, status, why = _instagram_container(http, base, host, light, caption, token,
+                                                          tunnel_factory, poll_seconds, max_wait)
+            if status == "FINISHED":
+                break
+            if attempt < 3 and status in ("ERROR", ""):
+                time.sleep(6 * poll_seconds)
+                continue
+            raise PublishError(f"Instagram could not process the video ({why or status or 'timed out'})")
+    finally:
+        if light != Path(video):
+            Path(light).unlink(missing_ok=True)
     r = http.post(f"{base}/media_publish", timeout=60,
                   data={"creation_id": container, "access_token": token})
     if r.status_code != 200 or not (r.json() or {}).get("id"):

@@ -105,9 +105,32 @@ On simulated chats, 8 to 30 messages/s with 2.5x bursts were caught 40 out of
 40 times with no false peaks in 20 hours of normal chat
 (`tests/test_livewatch.py` has the reduced version).
 
+## The card look (default)
+
+`style.layout = "card"` presents each Short like a post from a big clip page:
+
+- a black header with your **logo**, page name, a blue badge and **@handle**;
+- a news-style headline with an emoji, such as "First look at the motorcycle
+  crash physics in GTA 6 👀";
+- the stream below, at **full width with nothing cropped**, so a facecam in a
+  corner is never cut off;
+- the word captions under the video.
+
+Set the brand in **Settings > Your page**:
+
+- **Import logo** takes a square PNG or JPG. Without a logo, the header shows
+  the @handle alone.
+- The preview shows the result before you save.
+
+The header and headline are drawn with Pillow, because libass cannot draw
+colour emoji. `layout = "blur"` keeps the older look (the stream over a
+blurred copy of itself), now also without the side crop.
+
 ## Styles
 
-All text is English. Two settings, chosen separately.
+All text is English. Two settings, chosen separately. `caption_style` defaults
+to `news`, the headline style above. Titles and post captions carry 1–3
+emojis.
 
 `caption_style` sets the hook burned on the video: `ooc` | `brainrot` |
 `clean` | `rotate`.

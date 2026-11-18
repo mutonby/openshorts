@@ -19,7 +19,8 @@ except ModuleNotFoundError:  # pragma: no cover - 3.10 and older
     import tomli as tomllib  # type: ignore
 
 PLATFORMS = ("twitch", "kick", "youtube")
-CAPTION_STYLES = ("ooc", "brainrot", "clean")          # on-video hook, always English
+CAPTION_STYLES = ("news", "ooc", "brainrot", "clean")  # on-video hook/headline, always English
+LAYOUTS = ("card", "blur")
 DESCRIPTION_STYLES = ("normal", "weird")              # caption under Reels/TikToks
 POST_PLATFORMS = ("youtube", "tiktok", "instagram", "facebook", "x", "threads", "bluesky")
 VIA_API = ("api", "phone", "upload-post", "off")      # youtube_via, instagram_via
@@ -100,8 +101,14 @@ class Settings:
     min_chat_rate: float = 0.3  # messages/s; quieter chats lean on audio
     audio_weight: float = 1.0
     # style
-    caption_style: str = "ooc"
+    caption_style: str = "news"
     rotate_styles: bool = False
+    layout: str = "card"            # card (news-page post) | blur
+    brand_name: str = ""
+    brand_handle: str = ""
+    brand_verified: bool = True
+    cta: bool = True                # the floating "follow" badge
+    cta_text: str = "Follow & subscribe for more GTA 6 news 🔔"
     description_style: str = "normal"
     rotate_descriptions: bool = False
     captions: bool = True
@@ -140,6 +147,11 @@ class Settings:
         if self.rotate_styles:
             return CAPTION_STYLES[n % len(CAPTION_STYLES)]
         return self.caption_style
+
+    @property
+    def logo_path(self) -> Path:
+        """Where the imported logo lives (the card shows the @handle alone without it)."""
+        return self.data_dir / "brand" / "logo.png"
 
     def description_for(self, n: int = 0) -> str:
         if self.rotate_descriptions:
@@ -279,6 +291,20 @@ def from_dict(data: dict, base_dir: Path = Path(".")) -> Settings:
     else:
         raise ConfigError("description_style must be one of "
                           f"{', '.join(DESCRIPTION_STYLES + ('rotate',))}")
+    s.layout = str(st.get("layout", s.layout)).strip().lower()
+    if s.layout not in LAYOUTS:
+        raise ConfigError(f"layout must be one of {', '.join(LAYOUTS)}")
+    br = data.get("brand", {}) or {}
+    s.brand_name = str(br.get("name", s.brand_name)).strip()[:60]
+    s.brand_handle = str(br.get("handle", s.brand_handle)).strip().lstrip("@")[:60]
+    if s.brand_handle and not re.match(r"^[A-Za-z0-9_.]{1,60}$", s.brand_handle):
+        raise ConfigError("brand handle: letters, digits, _ and . only (no @ needed)")
+    s.brand_verified = bool(br.get("verified", s.brand_verified))
+    s.cta = bool(st.get("cta", s.cta))
+    cta_text = " ".join(str(st.get("cta_text", s.cta_text)).split())
+    if len(cta_text) > 80:
+        raise ConfigError("cta_text: 80 characters at most")
+    s.cta_text = cta_text or s.cta_text
     s.captions = bool(st.get("captions", s.captions))
     s.hook = bool(st.get("hook", s.hook))
     s.whisper_model = str(st.get("whisper_model", s.whisper_model))
