@@ -261,9 +261,10 @@ THUMBNAIL_CONVERSATION_MAX_TURNS = _env_int("THUMBNAIL_CONVERSATION_MAX_TURNS", 
 DESCRIBE_TRANSCRIPT_MAX_CHARS = _env_int("DESCRIBE_TRANSCRIPT_MAX_CHARS", 200000)
 
 # Social posting through the managed Upload-Post account: posts per user and
-# hour (a scheduled week is one post per clip), and per day on the free plan.
+# hour (a scheduled week is one post per clip). Posting is part of the paid
+# plans; a free account gets this many posts in total to try it.
 SOCIAL_POSTS_PER_HOUR = _env_int("SOCIAL_POSTS_PER_HOUR", 60)
-SOCIAL_POSTS_PER_DAY_FREE = _env_int("SOCIAL_POSTS_PER_DAY_FREE", 30)
+FREE_SOCIAL_POSTS = _env_int("FREE_SOCIAL_POSTS", 3)
 
 # Agent upload slots (POST /api/uploads) a user may hold open at once.
 MAX_PENDING_UPLOADS_PER_USER = _env_int("MAX_PENDING_UPLOADS_PER_USER", 5)

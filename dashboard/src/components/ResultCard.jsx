@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Download, Share2, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp, Sparkles } from 'lucide-react';
 import { getApiUrl } from '../config';
-import { apiFetch } from '../lib/api';
+import { apiFetch, QuotaError, openQuotaWall } from '../lib/api';
 import { platformOptions as buildPlatformOptions, defaultPlatformFlags, flagsFromList } from '../lib/socialPlatforms';
 import { track } from '../lib/analytics';
 import SubtitleModal from './SubtitleModal';
@@ -810,8 +810,12 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             }
 
             const sent = await res.json().catch(() => ({}));
+            // Free plan: posting is a paid feature it can try a few times.
+            const freeLeft = typeof sent?.free_posts_left === 'number'
+                ? ` ${sent.free_posts_left} free post${sent.free_posts_left === 1 ? '' : 's'} left; posting is part of the paid plans.`
+                : '';
             if (isScheduling || !sent?.request_id) {
-                setPostResult({ success: true, msg: isScheduling ? "Scheduled successfully!" : "Sent for publishing." });
+                setPostResult({ success: true, msg: (isScheduling ? "Scheduled successfully!" : "Sent for publishing.") + freeLeft });
                 setTimeout(() => {
                     setShowModal(false);
                     setPostResult(null);
@@ -826,7 +830,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 setPostResult({ success: false, msg: `Failed on ${outcome.failed.join('; ')}` });
                 track('SocialPostFailed', { props: { platforms: selectedPlatforms.join(',') } });
             } else {
-                setPostResult({ success: true, msg: outcome.done ? "Posted successfully!" : "Still publishing: check your accounts in a few minutes." });
+                setPostResult({ success: true, msg: (outcome.done ? "Posted successfully!" : "Still publishing: check your accounts in a few minutes.") + freeLeft });
                 setTimeout(() => {
                     setShowModal(false);
                     setPostResult(null);
@@ -834,6 +838,11 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             }
 
         } catch (e) {
+            if (e instanceof QuotaError) {
+                setShowModal(false);
+                openQuotaWall(e, 'social_post');
+                return;
+            }
             setPostResult({ success: false, msg: `Failed: ${e.message}` });
         } finally {
             setPosting(false);

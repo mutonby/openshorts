@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Globe, Sparkles, Download, Copy, Check, ChevronRight, ChevronLeft, Loader2, AlertCircle, Volume2, User, Film, Terminal, ChevronDown, RefreshCw, Share2, Calendar, Upload } from 'lucide-react';
 import { getApiUrl } from '../config';
-import { apiFetch } from '../lib/api';
+import { apiFetch, QuotaError, openQuotaWall } from '../lib/api';
 import { SOCIAL_PLATFORMS, defaultPlatformFlags, flagsFromList } from '../lib/socialPlatforms';
 import StepIndicator from './ui/StepIndicator';
 import SegmentedControl from './ui/SegmentedControl';
@@ -1457,6 +1457,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                               }
                               setPublishResult({ ok: true, msg: isScheduling ? 'Scheduled!' : 'Published!' });
                             } catch (e) {
+                              if (e instanceof QuotaError) { openQuotaWall(e, 'saasshorts_post'); return; }
                               setPublishResult({ ok: false, msg: e.message });
                             } finally {
                               setPublishing(false);

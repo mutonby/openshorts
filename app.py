@@ -9197,15 +9197,14 @@ async def _platforms_needing_reconnect(profile, platforms):
 
 
 # Posts through the managed Upload-Post account, per owner: monotonic times of
-# the last hour, and (owner, UTC day) -> count for the free plan's daily cap.
-# In memory: a restart forgets them, which only ever errs in the user's favour.
+# the last hour. In memory: a restart forgets them, which only ever errs in the
+# user's favour.
 _social_post_times: dict = {}
-_social_post_days: dict = {}
 
 
 async def _check_social_post_rate(request):
-    """429 past SOCIAL_POSTS_PER_HOUR (any plan) or SOCIAL_POSTS_PER_DAY_FREE
-    (free plan). Cloud only; counts the post being attempted."""
+    """429 past SOCIAL_POSTS_PER_HOUR (any plan). Cloud only; counts the post
+    being attempted."""
     if not BILLING_ENABLED:
         return
     user = await _user_from_request(request)
@@ -9219,17 +9218,49 @@ async def _check_social_post_rate(request):
         raise HTTPException(status_code=429, detail=(
             f"You have sent {len(times)} posts in the last hour, the most allowed. "
             "Please wait a few minutes and try again."))
-    if user.plan == "free":
-        today = datetime.now(timezone.utc).date().isoformat()
-        for k in [k for k in _social_post_days if k[1] != today]:
-            _social_post_days.pop(k, None)
-        used = _social_post_days.get((key, today), 0)
-        if used >= _cloud_config.SOCIAL_POSTS_PER_DAY_FREE:
-            raise HTTPException(status_code=429, detail=(
-                f"The free plan posts up to {_cloud_config.SOCIAL_POSTS_PER_DAY_FREE} clips a day. "
-                f"The limit resets at midnight UTC; paid plans have no daily limit: {upgrade_url('post_limit')}"))
-        _social_post_days[(key, today)] = used + 1
     times.append(now)
+
+
+# Posting to socials is part of the paid plans. A free account gets
+# FREE_SOCIAL_POSTS posts in total to try it, counted as zero-minute ledger rows
+# so a restart or a second instance cannot reset them; past them every post is
+# a 402 the dashboard turns into the plans modal. A post that fails before
+# Upload-Post takes it gives its try back.
+FREE_POST_JOB_TYPE = "social_post"
+_free_post_locks: dict = {}
+
+
+async def _claim_free_post(request, job_id):
+    """``(ledger_id, posts_left)`` for a free account's post, ``(None, None)``
+    for a paid plan or self-host; a 402 once the free posts are used."""
+    if not BILLING_ENABLED:
+        return None, None
+    user = await _user_from_request(request)
+    if user is None or getattr(user, "plan", None) != "free":
+        return None, None
+    allowance = _cloud_config.FREE_SOCIAL_POSTS
+    lock = _free_post_locks.setdefault(str(user.id), asyncio.Lock())
+    async with lock:
+        used = await _metering.free_actions_total(user.id, FREE_POST_JOB_TYPE)
+        if used >= allowance:
+            raise HTTPException(status_code=402, detail={
+                "error": "post_requires_plan",
+                "free_posts": allowance,
+                "message": (f"Posting to your socials is part of the paid plans, and this account "
+                            f"has used its {allowance} free posts. Pick a plan to keep posting."),
+                "upgrade_url": upgrade_url("post_wall"),
+            })
+        ledger_id = await _metering.record_free_action(user.id, job_id, FREE_POST_JOB_TYPE)
+    return ledger_id, allowance - used - 1
+
+
+async def _give_back_free_post(ledger_id):
+    if not ledger_id:
+        return
+    try:
+        await _metering.undo_free_action(ledger_id)
+    except Exception as e:
+        print(f"⚠️ Could not give back a free post: {type(e).__name__}")
 
 
 @app.post("/api/social/post")
@@ -9265,6 +9296,7 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
                 f"Reconnect {names} first: its login has expired, so the post would "
                 "fail. Use \"connect socials\" and try again."))
 
+    free_claim, free_left = await _claim_free_post(request, req.job_id)
     try:
         clip = job['result']['clips'][req.clip_index]
         # Video URL is relative /videos/..., we need absolute file path
@@ -9337,9 +9369,12 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
         out = response.json()
         if isinstance(out, dict) and out.get("request_id"):
             _post_request_owners[str(out["request_id"])] = await _owner_id(request)
+        if isinstance(out, dict) and free_left is not None:
+            out["free_posts_left"] = free_left
         return out
 
     except Exception as e:
+        await _give_back_free_post(free_claim)
         print(f"❌ Social Post Exception: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -10464,6 +10499,8 @@ async def thumbnail_publish(
     if not os.path.exists(thumb_path):
         raise HTTPException(status_code=404, detail="Thumbnail file not found")
 
+    await _claim_free_post(request, session_id)
+
     # Generate a unique ID for this publish job so the frontend can poll
     publish_id = str(uuid.uuid4())
     publish_jobs[publish_id] = {"status": "uploading", "result": None, "error": None,
@@ -10787,6 +10824,7 @@ async def saasshorts_post_to_socials(req: SaaSPostRequest, request: Request):
     result = job.get("result")
     if not result or not result.get("video_url"):
         raise HTTPException(status_code=400, detail="No video available for this job")
+    await _claim_free_post(request, req.job_id)
 
     try:
         # Resolve video file path

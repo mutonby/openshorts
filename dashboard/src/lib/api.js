@@ -30,7 +30,8 @@ export const QUOTA_WALL_EVENT = 'os:quota-wall';
 export function openQuotaWall(err, source) {
   try {
     window.dispatchEvent(new CustomEvent(QUOTA_WALL_EVENT, {
-      detail: { required: err?.minutesRequired, remaining: err?.minutesRemaining, source },
+      detail: { required: err?.minutesRequired, remaining: err?.minutesRemaining, source,
+                code: err?.code },
     }));
   } catch (_) { /* ignore */ }
 }

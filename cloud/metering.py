@@ -876,16 +876,42 @@ async def free_actions_today(user_id, job_type: str) -> int:
         )).scalar_one() or 0)
 
 
+async def free_actions_total(user_id, job_type: str) -> int:
+    """How many zero-minute ``job_type`` rows this user has, ever."""
+    async with database.session() as session:
+        return int((await session.execute(
+            select(func.count(UsageLedger.id)).where(and_(
+                UsageLedger.user_id == user_id,
+                UsageLedger.job_type == job_type,
+                UsageLedger.minutes == 0,
+            ))
+        )).scalar_one() or 0)
+
+
 async def record_free_action(user_id, job_id: str, job_type: str):
-    """A committed zero-minute row: counts a free daily allowance (AI edits)
-    across restarts without touching the balance."""
+    """A committed zero-minute row: counts a free allowance (AI edits per day,
+    social posts in total) across restarts without touching the balance.
+    Returns the row id, for undo_free_action."""
+    row = UsageLedger(
+        user_id=user_id, job_id=str(job_id), job_type=job_type,
+        minutes=_D(0), minutes_from_plan=_D(0), minutes_from_topup=_D(0),
+        status="committed",
+    )
     async with database.session() as session:
         async with session.begin():
-            session.add(UsageLedger(
-                user_id=user_id, job_id=str(job_id), job_type=job_type,
-                minutes=_D(0), minutes_from_plan=_D(0), minutes_from_topup=_D(0),
-                status="committed",
-            ))
+            session.add(row)
+    return str(row.id)
+
+
+async def undo_free_action(ledger_id):
+    """Give back a free action whose work failed (zero-minute rows only)."""
+    if not ledger_id:
+        return
+    async with database.session() as session:
+        async with session.begin():
+            row = await session.get(UsageLedger, ledger_id)
+            if row is not None and row.minutes == 0 and row.status == "committed":
+                await session.delete(row)
 
 
 async def commit_reservation(ledger_id: str):

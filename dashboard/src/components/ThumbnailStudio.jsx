@@ -440,6 +440,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
       });
 
     } catch (e) {
+      if (e instanceof QuotaError) { openQuotaWall(e, 'thumbnail_publish'); return; }
       setPublishResult({ success: false, error: e.message });
     } finally {
       setIsPublishing(false);

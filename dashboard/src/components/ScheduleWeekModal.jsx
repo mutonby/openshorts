@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Loader2, Calendar, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Circle, ExternalLink } from 'lucide-react';
-import { apiFetch } from '../lib/api';
+import { apiFetch, QuotaError, openQuotaWall } from '../lib/api';
 import { platformOptions, defaultPlatformFlags, flagsFromList } from '../lib/socialPlatforms';
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
@@ -154,6 +154,13 @@ export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploa
 
                 results.push({ index: i, success: true });
             } catch (e) {
+                if (e instanceof QuotaError) {
+                    // The free posts ran out: the rest would be refused too.
+                    setScheduling(false);
+                    onClose();
+                    openQuotaWall(e, 'schedule_week');
+                    return;
+                }
                 results.push({ index: i, success: false, error: e.message });
             }
 

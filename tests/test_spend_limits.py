@@ -9,8 +9,8 @@ Each block pins one rule at the function or HTTP surface:
   goes back to its slot);
 - Thumbnail Studio validates, probes, caps and reserves a link before anything
   downloads it, bills transcription by length, and bounds its text calls;
-- social profiles are created only by the connect page, and posting is capped
-  per hour (and per day on the free plan);
+- social profiles are created only by the connect page, posting is capped per
+  hour, and a free account posts a few times in total before the plans modal;
 - agent upload slots, OAuth registrations and SaaSShorts inputs are bounded;
 - the free AI-edit allowance is counted in the ledger, so it survives restarts.
 """
@@ -418,20 +418,9 @@ class TestSocialPostRate:
     @pytest.fixture(autouse=True)
     def _clean(self, monkeypatch):
         monkeypatch.setattr(app_module, "_social_post_times", {})
-        monkeypatch.setattr(app_module, "_social_post_days", {})
 
-    def test_free_plan_daily_cap(self, cloud_user, monkeypatch):
-        monkeypatch.setattr(config, "SOCIAL_POSTS_PER_DAY_FREE", 3)
-        for _ in range(3):
-            asyncio.run(app_module._check_social_post_rate(_req()))
-        with pytest.raises(HTTPException) as e:
-            asyncio.run(app_module._check_social_post_rate(_req()))
-        assert e.value.status_code == 429
-        assert "clips a day" in e.value.detail
-
-    def test_paid_plans_have_no_daily_cap_but_an_hourly_one(self, cloud_user, monkeypatch):
+    def test_every_plan_has_an_hourly_cap(self, cloud_user, monkeypatch):
         cloud_user.plan = "starter"
-        monkeypatch.setattr(config, "SOCIAL_POSTS_PER_DAY_FREE", 1)
         monkeypatch.setattr(config, "SOCIAL_POSTS_PER_HOUR", 4)
         for _ in range(4):
             asyncio.run(app_module._check_social_post_rate(_req()))
@@ -443,6 +432,92 @@ class TestSocialPostRate:
         monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
         for _ in range(200):
             asyncio.run(app_module._check_social_post_rate(_req()))
+
+
+class _Ledger:
+    """metering's free-action rows, in memory."""
+    def __init__(self):
+        self.rows = {}
+        self.recorded = 0
+
+    async def free_actions_total(self, uid, job_type):
+        return sum(1 for r in self.rows.values() if r == (uid, job_type))
+
+    async def record_free_action(self, uid, job_id, job_type):
+        self.recorded += 1
+        rid = f"r{self.recorded}"
+        self.rows[rid] = (uid, job_type)
+        return rid
+
+    async def undo_free_action(self, rid):
+        self.rows.pop(rid, None)
+
+
+class TestFreePostsArePaid:
+    """Posting is part of the paid plans: a free account tries it a few times,
+    then every post opens the plans modal (402 post_requires_plan)."""
+
+    @pytest.fixture(autouse=True)
+    def ledger(self, monkeypatch):
+        led = _Ledger()
+        monkeypatch.setattr(app_module, "_metering", led)
+        monkeypatch.setattr(app_module, "_free_post_locks", {})
+        monkeypatch.setattr(config, "FREE_SOCIAL_POSTS", 3)
+        return led
+
+    def test_a_free_account_posts_three_times_then_meets_the_plans(self, cloud_user, ledger):
+        left = [asyncio.run(app_module._claim_free_post(_req(), "j"))[1] for _ in range(3)]
+        assert left == [2, 1, 0]
+        with pytest.raises(HTTPException) as e:
+            asyncio.run(app_module._claim_free_post(_req(), "j"))
+        assert e.value.status_code == 402
+        assert e.value.detail["error"] == "post_requires_plan"
+        assert "upgrade_url" in e.value.detail
+
+    def test_the_count_lives_in_the_ledger_so_a_restart_keeps_it(self, cloud_user, ledger, monkeypatch):
+        for _ in range(3):
+            asyncio.run(app_module._claim_free_post(_req(), "j"))
+        monkeypatch.setattr(app_module, "_free_post_locks", {})      # a restart
+        with pytest.raises(HTTPException):
+            asyncio.run(app_module._claim_free_post(_req(), "j"))
+
+    def test_paid_plans_and_self_host_are_not_counted(self, cloud_user, ledger, monkeypatch):
+        cloud_user.plan = "creator"
+        assert asyncio.run(app_module._claim_free_post(_req(), "j")) == (None, None)
+        monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+        assert asyncio.run(app_module._claim_free_post(_req(), "j")) == (None, None)
+        assert ledger.rows == {}
+
+    def test_a_post_that_fails_gives_its_try_back(self, cloud_user, ledger, monkeypatch, tmp_path):
+        monkeypatch.setattr(app_module, "OUTPUT_DIR", str(tmp_path))
+        (tmp_path / "j1").mkdir()
+        (tmp_path / "j1" / "c.mp4").write_bytes(b"v")
+        cloud_user.upload_post_profile = "os_mine"
+        monkeypatch.setattr(app_module, "_social_post_times", {})
+        monkeypatch.setattr(app_module, "jobs", {"j1": {
+            "user_id": "u1", "result": {"clips": [{"video_url": "/videos/j1/c.mp4"}]}}})
+
+        async def _noop(*a, **k):
+            return None
+
+        async def _none_stale(*a, **k):
+            return []
+        monkeypatch.setattr(app_module, "_ensure_job_files", _noop)
+        monkeypatch.setattr(app_module, "_assert_job_owner", _noop)
+        monkeypatch.setattr(app_module, "_platforms_needing_reconnect", _none_stale)
+
+        def _vendor_down(*a, **k):
+            raise RuntimeError("The write operation timed out")
+        monkeypatch.setattr(app_module, "_post_video_blocking", _vendor_down)
+        body = {"job_id": "j1", "clip_index": 0, "platforms": ["tiktok"]}
+        assert _call("post", "/api/social/post", json=body).status_code == 500
+        assert ledger.recorded == 1 and ledger.rows == {}
+
+        monkeypatch.setattr(app_module, "_post_video_blocking",
+                            lambda *a, **k: SimpleNamespace(status_code=200,
+                                                            json=lambda: {"request_id": "r"}))
+        r = _call("post", "/api/social/post", json=body)
+        assert r.status_code == 200 and r.json()["free_posts_left"] == 2
 
 
 # --------------------------------------------------------------------------- #

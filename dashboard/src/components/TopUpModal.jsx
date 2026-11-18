@@ -52,6 +52,9 @@ const PLAN_BLURBS = {
 // (QueueFullSeen / QueueFullCheckout / QueueFullDismissed, plus the shared
 // CheckoutStarted/Redirected with source 'queue_full') keep it out of the quota
 // wall's numbers. The copy never says why the queue is full for this user.
+// context 'post_wall': a free account used its few free posts (402
+// post_requires_plan). Posting is what is being sold, so the cards lead with it
+// and the one-time packs are hidden: minutes do not unlock posting.
 // partialJob: { processed_minutes, total_minutes } of the job on screen when the
 // "clip the whole video" banner opened it, so the copy talks about the rest of
 // that video instead of the watermark.
@@ -67,12 +70,16 @@ export default function TopUpModal({ onClose, required, remaining, partialMinute
   useBackFromStripe(() => { inFlightRef.current = false; setBusyPrice(null); });
   const isUpsell = context === 'upsell';
   const isQueueFull = context === 'queue_full';
+  const isPostWall = context === 'post_wall';
   // Opened from a video waiting in line (App's queue notice): the reason to
   // pay here is the wait, not the watermark.
   const fromQueue = isUpsell && sourceOverride === 'queue';
-  const source = sourceOverride || (isUpsell ? 'upsell' : isQueueFull ? 'queue_full' : 'wall');
-  const seenEvent = isUpsell ? 'UpsellModalSeen' : isQueueFull ? 'QueueFullSeen' : 'QuotaWallSeen';
-  const checkoutEvent = isUpsell ? 'UpsellModalCheckout' : isQueueFull ? 'QueueFullCheckout' : 'QuotaWallCheckout';
+  const source = sourceOverride || (isUpsell ? 'upsell' : isQueueFull ? 'queue_full'
+    : isPostWall ? 'post_wall' : 'wall');
+  const seenEvent = isUpsell ? 'UpsellModalSeen' : isQueueFull ? 'QueueFullSeen'
+    : isPostWall ? 'PostWallSeen' : 'QuotaWallSeen';
+  const checkoutEvent = isUpsell ? 'UpsellModalCheckout' : isQueueFull ? 'QueueFullCheckout'
+    : isPostWall ? 'PostWallCheckout' : 'QuotaWallCheckout';
 
   useEffect(() => {
     track(seenEvent,
@@ -140,19 +147,24 @@ export default function TopUpModal({ onClose, required, remaining, partialMinute
   // so that case reads as "out of minutes", not "this video is 1 min long".
   const blockedByLength = typeof required === 'number' && typeof remaining === 'number'
     && remaining >= 1 && required > remaining;
-  const partialOffer = !isUpsell && !isQueueFull && partialMinutes > 0 && typeof onPartial === 'function';
+  const partialOffer = !isUpsell && !isQueueFull && !isPostWall && partialMinutes > 0 && typeof onPartial === 'function';
   const remainingShown = Math.max(0, Math.round((remaining || 0) * 10) / 10);
 
   return (
     <Modal isOpen onClose={onClose} eyebrow="UPGRADE"
            title={isQueueFull ? 'The free queue is full right now'
+             : isPostWall ? 'Keep posting to your socials'
              : isUpsell
              ? (partialJob ? 'Clip the whole video' : fromQueue ? 'Skip the line' : 'Keep your clips forever')
              : (blockedByLength ? 'Your video is ready to clip' : "You've used this month's minutes")}
            size="xl">
       {/* Goal-gradient framing: they're one step from the thing they came for. */}
       <p className="text-muted text-sm mb-5">
-        {isQueueFull
+        {isPostWall
+          ? <>You have used the free posts that come with the free plan. Posting is part of the
+              paid plans: every clip goes to <b className="text-ink font-medium">TikTok, Instagram,
+              YouTube</b> and the rest of your accounts, scheduled or right away, with no watermark.</>
+          : isQueueFull
           ? <>Come back later, or skip the line with a plan: paid videos go to the{' '}
               <b className="text-ink font-medium">front of the queue</b>. Nothing was charged and your
               free minutes are still yours.</>
@@ -217,6 +229,12 @@ export default function TopUpModal({ onClose, required, remaining, partialMinute
                 <span className="readout">/mo</span>
               </div>
               <ul className="space-y-1.5 text-sm text-ink2 mb-4 flex-1">
+                {isPostWall && (
+                  <li className="flex items-start gap-2">
+                    <Check size={15} className="text-ok shrink-0 mt-0.5" />
+                    <span><b>Post every clip</b> to your socials</span>
+                  </li>
+                )}
                 <li className="flex items-start gap-2">
                   <Check size={15} className="text-ok shrink-0 mt-0.5" />
                   <span><b>{entry.minutes} min</b> every month ({Math.round(entry.minutes / 20)}× your free quota)</span>
@@ -251,8 +269,9 @@ export default function TopUpModal({ onClose, required, remaining, partialMinute
         )}
       </div>
 
-      {/* Secondary escape hatch: one-time packs, deliberately de-emphasized. */}
-      <div className="mt-4 text-center">
+      {/* Secondary escape hatch: one-time packs, deliberately de-emphasized.
+          Not on the post wall: a pack adds minutes, it does not unlock posting. */}
+      {!isPostWall && <div className="mt-4 text-center">
         {!showTopups ? (
           <button onClick={() => setShowTopups(true)}
                   className="text-xs text-muted underline underline-offset-2 lowercase hover:text-ink2">
@@ -276,7 +295,7 @@ export default function TopUpModal({ onClose, required, remaining, partialMinute
             )}
           </div>
         )}
-      </div>
+      </div>}
     </Modal>
   );
 }

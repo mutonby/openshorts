@@ -13,8 +13,12 @@
 - `POST /api/social/post`: post to social media (async upload). Cloud posts
   through one managed Upload-Post account, one `os_<hex>` profile per user,
   created only by `/api/social/connect` (reads never create it). Capped at
-  `SOCIAL_POSTS_PER_HOUR` per user and `SOCIAL_POSTS_PER_DAY_FREE` on the free
-  plan (429 with the reason); thumbnail and SaaSShorts publishing count too.
+  `SOCIAL_POSTS_PER_HOUR` per user (429). Posting is part of the paid plans: a
+  free account gets `FREE_SOCIAL_POSTS` posts in total (zero-minute
+  `social_post` ledger rows; a post that fails gives its try back), then a 402
+  `post_requires_plan` with an `upgrade_url`, and the response carries
+  `free_posts_left` while it has some. Thumbnail and SaaSShorts publishing
+  count too.
 - `POST /mcp`: MCP server (JSON-RPC), the pipeline as agent tools.
 - `POST/GET/DELETE /api/keys`: user API keys (cloud mode, session JWT only).
 - `DELETE /api/account`: erase the account and everything in it (GDPR art. 17).

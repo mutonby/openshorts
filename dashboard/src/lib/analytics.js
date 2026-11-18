@@ -18,6 +18,9 @@ import { firstTouchProps } from './attribution';
 //                          free_queue_full; its checkouts carry source 'queue_full')
 //   - QueueFullCheckout  — a plan/top-up clicked inside that wall
 //   - QueueFullDismissed — "I'll come back later" clicked
+//   - PostWallSeen       — a free account used its free posts and the plans
+//                          modal opened (402 post_requires_plan)
+//   - PostWallCheckout   — a plan clicked inside that wall
 //   - CheckoutStarted    — checkout clicked, on ANY surface (see `source` prop:
 //                          'wall' | 'upsell' | 'pricing' | 'watermark')
 //   - CheckoutRedirected — Stripe returned a URL and we are sending them there

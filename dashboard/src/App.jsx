@@ -507,7 +507,12 @@ function App() {
       refreshMe();
       if (meStatus === 'trialing') { setShowTrialUpgrade(true); return; }
       const d = ev.detail || {};
-      setTopUpInfo({ context: 'wall', required: d.required, remaining: d.remaining, source: d.source });
+      if (d.code === 'post_requires_plan') {
+        // The free posts are used: the plans modal sells posting, not minutes.
+        setTopUpInfo({ context: 'post_wall', source: d.source || 'post_wall', highlight: 'starter' });
+      } else {
+        setTopUpInfo({ context: 'wall', required: d.required, remaining: d.remaining, source: d.source });
+      }
       setShowTopUp(true);
     };
     window.addEventListener(QUOTA_WALL_EVENT, onWall);
