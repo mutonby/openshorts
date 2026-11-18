@@ -156,11 +156,34 @@ async def profile_token(username: str):
     return (parse_qs(urlparse(url).query).get("token") or [None])[0]
 
 
+CONNECT_WALL = "connect_requires_plan"
+
+
+def require_paid_plan_to_connect(user) -> None:
+    """Connecting social accounts is part of the paid plans. Free accounts
+    were connecting thousands of YouTube channels through the managed
+    Upload-Post account, filling its platform quota for accounts that cannot
+    post anyway (posting is paid too, app._claim_free_post). A 402 that the
+    dashboard turns into the plans modal. A subscription or bought minutes
+    (plan None but entitled: a top-up) count as paid."""
+    plan = getattr(user, "plan", None)
+    if plan not in (None, "free") or (plan is None and getattr(user, "entitled", False)):
+        return
+    raise HTTPException(status_code=402, detail={
+        "error": CONNECT_WALL,
+        "message": ("Connecting your social accounts is part of the paid plans. Pick a plan "
+                    "to connect TikTok, Instagram, YouTube and the rest, and post every clip."),
+        "upgrade_url": f"{settings.frontend_url}/#/pricing?plan=starter&src=connect_wall",
+    })
+
+
 @router.post("/api/social/connect")
 async def social_connect(request: Request):
-    """Return a branded Upload-Post connection URL for the signed-in managed user."""
+    """Return a branded Upload-Post connection URL for the signed-in managed
+    user. Paid plans only (``require_paid_plan_to_connect``)."""
     from .auth import get_current_user_required
     user = await get_current_user_required(request)
+    require_paid_plan_to_connect(user)
     username = await ensure_profile(user)
     access_url = await get_connect_url(username, request.query_params.get("return_to") or "account")
     return {"access_url": access_url}

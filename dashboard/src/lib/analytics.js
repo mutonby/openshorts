@@ -21,6 +21,9 @@ import { firstTouchProps } from './attribution';
 //   - PostWallSeen       — a free account used its free posts and the plans
 //                          modal opened (402 post_requires_plan)
 //   - PostWallCheckout   — a plan clicked inside that wall
+//   - ConnectWallSeen    — a free account tried to connect its socials and the
+//                          plans modal opened (402 connect_requires_plan)
+//   - ConnectWallCheckout — a plan clicked inside that wall
 //   - CheckoutStarted    — checkout clicked, on ANY surface (see `source` prop:
 //                          'wall' | 'upsell' | 'pricing' | 'watermark')
 //   - CheckoutRedirected — Stripe returned a URL and we are sending them there

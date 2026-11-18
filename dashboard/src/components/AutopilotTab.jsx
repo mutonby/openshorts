@@ -3,7 +3,7 @@ import {
   Rocket, Youtube, Twitch, Loader2, RefreshCw, Play, CheckCircle2, AlertTriangle,
   Clock, Scissors, Send, ExternalLink, FolderOpen, Lock,
 } from 'lucide-react';
-import { apiJson, openQuotaWall } from '../lib/api';
+import { apiJson, openQuotaWall, QuotaError } from '../lib/api';
 import { PLATFORM_VALUES, platformLabel } from '../lib/socialPlatforms';
 import { track } from '../lib/analytics';
 import { connectNotice } from '../lib/connectReturn';
@@ -173,6 +173,7 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
       const { access_url } = await apiJson('/api/social/connect?return_to=autopilot', { method: 'POST' });
       if (access_url) window.location.href = access_url;
     } catch (e) {
+      if (e instanceof QuotaError) { openQuotaWall(e, 'autopilot_connect'); return; }
       setNotice(errText(e, 'Could not open the connection page. Please try again.'));
     }
   }, []);

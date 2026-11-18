@@ -30,7 +30,7 @@ import AutopilotTab from './components/AutopilotTab';
 import ProfileMenu from './components/ProfileMenu';
 import Modal from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
-import { apiFetch, apiJson, QuotaError, QUOTA_WALL_EVENT } from './lib/api';
+import { apiFetch, apiJson, QuotaError, QUOTA_WALL_EVENT, openQuotaWall } from './lib/api';
 import { SOCIAL_PLATFORMS } from './lib/socialPlatforms';
 import { track } from './lib/analytics';
 import { readConnectReturn, stripConnectReturn } from './lib/connectReturn';
@@ -507,7 +507,10 @@ function App() {
       refreshMe();
       if (meStatus === 'trialing') { setShowTrialUpgrade(true); return; }
       const d = ev.detail || {};
-      if (d.code === 'post_requires_plan') {
+      if (d.code === 'connect_requires_plan') {
+        // Connecting socials is paid: the plans modal sells posting.
+        setTopUpInfo({ context: 'connect_wall', source: d.source || 'connect_wall', highlight: 'starter' });
+      } else if (d.code === 'post_requires_plan') {
         // The free posts are used: the plans modal sells posting, not minutes.
         setTopUpInfo({ context: 'post_wall', source: d.source || 'post_wall', highlight: 'starter' });
       } else {
@@ -1221,6 +1224,7 @@ function App() {
       // Same tab so the connect page's redirectUrl brings the user back into the app.
       if (access_url) window.location.href = access_url;
     } catch (e) {
+      if (e instanceof QuotaError) { openQuotaWall(e, 'social_connect'); return; }
       alert('Could not open the connection page. Please try again.');
     }
   };
@@ -1232,6 +1236,7 @@ function App() {
       const { access_url } = await apiJson('/api/social/connect', { method: 'POST' });
       if (access_url) window.open(access_url, '_blank', 'noopener');
     } catch (e) {
+      if (e instanceof QuotaError) { openQuotaWall(e, 'calendar'); return; }
       alert('Could not open the calendar. Please try again.');
     }
   };

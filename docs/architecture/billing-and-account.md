@@ -279,3 +279,17 @@ recent activity (`GET /users/{id}/activity`) and fix it with one action at a tim
   performance) with a one-sentence `CONSENT_MESSAGE`.
 - Checkout buttons reset their spinner on a back/forward-cache restore
   (`lib/backFromStripe.js`); without it every plan stayed disabled after Back.
+
+## Social posting and connecting are paid
+
+Free accounts used to connect their channels through the managed Upload-Post
+account freely, and thousands of YouTube channels of accounts that never
+posted filled that account's platform quota. Now:
+
+- `POST /api/social/connect` (the connect page, the scheduling calendar)
+  answers a free account with a 402 `connect_requires_plan`
+  (`cloud/social_profiles.require_paid_plan_to_connect`). A subscription or
+  bought minutes count as paid. The dashboard opens the plans modal in its
+  `connect_wall` context (events `ConnectWallSeen` / `ConnectWallCheckout`).
+- A free account that connected before keeps `FREE_SOCIAL_POSTS` posts in
+  total, then a 402 `post_requires_plan` (`post_wall` context).

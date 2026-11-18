@@ -70,16 +70,19 @@ export default function TopUpModal({ onClose, required, remaining, partialMinute
   useBackFromStripe(() => { inFlightRef.current = false; setBusyPrice(null); });
   const isUpsell = context === 'upsell';
   const isQueueFull = context === 'queue_full';
-  const isPostWall = context === 'post_wall';
+  // 'connect_wall': a free account tried to connect its socials (402
+  // connect_requires_plan). Same offer as the post wall, its own words.
+  const isConnectWall = context === 'connect_wall';
+  const isPostWall = context === 'post_wall' || isConnectWall;
   // Opened from a video waiting in line (App's queue notice): the reason to
   // pay here is the wait, not the watermark.
   const fromQueue = isUpsell && sourceOverride === 'queue';
   const source = sourceOverride || (isUpsell ? 'upsell' : isQueueFull ? 'queue_full'
-    : isPostWall ? 'post_wall' : 'wall');
+    : isConnectWall ? 'connect_wall' : isPostWall ? 'post_wall' : 'wall');
   const seenEvent = isUpsell ? 'UpsellModalSeen' : isQueueFull ? 'QueueFullSeen'
-    : isPostWall ? 'PostWallSeen' : 'QuotaWallSeen';
+    : isConnectWall ? 'ConnectWallSeen' : isPostWall ? 'PostWallSeen' : 'QuotaWallSeen';
   const checkoutEvent = isUpsell ? 'UpsellModalCheckout' : isQueueFull ? 'QueueFullCheckout'
-    : isPostWall ? 'PostWallCheckout' : 'QuotaWallCheckout';
+    : isConnectWall ? 'ConnectWallCheckout' : isPostWall ? 'PostWallCheckout' : 'QuotaWallCheckout';
 
   useEffect(() => {
     track(seenEvent,
@@ -153,6 +156,7 @@ export default function TopUpModal({ onClose, required, remaining, partialMinute
   return (
     <Modal isOpen onClose={onClose} eyebrow="UPGRADE"
            title={isQueueFull ? 'The free queue is full right now'
+             : isConnectWall ? 'Post your clips to your socials'
              : isPostWall ? 'Keep posting to your socials'
              : isUpsell
              ? (partialJob ? 'Clip the whole video' : fromQueue ? 'Skip the line' : 'Keep your clips forever')
@@ -160,7 +164,11 @@ export default function TopUpModal({ onClose, required, remaining, partialMinute
            size="xl">
       {/* Goal-gradient framing: they're one step from the thing they came for. */}
       <p className="text-muted text-sm mb-5">
-        {isPostWall
+        {isConnectWall
+          ? <>Connecting your social accounts is part of the paid plans: every clip goes to{' '}
+              <b className="text-ink font-medium">TikTok, Instagram, YouTube</b> and the rest of your
+              accounts, scheduled or right away, with no watermark.</>
+          : isPostWall
           ? <>You have used the free posts that come with the free plan. Posting is part of the
               paid plans: every clip goes to <b className="text-ink font-medium">TikTok, Instagram,
               YouTube</b> and the rest of your accounts, scheduled or right away, with no watermark.</>
