@@ -626,6 +626,38 @@ function App() {
     handleClipStateChange(index, { activeLayers: null, serverVideoFile: newFile });
   };
 
+  // Whether a job's source video can still be played (a paid job's is kept in
+  // storage for a while; older ones and the free plan's are gone). Asked of a
+  // player of its own: playing it is the only honest test, and a missing
+  // source must leave the panel as it was, not a dead player.
+  const sourcePlayable = async (id) => {
+    try {
+      const res = await apiFetch(`/api/source-url/${id}`);
+      if (!res.ok) return false;
+      const { url } = await res.json();
+      if (!url) return false;
+      return await new Promise((resolve) => {
+        const probe = document.createElement('video');
+        let settled = false;
+        const done = (ok) => {
+          if (settled) return;
+          settled = true;
+          probe.removeAttribute('src');
+          probe.load();
+          resolve(ok);
+        };
+        probe.preload = 'metadata';
+        probe.muted = true;
+        probe.onloadedmetadata = () => done(true);
+        probe.onerror = () => done(false);
+        setTimeout(() => done(false), 15000);
+        probe.src = getApiUrl(url);
+      });
+    } catch {
+      return false;
+    }
+  };
+
   // Reopen an archived project from the History tab: the backend re-downloads
   // its files from R2 into the server's working dir and returns the full state.
   const restoreProject = async (projectJobId) => {
@@ -641,6 +673,13 @@ function App() {
     setQualityGate(null);
     setStatus('complete');
     setActiveTab('dashboard');
+    // The long video comes back next to the clips when it is still there, so
+    // a clip can be checked against it before lengthening or trimming it.
+    sourcePlayable(data.job_id).then((ok) => {
+      if (!ok || jobIdRef.current !== data.job_id) return;
+      setNoSource(false);
+      setProcessingMedia({ type: 'server', payload: `/api/source/${data.job_id}` });
+    });
   };
 
   // Apply one subtitle style to every clip of the job, sequentially.
