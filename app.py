@@ -4741,12 +4741,20 @@ def _handle_job_line(job_id, line, remote=False):
         return
     if remote and job_id in jobs and len(jobs[job_id]['logs']) >= REMOTE_MAX_LOG_LINES:
         return        # a render prints a few hundred lines; the rest is noise
+    if _DOWNLOADER_CHATTER.match(decoded_line):
+        return
     print(f"📝 [Job Output] {decoded_line}")
     if job_id in jobs:
         jobs[job_id]['logs'].append(decoded_line)
 
 
 REMOTE_MAX_LOG_LINES = 5000
+
+# ffmpeg fetching a segmented (HLS) source says one line per request and per
+# connection: tens of thousands for a long video. They are kept out of the
+# job's log, which every status poll reads from start to end, and out of the
+# server's own log. The downloader's errors and its summary still print.
+_DOWNLOADER_CHATTER = re.compile(r'\[(?:hls|tcp|tls|https?|AVIOContext) @ 0x[0-9a-f]+\] ')
 
 
 def enqueue_output(out, job_id):

@@ -300,6 +300,30 @@ def test_the_marker_is_consumed_and_only_this_host_may_send_it(api):
     assert "yt_limited" not in other
 
 
+def test_the_segment_chatter_of_a_download_stays_out_of_the_job_log(api, capsys):
+    """A segmented source makes ffmpeg print a line per request and connection.
+    None of it is progress, and the job's log is read whole on every poll."""
+    m = api
+    job = _failed_job(m, "j3")
+    before = len(job["logs"])
+    for line in ("[hls @ 0x605dd11db300] HLS request for url 'https://example.com/seg/1', offset 0",
+                 "[hls @ 0x605dd11db300] Opening 'https://example.com/seg/1' for reading",
+                 "[hls @ 0x605dd11db300] Failed to open segment 7 of playlist 0",
+                 "[tcp @ 0x5b1c9a0c] Starting connection attempt to 192.0.2.1 port 443",
+                 "[https @ 0x5b1c9a0c] Opening 'https://example.com/seg/2' for reading"):
+        m._handle_job_line("j3", line)
+    assert len(job["logs"]) == before
+    assert "0x605dd11db300" not in capsys.readouterr().out
+    # What a person follows still arrives: progress, the end and real errors.
+    for line in ("[download] 100% of 400.00MiB in 00:20",
+                 "✅ Video downloaded: clip.mp4",
+                 "ERROR: [youtube] abc: Sign in to confirm your age"):
+        m._handle_job_line("j3", line)
+    assert job["logs"][-3:] == ["[download] 100% of 400.00MiB in 00:20",
+                               "✅ Video downloaded: clip.mp4",
+                               "ERROR: [youtube] abc: Sign in to confirm your age"]
+
+
 def test_a_video_stopped_by_the_account_limit_goes_back_in_line(api, monkeypatch):
     m = api
     job = _failed_job(m)
