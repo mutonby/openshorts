@@ -169,3 +169,40 @@ def test_partial_result_is_parsed_again_only_when_something_changed(tmp_path, mo
     app_module._refresh_partial_result(job_id, str(tmp_path))
     assert loads["n"] == 2
     assert len(app_module.jobs[job_id]["result"]["clips"]) == 2
+
+
+def test_quiet_access_log_keeps_errors_and_other_paths():
+    import logging
+    f = app_module._QuietAccessLog()
+
+    def rec(path, status):
+        return logging.LogRecord("uvicorn.access", logging.INFO, "", 0,
+                                 '%s - "%s %s HTTP/%s" %d', ("1.2.3.4:1", "GET", path, "1.1", status), None)
+    assert not f.filter(rec("/api/status/abc", 200))
+    assert not f.filter(rec("/api/config", 200))
+    assert f.filter(rec("/api/status/abc", 500))
+    assert f.filter(rec("/api/me", 200))
+
+
+def test_a_job_starts_through_nice_without_a_preexec_fn(monkeypatch):
+    seen = {}
+
+    class _P:
+        stdout = None
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+    def _popen(cmd, **kw):
+        seen["cmd"], seen["preexec"] = cmd, kw.get("preexec_fn")
+        return _P()
+    monkeypatch.setattr(app_module.subprocess, "Popen", _popen)
+    import types
+    fake_thread = type("T", (), {"daemon": True, "start": lambda s: None, "join": lambda s, t=None: None})
+    monkeypatch.setattr(app_module, "threading", types.SimpleNamespace(
+        Thread=lambda **kw: fake_thread(), Lock=app_module.threading.Lock))
+    monkeypatch.setenv("JOB_NICE", "10")
+    monkeypatch.setattr(app_module.shutil, "which", lambda name: "/usr/bin/nice")
+    asyncio.run(app_module._run_main("j", ["python", "main.py"], {}))
+    assert seen["cmd"][:3] == ["nice", "-n", "10"] and seen["preexec"] is None

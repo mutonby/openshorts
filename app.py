@@ -3079,9 +3079,11 @@ async def cleanup_jobs():
             
             # Simple directory cleanup based on modification time
             # Check OUTPUT_DIR
-            _sweep_expired_job_dirs(now)
+            # Disk walks and rmtree of whole job dirs: in a thread, so the
+            # API keeps answering while they run.
+            await asyncio.to_thread(_sweep_expired_job_dirs, now)
 
-            for job_id in _sweep_retained_sources(now):
+            for job_id in await asyncio.to_thread(lambda: list(_sweep_retained_sources(now))):
                 print(f"🧹 Dropped retained source for job {job_id}")
 
             # Hard disk cap. The time-based sweep above bounds the *age* of what
@@ -3089,8 +3091,8 @@ async def cleanup_jobs():
             # inside one retention window. Drop the oldest jobs until we're back
             # under the cap — clips are already archived to R2 and get restored
             # on demand, so this only costs a re-download.
-            _enforce_output_size_cap()
-            _enforce_uploads_size_cap()
+            await asyncio.to_thread(_enforce_output_size_cap)
+            await asyncio.to_thread(_enforce_uploads_size_cap)
 
             # Cleanup SaaSShorts jobs from memory
             try:
@@ -4315,6 +4317,28 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+
+class _QuietAccessLog(__import__("logging").Filter):
+    """Drop the access-log line of a successful status poll, config read or
+    remote-worker call: they are most of the traffic, and every line is a
+    write on the event loop (and into the log spool). Errors (>= 400) on
+    those paths are still logged."""
+
+    QUIET_PREFIXES = ("/api/status/", "/api/config", "/internal/worker/")
+
+    def filter(self, record):
+        try:
+            args = record.args
+            if (isinstance(args, tuple) and len(args) >= 5 and int(args[4]) < 400
+                    and str(args[2]).startswith(self.QUIET_PREFIXES)):
+                return False
+        except Exception:
+            pass
+        return True
+
+
+__import__("logging").getLogger("uvicorn.access").addFilter(_QuietAccessLog())
+
 # Cloud mode: attach middleware + routers at import time (before the app serves).
 if BILLING_ENABLED:
     cloud.setup_sync(app)
@@ -5010,13 +5034,22 @@ async def _run_main(job_id, cmd, env, tick=None):
     called every couple of seconds. Cancelled (the server is stopping): the
     child is killed so it cannot keep writing into the job dir while the next
     instance resumes the same job."""
-    process = subprocess.Popen(
-        cmd,
+    # Started off the event loop and without preexec_fn: a preexec_fn makes
+    # Python fork() this whole process (GPU mappings and all) instead of a
+    # cheap vfork, and that fork stalled every request for a few hundred ms
+    # per job start. The niceness comes from nice(1), which execs the job in
+    # place (same pid, so kill() still reaches main.py).
+    nice = _job_nice()
+    launch = (["nice", "-n", str(nice), *cmd]
+              if nice and shutil.which("nice") else list(cmd))
+    process = await asyncio.to_thread(
+        subprocess.Popen,
+        launch,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, # Merge stderr to stdout
         env=env,
         cwd=os.getcwd(),
-        preexec_fn=_lower_priority,
+        preexec_fn=(_lower_priority if nice and launch[0] != "nice" else None),
     )
     # We need to capture logs in a thread because Popen isn't async
     t_log = threading.Thread(target=enqueue_output, args=(process.stdout, job_id))
@@ -5457,12 +5490,23 @@ async def worker_file(job_id: str, request: Request):
         # the room granted below is then really this request's.
         with remote_worker.upload_lock(job_dir):
             rel, tmp, room = remote_worker.open_upload(job_dir, name, offset, file_max, job_max)
-            with open(tmp, "ab") as f:
+            # Disk writes in a thread, 1 MB at a time: written straight from
+            # the loop they stalled every request whenever the disk was busy.
+            f = await asyncio.to_thread(open, tmp, "ab")
+            try:
+                buf = bytearray()
                 async for chunk in request.stream():
                     written += len(chunk)
                     if written > room:
                         raise remote_worker.UploadError(413, "file too large")
-                    f.write(chunk)
+                    buf += chunk
+                    if len(buf) >= 1024 * 1024:
+                        await asyncio.to_thread(f.write, bytes(buf))
+                        buf.clear()
+                if buf:
+                    await asyncio.to_thread(f.write, bytes(buf))
+            finally:
+                await asyncio.to_thread(f.close)
             remote_worker.touch_seen(job_dir)
             if size is not None:
                 remote_worker.finish_upload(
@@ -6111,7 +6155,7 @@ async def process_endpoint(
         src = thumb_session["video_path"]
         src_duration = await asyncio.to_thread(_media_duration_seconds, src)
         if MIN_SOURCE_SECONDS > 0 and 0 < src_duration < MIN_SOURCE_SECONDS:
-            _discard_rejected_source(None, job_output_dir)
+            await asyncio.to_thread(_discard_rejected_source, None, job_output_dir)
             _reject_short_source(src_duration)
         input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{_clamp_upload_name(os.path.basename(src))}")
         try:
@@ -6132,7 +6176,7 @@ async def process_endpoint(
         src = upload_slot["path"]
         src_duration = await asyncio.to_thread(_media_duration_seconds, src)
         if MIN_SOURCE_SECONDS > 0 and 0 < src_duration < MIN_SOURCE_SECONDS:
-            _discard_rejected_source(None, job_output_dir)
+            await asyncio.to_thread(_discard_rejected_source, None, job_output_dir)
             _reject_short_source(src_duration)
         input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{upload_slot['filename']}")
         os.replace(src, input_path)
@@ -6153,13 +6197,13 @@ async def process_endpoint(
             while content := await file.read(1024 * 1024): # Read 1MB chunks
                 size += len(content)
                 if size > limit_bytes:
-                    _discard_rejected_source(input_path, job_output_dir)
+                    await asyncio.to_thread(_discard_rejected_source, input_path, job_output_dir)
                     raise HTTPException(status_code=413, detail=f"File too large. Max size {MAX_FILE_SIZE_MB}MB")
                 buffer.write(content)
 
         upload_duration = await asyncio.to_thread(_media_duration_seconds, input_path)
         if MIN_SOURCE_SECONDS > 0 and 0 < upload_duration < MIN_SOURCE_SECONDS:
-            _discard_rejected_source(input_path, job_output_dir)
+            await asyncio.to_thread(_discard_rejected_source, input_path, job_output_dir)
             _reject_short_source(upload_duration)
 
         cmd.extend(["-i", input_path])
@@ -6179,7 +6223,7 @@ async def process_endpoint(
             request, url, input_path, job_id, max_minutes=max_minutes,
             source_range=_parse_source_range(source_start, source_end))
     except BaseException:
-        _discard_rejected_source(input_path, job_output_dir,
+        await asyncio.to_thread(_discard_rejected_source, input_path, job_output_dir,
                                  upload_slot=upload_slot, upload_id=upload_id)
         raise
     if getattr(request.state, "paid_allowed", True) is False:
@@ -6743,17 +6787,20 @@ async def _restore_job_files(job_id: str, proj, user_id: str) -> bool:
             except Exception as e:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
                 raise HTTPException(status_code=502, detail=f"Restore download failed: {e}")
-            # Owner sidecar keeps the multi-tenant guard after a server restart.
-            with open(os.path.join(tmp_dir, ".owner"), "w") as f:
-                f.write(user_id)
+            def _settle():
+                # Owner sidecar keeps the multi-tenant guard after a server restart.
+                with open(os.path.join(tmp_dir, ".owner"), "w") as f:
+                    f.write(user_id)
+                if os.path.isdir(job_dir):
+                    for fname in os.listdir(tmp_dir):
+                        shutil.move(os.path.join(tmp_dir, fname), os.path.join(job_dir, fname))
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                    os.utime(job_dir, None)
+                else:
+                    os.rename(tmp_dir, job_dir)
+            # Moves, a tree removal and a rename: in a thread, not on the loop.
+            await asyncio.to_thread(_settle)
             pulled = True
-            if os.path.isdir(job_dir):
-                for fname in os.listdir(tmp_dir):
-                    shutil.move(os.path.join(tmp_dir, fname), os.path.join(job_dir, fname))
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-                os.utime(job_dir, None)
-            else:
-                os.rename(tmp_dir, job_dir)
 
         # Register (or refresh) the in-memory job — same shape as
         # _recover_jobs_from_disk, so every edit endpoint works unchanged.
