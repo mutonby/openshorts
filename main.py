@@ -2129,7 +2129,8 @@ def transcribe_video(video_path, slot_timeout=None):
     """``slot_timeout``: seconds to wait for a host transcription slot before
     giving up with TimeoutError (None waits for as long as it takes)."""
     print("🎙️  Transcribing video...")
-    from transcribe_backends import transcribe_media, release_models, host_asr_slot
+    from transcribe_backends import (transcribe_media, release_models, host_asr_slot,
+                                     media_seconds)
 
     # At most ASR_HOST_SLOTS jobs transcribe on the GPU at once, host-wide.
     # Inside the slot, the model's VRAM is handed back before the long render
@@ -2138,7 +2139,9 @@ def transcribe_video(video_path, slot_timeout=None):
     # clips into its render still held 5.9 GB of the 20 GB card; eight such
     # jobs filled it and NVENC / TransNetV2 failed with CUDA OOM (30-60% of
     # jobs failing per hour at peak). Nothing after this point transcribes.
-    with host_asr_slot(timeout=slot_timeout):
+    # A long source never takes the last slot (ASR_LONG_SECONDS), and whisper
+    # hands the slot back if it falls to the CPU.
+    with host_asr_slot(timeout=slot_timeout, media_seconds=media_seconds(video_path)):
         try:
             transcript = transcribe_media(video_path)
         finally:

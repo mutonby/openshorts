@@ -64,6 +64,23 @@ ASR_HOST_SLOTS = int(os.environ.get("ASR_HOST_SLOTS", "2"))
 ASR_LOCK_DIR = os.environ.get("ASR_LOCK_DIR", "output")
 # Seconds this process waited for a host slot (main.py reports it in JOB_CPU).
 ASR_WAIT = {"s": 0.0}
+# Media at least this long (seconds) may not take the last host slot, which
+# stays for shorter sources. In prod on 18-nov-2026 two long videos (50 and
+# 88 min, languages Parakeet does not cover) held both slots for an hour while
+# eight jobs, one of them a 3 MB clip, slept waiting for one. 0 turns it off.
+ASR_LONG_SECONDS = float(os.environ.get("ASR_LONG_SECONDS", "1800") or 0)
+
+# The host slot this process holds right now, so a transcription that stops
+# using the GPU (whisper fell back to the CPU) can hand it back early.
+_HELD_HOST_SLOT = None
+
+
+def release_host_slot():
+    """Hand back the host slot this process holds, if any, before the
+    ``with`` block ends: for work that no longer runs on the card."""
+    slot = _HELD_HOST_SLOT
+    if slot is not None:
+        slot.release()
 
 
 class host_asr_slot:
@@ -74,16 +91,31 @@ class host_asr_slot:
     Degrades to a no-op where flock or the directory is unavailable.
     ``timeout``: give up with TimeoutError after that many seconds without a
     slot (a caller that has another way to get the work done).
+    ``media_seconds``: length of what will be transcribed. Media of at least
+    ``long_seconds`` never takes the last slot (with two or more slots), so a
+    short source never waits behind long ones only.
     """
 
-    def __init__(self, slots=None, lock_dir=None, poll=1.0, timeout=None):
+    def __init__(self, slots=None, lock_dir=None, poll=1.0, timeout=None,
+                 media_seconds=None, long_seconds=None):
         self.slots = ASR_HOST_SLOTS if slots is None else slots
         self.lock_dir = lock_dir or ASR_LOCK_DIR
         self.poll = poll
         self.timeout = timeout
+        self.media_seconds = media_seconds
+        self.long_seconds = ASR_LONG_SECONDS if long_seconds is None else long_seconds
         self._fh = None
 
+    def usable_slots(self):
+        """How many of the slots (from index 0) this transcription may take."""
+        long_media = (self.long_seconds and self.media_seconds
+                      and self.media_seconds >= self.long_seconds)
+        if long_media and self.slots >= 2:
+            return self.slots - 1
+        return self.slots
+
     def __enter__(self):
+        global _HELD_HOST_SLOT
         if self.slots <= 0:
             return self
         try:
@@ -94,7 +126,7 @@ class host_asr_slot:
         announced = False
         started = time.monotonic()
         while True:
-            for i in range(self.slots):
+            for i in range(self.usable_slots()):
                 path = os.path.join(self.lock_dir, f".asr-gpu-{i}.lock")
                 try:
                     fh = open(path, "a+")
@@ -103,6 +135,7 @@ class host_asr_slot:
                 try:
                     fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     self._fh = fh
+                    _HELD_HOST_SLOT = self
                     ASR_WAIT["s"] += time.monotonic() - started
                     return self
                 except OSError:
@@ -115,7 +148,9 @@ class host_asr_slot:
                 announced = True
             time.sleep(self.poll)
 
-    def __exit__(self, *exc):
+    def release(self):
+        """Give the slot back (idempotent; ``__exit__`` calls it too)."""
+        global _HELD_HOST_SLOT
         if self._fh is not None:
             try:
                 import fcntl
@@ -124,6 +159,11 @@ class host_asr_slot:
                 pass
             self._fh.close()
             self._fh = None
+        if _HELD_HOST_SLOT is self:
+            _HELD_HOST_SLOT = None
+
+    def __exit__(self, *exc):
+        self.release()
         return False
 
 
@@ -169,6 +209,19 @@ _whisper_lock = threading.Lock()
 _whisper_force_cpu = False
 
 
+def whisper_cpu_threads():
+    """Threads for whisper on the CPU (``WHISPER_CPU_THREADS``, default
+    min(8, cores)). Job processes run with OMP_NUM_THREADS=1, and ctranslate2
+    takes that as its default: measured in prod on 18-nov-2026, a fallen-back
+    large-v3-turbo decoded on one thread at about real time, so a 50-minute
+    video kept its job (and the GPU slot) for an hour."""
+    try:
+        n = int(os.environ.get("WHISPER_CPU_THREADS", "") or 0)
+    except ValueError:
+        n = 0
+    return n if n > 0 else max(1, min(8, os.cpu_count() or 1))
+
+
 def _get_whisper_model():
     """Process-wide WhisperModel singleton, rebuilt if the env config changes.
 
@@ -184,7 +237,9 @@ def _get_whisper_model():
     with _whisper_lock:
         if _whisper_model is None or _whisper_key != key:
             from faster_whisper import WhisperModel
-            _whisper_model = WhisperModel(key[0], device=key[1], compute_type=key[2])
+            kwargs = {"cpu_threads": whisper_cpu_threads()} if key[1] == "cpu" else {}
+            _whisper_model = WhisperModel(key[0], device=key[1], compute_type=key[2],
+                                          **kwargs)
             _whisper_key = key
     return _whisper_model, cfg["device"]
 
@@ -194,6 +249,11 @@ def _whisper_device():
 
 
 def _run_whisper_once(media_path, **params):
+    if _whisper_force_cpu:
+        # Off the card for good in this process: the host slot only guards
+        # the GPU, and holding it through a CPU decode starves every job
+        # that would transcribe on the card in seconds.
+        release_host_slot()
     gate = _ASR_GATE if _whisper_device() != "cpu" else _NULL_GATE
     # The model is fetched inside the gate: release_models() drains the gate
     # before unloading, so a transcription can never start on a model that is
@@ -419,6 +479,27 @@ def _get_parakeet_model():
     return _parakeet_model
 
 
+def _drop_parakeet():
+    """Drop the Parakeet singleton (its onnxruntime CUDA arena) before whisper
+    loads in the same process. Measured in prod on 18-nov-2026: a job whose
+    video Parakeet rejected still held ~7 GB of the card when whisper loaded,
+    whisper hit CUDA OOM and the whole transcription went to the CPU."""
+    global _parakeet_model
+    for _ in range(_ASR_SLOTS):
+        _ASR_GATE.acquire()
+    try:
+        with _parakeet_lock:
+            parakeet, _parakeet_model = _parakeet_model, None
+    finally:
+        for _ in range(_ASR_SLOTS):
+            _ASR_GATE.release()
+    if parakeet is None:
+        return
+    del parakeet
+    import gc
+    gc.collect()
+
+
 def release_models():
     """Drop the resident ASR models and hand their VRAM back to the GPU.
 
@@ -537,6 +618,9 @@ def _transcribe_with_parakeet(media_path):
                 progress.update(float(seg.end))
             progress.update(progress.total)
         transcript = _parakeet_transcript(results)
+        if _parakeet_fallback_reason(transcript) is not None:
+            # transcribe_media throws this away for whisper: no repair.
+            return transcript
         # Outside the parakeet gate on purpose: the repair takes it again for
         # whisper, and the semaphore is not re-entrant.
         _repair_script_drift(transcript, wav_path)
@@ -622,6 +706,8 @@ def _whisper_span(audio, language):
     the user-facing progress lines are not printed once per span.
     """
     params = dict(WHISPER_TRANSCRIBE_PARAMS, language=language, vad_filter=False)
+    if _whisper_force_cpu:
+        release_host_slot()
     gate = _ASR_GATE if _whisper_device() != "cpu" else _NULL_GATE
     with gate:
         model, _device = _get_whisper_model()
@@ -735,6 +821,20 @@ def _has_audio_stream(media_path) -> bool:
         return True  # probe failed — don't block, let the backend try
 
 
+def media_seconds(media_path):
+    """Container duration in seconds (ffprobe), or None when unknown."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", media_path],
+            capture_output=True, text=True, timeout=60,
+        )
+        value = float(out.stdout.strip().splitlines()[0])
+        return value if value > 0 else None
+    except Exception:
+        return None
+
+
 def transcribe_media(media_path):
     """Transcribe with the configured backend, falling back to whisper."""
     # Silent videos (AI-generated clips, muted screen recordings) have no audio
@@ -761,5 +861,10 @@ def transcribe_media(media_path):
         except Exception as e:
             print(f"⚠️ [ASR] parakeet failed ({type(e).__name__}: {e}) — "
                   f"falling back to whisper")
+        # Whisper needs the card's memory that Parakeet's arena still holds.
+        try:
+            _drop_parakeet()
+        except Exception as e:
+            print(f"⚠️ [ASR] could not release parakeet ({type(e).__name__}: {e})")
 
     return _transcribe_with_whisper(media_path)

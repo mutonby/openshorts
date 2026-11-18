@@ -171,9 +171,10 @@ def fake_faster_whisper(monkeypatch):
     created = []
 
     class FakeModel:
-        def __init__(self, model_size, device=None, compute_type=None):
+        def __init__(self, model_size, device=None, compute_type=None, **kwargs):
             self.model_size = model_size
             self.device = device
+            self.kwargs = kwargs
             created.append(self)
 
         def transcribe(self, path, **params):
@@ -540,3 +541,141 @@ def test_repair_failure_keeps_parakeet_text(monkeypatch):
     t = _drift_transcript()
     assert tb._repair_script_drift(t, "/tmp/x.wav") == 0
     assert t["segments"][1]["text"].startswith("Тудей")
+
+
+# --- 18-nov-2026: two long videos jammed both host slots for an hour ---------
+
+class TestLongMediaAndEarlyRelease:
+    def test_long_media_never_takes_the_last_slot(self, tmp_path):
+        long_a = tb.host_asr_slot(slots=2, lock_dir=str(tmp_path), poll=0.01,
+                                  media_seconds=3000, long_seconds=1800)
+        with long_a:
+            assert long_a._fh.name.endswith(".asr-gpu-0.lock")
+            # A second long one may not take slot 1: it times out...
+            with pytest.raises(TimeoutError):
+                with tb.host_asr_slot(slots=2, lock_dir=str(tmp_path), poll=0.01,
+                                      timeout=0.05, media_seconds=5000,
+                                      long_seconds=1800):
+                    pass
+            # ...while a short source still gets in at once.
+            with tb.host_asr_slot(slots=2, lock_dir=str(tmp_path), poll=0.01,
+                                  timeout=0.05, media_seconds=60,
+                                  long_seconds=1800) as short:
+                assert short._fh.name.endswith(".asr-gpu-1.lock")
+
+    def test_unknown_length_or_one_slot_or_disabled_use_every_slot(self):
+        assert tb.host_asr_slot(slots=2, media_seconds=None, long_seconds=1800).usable_slots() == 2
+        assert tb.host_asr_slot(slots=1, media_seconds=9999, long_seconds=1800).usable_slots() == 1
+        assert tb.host_asr_slot(slots=3, media_seconds=9999, long_seconds=0).usable_slots() == 3
+        assert tb.host_asr_slot(slots=3, media_seconds=9999, long_seconds=1800).usable_slots() == 2
+
+    def test_release_host_slot_frees_it_before_the_block_ends(self, tmp_path):
+        with tb.host_asr_slot(slots=1, lock_dir=str(tmp_path), poll=0.01) as held:
+            assert tb._HELD_HOST_SLOT is held
+            tb.release_host_slot()
+            assert held._fh is None and tb._HELD_HOST_SLOT is None
+            with tb.host_asr_slot(slots=1, lock_dir=str(tmp_path), poll=0.01,
+                                  timeout=0.05) as other:
+                assert other._fh is not None
+        tb.release_host_slot()  # nothing held: a no-op
+
+    def test_whisper_on_the_cpu_hands_the_slot_back(self, tmp_path, monkeypatch):
+        class _Model:
+            def transcribe(self, path, **params):
+                assert tb._HELD_HOST_SLOT is None  # released before decoding
+                return iter([]), SimpleNamespace(duration=0, language="hi")
+
+        monkeypatch.setattr(tb, "_whisper_force_cpu", True)
+        monkeypatch.setattr(tb, "_get_whisper_model", lambda: (_Model(), "cpu"))
+        with tb.host_asr_slot(slots=1, lock_dir=str(tmp_path), poll=0.01) as held:
+            tb._run_whisper_once("x.mp4")
+            assert held._fh is None
+
+    def test_whisper_on_the_gpu_keeps_the_slot(self, tmp_path, monkeypatch):
+        class _Model:
+            def transcribe(self, path, **params):
+                return iter([]), SimpleNamespace(duration=0, language="en")
+
+        monkeypatch.setattr(tb, "_whisper_force_cpu", False)
+        monkeypatch.setattr(tb, "_whisper_device", lambda: "cuda")
+        monkeypatch.setattr(tb, "_get_whisper_model", lambda: (_Model(), "cuda"))
+        with tb.host_asr_slot(slots=1, lock_dir=str(tmp_path), poll=0.01) as held:
+            tb._run_whisper_once("x.mp4")
+            assert held._fh is not None
+
+
+def test_cpu_whisper_gets_several_threads(fake_faster_whisper, monkeypatch):
+    monkeypatch.delenv("WHISPER_CPU_THREADS", raising=False)
+    monkeypatch.setenv("WHISPER_DEVICE", "cpu")
+    monkeypatch.setattr(tb.os, "cpu_count", lambda: 20)
+    tb._get_whisper_model()
+    assert fake_faster_whisper[-1].kwargs == {"cpu_threads": 8}
+
+
+def test_cpu_whisper_threads_from_env(monkeypatch):
+    monkeypatch.setenv("WHISPER_CPU_THREADS", "12")
+    assert tb.whisper_cpu_threads() == 12
+    monkeypatch.setenv("WHISPER_CPU_THREADS", "junk")
+    monkeypatch.setattr(tb.os, "cpu_count", lambda: 4)
+    assert tb.whisper_cpu_threads() == 4
+
+
+def test_gpu_whisper_gets_no_cpu_threads(fake_faster_whisper, monkeypatch):
+    monkeypatch.setenv("WHISPER_DEVICE", "cuda")
+    monkeypatch.setenv("WHISPER_COMPUTE", "float16")
+    monkeypatch.setattr(tb, "_whisper_force_cpu", False)
+    tb._get_whisper_model()
+    assert fake_faster_whisper[-1].kwargs == {}
+
+
+def test_parakeet_is_dropped_before_the_whisper_fallback(monkeypatch):
+    order = []
+    rejected = {"text": "x", "language": "hi", "segments": [
+        {"start": 0.0, "end": 1.0, "text": "x", "words": [{"word": " x", "start": 0.0, "end": 1.0}]}]}
+    monkeypatch.setenv("TRANSCRIBE_BACKEND", "parakeet")
+    monkeypatch.setattr(tb, "_has_audio_stream", lambda path: True)
+    monkeypatch.setattr(tb, "_transcribe_with_parakeet", lambda path: rejected)
+    monkeypatch.setattr(tb, "_parakeet_model", object())
+
+    def whisper(path):
+        order.append(("whisper", tb._parakeet_model))
+        return {"text": "ok", "language": "hi", "segments": []}
+
+    monkeypatch.setattr(tb, "_transcribe_with_whisper", whisper)
+    tb.transcribe_media("video.mp4")
+    assert order == [("whisper", None)]
+
+
+def test_parakeet_on_its_own_keeps_its_model(monkeypatch):
+    good = {"text": "hello " * 50, "language": "en", "segments": [
+        {"start": 0.0, "end": 30.0, "text": "hello",
+         "words": [{"word": " hello", "start": float(i), "end": i + 0.5} for i in range(30)]}]}
+    model = object()
+    monkeypatch.setenv("TRANSCRIBE_BACKEND", "parakeet")
+    monkeypatch.setattr(tb, "_has_audio_stream", lambda path: True)
+    monkeypatch.setattr(tb, "_transcribe_with_parakeet", lambda path: good)
+    monkeypatch.setattr(tb, "_parakeet_model", model)
+    assert tb.transcribe_media("video.mp4") is good
+    assert tb._parakeet_model is model
+
+
+def test_a_rejected_parakeet_result_skips_the_drift_repair(monkeypatch):
+    segs = [_seg(0.0, 2.0, "Тудей", [" Тудей"], [0.0])]  # 1 word in 2 s: kept
+    monkeypatch.setattr(tb, "_get_parakeet_model",
+                        lambda: SimpleNamespace(recognize=lambda path: iter(segs)))
+    monkeypatch.setattr(tb, "_extract_wav", lambda path: "/tmp/fake.wav")
+    monkeypatch.setattr(tb.os, "remove", lambda path: None)
+    monkeypatch.setattr(tb, "_detect_language", lambda text: "hi")  # unsupported
+    monkeypatch.setattr(tb, "_repair_script_drift",
+                        lambda t, w: pytest.fail("whisper repair of a discarded result"))
+    t = tb._transcribe_with_parakeet("video.mp4")
+    assert t["language"] == "hi"
+
+
+def test_media_seconds_reads_the_container(monkeypatch):
+    monkeypatch.setattr(tb.subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(stdout="3029.228844\n"))
+    assert tb.media_seconds("x.mp4") == pytest.approx(3029.228844)
+    monkeypatch.setattr(tb.subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(stdout="N/A\n"))
+    assert tb.media_seconds("x.mp4") is None

@@ -38,7 +38,17 @@ Guards that keep the card from filling:
   `[job-cpu]` reports `asr_device` (`cuda` / `cpu`) per job.
 - **Host-wide transcription slots** (`transcribe_backends.host_asr_slot`,
   `ASR_HOST_SLOTS`, default 2): flock files `output/.asr-gpu-N.lock`, shared by
-  every job process and by both containers of a deploy.
+  every job process and by both containers of a deploy. A source of at least
+  `ASR_LONG_SECONDS` (1800) never takes the last slot, so short ones never
+  wait behind long ones only. The slot guards the card, so whisper hands it
+  back as soon as it falls to the CPU (`release_host_slot`).
+- **Parakeet leaves the card before the whisper fallback**
+  (`transcribe_backends._drop_parakeet`): its arena (~7 GB on a long video)
+  made whisper hit CUDA OOM and the whole transcription ran on the CPU. A
+  rejected Parakeet result skips the script-drift repair, and CPU whisper
+  runs on `WHISPER_CPU_THREADS` (default min(8, cores)), not on the job's
+  `OMP_NUM_THREADS=1`. Measured on 18-nov-2026: two such videos held both
+  slots for an hour and eight jobs slept behind them with the GPU at ~18%.
 - **Queue admission** (`app._wait_for_shared_gpu`): a job starts only when
   running-here + running-on-the-draining-instance < `MAX_CONCURRENT_JOBS` and
   `nvidia-smi` reports at least `GPU_MIN_FREE_MB` (4500) free; an idle card
