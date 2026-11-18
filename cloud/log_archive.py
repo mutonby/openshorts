@@ -139,8 +139,14 @@ class _Sink:
             self._close()
 
     def ready_files(self, include_open=False):
-        """Chunk files to upload, oldest first: every closed one, plus the open
-        one when ``include_open`` (shutdown)."""
+        """Chunk files to upload, oldest first: every closed one of this
+        process, plus its open one when ``include_open`` (shutdown).
+
+        Several processes can share the directory (the engine and the front
+        processes of a split API, serve.py): another process's chunk is taken
+        only once nothing has written to it for two chunk lengths (its process
+        ended without uploading it). Taking it sooner uploaded and deleted the
+        chunk that process was still appending to."""
         try:
             names = sorted(n for n in os.listdir(self.dir) if _FILE_RE.match(n))
         except Exception:
@@ -151,7 +157,13 @@ class _Sink:
         out = []
         for name in names:
             path = os.path.join(self.dir, name)
-            if not include_open and path in (current, open_path):
+            if _FILE_RE.match(name).group(2) != self.boot:
+                try:
+                    if self.clock() - os.path.getmtime(path) < 2 * self.chunk:
+                        continue
+                except OSError:
+                    continue
+            elif not include_open and path in (current, open_path):
                 continue
             out.append(path)
         return out
@@ -160,7 +172,9 @@ class _Sink:
         """Drop the oldest chunks past the local cap; stop writing while even
         the open chunk alone is over it."""
         try:
-            names = sorted(n for n in os.listdir(self.dir) if _FILE_RE.match(n))
+            # Only this process's chunks: another one may be appending to its own.
+            names = sorted(n for n in os.listdir(self.dir)
+                           if _FILE_RE.match(n) and _FILE_RE.match(n).group(2) == self.boot)
             sizes = [(n, os.path.getsize(os.path.join(self.dir, n))) for n in names]
         except Exception:
             return
@@ -256,18 +270,25 @@ class _Uploader:
                 if key is None:
                     continue
                 try:
-                    with open(path, "rb") as f:
-                        body = gzip.compress(f.read(), compresslevel=6)
+                    try:
+                        with open(path, "rb") as f:
+                            body = gzip.compress(f.read(), compresslevel=6)
+                    except FileNotFoundError:
+                        continue   # another process of this container took it
                     if self.client is None:
                         self.client = self.client_factory()
                     self.client.put_object(Bucket=self.bucket, Key=key, Body=body,
                                            ContentType="text/plain",
                                            ContentEncoding="gzip")
-                    os.remove(path)
+                    try:
+                        os.remove(path)
+                    except FileNotFoundError:
+                        pass
                     sent += 1
                     if self.failing:
                         self.failing = False
                         _complain("uploads recovered")
+                    continue
                 except Exception as e:
                     if not self.failing:
                         _complain(f"upload failed, will retry: {type(e).__name__}: {e}")

@@ -128,3 +128,49 @@ def test_refuses_the_public_media_bucket(monkeypatch):
 @pytest.mark.parametrize("raw,expected", [("api", "api"), ("../etc", "etc"), ("", "unknown")])
 def test_prefix_is_sanitised(raw, expected):
     assert la._safe(raw) == expected
+
+
+def test_processes_sharing_the_spool_leave_each_others_chunks_alone(tmp_path):
+    """The engine and the front processes of a split API (serve.py) spool in
+    one directory: each uploaded and deleted the chunk another one was still
+    appending to (18-nov-2026). Another process's chunk goes up only once
+    nothing has written to it for two chunk lengths (that process ended)."""
+    clock = _Clock(1_700_000_000)
+    mine = la._Sink(str(tmp_path), 600, "engine1", 10 * 1024 * 1024, clock=clock)
+    other = la._Sink(str(tmp_path), 600, "front1", 10 * 1024 * 1024, clock=clock)
+    s3 = _FakeS3()
+    up = la._Uploader(mine, "logs", "api", "h", client_factory=lambda: s3)
+    other.write("front line\n")
+    clock.t += 600
+    other.write("front still writing\n")       # its previous chunk is closed, this one open
+    mine.write("engine line\n")
+    for path in [os.path.join(tmp_path, n) for n in os.listdir(tmp_path)]:
+        os.utime(path, (clock.t, clock.t))
+    up.upload_ready()
+    assert all("front1" not in key for _, key in s3.objects)
+    assert len([n for n in os.listdir(tmp_path) if "front1" in n]) == 2
+    # The front process died: an hour later its chunks are taken.
+    clock.t += 3600
+    mine.write("engine later\n")
+    up.upload_ready()
+    assert len([key for _, key in s3.objects if "front1" in key]) == 2
+    assert not [n for n in os.listdir(tmp_path) if "front1" in n]
+
+
+def test_a_chunk_another_process_took_is_not_a_failed_upload(tmp_path):
+    clock = _Clock(1_700_000_000)
+    sink = _sink(tmp_path, clock)
+    s3 = _FakeS3()
+    up = la._Uploader(sink, "logs", "api", "h", client_factory=lambda: s3)
+    sink.write("a\n")
+    clock.t += 600
+    sink.write("b\n")
+    real_ready = sink.ready_files
+
+    def ready_then_gone(include_open=False):
+        paths = real_ready(include_open)
+        for p in paths:
+            os.remove(p)
+        return paths
+    sink.ready_files = ready_then_gone
+    assert up.upload_ready() == 0 and up.failing is False

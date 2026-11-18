@@ -25,6 +25,11 @@ PORT = os.environ.get("PORT", "8000")
 UVICORN_COMMON = ["--proxy-headers", "--forwarded-allow-ips", "*",
                   "--timeout-graceful-shutdown", "15"]
 FRONT_STOP_SECONDS = 20
+# uvicorn's supervisor kills a worker that does not answer its ping within
+# this many seconds and starts another one, dropping that worker's requests.
+# Its default (5 s) killed healthy fronts on a host whose CPU other services
+# had saturated (load ~200 on 20 cores, 18-nov-2026).
+FRONT_HEALTHCHECK_SECONDS = os.environ.get("FRONT_HEALTHCHECK_SECONDS", "30")
 
 
 def _workers() -> int:
@@ -58,7 +63,8 @@ def main():
         env={**os.environ, "API_ROLE": "engine"})
     fronts = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "front:app", "--host", "0.0.0.0", "--port", PORT,
-         "--workers", str(workers), *UVICORN_COMMON],
+         "--workers", str(workers), "--timeout-worker-healthcheck", FRONT_HEALTHCHECK_SECONDS,
+         *UVICORN_COMMON],
         env={**os.environ, "API_ROLE": "front"})
     print(f"🚦 API split: engine pid {engine.pid} on {socket_path}, "
           f"{workers} front processes (pid {fronts.pid}) on :{PORT}", flush=True)
