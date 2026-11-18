@@ -52,7 +52,7 @@ def test_app_ends_the_poll_and_drops_the_saved_session():
     effect = src[src.index("pollFailureAction(e, failures)") - 400:
                  src.index("pollFailureAction(e, failures)") + 600]
     assert "failures += 1" in effect
-    assert "clearInterval(interval)" in effect
+    assert "stop();" in effect     # ends the self-scheduling poll
     # handleReset sets status to idle, which removes the saved session.
     assert "handleResetRef.current()" in effect
     assert "setActiveTab('history')" in effect

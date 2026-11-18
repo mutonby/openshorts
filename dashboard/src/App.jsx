@@ -898,10 +898,30 @@ function App() {
   const handleResetRef = useRef(null);
 
   useEffect(() => {
-    let interval;
+    let timer;
+    let stopped = false;
     let failures = 0;
-    if ((status === 'processing' || status === 'completed') && jobId) {
-      interval = setInterval(async () => {
+    // One poll at a time (the next is scheduled when this one answers, so a
+    // slow server never gets a pile of them), and at the pace the job needs:
+    // every 2 s while it renders, 5 s while it waits in the queue, 15 s in a
+    // tab nobody is looking at.
+    let nextDelay = 2000;
+    let inFlight = false;
+    const stop = () => { stopped = true; clearTimeout(timer); };
+    const schedule = () => {
+      if (stopped) return;
+      const delay = (typeof document !== 'undefined' && document.hidden) ? 15000 : nextDelay;
+      timer = setTimeout(tick, delay);
+    };
+    const onVisible = () => {
+      if (!stopped && !inFlight && typeof document !== 'undefined' && !document.hidden) {
+        clearTimeout(timer);
+        timer = setTimeout(tick, 0);
+      }
+    };
+    const tick = async () => {
+        if (stopped || inFlight) return;
+        inFlight = true;
         try {
           const data = await pollJob(jobId);
           failures = 0;
@@ -914,18 +934,19 @@ function App() {
 
           if (data.partial) setPartialJob(data.partial);
           setQueueInfo(data.status === 'queued' && data.queue ? data.queue : null);
+          nextDelay = data.status === 'queued' ? 5000 : 2000;
 
           if (data.status === 'completed') {
             setQueueInfo(null);
             setStatus('complete');
-            clearInterval(interval);
+            stop();
             refreshMe();
           } else if (data.status === 'failed') {
             setStatus('error');
             const errorMsg = data.error || (data.logs && data.logs.length > 0 ? data.logs[data.logs.length - 1] : "Process failed");
             setJobError(readableError(errorMsg));
             setLogs(prev => [...prev, "Error: " + errorMsg]);
-            clearInterval(interval);
+            stop();
             refreshMe();
           } else {
             // Update logs if available
@@ -938,7 +959,7 @@ function App() {
           console.error("Polling error", e);
           failures += 1;
           if (pollFailureAction(e, failures) === 'gone') {
-            clearInterval(interval);
+            stop();
             // Back to idle (which drops the saved session) and on to History,
             // where a finished job's clips are kept.
             handleResetRef.current();
@@ -947,9 +968,17 @@ function App() {
             if (historyAvailableRef.current) setActiveTab('history');
           }
         }
-      }, 2000);
+        inFlight = false;
+        schedule();
+    };
+    if ((status === 'processing' || status === 'completed') && jobId) {
+      document.addEventListener('visibilitychange', onVisible);
+      timer = setTimeout(tick, 2000);
     }
-    return () => clearInterval(interval);
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [status, jobId, refreshMe]);
 
 

@@ -86,6 +86,63 @@ def friendly_log_line(line):
     return None
 
 
+class FriendlyLogFold:
+    """The curated view of one growing log, built incrementally.
+
+    ``friendly_logs_timed`` folds every raw line into a short list of stages.
+    /api/status asks for that view on every poll of every open tab, and a raw
+    log runs to thousands of lines, so folding it from the top each time made
+    the poll cost grow with the log. The fold keeps its state and only reads
+    the lines that arrived since the last call. Logs only ever grow (append /
+    extend); a shorter log than what was consumed means it was replaced, and
+    the fold starts over.
+    """
+
+    __slots__ = ("consumed", "_out", "_live")
+
+    def __init__(self):
+        self.consumed = 0
+        self._out = []      # [text, time]
+        self._live = {}     # progress kind -> index in _out still being updated
+
+    def feed(self, logs, times=None, upto=None):
+        """Fold the lines of ``logs`` not seen yet, up to ``upto`` (default:
+        all). ``times`` is parallel to ``logs`` (epoch seconds) or None."""
+        n = len(logs) if upto is None else min(int(upto), len(logs))
+        if n < self.consumed:
+            self.__init__()
+        out, live = self._out, self._live
+        for i in range(self.consumed, n):
+            line = logs[i]
+            t = times[i] if times is not None and i < len(times) else None
+            for seg in _segments(line):
+                hit = _match(seg)
+                if not hit:
+                    continue
+                text, kind = hit
+                if kind and kind in live:
+                    out[live[kind]][0] = text
+                    continue
+                if out and out[-1][0] == text:
+                    continue
+                out.append([text, t])
+                # Any other line closes the running progress of other stages only
+                # when it is a new stage of the same kind; different kinds (the
+                # download and the early transcription) run side by side.
+                if kind:
+                    live[kind] = len(out) - 1
+                elif text.startswith(('✅ Video downloaded', '✂️')):
+                    live.pop('download', None)
+                elif text.startswith(('🔥', '🤖', '🎥')):
+                    live.pop('asr', None)
+        self.consumed = n
+        return self
+
+    def view(self):
+        """The curated ``[(text, time)]`` so far (a copy)."""
+        return [(text, t) for text, t in self._out]
+
+
 def friendly_logs_timed(logs, times=None):
     """Curated (text, time) list for cloud users.
 
@@ -94,31 +151,7 @@ def friendly_logs_timed(logs, times=None):
     time it first appeared. ``times`` is a list parallel to ``logs`` (epoch
     seconds) or None.
     """
-    out = []           # [text, time]
-    live = {}          # progress kind -> index in out still being updated
-    for i, line in enumerate(logs):
-        t = times[i] if times is not None and i < len(times) else None
-        for seg in _segments(line):
-            hit = _match(seg)
-            if not hit:
-                continue
-            text, kind = hit
-            if kind and kind in live:
-                out[live[kind]][0] = text
-                continue
-            if out and out[-1][0] == text:
-                continue
-            out.append([text, t])
-            # Any other line closes the running progress of other stages only
-            # when it is a new stage of the same kind; different kinds (the
-            # download and the early transcription) run side by side.
-            if kind:
-                live[kind] = len(out) - 1
-            elif text.startswith(('✅ Video downloaded', '✂️')):
-                live.pop('download', None)
-            elif text.startswith(('🔥', '🤖', '🎥')):
-                live.pop('asr', None)
-    return [(text, t) for text, t in out]
+    return FriendlyLogFold().feed(logs, times).view()
 
 
 def friendly_logs(logs):

@@ -86,11 +86,26 @@ async def owner_id(credential: str, load):
     return str(user.id)
 
 
+# Other per-user memories to clear with this one (cloud.auth registers its
+# signed-in user snapshot): one call site for ban, revoke and erase.
+_forget_hooks: list = []
+
+
+def on_forget(hook) -> None:
+    if hook not in _forget_hooks:
+        _forget_hooks.append(hook)
+
+
 def forget_user(user_id) -> None:
     """Drop every remembered credential of this user (ban, revoke, erase)."""
     uid = str(user_id)
     for k in [k for k, v in _entries.items() if v[1] == uid]:
         _entries.pop(k, None)
+    for hook in list(_forget_hooks):
+        try:
+            hook(uid)
+        except Exception:
+            pass
 
 
 def clear() -> None:

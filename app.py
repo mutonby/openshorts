@@ -23,7 +23,7 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from typing import Any, Dict, Optional, List
 from contextlib import asynccontextmanager, suppress
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Header, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Header, BackgroundTasks, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import (HTMLResponse, FileResponse, JSONResponse, StreamingResponse,
@@ -4716,6 +4716,9 @@ class _TimedLog(list):
         self.times.extend([time.time()] * len(lines))
 
 
+_log_fold_lock = threading.Lock()
+
+
 def _visible_logs_timed(logs):
     """(lines, times) to surface to the client; see _visible_logs."""
     times = getattr(logs, "times", None)
@@ -4723,7 +4726,19 @@ def _visible_logs_timed(logs):
         times = None
     if not BILLING_ENABLED or DEBUG_LOGS:
         return list(logs), list(times) if times is not None else None
-    from log_view import friendly_logs_timed
+    from log_view import FriendlyLogFold, friendly_logs_timed
+    if isinstance(logs, _TimedLog):
+        # Polled every 2 s by each open tab: fold only the lines that arrived
+        # since the last poll (the fold lives on the log itself, so it goes
+        # away with the job). A line whose time is not stamped yet (another
+        # thread is between the two appends) waits for the next poll.
+        raw_times = logs.times
+        fold = getattr(logs, "_friendly", None)
+        if fold is None:
+            fold = logs._friendly = FriendlyLogFold()
+        with _log_fold_lock:
+            pairs = fold.feed(logs, raw_times, min(len(logs), len(raw_times))).view()
+        return [p[0] for p in pairs], [p[1] for p in pairs]
     pairs = friendly_logs_timed(logs, times)
     return [p[0] for p in pairs], ([p[1] for p in pairs] if times is not None else None)
 
@@ -5353,7 +5368,9 @@ async def worker_source(job_id: str, request: Request):
                              headers={"Content-Length": str(os.path.getsize(real))})
 
 
-SOURCE_CHUNK = 1024 * 1024
+# Each chunk is one hop through the event loop: big chunks keep the cost of
+# feeding the remote worker its sources off the API's one core.
+SOURCE_CHUNK = max(256 * 1024, _int_env("SOURCE_CHUNK_BYTES", 4 * 1024 * 1024))
 # REMOTE_SOURCE_MBPS is for all transfers together: when a quiet window ends,
 # up to REMOTE_WORKER_SLOTS sources leave at once for the same link.
 _source_bucket = {"free_at": 0.0}
@@ -5464,8 +5481,14 @@ async def worker_done(job_id: str, request: Request):
     return {"ok": True}
 
 
+# Fixed for the life of the process (env only), and asked for by every page
+# load: the browser may reuse it for a few minutes.
+PUBLIC_CONFIG_CACHE = "public, max-age=300"
+
+
 @app.get("/api/config")
-async def get_config():
+async def get_config(response: Response):
+    response.headers["Cache-Control"] = PUBLIC_CONFIG_CACHE
     return {
         "youtubeUrlEnabled": not DISABLE_YOUTUBE_URL,
         "billingEnabled": BILLING_ENABLED,
@@ -6070,7 +6093,7 @@ async def process_endpoint(
         # lookup, the clip editor and the preview treat it exactly like a normal
         # upload; the transcript rides along so the pipeline skips Whisper.
         src = thumb_session["video_path"]
-        src_duration = _media_duration_seconds(src)
+        src_duration = await asyncio.to_thread(_media_duration_seconds, src)
         if MIN_SOURCE_SECONDS > 0 and 0 < src_duration < MIN_SOURCE_SECONDS:
             _discard_rejected_source(None, job_output_dir)
             _reject_short_source(src_duration)
@@ -6091,7 +6114,7 @@ async def process_endpoint(
         # Move the pre-uploaded file under the job's name so it is cleaned up
         # with the job like any other upload; the slot is consumed.
         src = upload_slot["path"]
-        src_duration = _media_duration_seconds(src)
+        src_duration = await asyncio.to_thread(_media_duration_seconds, src)
         if MIN_SOURCE_SECONDS > 0 and 0 < src_duration < MIN_SOURCE_SECONDS:
             _discard_rejected_source(None, job_output_dir)
             _reject_short_source(src_duration)
@@ -6118,7 +6141,7 @@ async def process_endpoint(
                     raise HTTPException(status_code=413, detail=f"File too large. Max size {MAX_FILE_SIZE_MB}MB")
                 buffer.write(content)
 
-        upload_duration = _media_duration_seconds(input_path)
+        upload_duration = await asyncio.to_thread(_media_duration_seconds, input_path)
         if MIN_SOURCE_SECONDS > 0 and 0 < upload_duration < MIN_SOURCE_SECONDS:
             _discard_rejected_source(input_path, job_output_dir)
             _reject_short_source(upload_duration)

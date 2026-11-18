@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 import httpx
 import stripe
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -129,8 +129,11 @@ async def _blocking_sub_status(user_id):
 # Endpoints
 # --------------------------------------------------------------------------- #
 @router.get("/api/billing/plans")
-async def list_plans():
+async def list_plans(response: Response):
     cat = await get_catalog()
+    # The same catalog for everyone, asked for by every pricing view: the
+    # browser may reuse it for a few minutes.
+    response.headers["Cache-Control"] = "public, max-age=300"
     return {"plans": cat["plans"], "topups": cat["topups"]}
 
 
@@ -399,6 +402,9 @@ async def stripe_webhook(request: Request):
             return {"ok": True, "dedup": True}
 
     await handle_event(event)
+    # A plan or a top-up may have changed: nobody's remembered snapshot stands.
+    from .auth import forget_current_user
+    forget_current_user()
 
     async with database.session() as s:
         async with s.begin():
