@@ -86,6 +86,45 @@ class Controller:
         body = self.config_path.read_bytes() if self.config_path.is_file() else b""
         return hashlib.sha1(str(self.config_path).encode() + b"\0" + body).hexdigest()[:16]
 
+    BACKUPS_KEPT = 20
+
+    @property
+    def backup_dir(self) -> Path:
+        return self.base / "livewatch_backups"
+
+    def backup_config(self) -> Optional[Path]:
+        """Copy the settings file aside before it is overwritten; keep the last 20."""
+        if not self.config_path.is_file():
+            return None
+        self.backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        dest = self.backup_dir / f"{self.config_path.stem}-{stamp}.toml"
+        shutil.copy2(self.config_path, dest)
+        old = sorted(self.backup_dir.glob(f"{self.config_path.stem}-*.toml"))
+        for p in old[:-self.BACKUPS_KEPT]:
+            p.unlink(missing_ok=True)
+        return dest
+
+    def backups(self) -> list:
+        if not self.backup_dir.is_dir():
+            return []
+        out = []
+        for p in sorted(self.backup_dir.glob(f"{self.config_path.stem}-*.toml"), reverse=True):
+            try:
+                data = tomllib.loads(p.read_text(encoding="utf-8"))
+                chans = [f"{c.get('platform')}:{c.get('name')}" for c in data.get("channel", [])]
+            except (OSError, ValueError):
+                chans = []
+            out.append({"name": p.name, "saved": p.stat().st_mtime, "channels": chans})
+        return out
+
+    def restore_backup(self, name: str) -> dict:
+        p = (self.backup_dir / str(name or "")).resolve()
+        if p.parent != self.backup_dir.resolve() or not p.is_file() or p.suffix != ".toml":
+            raise ApiError(404, "no such backup")
+        raw = tomllib.loads(p.read_text(encoding="utf-8"))
+        return self.save_config(raw)  # validated, and the current file is backed up first
+
     def save_config(self, raw: dict, version: Optional[str] = None) -> dict:
         if not isinstance(raw, dict):
             raise ApiError(400, "settings must be an object")
@@ -99,6 +138,7 @@ class Controller:
             tomllib.loads(text)
         except (config.ConfigError, TypeError, ValueError) as e:
             raise ApiError(400, str(e))
+        self.backup_config()
         tmp = self.config_path.with_suffix(".toml.tmp")
         tmp.write_text(text, encoding="utf-8")
         tmp.replace(self.config_path)
@@ -562,6 +602,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(ctl.music_list())
             if path == "/api/uploadpost/profiles":
                 return self._json(ctl.upload_profiles())
+            if path == "/api/config/backups":
+                return self._json({"backups": ctl.backups()})
             m = re.match(r"^/media/(.+)/short\.mp4$", path)
             if m:
                 d = ctl.clip_dir(unquote(m.group(1)))
@@ -590,6 +632,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(ctl.open_folder())
             if path == "/api/uploadpost/profiles":
                 return self._json(ctl.create_upload_profile(self._json_body()))
+            if path == "/api/config/restore":
+                body = self._json_body()
+                return self._json(ctl.restore_backup(body.get("name") if isinstance(body, dict) else ""))
             if path == "/api/uploadpost/connect":
                 return self._json(ctl.upload_connect_url(
                     self._json_body(), f"http://127.0.0.1:{self.port}/"))

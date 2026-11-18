@@ -197,7 +197,8 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
     <button class="btn" id="saveSecrets">Save keys</button>
   </div>
   <div class="savebar"><button class="btn primary" id="saveCfg">Save settings</button>
-    <button class="btn" id="reloadCfg">Discard changes</button><span id="saveMsg" class="small"></span>
+    <button class="btn" id="reloadCfg">Discard changes</button>
+    <button class="btn" id="backupsBtn" title="Every save keeps a copy of the previous settings">Backups</button><span id="saveMsg" class="small"></span>
     <div class="grow"></div><span class="muted small mono" id="cfgPath"></span></div>
 </section>
 
@@ -596,6 +597,23 @@ $("#saveCfg").onclick = async () => {
   } catch (e) { $("#saveMsg").innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`; toast(e.message, "bad"); }
 };
 $("#reloadCfg").onclick = loadConfig;
+$("#backupsBtn").onclick = async () => {
+  const r = await act(() => api("/api/config/backups")); if (!r) return;
+  $("#dlgTitle").textContent = "Settings backups"; $("#dlgMsg").textContent = "A copy is kept before every save (last 20).";
+  $("#dlgSave").style.display = "none"; $("#dlgPost").style.display = "none";
+  $("#dlgBody").innerHTML = r.backups.map(b => `<div class="net"><div class="row"><b>${new Date(b.saved * 1000).toLocaleString()}</b>
+      <div class="grow"></div><button class="btn sm" data-restore="${esc(b.name)}">Restore</button></div>
+      <div class="small muted">${b.channels.length ? esc(b.channels.join(", ")) : "no channels"}</div></div>`).join("") ||
+    `<p class="muted">No backups yet: one is made the next time settings are saved.</p>`;
+  postDlg.showModal();
+};
+$("#dlgBody").addEventListener("click", async e => {
+  const n = e.target.dataset.restore; if (!n) return;
+  if (!confirm("Replace the current settings with this backup? The current ones are backed up first.")) return;
+  const r = await act(() => api("/api/config/restore", {method:"POST", json:{name: n}}), "Settings restored");
+  if (r) { postDlg.close(); loadConfig(); }
+});
+postDlg.addEventListener("close", () => { $("#dlgSave").style.display = ""; $("#dlgPost").style.display = ""; });
 async function loadSecrets() {
   const s = await act(() => api("/api/secrets")); if (!s) return;
   $("#secrets").innerHTML = schemaDef.secrets.map(f => `<label class="f"><b>${esc(f.label)}</b>

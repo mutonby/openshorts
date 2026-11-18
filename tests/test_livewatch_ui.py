@@ -247,6 +247,23 @@ def test_a_stale_page_cannot_overwrite_newer_settings(ctl):
     assert ctl.settings().data_dir.name == "data"
 
 
+def test_every_save_keeps_a_backup_and_can_be_restored(ctl):
+    original = ctl.raw_config()
+    hand_edit = dict(original, channel=original["channel"] + [{"platform": "kick", "name": "xyz"}])
+    ctl.save_config(hand_edit)
+    ctl.save_config(dict(original, channel=[{"platform": "twitch", "name": "only"}]))
+    names = [c for b in ctl.backups() for c in b["channels"]]
+    assert "kick:xyz" in names  # the version that was overwritten is kept
+    newest_with_xyz = next(b for b in ctl.backups() if "kick:xyz" in b["channels"])
+    ctl.restore_backup(newest_with_xyz["name"])
+    assert [c.key for c in ctl.settings().channels] == ["twitch:abc", "kick:xyz"]
+    with pytest.raises(ApiError):
+        ctl.restore_backup("../livewatch.toml")
+    for i in range(25):
+        ctl.save_config(original)
+    assert len(ctl.backups()) == ctl.BACKUPS_KEPT
+
+
 def test_controller_secrets_go_to_env_file(ctl, monkeypatch):
     out = ctl.save_secrets({"GEMINI_API_KEY": "abcd1234efgh5678"})
     assert out["GEMINI_API_KEY"]["set"] and out["GEMINI_API_KEY"]["hint"].endswith("5678")
