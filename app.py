@@ -6681,9 +6681,19 @@ async def download_all_clips(job_id: str, request: Request):
     loop = asyncio.get_event_loop()
     try:
         await loop.run_in_executor(None, build_zip)
+    except FileNotFoundError:
+        # The retention/size sweep removed the job folder while we were
+        # zipping: the clips are gone, which is a 404, not a server error.
+        remove_zip()
+        raise HTTPException(status_code=404, detail="Job files were removed")
     except BaseException:
         remove_zip()
         raise
+
+    if not os.path.exists(zip_path):
+        # Same sweep, just after the ZIP was written: FileResponse would raise
+        # RuntimeError("File at path ... does not exist") and answer 500.
+        raise HTTPException(status_code=404, detail="Job files were removed")
 
     return FileResponse(
         zip_path,
