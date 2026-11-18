@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Loader2, Check, Zap, Clock } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import { track } from '../lib/analytics';
@@ -62,7 +62,9 @@ export default function TopUpModal({ onClose, required, remaining, partialMinute
   const [topups, setTopups] = useState([]);
   const [showTopups, setShowTopups] = useState(false);
   const [busyPrice, setBusyPrice] = useState(null);
-  useBackFromStripe(() => setBusyPrice(null));
+  // Same-tick guard against a double click before the buttons re-render.
+  const inFlightRef = useRef(false);
+  useBackFromStripe(() => { inFlightRef.current = false; setBusyPrice(null); });
   const isUpsell = context === 'upsell';
   const isQueueFull = context === 'queue_full';
   // Opened from a video waiting in line (App's queue notice): the reason to
@@ -97,6 +99,8 @@ export default function TopUpModal({ onClose, required, remaining, partialMinute
   // CheckoutFailed (we don't) separates them.
 
   const buy = async (entry, kind) => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setBusyPrice(entry.price_id);
     const props = { kind, plan: entry.plan || null, minutes: entry.minutes, source };
     track(checkoutEvent, { props });
@@ -121,6 +125,7 @@ export default function TopUpModal({ onClose, required, remaining, partialMinute
       window.location.href = url;
     } catch (e) {
       track('CheckoutFailed', { props: { ...props, reason: String(e?.detail || e?.message || 'unknown').slice(0, 120) } });
+      inFlightRef.current = false;
       setBusyPrice(null);
       alert(e?.detail || 'Could not start checkout.');
     }

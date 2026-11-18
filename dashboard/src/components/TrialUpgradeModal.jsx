@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Loader2, Rocket, CheckCircle2 } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import Modal from './ui/Modal';
@@ -8,6 +8,7 @@ import Modal from './ui/Modal';
 // monthly minutes). The subscription webhook flips status→active server-side.
 export default function TrialUpgradeModal({ plan, onActivated, onClose }) {
   const [busy, setBusy] = useState(false);
+  const inFlightRef = useRef(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState('');
   const [planMinutes, setPlanMinutes] = useState(null);
@@ -23,6 +24,9 @@ export default function TrialUpgradeModal({ plan, onActivated, onClose }) {
   }, [plan]);
 
   const activate = async () => {
+    // Charges the card: a double click in the same tick must send one request.
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setBusy(true);
     setError('');
     try {
@@ -45,6 +49,7 @@ export default function TrialUpgradeModal({ plan, onActivated, onClose }) {
     } catch (e) {
       setError('Could not activate your plan. Please try again or manage billing from your account.');
     } finally {
+      inFlightRef.current = false;
       setBusy(false);
     }
   };

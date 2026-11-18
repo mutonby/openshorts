@@ -35,7 +35,10 @@ export default function PricingSection({ onRequireLogin }) {
   const [interval, setInterval] = useState('month');
   const [loading, setLoading] = useState(true);
   const [busyPrice, setBusyPrice] = useState(null);
-  useBackFromStripe(() => setBusyPrice(null));
+  // Set in the same tick as the click: a double click (or monthly then yearly)
+  // before React re-renders the disabled buttons must not open two checkouts.
+  const inFlightRef = useRef(false);
+  useBackFromStripe(() => { inFlightRef.current = false; setBusyPrice(null); });
   // One automatic checkout per page load (resumed plan or ?plan= link).
   const autoCheckoutRef = useRef(false);
 
@@ -53,6 +56,8 @@ export default function PricingSection({ onRequireLogin }) {
       onRequireLogin?.(entry.price_id);
       return;
     }
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setBusyPrice(entry.price_id);
     // `source` segments this surface from the two modals (see TopUpModal), which
     // now emit the same three events. `resumed`: the plan was picked before
@@ -76,6 +81,7 @@ export default function PricingSection({ onRequireLogin }) {
       window.location.href = url;
     } catch (e) {
       track('CheckoutFailed', { props: { ...props, reason: String(e?.detail || e?.message || 'unknown').slice(0, 120) } });
+      inFlightRef.current = false;
       setBusyPrice(null);
       alert(e?.detail || 'Could not start checkout. Please try again.');
     }
@@ -200,7 +206,7 @@ export default function PricingSection({ onRequireLogin }) {
               </ul>
               <button
                 onClick={() => checkout(entry)}
-                disabled={busyPrice === entry.price_id}
+                disabled={busyPrice !== null}
                 className={`w-full ${highlight ? 'btn-primary' : 'btn-ghost'}`}
               >
                 {busyPrice === entry.price_id ? <Loader2 size={18} className="animate-spin" /> : `Get ${plan}`}

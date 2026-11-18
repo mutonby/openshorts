@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Loader2, CreditCard, LogOut, Plus } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiJson } from '../lib/api';
@@ -24,6 +24,16 @@ const fmtDay = (iso) => (iso ? new Date(iso).toLocaleDateString('en-US', { month
 export default function AccountPage() {
   const { me, refreshMe, logout, plan, minutes } = useAuth();
   const [busy, setBusy] = useState(false);
+  // `busy` disables the billing buttons only after a re-render; this ref stops
+  // a double click in the same tick (a restart or a top-up charges the card).
+  const inFlightRef = useRef(false);
+  const claim = () => {
+    if (inFlightRef.current) return false;
+    inFlightRef.current = true;
+    setBusy(true);
+    return true;
+  };
+  const release = () => { inFlightRef.current = false; setBusy(false); };
   const [topups, setTopups] = useState([]);
   const [activating, setActivating] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -84,27 +94,27 @@ export default function AccountPage() {
   }, []);
 
   const openPortal = useCallback(async () => {
-    setBusy(true);
+    if (!claim()) return;
     try {
       const { url } = await apiJson('/api/billing/portal', { method: 'POST' });
       window.location.href = url;
-    } catch (e) { setBusy(false); alert('Could not open billing portal.'); }
+    } catch (e) { release(); alert('Could not open billing portal.'); }
   }, []);
 
   // The portal no longer cancels, and its "renew" went with that, so undoing
   // a scheduled cancel happens here (cloud/cancellation.py).
   const resume = useCallback(async () => {
-    setBusy(true);
+    if (!claim()) return;
     try {
       await apiJson('/api/billing/resume', { method: 'POST' });
       track('SubscriptionResumed', { props: { plan } });
       await refreshMe();
     } catch (e) { alert(e?.detail || 'Could not resume your subscription.'); }
-    setBusy(false);
+    release();
   }, [plan, refreshMe]);
 
   const unpause = useCallback(async () => {
-    setBusy(true);
+    if (!claim()) return;
     try {
       const out = await apiJson('/api/billing/unpause', { method: 'POST' });
       track('SubscriptionUnpaused', { props: { plan, charged: !!out?.charged } });
@@ -112,11 +122,11 @@ export default function AccountPage() {
       if (out?.charged) await new Promise((r) => setTimeout(r, 2500));
       await refreshMe();
     } catch (e) { alert(e?.detail || 'Could not restart your plan.'); }
-    setBusy(false);
+    release();
   }, [plan, refreshMe]);
 
   const buyTopup = useCallback(async (price_id) => {
-    setBusy(true);
+    if (!claim()) return;
     const props = { kind: 'topup', source: 'account_topup' };
     track('CheckoutStarted', { props });
     try {
@@ -128,11 +138,11 @@ export default function AccountPage() {
       window.location.href = url;
     } catch (e) {
       track('CheckoutFailed', { props: { ...props, reason: String(e?.detail || e?.message || 'unknown').slice(0, 120) } });
-      setBusy(false);
+      release();
       alert(e?.detail || 'Could not start checkout.');
     }
   }, []);
-  useBackFromStripe(() => setBusy(false));
+  useBackFromStripe(release);
 
   if (!me) return <div className="flex justify-center py-16"><Loader2 className="animate-spin text-brass" /></div>;
 

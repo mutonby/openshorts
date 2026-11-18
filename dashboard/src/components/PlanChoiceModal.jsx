@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Check, Loader2, Zap, ArrowRight } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import { track } from '../lib/analytics';
@@ -16,7 +16,9 @@ export default function PlanChoiceModal({ onClose }) {
   const [plans, setPlans] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(null);
-  useBackFromStripe(() => setBusy(null));
+  // Same-tick guard against a double click before the buttons re-render.
+  const inFlightRef = useRef(false);
+  useBackFromStripe(() => { inFlightRef.current = false; setBusy(null); });
 
   useEffect(() => {
     apiJson('/api/billing/plans')
@@ -30,6 +32,8 @@ export default function PlanChoiceModal({ onClose }) {
   // Same three events and stash as TopUpModal/PricingSection, so a plan bought
   // here shows up in the funnel and in the Subscribed goal.
   const checkout = async (price_id) => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setBusy(price_id);
     const entry = plans.find((p) => p.price_id === price_id) || {};
     const props = { kind: 'subscription', plan: entry.plan || null, minutes: entry.minutes, source: 'plan_choice' };
@@ -48,6 +52,7 @@ export default function PlanChoiceModal({ onClose }) {
       window.location.href = url;
     } catch (e) {
       track('CheckoutFailed', { props: { ...props, reason: String(e?.detail || e?.message || 'unknown').slice(0, 120) } });
+      inFlightRef.current = false;
       setBusy(null);
       alert(e?.detail || 'Could not start checkout. Please try again.');
     }
@@ -94,7 +99,7 @@ export default function PlanChoiceModal({ onClose }) {
                 const e = byPlan(p);
                 if (!e) return null;
                 return (
-                  <button key={p} onClick={() => checkout(e.price_id)} disabled={busy === e.price_id}
+                  <button key={p} onClick={() => checkout(e.price_id)} disabled={busy !== null}
                     className="w-full flex items-center justify-between border border-rule hover:border-brass rounded-input px-3 py-2 text-left transition-colors disabled:opacity-50">
                     <span className="text-sm text-ink capitalize">{p} <span className="text-muted">· {e.minutes} min</span></span>
                     <span className="readout">{busy === e.price_id ? '…' : `${fmt(e.amount, e.currency)}/mo`}</span>
