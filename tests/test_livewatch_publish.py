@@ -376,3 +376,44 @@ def test_youtube_upload_limit_is_retried_later_and_merged(tmp_path, video, monke
     assert merged["networks"]["tiktok"] == {"status": "sent to phone"}  # not posted twice
     assert merged["networks"]["youtube"]["url"].endswith("/x")
     assert svc._schedule_retry(d, merged).get("retry_at") is None
+
+
+def test_overdue_queued_posts_are_spaced_not_fired_together(tmp_path, monkeypatch):
+    """After a restart, posts whose slots passed while livewatch was off go out one
+    per min_gap, never in a burst, and a post's own reserved slot never delays it."""
+    from livewatch import service
+    s = config.from_dict({"general": {"data_dir": str(tmp_path / "data")},
+                          "post": {"enabled": True, "min_gap_minutes": 20},
+                          "channel": [{"platform": "twitch", "name": "abc"}]})
+    svc = service.Service(s)
+    now = datetime.now(timezone.utc)
+    a, b, c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
+    for i, d in enumerate((a, b, c)):  # three slots reserved 20 min apart, all in the past
+        when = now - timedelta(minutes=60 - 20 * i)
+        svc.ledger.record(when)
+        svc._enqueue(d, when)
+    delivered = []
+    monkeypatch.setattr(service, "deliver", lambda d, s, log, only=None: delivered.append(d) or {"status": "posted"})
+    monkeypatch.setattr(service, "write_meta", lambda d, m: None)
+    monkeypatch.setattr(service.json, "loads", lambda text: {})
+    monkeypatch.setattr(Path, "read_text", lambda self, encoding=None: "{}")
+    # run the poster loop body by hand: one pass per "tick"
+    ticks = []
+
+    def tick(t):  # a few passes of the loop, as the real poster runs every 10 s
+        ticks.append(t)
+        if len(ticks) >= 5:
+            svc.stop_event.set()
+    svc.stop_event.wait = tick
+    svc._poster()
+    svc.stop_event.clear()
+    assert len(delivered) == 1                         # one went out ...
+    left = sorted(w for w, _, _ in svc._post_queue)
+    assert len(left) == 2 and all(w > now + timedelta(minutes=19) for w in left)  # ... the rest wait
+    # a single fresh post due now is not held back by its own reservation
+    svc2 = service.Service(s)
+    svc2.ledger.times = []
+    own = datetime.now(timezone.utc) - timedelta(seconds=5)
+    svc2.ledger.record(own)
+    svc2._enqueue(tmp_path / "solo", own)
+    assert svc2._next_free_slot(datetime.now(timezone.utc), own=own) <= datetime.now(timezone.utc)

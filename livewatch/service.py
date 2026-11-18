@@ -253,6 +253,7 @@ class Service:
         self.worker = threading.Thread(target=self._worker, daemon=True, name="clip-worker")
         self._post_queue: List[tuple] = []
         self._post_lock = threading.Lock()
+        self._last_post_at: Optional[datetime] = None
         self.poster = threading.Thread(target=self._poster, daemon=True, name="poster")
         self.index_path = settings.data_dir / "clips.csv"
         # for the web UI
@@ -678,13 +679,32 @@ class Service:
             except (OSError, ValueError, KeyError, TypeError):
                 continue
 
+    def _next_free_slot(self, now: datetime, own: Optional[datetime] = None) -> datetime:
+        """The earliest a queued post may go out: ``min_gap_minutes`` after the last
+        one (whichever is later, the ledger's last past slot or the last real post).
+        ``own`` is the slot this post reserved itself, which does not count."""
+        gap = timedelta(minutes=self.settings.min_gap_minutes)
+        past = [t for t in self.ledger.times
+                if t <= now and not (own and abs((t - own).total_seconds()) < 1)]
+        last = max(past + ([self._last_post_at] if self._last_post_at else []), default=None)
+        return now if last is None else max(now, last + gap)
+
     def _poster(self):
         while not self.stop_event.is_set():
             due = None
             with self._post_lock:
-                if self._post_queue and self._post_queue[0][0] <= datetime.now(timezone.utc):
+                now = datetime.now(timezone.utc)
+                if self._post_queue and self._post_queue[0][0] <= now:
                     due = self._post_queue.pop(0)
+                    # posts that piled up while livewatch was off are spaced out,
+                    # not fired together (a burst trips YouTube's upload limit)
+                    slot = self._next_free_slot(now, own=due[0])
+                    if slot > now + timedelta(seconds=30):
+                        self._post_queue.append((slot, due[1], due[2]))
+                        self._post_queue.sort(key=lambda x: x[0])
+                        due = None
             if due is not None:
+                self._last_post_at = datetime.now(timezone.utc)
                 _, clip_dir, only = due
                 try:
                     meta = json.loads((clip_dir / "meta.json").read_text(encoding="utf-8"))
