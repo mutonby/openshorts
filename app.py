@@ -37,6 +37,7 @@ import watermarked
 import media_auth
 import remote_worker
 import yt_account
+import api_role as _api_role
 from jsonfile import write_json_atomic
 
 load_dotenv()
@@ -4244,6 +4245,15 @@ def _queue_wait_started(job_id):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if _api_role.is_front():
+        # A front process of a split API (front.py) serves only routes that
+        # need none of the engine's memory: no queue, no jobs, no handover,
+        # no sweeps or background loops here. The engine of the same
+        # container runs all of that once.
+        if BILLING_ENABLED:
+            await cloud.setup_front()
+        yield
+        return
     # Rehydrate finished jobs from disk before serving (survives restarts).
     _recover_jobs_from_disk()
     # Re-enqueue jobs that were mid-processing when we stopped (redeploy). Their
@@ -4273,6 +4283,9 @@ async def lifespan(app: FastAPI):
     # The worker starts only now, so the first job it takes off the queue was
     # already ranked by its owner's current plan.
     worker_task = asyncio.create_task(process_queue())
+    if _api_role.is_engine():
+        # The front processes answer /api/status from what this publishes.
+        asyncio.create_task(_status_publisher())
     if BILLING_ENABLED:
         # Account erasure lives in cloud/, which can't import app.py; hand it the
         # one thing only this module can do — wipe the local working files.
@@ -6412,8 +6425,183 @@ def _presented_status(job_id, job):
     return job['status']
 
 
+# --- Status snapshots for the front processes (split API) ---------------------
+# With the API split (api_role, serve.py) the front processes answer
+# /api/status from files this engine publishes, so the polls of every open
+# tab never reach the engine's one core. Only jobs still waiting or running
+# have a snapshot (those are the polls: a finished job is read once and the
+# dashboard stops), rewritten when what a poll would show changes, at most
+# every STATUS_PUBLISH_SECONDS; the queue positions of all waiting jobs go in
+# one file with it. A front uses a snapshot only while the queue view says
+# this same instance published it within STATUS_SNAPSHOT_FRESH_SECONDS, so
+# a busy, stopped or draining engine sends the polls back to an engine,
+# which answers from memory or disk as before. Dot files: /videos never
+# serves them, and the remote worker cannot write them (safe_relpath).
+STATUS_SNAPSHOT_FILE = ".status.json"
+QUEUE_VIEW_FILE = ".queue_view.json"
+# Touched every publish (no content): the queue view itself is rewritten only
+# when a position or an ETA changed, so a long quiet queue costs no writes.
+QUEUE_BEAT_FILE = ".queue_view.beat"
+STATUS_PUBLISH_SECONDS = max(0.2, float(os.environ.get("STATUS_PUBLISH_SECONDS", "1") or 1))
+STATUS_SNAPSHOT_FRESH_SECONDS = max(3.0, float(os.environ.get("STATUS_SNAPSHOT_FRESH_SECONDS", "10") or 10))
+_published: Dict[str, tuple] = {}   # job id -> signature of the snapshot on disk
+_queue_view_written: dict = {}      # the last queue view written (publisher thread only)
+_STATUS_VIEW_KEY = "openshorts.status_view"   # ASGI scope key front.py fills
+
+
+def _status_signature(job_id, job):
+    """What a poll would show, cheaply: a change rewrites the snapshot."""
+    result = job.get('result')
+    clips = result.get('clips') if isinstance(result, dict) else None
+    return (_presented_status(job_id, job), len(job.get('logs') or ()),
+            len(clips) if isinstance(clips, list) else -1,
+            json.dumps(job.get('partial'), sort_keys=True, default=str),
+            str(job.get('user_id')))
+
+
+def _status_snapshot(job_id, job):
+    lines, times = _visible_logs_timed(job['logs'])
+    owner = job.get('user_id')
+    return {"instance": INSTANCE_ID,
+            "owner": None if owner is None else str(owner),
+            "status": _presented_status(job_id, job),
+            "logs": lines, "log_times": times,
+            "result": job.get('result'), "partial": job.get('partial')}
+
+
+def _write_status_files(writes, removes, queue_view):
+    """Off the loop: the snapshots that changed, the ones to drop (only if we
+    wrote them: the next instance may own that job now) and the queue view."""
+    for job_id, snap in writes:
+        job_dir = os.path.join(OUTPUT_DIR, job_id)
+        if not os.path.isdir(job_dir):
+            continue
+        try:
+            write_json_atomic(os.path.join(job_dir, STATUS_SNAPSHOT_FILE), snap, default=str)
+        except OSError:
+            pass   # the job dir went away meanwhile
+    for job_id in removes:
+        path = os.path.join(OUTPUT_DIR, job_id, STATUS_SNAPSHOT_FILE)
+        try:
+            with open(path) as f:
+                mine = (json.load(f) or {}).get("instance") == INSTANCE_ID
+            if mine:
+                os.remove(path)
+        except (OSError, ValueError, AttributeError):
+            pass
+    if queue_view is not None:
+        path = os.path.join(OUTPUT_DIR, QUEUE_VIEW_FILE)
+        try:
+            if queue_view != _queue_view_written.get("view") or not os.path.exists(path):
+                write_json_atomic(path, queue_view, default=str)
+                _queue_view_written["view"] = queue_view
+            beat = os.path.join(OUTPUT_DIR, QUEUE_BEAT_FILE)
+            with open(beat, "a"):
+                pass
+            os.utime(beat, None)
+        except OSError:
+            pass
+
+
+async def _publish_statuses():
+    active = not _draining and _read_instance_marker() in (None, INSTANCE_ID)
+    writes, live, queue = [], set(), {}
+    if active:
+        for job_id, job in list(jobs.items()):
+            if job.get('status') not in ('queued', 'processing') or not _JOB_ID_RE.match(job_id):
+                continue
+            live.add(job_id)
+            if job.get('status') == 'queued':
+                q = queue_snapshot(job_id)
+                if q is not None:
+                    queue[job_id] = q
+            sig = _status_signature(job_id, job)
+            if _published.get(job_id) != sig:
+                writes.append((job_id, _status_snapshot(job_id, job)))
+                _published[job_id] = sig
+    removes = [j for j in list(_published) if j not in live]
+    for job_id in removes:
+        _published.pop(job_id, None)
+    view = {"instance": INSTANCE_ID, "jobs": queue} if active else None
+    await asyncio.to_thread(_write_status_files, writes, removes, view)
+
+
+async def _status_publisher():
+    while True:
+        await asyncio.sleep(STATUS_PUBLISH_SECONDS)
+        try:
+            await _publish_statuses()
+        except Exception as e:
+            print(f"⚠️ Status snapshot publish failed: {type(e).__name__}: {e}")
+
+
+_queue_view_cache = {"stamp": None, "data": None}
+
+
+def _queue_view():
+    """The engine's queue view, re-read only when the file changes."""
+    path = os.path.join(OUTPUT_DIR, QUEUE_VIEW_FILE)
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    stamp = (st.st_mtime_ns, st.st_size, st.st_ino)
+    if _queue_view_cache["stamp"] != stamp:
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return None
+        _queue_view_cache.update(stamp=stamp, data=data if isinstance(data, dict) else None)
+    return _queue_view_cache["data"]
+
+
+def _publisher_alive() -> bool:
+    try:
+        beat = os.stat(os.path.join(OUTPUT_DIR, QUEUE_BEAT_FILE)).st_mtime
+    except OSError:
+        return False
+    return time.time() - beat <= STATUS_SNAPSHOT_FRESH_SECONDS
+
+
+def front_status_view(job_id):
+    """``(snapshot, queue entry)`` a front process may answer a poll from, or
+    None when only an engine can (no snapshot, a stale one, another
+    instance's, or no live publisher)."""
+    if not _JOB_ID_RE.match(job_id or "") or not _publisher_alive():
+        return None
+    view = _queue_view()
+    if not view:
+        return None
+    try:
+        with open(os.path.join(OUTPUT_DIR, job_id, STATUS_SNAPSHOT_FILE)) as f:
+            snap = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(snap, dict) or snap.get("instance") != view.get("instance"):
+        return None
+    queue = (view.get("jobs") or {}).get(job_id)
+    return snap, (queue if isinstance(queue, dict) else None)
+
+
+async def _status_from_snapshot(request, snap, queue):
+    await _assert_job_owner(request, {"user_id": snap.get("owner")})
+    status = snap.get("status")
+    return {
+        "status": status,
+        "logs": snap.get("logs") or [],
+        "log_times": snap.get("log_times"),
+        "result": _with_download_urls(snap.get("result")),
+        "queue": queue if status == 'queued' else None,
+        "partial": snap.get("partial"),
+    }
+
+
 @app.get("/api/status/{job_id}")
 async def get_status(job_id: str, request: Request):
+    front_view = request.scope.get(_STATUS_VIEW_KEY)
+    if front_view is not None:
+        return await _status_from_snapshot(request, *front_view)
     job = jobs.get(job_id)
     if job is None:
         job = _job_view_from_disk(job_id)

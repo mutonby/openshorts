@@ -63,6 +63,7 @@ def _remember(key, user_id, now):
 async def owner_id(credential: str, load):
     """The caller's user id (str) or None. ``load`` is an async callable that
     returns the user (with ``.id``) or None; it runs only when needed."""
+    sync()
     key = key_for(credential)
     now = time.monotonic()
     hit = _entries.get(key)
@@ -96,11 +97,13 @@ def on_forget(hook) -> None:
         _forget_hooks.append(hook)
 
 
-def forget_user(user_id) -> None:
-    """Drop every remembered credential of this user (ban, revoke, erase)."""
-    uid = str(user_id)
-    for k in [k for k, v in _entries.items() if v[1] == uid]:
-        _entries.pop(k, None)
+def _forget_here(uid) -> None:
+    """Drop this process's memories of one user, or of everyone (None)."""
+    if uid is None:
+        _entries.clear()
+    else:
+        for k in [k for k, v in _entries.items() if v[1] == uid]:
+            _entries.pop(k, None)
     for hook in list(_forget_hooks):
         try:
             hook(uid)
@@ -108,7 +111,74 @@ def forget_user(user_id) -> None:
             pass
 
 
+def forget_user(user_id) -> None:
+    """Drop every remembered credential of this user (ban, revoke, erase), in
+    this process and in every other API process (``bump``)."""
+    _forget_here(str(user_id))
+    bump()
+
+
+# --- Several API processes ----------------------------------------------------
+# A split API (serve.py) runs the routes in several processes, each with its
+# own copy of these memories, and the forget comes from one of them (a ban in
+# the support API, a revoke, a Stripe event). CACHE_EPOCH_FILE, on the disk
+# they all share (both containers of a deploy too), is touched on every
+# forget; a process that sees it change drops everything it remembers, so a
+# credential that stops working stops passing everywhere within
+# EPOCH_CHECK_SECONDS. Unset (one process): nothing to tell anyone.
+EPOCH_CHECK_SECONDS = 0.5
+_epoch = {"file": None, "seen": None, "checked": 0.0}
+
+
+def _epoch_file():
+    return os.environ.get("CACHE_EPOCH_FILE") or None
+
+
+def bump() -> None:
+    """Tell the other API processes to drop what they remember."""
+    path = _epoch_file()
+    if not path:
+        return
+    try:
+        with open(path, "a"):
+            pass
+        os.utime(path, None)
+    except OSError:
+        pass
+    # Our own clear already happened; do not clear again on our own bump.
+    _epoch["seen"] = _stamp(path)
+
+
+def _stamp(path):
+    try:
+        st = os.stat(path)
+        return (st.st_mtime_ns, st.st_size, st.st_ino)
+    except OSError:
+        return None
+
+
+def sync() -> None:
+    """Drop everything remembered here if another process forgot someone.
+    Cheap: one stat every EPOCH_CHECK_SECONDS at most."""
+    path = _epoch_file()
+    if not path:
+        return
+    now = time.monotonic()
+    if _epoch["file"] == path and now - _epoch["checked"] < EPOCH_CHECK_SECONDS:
+        return
+    stamp = _stamp(path)
+    first = _epoch["file"] != path
+    _epoch.update(file=path, checked=now)
+    if first:
+        _epoch["seen"] = stamp
+        return
+    if stamp != _epoch["seen"]:
+        _epoch["seen"] = stamp
+        _forget_here(None)
+
+
 def clear() -> None:
     global _gate
     _entries.clear()
     _gate = None
+    _epoch.update(file=None, seen=None, checked=0.0)

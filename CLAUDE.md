@@ -49,6 +49,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 - Concurrency/VRAM, auto-retry, deploy handover and drain → `docs/architecture/jobs-and-deploys.md`
 - Download routing, yt-dlp clients, paid proxy ledger → `docs/architecture/proxy-routing.md`
 - Remote CPU worker (second host renders free jobs) → `docs/architecture/remote-worker.md`
+- Multiprocess API (engine + front processes, status snapshots, shared cache epoch) → `docs/architecture/multiprocess-api.md`
 
 ## Hard rules
 
@@ -78,6 +79,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 **Jobs, GPU, deploys**
 - Call `transcribe_backends.release_models()` after any ASR (job processes and in-API transcriptions alike). Size `MAX_CONCURRENT_JOBS` by free VRAM first.
 - `DRAIN_TIMEOUT_SECONDS` must stay below the deployment's (Coolify) stop grace period. The image must ship `curl` for the platform health check.
+- With `API_FRONT_WORKERS` > 0 the API is one engine (`app.py`, the only process with jobs/queue in memory) plus N front processes (`front.py`). A front serves only `front_proxy.serves_locally` routes, which must reach none of `app.py`'s module-level state (a test walks them); everything else is proxied to the engine. A per-process cache that a forget must clear calls `owner_cache.bump` (shared `CACHE_EPOCH_FILE`). Boot-time schema steps never take a table lock when the change is already there.
 - A drain-cancelled job keeps its manifest and reservation and is resumed, never marked failed or completed.
 - The disk sweeps and size caps delete only what `_job_is_active` / `_upload_is_live` call dead: a submission counts as live from its `_begin_job_dir` (source still streaming in) and an agent upload slot until it expires.
 - The remote worker gets job options, the source and the transcript this host prepared for it (`PREPARE_TRANSCRIPT`), never a credential, and writes only plain non-dot output files into its job's directory (`remote_worker.job_options`, `safe_relpath`). A remote job holds no GPU slot (`_local_running`); new per-job state it needs lives as files in the job dir, not in memory.

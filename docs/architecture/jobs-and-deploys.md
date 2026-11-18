@@ -2,6 +2,10 @@
 
 ## Concurrency model
 
+The API itself can run as one engine plus several front processes so it uses
+more than one core: see `multiprocess-api.md`.
+
+
 Async job queue with semaphore-based concurrency control, sized by
 `MAX_CONCURRENT_JOBS` (default 5). Jobs auto-clean after 1 hour.
 

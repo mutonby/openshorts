@@ -62,6 +62,14 @@ def setup_sync(app):
     app.add_middleware(UsageEventsMiddleware)
 
 
+async def setup_front():
+    """What a front process of a split API needs (api_role, serve.py): the DB
+    pool. No schema step, sweeper, digest or anything else that must run once:
+    the engine process of the same container does those."""
+    from . import database
+    await database.init_engine(create_schema=False)
+
+
 async def setup_async(app, keep_reservation_ids=None, live_reservation_ids=None,
                       sweep_active=None, booted_at=None):
     """Async initialization done inside the FastAPI lifespan.

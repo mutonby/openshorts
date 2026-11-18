@@ -182,4 +182,9 @@ EXPOSE 8000
 HEALTHCHECK --interval=5s --timeout=3s --start-period=30s --retries=2 \
   CMD curl -sf http://127.0.0.1:8000/health/ready > /dev/null || exit 1
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*", "--timeout-graceful-shutdown", "15"]
+# serve.py starts uvicorn with exactly those flags: one process by default,
+# or (API_FRONT_WORKERS=N) an engine on a local socket plus N front processes
+# on port 8000, so the API uses more than one core
+# (docs/architecture/multiprocess-api.md). uvloop and httptools (in the
+# locks) are picked up by uvicorn on their own.
+CMD ["python", "serve.py"]

@@ -139,6 +139,7 @@ def _cacheable(request) -> bool:
 
 
 def _cached_user(user_id) -> Optional["CurrentUser"]:
+    _owner_cache.sync()   # another API process may have forgotten someone
     hit = _user_cache.get(str(user_id))
     if hit and hit[0] > time.monotonic():
         return hit[1]
@@ -155,16 +156,22 @@ def _remember_user(user_id, current) -> None:
     _user_cache[str(user_id)] = (now + CURRENT_USER_TTL, current)
 
 
-def forget_current_user(user_id=None) -> None:
-    """Drop the remembered snapshot of one user, or of everyone (None)."""
+def _forget_user_here(user_id=None) -> None:
     if user_id is None:
         _user_cache.clear()
     else:
         _user_cache.pop(str(user_id), None)
 
 
+def forget_current_user(user_id=None) -> None:
+    """Drop the remembered snapshot of one user, or of everyone (None), in
+    this process and in every other API process (``owner_cache.bump``)."""
+    _forget_user_here(user_id)
+    _owner_cache.bump()
+
+
 from . import owner_cache as _owner_cache  # noqa: E402  (stdlib only, no cycle)
-_owner_cache.on_forget(forget_current_user)
+_owner_cache.on_forget(_forget_user_here)
 
 
 async def get_current_user_optional(request: Request) -> Optional[CurrentUser]:
