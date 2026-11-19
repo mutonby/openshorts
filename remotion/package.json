@@ -8,15 +8,15 @@
     "render": "remotion render",
     "build": "tsc --noEmit"
   },
-  "dependencies": {
-    "@remotion/cli": "^4.0.0",
-    "@remotion/google-fonts": "^4.0.0",
-    "@remotion/layout-utils": "^4.0.0",
-    "@remotion/media": "^4.0.447",
-    "@remotion/player": "^4.0.0",
+ "dependencies": {
+    "@remotion/cli": "4.0.447",
+    "@remotion/google-fonts": "4.0.447",
+    "@remotion/layout-utils": "4.0.447",
+    "@remotion/media": "4.0.447",
+    "@remotion/player": "4.0.447",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "remotion": "^4.0.0",
+    "remotion": "4.0.447",
     "zod": "^4.3.6"
   },
   "devDependencies": {
