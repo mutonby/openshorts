@@ -4397,6 +4397,9 @@ async def lifespan(app: FastAPI):
         cloud.videos.register_local_unmark(_unmark_local_job)
         # And for the queue: paying moves the user's waiting videos up.
         cloud.billing.register_local_reprioritize(reprioritize_user_jobs)
+        # A payment whose webhook delivery failed is applied within minutes,
+        # not at Stripe's next retry (30 min to hours later).
+        cloud.billing.start_reconciler(is_active=lambda: not _draining)
         # Autopilot: watch connected YouTube channels for new videos. Paused
         # while this instance drains so only the new container submits jobs.
         cloud.autopilot.start(app, is_active=lambda: not _draining)
