@@ -41,10 +41,17 @@ def _parse(ts):
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def row_views(row):
-    """Views of one cached row; platforms name the count differently."""
-    metrics = row.get("post_metrics") or row.get("metrics") or row
-    for key in ("views", "impressions", "plays"):
+# Each platform names the same count differently; the first key present wins.
+_METRIC_KEYS = {
+    "views": ("views", "impressions", "plays"),
+    "likes": ("likes", "like_count", "favorites", "reactions"),
+    "comments": ("comments", "comment_count", "replies"),
+    "shares": ("shares", "share_count", "reposts", "retweets"),
+}
+
+
+def _first_number(metrics, keys):
+    for key in keys:
         value = metrics.get(key)
         if value is not None:
             try:
@@ -52,6 +59,23 @@ def row_views(row):
             except (TypeError, ValueError):
                 return 0.0
     return 0.0
+
+
+def row_metrics(row):
+    """Views, likes, comments and shares of one cached row.
+
+    A metric a platform does not report comes back 0.0, so a network that only
+    exposes views still sums cleanly alongside one that reports engagement.
+    """
+    metrics = row.get("post_metrics") or row.get("metrics") or row
+    if not isinstance(metrics, dict):
+        return {name: 0.0 for name in _METRIC_KEYS}
+    return {name: _first_number(metrics, keys) for name, keys in _METRIC_KEYS.items()}
+
+
+def row_views(row):
+    """Views of one cached row (kept for callers that only want the count)."""
+    return row_metrics(row)["views"]
 
 
 def summarise(rows, since, top_n=3):
@@ -74,11 +98,15 @@ def summarise(rows, since, top_n=3):
             latest[key] = (captured, published, row)
 
     total = 0.0
+    engagement_totals = {"likes": 0.0, "comments": 0.0, "shares": 0.0}
     per_platform = {}
     posts = []
     for captured, published, row in latest.values():
-        views = row_views(row)
+        m = row_metrics(row)
+        views = m["views"]
         total += views
+        for k in engagement_totals:
+            engagement_totals[k] += m[k]
         name = row.get("platform")
         if name:
             per_platform[name] = per_platform.get(name, 0) + views
@@ -87,12 +115,17 @@ def summarise(rows, since, top_n=3):
             "published_at": published.isoformat(),
             "post_url": row.get("post_url"),
             "views": round(views),
+            "likes": round(m["likes"]),
+            "comments": round(m["comments"]),
+            "shares": round(m["shares"]),
         })
     posts.sort(key=lambda p: -p["views"])
     captured_at = max((c for c, _p, _r in latest.values()), default=None)
     return {
         "total_impressions": round(total),
         "per_platform": {k: round(v) for k, v in per_platform.items()},
+        "engagement": {k: round(v) for k, v in engagement_totals.items()},
+        "total_engagement": round(sum(engagement_totals.values())),
         "posts_count": len(posts),
         "top_posts": posts[:top_n],
         "updated_at": captured_at.isoformat() if captured_at else None,
