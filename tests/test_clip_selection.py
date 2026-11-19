@@ -330,7 +330,21 @@ def test_vision_segments_cover_the_whole_source_contiguously():
     assert max(e - s for s, e in segs) <= 2400
 
 
-def test_vision_segments_are_capped():
-    segs = vision_segments(8 * 3600, 2400, 8)  # 12 stretches wanted
-    assert len(segs) == 8
-    assert segs[-1][1] < 8 * 3600
+def test_vision_segments_are_capped_but_still_span_the_whole_source():
+    # 8-hour stream wants 12 stretches at the 40-min default; the budget is 8.
+    segs = vision_segments(8 * 3600, 2400, 8)
+    assert len(segs) == 8                       # budget respected
+    assert segs[0][0] == 0.0                    # samples from the first second
+    assert segs[-1][1] == 8 * 3600              # ...to the last — not just the head
+    assert all(e - s <= 2400 for s, e in segs)  # each still fits the token window
+    # The windows are in order and non-overlapping (gaps between them are the
+    # price of the fixed budget), and together they reach across the whole
+    # stream rather than tiling only its first 5.3 hours.
+    assert all(a[1] <= b[0] for a, b in zip(segs, segs[1:]))
+    watched = sum(e - s for s, e in segs)
+    assert segs[-1][1] - segs[0][0] > watched   # genuinely sampled with gaps
+
+
+def test_vision_segments_single_budget_watches_the_opening():
+    # A one-stretch budget can only see `seg` of a long source: take the start.
+    assert vision_segments(8 * 3600, 2400, 1) == [(0.0, 2400.0)]

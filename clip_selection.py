@@ -175,8 +175,18 @@ def vision_segments(video_duration, segment_seconds, max_segments):
     ones: a 41-minute source split at 40 minutes would leave a one-minute
     tail that the prompt has to fill with 3+ clips. A source that fits in one
     stretch returns one stretch, so short videos take the single-upload path
-    unchanged. Past ``max_segments`` the source is truncated (the caller logs
-    it) rather than spending without bound on one job.
+    unchanged.
+
+    When the source needs more stretches than ``max_segments`` allows (a
+    10-hour stream wants 15 at the 40-minute default, the budget is 8), the
+    kept stretches are spread evenly across the WHOLE timeline rather than
+    taken from the head. The old code sized each stretch to tile the source
+    (``step = duration / n``) but then returned only the first ``n_kept`` of
+    them, so a 10-hour capture had only its first ~5.3 hours ever looked at
+    and the best moments in the back half could not be found. Spacing the
+    budgeted stretches from the first second to the last keeps each one inside
+    the token window (still ``<= seg``) while sampling the entire stream; the
+    gaps between them are the price of the fixed budget, logged by the caller.
     """
     duration = max(0.0, float(video_duration or 0))
     seg = max(60.0, float(segment_seconds))
@@ -184,9 +194,21 @@ def vision_segments(video_duration, segment_seconds, max_segments):
         return [(0.0, round(duration, 3))]
     n = int(math.ceil(duration / seg))
     n_kept = max(1, min(n, int(max_segments)))
-    step = duration / n
-    return [(round(i * step, 3), round(min(duration, (i + 1) * step), 3))
-            for i in range(n_kept)]
+    if n_kept >= n:
+        # The budget covers the whole source: near-equal tiles, no gaps.
+        step = duration / n
+        return [(round(i * step, 3), round(min(duration, (i + 1) * step), 3))
+                for i in range(n)]
+    if n_kept == 1:
+        return [(0.0, round(seg, 3))]
+    # Budget-limited: anchor the first stretch at 0 and the last at the end,
+    # spacing the rest evenly, so the sampled windows span start to finish.
+    start_step = (duration - seg) / (n_kept - 1)
+    out = []
+    for i in range(n_kept):
+        start = min(max(0.0, i * start_step), duration - seg)
+        out.append((round(start, 3), round(min(duration, start + seg), 3)))
+    return out
 
 
 def clip_duration_bounds():
