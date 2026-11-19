@@ -446,8 +446,8 @@ has a publish button that sends it to the channel with its title and
 description, and <strong>schedule a week</strong> spreads a batch across the
 coming days at the time you choose, which is how most channels use a long
 video: one Short a day pointing back at it. TikTok and Instagram sit on the
-same screen if you post there too. Posting works on the free plan as well, with
-a daily cap.</p>
+same screen if you post there too. Posting to your socials is part of the paid
+plans; on the free plan you download the clips.</p>
 <p>One thing YouTube lets you do that is worth doing by hand: in YouTube Studio
 a Short can link to a related video, which puts a link to the full episode
 under the Short. OpenShorts does not set that field for you.</p>
@@ -747,8 +747,8 @@ January 2025, so you can raise the clip maximum to 180 seconds when a longer
 Reel suits the moment; the default of 15 to 60 seconds is where most moments
 that stand alone end.</p>
 <p>The same screen posts to TikTok and YouTube Shorts, so one recording can
-fill all three. Posting is available on the free plan as well, with a daily
-cap.</p>
+fill all three. Posting is part of the paid plans; on the free plan you
+download the clips.</p>
 
 <h2>Facebook Reels maker: same file, posted by you</h2>
 <p>A Reel made here is the right shape for Facebook: vertical, captioned, with
