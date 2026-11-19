@@ -601,7 +601,7 @@ async def reserve_process_minutes(request, url, input_path, job_id, max_minutes=
     # their entry in `jobs` (probe, reservation, quality gate) count too, or a
     # burst of parallel requests would all pass it.
     limit = _cloud_config.PLAN_JOB_LIMIT.get(user.plan, 2)
-    active = sum(1 for j in jobs.values()
+    active = sum(1 for j in list(jobs.values())
                  if j.get('user_id') == user.id and j.get('status') in ('queued', 'processing'))
     active += _submissions_in_flight(user.id)
     if active >= limit:
@@ -1359,7 +1359,7 @@ async def _raise_users_jobs(priority_by_user: dict) -> int:
     want = {str(u): int(p) for u, p in priority_by_user.items()}
     if not want:
         return 0
-    owner = {jid: str(j.get('user_id')) for jid, j in jobs.items()
+    owner = {jid: str(j.get('user_id')) for jid, j in list(jobs.items())
              if str(j.get('user_id')) in want}
     moved = _raise_queued(lambda jid, _p: want[owner[jid]] if jid in owner else None)
     raised_at = time.time()
