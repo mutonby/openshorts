@@ -672,7 +672,7 @@ class Service:
             try:
                 posted = json.loads(m.read_text(encoding="utf-8")).get("posted") or {}
                 if posted.get("status") == "queued":
-                    self._enqueue(m.parent, datetime.fromisoformat(posted["at"]))
+                    self._enqueue(m.parent, datetime.fromisoformat(posted["at"]), posted.get("only"))
                 elif posted.get("retry_at") and posted.get("retry_only"):
                     self._enqueue(m.parent, datetime.fromisoformat(posted["retry_at"]),
                                   list(posted["retry_only"]))

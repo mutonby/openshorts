@@ -50,7 +50,9 @@ overflow:auto;font:12px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap
 .log .peak{color:var(--amber)}.log .ready{color:var(--green)}.log .err{color:var(--red)}.log .live{color:#ff8a80}
 .minilog{height:220px}
 .clip video{width:100%;aspect-ratio:9/16;background:#000;border-radius:8px;display:block}
-.clip .hook{font-weight:700;margin:10px 0 4px}.clip .title{color:var(--muted);font-size:12px;margin-bottom:8px}
+.clip .hook{font-weight:700;margin:10px 0 4px}
+.clip.picked{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.clip .pick{display:inline-flex;gap:6px;align-items:center;margin-top:10px;font-size:12px;color:var(--muted);cursor:pointer}.clip .title{color:var(--muted);font-size:12px;margin-bottom:8px}
 .chips{display:flex;gap:5px;flex-wrap:wrap;margin:6px 0}
 .chip{font-size:11px;padding:2px 7px;border-radius:5px;background:var(--panel2);color:var(--muted);border:1px solid var(--line)}
 .chip.posted{color:var(--green);border-color:#1f5b3c}.chip.held{color:var(--amber);border-color:#6a5220}.chip.failed{color:var(--red);border-color:#6b2b2a}
@@ -156,13 +158,21 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 
 <!-- CLIPS -->
 <section class="tab" id="tab-clips">
-  <div class="row" style="margin-bottom:14px">
+  <div class="row" style="margin-bottom:10px">
     <select id="clipFilter" style="width:auto">
       <option value="">All clips</option><option value="held">Not posted yet</option>
-      <option value="posted">Posted / scheduled</option><option value="failed">Failed</option>
+      <option value="posted">Posted / queued</option><option value="failed">Failed</option>
     </select>
+    <select id="clipStreamer" style="width:auto"><option value="">All streamers</option></select>
     <span class="muted small" id="clipCount"></span><div class="grow"></div>
     <button class="btn" id="openClips">Open clips folder</button>
+  </div>
+  <div class="row card" style="margin-bottom:14px;padding:10px 14px" id="bulkBar">
+    <button class="btn sm" id="selAll">Select all shown</button>
+    <button class="btn sm" id="selNone">Clear</button>
+    <span class="small" id="selCount">0 selected</span><div class="grow"></div>
+    <button class="btn sm primary" id="bulkPost" disabled>Post selected…</button>
+    <button class="btn sm danger" id="bulkDel" disabled>Delete selected</button>
   </div>
   <div class="grid g3" id="clips"></div>
 </section>
@@ -447,14 +457,59 @@ function postState(c) { const p = c.posted || {}; return c.posting_now || p.stat
 async function loadClips() {
   const r = await act(() => api("/api/clips")); if (!r) return; clips = r.clips; renderClips();
 }
+const DONE = ["posted", "partial", "queued", "scheduled"];
+const selected = new Set();
+function shownClips() {
+  const f = $("#clipFilter").value, who = $("#clipStreamer").value;
+  return clips.filter(c => (!who || c.streamer === who) && (!f || (f === "posted" ? DONE.includes(postState(c))
+    : f === "held" ? !DONE.includes(postState(c)) && postState(c) !== "failed" : postState(c) === f)));
+}
+// Cards are updated in place: a card's <video> is created once and never
+// rebuilt or moved, so a clip that is playing keeps playing while statuses change.
+const cardEls = new Map();
 function renderClips() {
-  const f = $("#clipFilter").value;
-  const done = ["posted", "partial", "queued", "scheduled"];
-  const list = clips.filter(c => !f || (f === "posted" ? done.includes(postState(c)) : f === "held" ? !done.includes(postState(c)) && postState(c) !== "failed" : postState(c) === f));
+  const names = [...new Set(clips.map(c => c.streamer).filter(Boolean))].sort();
+  const sel = $("#clipStreamer"), keep = sel.value;
+  const opts = ['<option value="">All streamers</option>'].concat(names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`)).join("");
+  if (sel.dataset.opts !== opts) { sel.innerHTML = opts; sel.dataset.opts = opts; sel.value = names.includes(keep) ? keep : ""; }
+  for (const id of [...selected]) if (!clips.some(c => c.id === id)) selected.delete(id);
+  const list = shownClips(), host = $("#clips");
   $("#clipCount").textContent = `${list.length} of ${clips.length}`;
-  $("#clips").innerHTML = list.map(c => {
+  const want = new Set(list.map(c => c.id));
+  for (const [id, el] of cardEls) if (!want.has(id)) { el.remove(); cardEls.delete(id); }
+  host.querySelector(".empty.card")?.remove();
+  let prev = null;
+  for (const c of list) {
+    let el = cardEls.get(c.id);
+    const sig = JSON.stringify([c.posted, c.text, c.music, c.posting_now, c.score, c.has_video, selected.has(c.id)]);
+    if (!el) {
+      el = document.createElement("div"); el.className = "card clip"; el.dataset.id = c.id;
+      el.innerHTML = `<div class="vbox"></div><div class="body"></div>`;
+      cardEls.set(c.id, el);
+    }
+    const vbox = el.querySelector(".vbox");
+    if (c.has_video && !vbox.querySelector("video")) {
+      vbox.innerHTML = `<video src="/media/${encodeURI(c.id)}/short.mp4" controls preload="metadata" playsinline></video>`;
+    } else if (!c.has_video && !vbox.firstChild) vbox.innerHTML = `<div class="empty">rendering…</div>`;
+    if (el.dataset.sig !== sig) { el.querySelector(".body").innerHTML = clipBody(c); el.dataset.sig = sig; }
+    el.classList.toggle("picked", selected.has(c.id));
+    // insert or keep order without moving cards that are already in place
+    const expected = prev ? prev.nextSibling : host.firstChild;
+    if (expected !== el) host.insertBefore(el, expected);
+    prev = el;
+  }
+  if (!list.length) host.insertAdjacentHTML("beforeend", `<div class="empty card">${clips.length ? "No clips match this filter."
+    : 'No clips yet. Start the watcher or run a <a href="#" data-goto="replay">Replay test</a>.'}</div>`);
+  updateSelection();
+}
+function updateSelection() {
+  const n = selected.size;
+  $("#selCount").textContent = `${n} selected`;
+  $("#bulkPost").disabled = $("#bulkDel").disabled = !n;
+}
+function clipBody(c) {
     const st = postState(c), t = c.text || {}, p = c.posted || {};
-    const k = done.includes(st) ? "posted" : st === "failed" ? "failed" : "held";
+    const k = DONE.includes(st) ? "posted" : st === "failed" ? "failed" : "held";
     const nets = Object.entries(p.networks || {}).map(([n, r]) => {
       const kk = ["posted", "sent to phone"].includes(r.status) ? "posted" : r.status === "failed" ? "failed" : "held";
       const label = `${NETS[n] || n}: ${r.status}`;
@@ -462,8 +517,7 @@ function renderClips() {
       return r.url ? `<a class="chip ${kk}" href="${esc(r.url)}" target="_blank" rel="noopener" title="${tip}">${esc(label)}</a>`
                    : `<span class="chip ${kk}" title="${tip}">${esc(label)}</span>`;
     }).join("");
-    return `<div class="card clip" data-id="${esc(c.id)}">
-      ${c.has_video ? `<video src="/media/${encodeURI(c.id)}/short.mp4" controls preload="metadata" playsinline></video>` : `<div class="empty">rendering…</div>`}
+    return `<label class="pick"><input type="checkbox" class="sel" ${selected.has(c.id) ? "checked" : ""}> select</label>
       <div class="hook">${esc(t.hook)}</div><div class="title">${esc(t.title)}</div>
       <div class="chips"><span class="chip ${k}">${esc(st)}${p.at && st === "queued" ? " " + new Date(p.at).toLocaleTimeString() : ""}${p.why ? ": " + esc(p.why) : ""}${p.error ? ": " + esc(p.error).slice(0, 80) : ""}</span>${nets}
         <span class="chip">${esc(c.streamer)}</span><span class="chip">score ${esc(c.score)}</span>
@@ -473,10 +527,48 @@ function renderClips() {
       <div class="row" style="margin-top:10px">
         <button class="btn sm primary" data-act="post">Review &amp; post</button>
         <button class="btn sm" data-act="open">Folder</button><div class="grow"></div>
-        <button class="btn sm danger" data-act="del">Delete</button></div></div>`;
-  }).join("") || `<div class="empty card">No clips yet. Start the watcher or run a <a href="#" data-goto="replay">Replay test</a>.</div>`;
+        <button class="btn sm danger" data-act="del">Delete</button></div>`;
 }
 $("#clipFilter").onchange = renderClips;
+$("#clipStreamer").onchange = renderClips;
+$("#clips").addEventListener("change", e => {
+  if (!e.target.classList.contains("sel")) return;
+  const id = e.target.closest(".clip").dataset.id;
+  e.target.checked ? selected.add(id) : selected.delete(id);
+  renderClips();
+});
+$("#selAll").onclick = () => { shownClips().forEach(c => selected.add(c.id)); renderClips(); };
+$("#selNone").onclick = () => { selected.clear(); renderClips(); };
+$("#bulkDel").onclick = async () => {
+  const ids = [...selected];
+  if (!ids.length || !confirm(`Delete ${ids.length} clip(s) and their files permanently? This cannot be undone.`)) return;
+  let ok = 0;
+  for (const id of ids) {
+    try { await api(`/api/clips/${encodeURI(id)}`, {method:"DELETE"}); ok++; selected.delete(id); } catch (e) { toast(e.message, "bad"); }
+  }
+  toast(`${ok} clip(s) deleted`, "ok"); loadClips();
+};
+$("#bulkPost").onclick = () => {
+  const ids = [...selected]; if (!ids.length) return;
+  const nets = [...new Set(ids.flatMap(id => Object.keys((clips.find(c => c.id === id) || {}).posts || {})))];
+  $("#dlgTitle").textContent = `Post ${ids.length} clip(s)`;
+  $("#dlgMsg").textContent = "They go out one by one, spaced by your 'Minutes between posts'.";
+  $("#dlgSave").style.display = "none"; $("#dlgPost").style.display = "none";
+  $("#dlgBody").innerHTML = `<p>Networks:</p><div class="checks" id="bulkNets">${nets.map(n =>
+      `<label><input type="checkbox" value="${esc(n)}" checked> ${esc(NETS[n] || n)}</label>`).join("")}</div>
+    <div class="row" style="margin-top:16px"><button class="btn primary" id="bulkGo">Queue ${ids.length} post(s)</button></div>`;
+  postDlg.showModal();
+};
+$("#dlgBody").addEventListener("click", async e => {
+  if (e.target.id !== "bulkGo") return;
+  const platforms = $$("#bulkNets input:checked").map(x => x.value);
+  if (!platforms.length) return toast("Tick at least one network", "bad");
+  const r = await act(() => api("/api/clips/bulk-post", {method:"POST", json:{ids: [...selected], platforms}}));
+  if (!r) return;
+  toast(`${r.queued} post(s) queued: first at ${new Date(r.first).toLocaleTimeString()}, last at ${new Date(r.last).toLocaleTimeString()}`, "ok");
+  (r.warnings || []).forEach(w => toast(w, "bad"));
+  selected.clear(); postDlg.close(); loadClips();
+});
 $("#openClips").onclick = () => act(() => api("/api/open", {method:"POST"}));
 $("#clips").addEventListener("click", async e => {
   const b = e.target.closest("button[data-act]"); if (!b) return;

@@ -451,3 +451,31 @@ def test_http_config_and_clip_media(server):
     assert _req(port, "/media/..%2F..%2Flivewatch.toml/short.mp4")[0] == 404
     st, body, _ = _req(port, "/api/clips")
     assert json.loads(body)["clips"][0]["id"] == cid
+
+
+def test_bulk_post_queues_clips_spaced_out(ctl, monkeypatch):
+    from datetime import datetime, timedelta
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1:A")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
+    ids = []
+    for n in range(3):
+        cid, _ = _fake_clip(ctl, f"twitch_abc/20261119-21000{n}")
+        ids.append(cid)
+    with pytest.raises(ApiError):
+        ctl.bulk_post([], None)
+    with pytest.raises(ApiError):
+        ctl.bulk_post(ids, ["myspace"])
+    with pytest.raises(ApiError):           # no account for youtube: refused before queueing
+        ctl.bulk_post(ids, ["youtube"])
+    raw = ctl.raw_config()
+    raw["post"] = {"others_via": "phone", "min_gap_minutes": 30}
+    ctl.save_config(raw)
+    out = ctl.bulk_post(ids, ["tiktok"])
+    first, last = datetime.fromisoformat(out["first"]), datetime.fromisoformat(out["last"])
+    assert out["queued"] == 3 and last - first == timedelta(minutes=60)
+    svc = ctl._post_only
+    assert svc is not None and [o for _, _, o in svc._post_queue] == [["tiktok"]] * 3
+    for cid in ids:
+        meta = json.loads((ctl.clip_dir(cid) / "meta.json").read_text(encoding="utf-8"))
+        assert meta["posted"]["status"] == "queued" and meta["posted"]["only"] == ["tiktok"]
+    svc.stop_event.set()

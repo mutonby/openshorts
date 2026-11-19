@@ -24,7 +24,7 @@ import shutil
 import threading
 import time
 import webbrowser
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, Optional
@@ -71,6 +71,7 @@ class Controller:
         self._loggers: Dict[str, Logger] = {}
         self._posting: Dict[str, threading.Thread] = {}
         self._oauth: Dict[str, tuple] = {}
+        self._post_only: Optional[Service] = None  # runs the post queue while the watcher is off
         config.load_dotenv(self.env_path)
 
     # ------------------------------------------------------------- config
@@ -197,6 +198,10 @@ class Controller:
         with self._lock:
             if self.svc and not self.svc.finished.is_set():
                 raise ApiError(409, "already running")
+            if self._post_only:
+                # the watcher takes over the post queue (it reloads it from the clips)
+                self._post_only.stop_event.set()
+                self._post_only = None
             try:
                 s = self.settings()
             except config.ConfigError as e:
@@ -390,6 +395,47 @@ class Controller:
         self._posting[clip_id] = th
         th.start()
         return {"ok": True, "routes": routes, "warnings": problems}
+
+    def _queue_service(self) -> Service:
+        """The post queue: the running watcher's, or a queue-only service when it is off."""
+        if self.svc and not self.svc.finished.is_set() and self.svc.started_at:
+            return self.svc
+        if self._post_only is None or self._post_only.stop_event.is_set():
+            s = self.settings()
+            svc = Service(s, log=self.logger(s))
+            svc._requeue_from_disk()
+            svc.poster.start()
+            self._post_only = svc
+        return self._post_only
+
+    def bulk_post(self, ids: list, platforms: Optional[list]) -> dict:
+        """Queue many clips, spaced by min_gap_minutes (a burst trips upload limits)."""
+        if not isinstance(ids, list) or not ids or len(ids) > 200:
+            raise ApiError(400, "select between 1 and 200 clips")
+        if platforms is not None and (not isinstance(platforms, list)
+                                      or any(p not in config.POST_PLATFORMS for p in platforms)):
+            raise ApiError(400, "unknown network")
+        s = self.settings()
+        routes = publish.route(platforms or s.post_platforms, s.youtube_via, s.instagram_via, s.others_via)
+        problems = publish.missing(routes, publish.credentials(), s.upload_post_user)
+        if problems and len(problems) >= len(routes):
+            raise ApiError(400, "set up first: " + "; ".join(problems))
+        dirs = [self.clip_dir(str(i)) for i in ids]
+        svc = self._queue_service()
+        now = datetime.now(timezone.utc)
+        first = svc._next_free_slot(now)
+        gap = timedelta(minutes=s.min_gap_minutes)
+        plan = []
+        for n, d in enumerate(dirs):
+            when = first + gap * n
+            meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+            meta["posted"] = {"status": "queued", "at": when.isoformat(), "only": platforms,
+                              "networks": (meta.get("posted") or {}).get("networks", {})}
+            write_meta(d, meta)
+            svc._enqueue(d, when, platforms)
+            plan.append(when.isoformat())
+        return {"ok": True, "queued": len(dirs), "first": plan[0], "last": plan[-1],
+                "warnings": problems}
 
     # ------------------------------------------------------- posting accounts
     def posting_issues(self, s: config.Settings) -> list:
@@ -785,6 +831,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(ctl.create_upload_profile(self._json_body()))
             if path == "/api/brand/logo":
                 return self._json(ctl.save_logo(self._body(8 * 1024 * 1024 + 1024)))
+            if path == "/api/clips/bulk-post":
+                body = self._json_body()
+                if not isinstance(body, dict):
+                    raise ApiError(400, "expected an object")
+                return self._json(ctl.bulk_post(body.get("ids"), body.get("platforms")))
             if path == "/api/accounts/youtube/connect":
                 return self._json(ctl.youtube_connect(f"http://127.0.0.1:{self.port}/oauth/youtube"))
             m = re.match(r"^/api/accounts/(youtube|instagram|telegram)/check$", path)
