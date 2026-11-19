@@ -241,6 +241,21 @@ parakeet text.
   manifest's priority. At startup the worker starts only after that lookup,
   so the first job it takes is already ranked by the current plan.
 
+## Admin alerts and the daily digest (`cloud/alerts.py`, `cloud/digest.py`)
+
+`alerts.send_admin_alert(subject, body, urgent=...)` and `alerts.notify(text,
+urgent=...)` are the only ways to the admin chat. Only `urgent=True` goes out at
+once (Telegram, plus `ADMIN_EMAIL` with SMTP): a dead or per-GB download route
+and its recovery, expired YouTube cookies, the paid proxy's daily budget hit,
+a job failure rate that is not the users' own videos (at most every 3 h), paid
+videos waiting late and their recovery, transcription on the CPU. Everything
+else (payments, plans, cancellations, account deletions, free backlog, brake,
+output rate, paid proxy use) is held: one JSON line in
+`output/.alerts_held.jsonl` (flock), counted by kind in the next daily digest
+with the day's figures and the queue's last measurement. The digest goes out
+at `DIGEST_HOUR_UTC` (7) from the active instance only. `TELEGRAM_ALERTS=all`
+sends every alert on its own again.
+
 ## Queue watch (`cloud/queue_watch.py`, Cloud only)
 
 A saturated queue fails nothing, it only starts jobs hours late, so the
@@ -249,7 +264,8 @@ API measures its queue (`app._queue_watch_snapshot`: waiting jobs paid/free,
 oldest wait of each, running vs `MAX_CONCURRENT_JOBS`, jobs finished in the last
 hour, the `queue_estimate` wait for a new job) and alerts through
 `alerts.send_admin_alert` (the admin Telegram chat, plus `ADMIN_EMAIL` with SMTP)
-when:
+when (only paid jobs waiting late page at once, the rest goes to the daily
+digest):
 
 - a paid job waits more than `QUEUE_ALERT_PAID_WAIT_MINUTES` (10), or
 - the oldest free job waits more than `QUEUE_ALERT_FREE_WAIT_MINUTES` (30), or

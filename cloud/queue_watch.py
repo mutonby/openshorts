@@ -608,6 +608,10 @@ async def _send_mode_alerts(events, m, now, lim) -> list:
 
 # --- The tick -----------------------------------------------------------------
 
+# The figures of the last measurement, for the daily digest's queue lines.
+latest_figures = []
+latest_figures_at = [0.0]
+
 async def tick(now=None):
     """Measure once and send whatever the state machine says. Returns the kind
     of message sent (or None), for tests and logs."""
@@ -669,6 +673,16 @@ async def tick(now=None):
         state = load_state()
         queue_state = {k: v for k, v in state.items() if k not in SUB_KEYS}
         kind, new_state = decide(queue_state, m, now, lim, hold)
+        # Paid videos late page at once (and so does their recovery); a free
+        # backlog, the output rate and the brake go to the daily digest.
+        urgent = {}
+        if kind in ("alert", "remind") and m["paid_late"]:
+            urgent[kind] = True
+            new_state = dict(new_state, paged=True)
+        elif kind == "recovered" and queue_state.get("paged"):
+            urgent[kind] = True
+        latest_figures[:] = _figures(m, lim)
+        latest_figures_at[0] = now
         asr_kind, asr_sub = asr_incident(state.get("asr"), snap, now, lim)
         rate_kind, rate_sub, samples, sampled_at = rate_incident(state, m, now, lim, hold)
         new_state = dict(new_state, asr=asr_sub, rate=rate_sub,
@@ -680,13 +694,15 @@ async def tick(now=None):
             out.append((kind, message(kind, new_state, m, now, lim)))
         if asr_kind:
             out.append(("asr-" + asr_kind, fault_message("asr", asr_kind, asr_sub, m, now, lim)))
+            # A deploy fault: its alert and its end page, the hourly reminder does not.
+            urgent["asr-" + asr_kind] = asr_kind != "remind"
         if rate_kind:
             out.append(("rate-" + rate_kind,
                         fault_message("rate", rate_kind, rate_sub, m, now, lim)))
         if out:
             from .alerts import send_admin_alert
             for name, (subject, body) in out:
-                await send_admin_alert(subject, body)
+                await send_admin_alert(subject, body, urgent=bool(urgent.get(name)))
             print(f"📣 Queue watch: {', '.join(n for n, _ in out)} ({m['queued']} queued, "
                   f"oldest paid {int(m['oldest_paid'])} s, oldest free "
                   f"{int(m['oldest_free'])} s, done/h {m.get('done_last_hour')})")

@@ -371,7 +371,7 @@ def world(sat, tmp_path, monkeypatch):
                         "slow": {"queued": 300, "wait": 13 * H}}}
     from cloud import alerts
 
-    async def fake_send(subject, body):
+    async def fake_send(subject, body, **kw):
         w.sent.append((subject, body))
     monkeypatch.setattr(alerts, "send_admin_alert", fake_send)
     qw.configure(snapshot=lambda: dict(w.snap), busy_elsewhere=lambda: 0,

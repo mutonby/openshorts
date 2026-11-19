@@ -8,7 +8,7 @@ alerts = pytest.importorskip("cloud.alerts")
 @pytest.fixture()
 def sent(monkeypatch):
     out = []
-    async def fake_send(title, body):
+    async def fake_send(title, body, **kw):
         out.append((title, body))
     monkeypatch.setattr(alerts, "send_admin_alert", fake_send)
     monkeypatch.setenv("STATIC_PROXY_URLS", "http://s1,http://s2")

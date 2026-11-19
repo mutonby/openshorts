@@ -400,8 +400,8 @@ async def erase_account(user_id, reason=None, *, cancel_stripe=True, notify_user
         except Exception as e:
             print(f"⚠️  Goodbye email failed: {e}")
     try:
-        from .alerts import send_telegram
-        await send_telegram(f"🗑️ Account deleted (plan: {plan or 'free'})")
+        from .alerts import notify
+        await notify(f"🗑️ Account deleted (plan: {plan or 'free'})")
     except Exception:
         pass
 

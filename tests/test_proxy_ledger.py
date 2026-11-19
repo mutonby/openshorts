@@ -170,6 +170,8 @@ def test_alert_folds_a_burst_into_one_message(monkeypatch):
 
     import cloud.alerts as alerts
     monkeypatch.setattr(alerts, "send_telegram", fake_send)
+    # The per-event mode: by default these go to the daily digest instead.
+    monkeypatch.setenv("TELEGRAM_ALERTS", "all")
     monkeypatch.setattr(proxy_ledger, "_persist", lambda *a, **k: asyncio.sleep(0))
     proxy_ledger._pending.update(count=0, bytes=0, lines=[], last_sent=0.0)
 

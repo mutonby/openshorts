@@ -121,7 +121,7 @@ async def _alert(line: str, nbytes: int):
     head = ("💸 Paid proxy (DataImpulse) used"
             + (f": {count} events, {total / 1e6:.1f} MB in the last {ALERT_COOLDOWN_SECONDS // 60} min"
                if count > 1 else ""))
-    await alerts.send_telegram(head + "\n" + "\n".join(lines))
+    await alerts.notify(head + "\n" + "\n".join(lines))
 
 
 async def flush_alerts():
@@ -134,7 +134,7 @@ async def flush_alerts():
         _pending.update(count=0, bytes=0, lines=[], last_sent=time.time())
     try:
         from . import alerts
-        await alerts.send_telegram(
+        await alerts.notify(
             f"💸 Paid proxy (DataImpulse) used: {count} events, {total / 1e6:.1f} MB\n" + "\n".join(lines))
     except Exception:
         pass
@@ -179,11 +179,11 @@ async def budget_exceeded() -> bool:
         _budget_alerted["day"] = day
         try:
             from . import alerts
-            await alerts.send_telegram(
+            await alerts.notify(
                 f"⛔ Paid proxy daily budget hit: {used / 1e6:.0f} MB of "
                 f"{DAILY_BUDGET_MB:.0f} MB used today. DataImpulse is disabled "
                 "until UTC midnight; jobs that need it will fail with a clear error. "
-                "Raise PAID_PROXY_DAILY_MB if this is expected.")
+                "Raise PAID_PROXY_DAILY_MB if this is expected.", urgent=True)
         except Exception:
             pass
     return True

@@ -24,7 +24,7 @@ def _reset_state(monkeypatch):
     alerts._last_alert.clear()
     sent = []
 
-    async def fake_alert(subject, body):
+    async def fake_alert(subject, body, **kw):
         sent.append((subject, body))
 
     monkeypatch.setattr(alerts, "send_admin_alert", fake_alert)

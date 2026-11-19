@@ -104,7 +104,7 @@ def test_an_admin_alert_shows_log_text_as_text(monkeypatch):
     from types import SimpleNamespace
     monkeypatch.setattr(alerts, "settings", SimpleNamespace(
         admin_email="ops@example.com", smtp_configured=True, telegram_configured=False))
-    asyncio.run(alerts.send_admin_alert("Proxy error", '407 <a href="https://evil.example">x</a>'))
+    asyncio.run(alerts.send_admin_alert("Proxy error", '407 <a href="https://evil.example">x</a>', urgent=True))
     assert "<a href" not in sent["html"] and "&lt;a href" in sent["html"]
 
 

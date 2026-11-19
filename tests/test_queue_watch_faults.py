@@ -56,7 +56,7 @@ def world(monkeypatch, tmp_path):
     w = World()
     w.sent = []
 
-    async def fake_send(subject, body):
+    async def fake_send(subject, body, **kw):
         w.sent.append((subject, body))
     monkeypatch.setattr(alerts, "send_admin_alert", fake_send)
     w.dir = str(tmp_path)

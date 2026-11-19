@@ -1,11 +1,17 @@
-"""Operational email alerts for the admin (proxy out of credits, high failure rate).
+"""Operational alerts for the admin (Telegram chat, plus ADMIN_EMAIL with SMTP).
 
-Tracks recent managed-job outcomes in memory and emails ADMIN_EMAIL (via Resend)
-when something looks broken, with a per-alert cooldown so it never spams.
+Only what needs someone now goes out on the spot (``urgent=True``): a dead
+download route, expired cookies, jobs failing in bulk, paid jobs stuck. The
+rest (payments, sign-ups of a plan, cancellations, free-queue backlog, paid
+proxy use...) is held and summed up in the daily digest (cloud/digest.py):
+one message a day instead of one per event (``TELEGRAM_ALERTS=all`` brings the
+per-event messages back).
 """
 import html as _html
 import asyncio
+import json
 import os
+import re
 import time
 from collections import deque
 
@@ -17,6 +23,9 @@ _last_alert = {}                    # alert kind -> last-sent epoch
 _ALERT_COOLDOWN = 3600              # 1 hour between repeats of the same alert
 _FAIL_WINDOW_MIN = 6               # need at least this many recent jobs to judge a rate
 _FAIL_THRESHOLD = 5                # ...and this many failures among them
+_FAILRATE_COOLDOWN = 3 * 3600       # an urgent failure-rate page at most every 3 h
+# Failure categories that are the user's video, not an outage: they never page.
+_CONTENT_FAILURES = ("no audio", "blocked content (user video)", "no clips found (user video)")
 
 # Specific signatures of a genuine proxy / download-stage failure. Kept precise
 # on purpose: a bare "proxy"/"credit"/"balance" match fired on any job whose logs
@@ -70,9 +79,9 @@ def _classify_failure(err: str) -> str:
     return "mixed"
 
 
-def _cooldown_ok(kind: str) -> bool:
+def _cooldown_ok(kind: str, cooldown: int = _ALERT_COOLDOWN) -> bool:
     now = time.time()
-    if now - _last_alert.get(kind, 0) < _ALERT_COOLDOWN:
+    if now - _last_alert.get(kind, 0) < cooldown:
         return False
     _last_alert[kind] = now
     return True
@@ -145,8 +154,117 @@ async def send_telegram(text: str, *, raise_errors: bool = False):
     print(f"⚠️  Telegram alert failed: {failure}")
 
 
-async def send_admin_alert(subject: str, body: str):
-    """Notify the admin via every configured channel (email + Telegram)."""
+def per_event() -> bool:
+    """``TELEGRAM_ALERTS=all``: every alert goes out on its own, as before the
+    digest. Default: only the urgent ones do."""
+    return os.environ.get("TELEGRAM_ALERTS", "").strip().lower() == "all"
+
+
+# --- Held for the digest ---------------------------------------------------------
+# One JSON line per held alert in a file of the shared output dir, so a deploy
+# loses nothing and the digest of whichever instance sends it sees both
+# containers' events. Without a configured file (tests, self-host without a
+# state dir) they are counted in memory.
+_held_path = {"path": None}
+_held_mem = []
+_MONEY = re.compile(r"([$€£])\s?([0-9][0-9,]*(?:\.[0-9]+)?)")
+
+
+def configure_digest(state_dir):
+    _held_path["path"] = os.path.join(state_dir, ".alerts_held.jsonl") if state_dir else None
+
+
+def digest_key(subject: str) -> str:
+    """The kind of an alert, for counting: its first line without the figures
+    that change from one to the next ("💵 Payment received: $12.00 USD",
+    "⚠️ La cola sigue atascada (desde hace 3 h)")."""
+    line = str(subject or "").strip().splitlines()[0] if str(subject or "").strip() else "?"
+    line = re.split(r":\s| \(", line, maxsplit=1)[0]
+    return line.strip()[:80] or "?"
+
+
+def hold(subject: str):
+    """Keep an alert for the daily digest instead of sending it now."""
+    entry = {"t": time.time(), "k": digest_key(subject)}
+    money = _MONEY.search(str(subject or ""))
+    if money:
+        try:
+            entry["m"] = [money.group(1), float(money.group(2).replace(",", ""))]
+        except ValueError:
+            pass
+    path = _held_path["path"]
+    if not path:
+        _held_mem.append(entry)
+        return
+    try:
+        import fcntl
+        with open(path, "a") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as e:
+        print(f"⚠️  Held alert not written ({e}); kept in memory")
+        _held_mem.append(entry)
+
+
+def take_held(until: float):
+    """The held alerts up to ``until``, removed from the store. Later ones
+    (written while the digest is being built) stay for tomorrow's."""
+    taken = [e for e in _held_mem if e.get("t", 0) <= until]
+    _held_mem[:] = [e for e in _held_mem if e.get("t", 0) > until]
+    path = _held_path["path"]
+    if not path or not os.path.exists(path):
+        return taken
+    try:
+        import fcntl
+        with open(path, "r+") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            keep = []
+            for line in fh:
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                (taken if float(e.get("t") or 0) <= until else keep).append(e)
+            fh.seek(0)
+            fh.truncate()
+            for e in keep:
+                fh.write(json.dumps(e, ensure_ascii=False) + "\n")
+    except OSError as e:
+        print(f"⚠️  Held alerts not read ({e})")
+    return taken
+
+
+def give_back(entries):
+    """A digest that could not be sent puts its alerts back for the retry."""
+    for e in entries:
+        _held_mem.append(e)
+
+
+def summarize_held(entries) -> list:
+    """One line per kind, busiest first: "🎉 New subscriber ×3", with the sum
+    of the amounts when the alerts carried one."""
+    counts, money = {}, {}
+    for e in entries:
+        k = e.get("k") or "?"
+        counts[k] = counts.get(k, 0) + 1
+        m = e.get("m")
+        if m and len(m) == 2:
+            per = money.setdefault(k, {})
+            per[m[0]] = per.get(m[0], 0.0) + float(m[1])
+    out = []
+    for k, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        total = ", ".join(f"{sym}{v:,.2f}" for sym, v in sorted(money.get(k, {}).items()))
+        out.append(f"{k} ×{n}" + (f" ({total})" if total else ""))
+    return out
+
+
+async def send_admin_alert(subject: str, body: str, *, urgent: bool = False):
+    """Notify the admin. Urgent: now, on every configured channel (Telegram +
+    email). Otherwise held for the daily digest (unless ``per_event()``)."""
+    if not urgent and not per_event():
+        hold(subject)
+        print(f"📥 Alert held for the daily digest: {digest_key(subject)}")
+        return
     # Telegram first — instant, and configured independently of email.
     await send_telegram(f"{subject}\n\n{body}")
 
@@ -160,6 +278,17 @@ async def send_admin_alert(subject: str, body: str):
     html = ("<pre style='font:13px/1.5 monospace;white-space:pre-wrap'>"
             f"{_html.escape(str(body))}</pre>")
     await send_email(to, f"[OpenShorts] {subject}", html)
+
+
+async def notify(text: str, *, urgent: bool = False):
+    """A one-message alert (first line = subject) under the same policy."""
+    text = str(text or "")
+    subject, _, body = text.partition("\n")
+    if not urgent and not per_event():
+        hold(subject)
+        print(f"📥 Alert held for the daily digest: {digest_key(subject)}")
+        return
+    await send_telegram(text)
 
 
 async def record_job_outcome(ok: bool, error_text: str = ""):
@@ -183,6 +312,7 @@ async def record_job_outcome(ok: bool, error_text: str = ""):
                 "balance — downloads will keep failing until it's topped up.\n"
                 "This repeats every 2 h until the proxy answers again.\n\n"
                 f"Error:\n{error_text[:1200]}",
+                urgent=True,
             )
         return
 
@@ -191,11 +321,18 @@ async def record_job_outcome(ok: bool, error_text: str = ""):
     # a silent upload, a bad video, etc.).
     recent = list(_recent)
     fails = recent.count(False)
-    if len(recent) >= _FAIL_WINDOW_MIN and fails >= _FAIL_THRESHOLD and _cooldown_ok("failrate"):
+    if len(recent) < _FAIL_WINDOW_MIN or fails < _FAIL_THRESHOLD:
+        return
+    category = _classify_failure(error_text)
+    # The user's own video (silent, blocked, nothing clip-shaped) is no outage:
+    # it goes to the digest. Anything else pages, at most every 3 h.
+    urgent = category not in _CONTENT_FAILURES
+    if _cooldown_ok("failrate", _FAILRATE_COOLDOWN if urgent else _ALERT_COOLDOWN):
         await send_admin_alert(
-            f"⚠️ High job failure rate ({_classify_failure(error_text)})",
+            f"⚠️ High job failure rate ({category})",
             f"{fails} of the last {len(recent)} managed jobs failed.\n\n"
             f"Last error:\n{error_text[:1200]}",
+            urgent=urgent,
         )
 
 
@@ -306,6 +443,7 @@ _PROXY_STRIKES = 2                  # consecutive failed probes before alerting
 _watch_down = {}                    # target name -> down-since epoch
 _watch_nag = {}                     # target name -> last-nag epoch
 _watch_strikes = {}                 # target name -> consecutive failed probes
+_watch_paged = {}                   # target name -> its down alert went out as urgent
 
 _PAID_TARGET = "paid proxy"
 _STATIC_TARGET = "static proxy pool"
@@ -400,8 +538,10 @@ async def _watch_update(name, ok, detail):
             await send_admin_alert(
                 f"✅ {name} recovered",
                 f"The {name} answers again after ~{mins} min down.",
+                urgent=bool(_watch_paged.get(name)),
             )
             _watch_down[name] = None
+            _watch_paged[name] = False
             _watch_nag[name] = 0.0
         return
     _watch_strikes[name] = _watch_strikes.get(name, 0) + 1
@@ -414,19 +554,26 @@ async def _watch_update(name, ok, detail):
         _watch_down[name] = now
         _watch_nag[name] = now
         icon, headline, impact = _watch_severity(name)
+        # A lost safety net (ℹ️) is no emergency; a dead route or a route
+        # that bills per GB (🔴 / 🟠) is.
+        _watch_paged[name] = icon != "ℹ️"
         await send_admin_alert(
             f"{icon} {headline}",
             f"{impact}\n\nThe {name} failed {strikes} probe(s) in a row "
             f"({_PROXY_PROBE_INTERVAL // 60} min apart). This repeats every 2 h "
             f"until it answers again.\n\nProbe error: {detail[:400]}",
+            urgent=_watch_paged[name],
         )
     elif now - _watch_nag[name] >= _PROXY_RENOTIFY:
         _watch_nag[name] = now
         hours = (now - _watch_down[name]) / 3600
         icon, headline, impact = _watch_severity(name)
+        # Keep nagging only while nothing works (or the session is gone);
+        # the per-GB fallback carrying the jobs is in the digest.
         await send_admin_alert(
             f"{icon} {headline} ({hours:.1f} h)",
             f"{impact}\n\nProbe error: {detail[:400]}",
+            urgent=icon == "🔴" or name == _COOKIE_TARGET,
         )
 
 

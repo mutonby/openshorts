@@ -52,8 +52,11 @@ def world(monkeypatch, tmp_path):
     w = World()
     w.sent = []
 
-    async def fake_send(subject, body):
+    w.urgent = []
+
+    async def fake_send(subject, body, **kw):
         w.sent.append((subject, body))
+        w.urgent.append(bool(kw.get("urgent")))
     monkeypatch.setattr(alerts, "send_admin_alert", fake_send)
     w.active = True
     w.dir = str(tmp_path)
@@ -376,3 +379,18 @@ def test_unreadable_state_falls_back_to_memory(world, monkeypatch):
         f.write("{not json")
     assert tick(T0 + 3 * MIN) is None
     assert len(world.sent) == 1
+
+
+def test_only_paid_videos_late_page_at_once(world):
+    # A free backlog alone goes to the daily digest...
+    world.add(5, paid=False, since=T0 - 31 * MIN)
+    assert tick(T0) == "alert"
+    assert world.urgent == [False]
+    # ...a paid video late pages, and so does the end of that incident.
+    world.add(1, paid=True, since=T0 + 50 * MIN)
+    assert tick(T0 + 61 * MIN) == "remind"
+    assert world.urgent[-1] is True
+    world.waiting.clear()
+    kinds = [tick(T0 + (62 + 3 * i) * MIN) for i in range(4)]
+    assert "recovered" in kinds
+    assert world.urgent[-1] is True

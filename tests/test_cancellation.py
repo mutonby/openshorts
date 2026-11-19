@@ -65,7 +65,7 @@ def env(monkeypatch):
             raise state.stripe_error
         state.stripe_calls.append((sid, feedback, comment))
 
-    async def _alert(subject, body):
+    async def _alert(subject, body, **kw):
         state.alerts.append((subject, body))
 
     async def _session_user(request, detail=None):

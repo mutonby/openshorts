@@ -3870,10 +3870,9 @@ async def _notify_clip_activity(job_id):
             sub = await metering._active_subscription(s, user.id)
         if sub is None:
             return
-        title = clips[0].get('video_title_for_youtube_short') or clips[0].get('title') or "video"
-        n = len(clips)
-        await _alerts.send_telegram(
-            f"🎬 Clips created\n{user.email} ({sub.plan}) — “{title}” ({n} clip{'s' if n != 1 else ''})")
+        # Counted in the daily digest; never the user's email or the video's
+        # title (personal data in a chat run from outside the EEA, alerts.user_ref).
+        await _alerts.notify(f"🎬 Clips created by a paying user ({sub.plan})")
     except Exception as e:
         print(f"⚠️  Clip-activity notify error for {job_id}: {e}")
 
@@ -4323,6 +4322,8 @@ async def lifespan(app: FastAPI):
         # container runs all of that once.
         if BILLING_ENABLED:
             await cloud.setup_front()
+            # An alert held here reaches the engine's digest through the file.
+            _alerts.configure_digest(OUTPUT_DIR)
         yield
         return
     # Rehydrate finished jobs from disk before serving (survives restarts).
@@ -4386,6 +4387,12 @@ async def lifespan(app: FastAPI):
         # a single job-failure alert is easy to miss and ingest stays broken
         # until someone tops the balance up.
         asyncio.create_task(_alerts.proxy_watch_loop())
+        # One Telegram message a day with the figures and every alert that was
+        # not urgent (cloud/alerts.hold); only the active instance sends it.
+        _alerts.configure_digest(OUTPUT_DIR)
+        from cloud import digest as _digest
+        _digest.start_digest(
+            is_active=lambda: not _draining and _read_instance_marker() in (None, INSTANCE_ID))
         # Page when the render queue backs up (paid job waiting, free backlog).
         # Only the newest instance measures; state is shared through output/.
         from cloud import queue_watch as _queue_watch
