@@ -6703,6 +6703,42 @@ async def get_status(job_id: str, request: Request):
     }
 
 
+@app.get("/api/jobs")
+async def list_jobs(request: Request, limit: int = 50):
+    """This caller's live jobs, most recent first.
+
+    Self-host keeps no project history (that lives in the cloud DB behind
+    BILLING_ENABLED, served by /api/projects and /api/history), so an agent or
+    CLI that lost a job_id mid-session had no way to recover it. Lists the
+    in-memory job registry — owner-filtered exactly like /api/status, so a
+    cloud caller only ever sees their own jobs.
+    """
+    try:
+        limit = max(1, min(int(limit), 200))
+    except (TypeError, ValueError):
+        limit = 50
+    # One owner lookup for the whole listing (it holds a pooled connection).
+    caller = await _owner_id_from_request(request) if BILLING_ENABLED else None
+    out = []
+    for job_id in reversed(list(jobs.keys())):
+        job = jobs.get(job_id)
+        if not isinstance(job, dict):
+            continue
+        if BILLING_ENABLED:
+            owner = job.get("user_id")
+            if owner is not None and (caller is None or str(owner) != str(caller)):
+                continue
+        out.append({
+            "job_id": job_id,
+            "status": _presented_status(job_id, job),
+            "clips": len((job.get("result") or {}).get("clips") or []),
+            "partial": job.get("partial"),
+        })
+        if len(out) >= limit:
+            break
+    return {"jobs": out, "count": len(out)}
+
+
 def _locate_source(job_id: str):
     """Find a job's source video on disk, or None.
 

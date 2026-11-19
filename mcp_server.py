@@ -223,6 +223,22 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "list_jobs",
+        "title": "List your recent jobs",
+        "description": (
+            "Your most recent clip jobs and their status, newest first. Use it "
+            "to recover a job_id you lost or to see what is still processing, "
+            "then call get_job_status / list_clips with an id from here."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer",
+                          "description": "How many to return, newest first (default 50, max 200)."},
+            },
+        },
+    },
+    {
         "name": "add_subtitles",
         "title": "Burn styled captions onto a clip",
         "description": (
@@ -354,6 +370,7 @@ _ANNOTATIONS = {
     "get_job_status": _READ,
     "list_clips": _READ,
     "get_quota": _READ,
+    "list_jobs": _READ,
     "add_subtitles": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
     # Replaces the clip's current render with the new cut.
     "recut_clip": {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False},
@@ -548,6 +565,16 @@ async def _tool_get_quota(client, args):
     return out, False
 
 
+async def _tool_list_jobs(client, args):
+    params = {}
+    if args.get("limit") is not None:
+        params["limit"] = args["limit"]
+    resp = await client.get("/api/jobs", params=params)
+    if resp.status_code >= 400:
+        return _api_error(resp), True
+    return resp.json(), False
+
+
 async def _tool_add_subtitles(client, args):
     body = {"job_id": args["job_id"], "clip_index": args["clip_index"]}
     for k in ("preset", "style", "position", "font_size", "font_name", "font_color",
@@ -601,6 +628,7 @@ _TOOL_IMPLS = {
     "get_job_status": _tool_get_job_status,
     "list_clips": _tool_list_clips,
     "get_quota": _tool_get_quota,
+    "list_jobs": _tool_list_jobs,
     "add_subtitles": _tool_add_subtitles,
     "recut_clip": _tool_recut_clip,
     "publish_clip": _tool_publish_clip,
