@@ -9895,7 +9895,8 @@ async def _save_thumbnail_upload(file, session_id):
             size += len(chunk)
             if size > limit_bytes:
                 buffer.close()
-                os.remove(video_path)
+                # The uploads sweep may already have taken the partial file.
+                _remove_quietly(video_path)
                 raise HTTPException(status_code=413, detail=f"File too large. Max size {MAX_FILE_SIZE_MB}MB")
             buffer.write(chunk)
     if not BILLING_ENABLED:
