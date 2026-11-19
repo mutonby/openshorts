@@ -1854,7 +1854,7 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     # Raw BGR frames stream down a pipe into ffmpeg, which encodes the silent
     # video track; the audio is muxed back in afterwards.
     encoder = subprocess.Popen(
-        ['ffmpeg', '-y',
+        ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error', '-nostats',
          '-f', 'rawvideo', '-pix_fmt', 'bgr24',
          '-video_size', f'{OUTPUT_WIDTH}x{OUTPUT_HEIGHT}',
          '-framerate', str(fps), '-i', 'pipe:0',
@@ -1879,81 +1879,90 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     stage_seconds = {'detect': 0.0, 'write': 0.0}
     loop_started = time.time()
 
-    with tqdm(total=frame_total, desc="   Processing", file=sys.stdout) as pbar:
-        while reader.isOpened():
-            ret, frame = reader.read()
-            if not ret:
-                break
+    try:
+        with tqdm(total=frame_total, desc="   Processing", file=sys.stdout) as pbar:
+            while reader.isOpened():
+                ret, frame = reader.read()
+                if not ret:
+                    break
 
-            # Update Scene Index
-            if current_scene_index < len(scene_boundaries):
-                start_f, end_f = scene_boundaries[current_scene_index]
-                if frame_number >= end_f and current_scene_index < len(scene_boundaries) - 1:
-                    current_scene_index += 1
+                # Update Scene Index
+                if current_scene_index < len(scene_boundaries):
+                    start_f, end_f = scene_boundaries[current_scene_index]
+                    if frame_number >= end_f and current_scene_index < len(scene_boundaries) - 1:
+                        current_scene_index += 1
             
-            # Determine Strategy for current frame based on scene
-            current_strategy = scene_strategies[current_scene_index] if current_scene_index < len(scene_strategies) else 'TRACK'
+                # Determine Strategy for current frame based on scene
+                current_strategy = scene_strategies[current_scene_index] if current_scene_index < len(scene_strategies) else 'TRACK'
             
-            # Apply Strategy
-            if current_strategy == 'GENERAL':
-                # "Plano General" -> Blur Background + Fit Width
-                output_frame = create_general_frame(frame, OUTPUT_WIDTH, OUTPUT_HEIGHT)
+                # Apply Strategy
+                if current_strategy == 'GENERAL':
+                    # "Plano General" -> Blur Background + Fit Width
+                    output_frame = create_general_frame(frame, OUTPUT_WIDTH, OUTPUT_HEIGHT)
                 
-                # Reset cameraman/tracker so they don't drift while inactive
-                cameraman.current_center_x = original_width / 2
-                cameraman.target_center_x = original_width / 2
+                    # Reset cameraman/tracker so they don't drift while inactive
+                    cameraman.current_center_x = original_width / 2
+                    cameraman.target_center_x = original_width / 2
                 
-            else:
-                # "Single Speaker" -> Track & Crop
-
-                # Detect every Nth frame for performance (cameraman smooths in
-                # between); the much heavier YOLO fallback gets its own stride.
-                # Snap camera on scene change to avoid panning from previous scene position
-                is_scene_start = (frame_number == scene_boundaries[current_scene_index][0])
-                if is_scene_start and SCENE_CUT_RESET:
-                    speaker_tracker.reset()
-                    cameraman.begin_scene()
-
-                # Always detect on a cut, whatever the stride: the new shot's
-                # subject has to be found before the first frame is framed.
-                if frame_number % DETECT_STRIDE == 0 or (is_scene_start and SCENE_CUT_RESET):
-                    t_det = time.time()
-                    candidates = detect_face_candidates(frame)
-                    target_box = speaker_tracker.get_target(candidates, frame_number, original_width)
-                    if target_box:
-                        cameraman.update_target(target_box)
-                    elif frame_number % YOLO_FALLBACK_STRIDE == 0 or (is_scene_start and SCENE_CUT_RESET):
-                        person_box = detect_person_yolo(frame)
-                        if person_box:
-                            cameraman.update_target(person_box)
-                    stage_seconds['detect'] += time.time() - t_det
-
-                x1, y1, x2, y2 = cameraman.get_crop_box(force_snap=is_scene_start)
-
-                # Crop
-                if y2 > y1 and x2 > x1:
-                    cropped = frame[y1:y2, x1:x2]
-                    output_frame = cv2.resize(cropped, (OUTPUT_WIDTH, OUTPUT_HEIGHT), interpolation=cv2.INTER_LINEAR)
                 else:
-                    output_frame = cv2.resize(frame, (OUTPUT_WIDTH, OUTPUT_HEIGHT), interpolation=cv2.INTER_LINEAR)
+                    # "Single Speaker" -> Track & Crop
 
-            t_wr = time.time()
-            encoder.stdin.write(output_frame.tobytes())
-            stage_seconds['write'] += time.time() - t_wr
-            frame_number += 1
-            pbar.update(1)
+                    # Detect every Nth frame for performance (cameraman smooths in
+                    # between); the much heavier YOLO fallback gets its own stride.
+                    # Snap camera on scene change to avoid panning from previous scene position
+                    is_scene_start = (frame_number == scene_boundaries[current_scene_index][0])
+                    if is_scene_start and SCENE_CUT_RESET:
+                        speaker_tracker.reset()
+                        cameraman.begin_scene()
+
+                    # Always detect on a cut, whatever the stride: the new shot's
+                    # subject has to be found before the first frame is framed.
+                    if frame_number % DETECT_STRIDE == 0 or (is_scene_start and SCENE_CUT_RESET):
+                        t_det = time.time()
+                        candidates = detect_face_candidates(frame)
+                        target_box = speaker_tracker.get_target(candidates, frame_number, original_width)
+                        if target_box:
+                            cameraman.update_target(target_box)
+                        elif frame_number % YOLO_FALLBACK_STRIDE == 0 or (is_scene_start and SCENE_CUT_RESET):
+                            person_box = detect_person_yolo(frame)
+                            if person_box:
+                                cameraman.update_target(person_box)
+                        stage_seconds['detect'] += time.time() - t_det
+
+                    x1, y1, x2, y2 = cameraman.get_crop_box(force_snap=is_scene_start)
+
+                    # Crop
+                    if y2 > y1 and x2 > x1:
+                        cropped = frame[y1:y2, x1:x2]
+                        output_frame = cv2.resize(cropped, (OUTPUT_WIDTH, OUTPUT_HEIGHT), interpolation=cv2.INTER_LINEAR)
+                    else:
+                        output_frame = cv2.resize(frame, (OUTPUT_WIDTH, OUTPUT_HEIGHT), interpolation=cv2.INTER_LINEAR)
+
+                t_wr = time.time()
+                encoder.stdin.write(output_frame.tobytes())
+                stage_seconds['write'] += time.time() - t_wr
+                frame_number += 1
+                pbar.update(1)
     
-    loop_total = time.time() - loop_started
-    other = loop_total - stage_seconds['detect'] - stage_seconds['write']
-    print(f"\n   ⏱️ Frame loop: {loop_total:.1f}s total — "
-          f"detect {stage_seconds['detect']:.1f}s, "
-          f"encode-wait {stage_seconds['write']:.1f}s, "
-          f"decode+render {other:.1f}s ({frame_number} frames)")
+        loop_total = time.time() - loop_started
+        other = loop_total - stage_seconds['detect'] - stage_seconds['write']
+        print(f"\n   ⏱️ Frame loop: {loop_total:.1f}s total — "
+              f"detect {stage_seconds['detect']:.1f}s, "
+              f"encode-wait {stage_seconds['write']:.1f}s, "
+              f"decode+render {other:.1f}s ({frame_number} frames)")
 
-    encoder.stdin.close()
-    encode_log = encoder.stderr.read().decode()
-    encoder.wait()
-    reader.release()
+        encoder.stdin.close()
+        encode_log = encoder.stderr.read().decode()
+        encoder.wait()
+    finally:
+        if encoder.poll() is None:
+            # The loop raised before the clean shutdown above: the encoder
+            # is still blocked on a pipe that will never close now. Kill it
+            # rather than leak a process, and always hand the decoder back.
+            encoder.kill()
+            with contextlib.suppress(Exception):
+                encoder.wait(timeout=10)
+        reader.release()
 
     if encoder.returncode != 0:
         print("\n   ❌ FFmpeg frame processing failed.")
