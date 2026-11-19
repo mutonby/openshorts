@@ -135,7 +135,7 @@ like `55-5`, with no new claim: when the worker's host shares its link with
 something that peaks at fixed times), `REMOTE_SOURCE_MBPS` (cap for all source
 transfers together, 0 for none), `PREPARE_TRANSCRIPT` (`1`, `cache` or unset:
 whether the source's transcript is prepared for the worker), `PREPARE_SCENES`
-(`1` or unset: whether the source's scene probabilities are),
+(`1` or unset: whether the source's scene probabilities are), `SCENE_HOST_SLOTS` (2),
 `PREPARE_SCENES_WAIT` (30), `PREPARE_SCENES_MAX_MINUTES` (45).
 
 The source download is the worker's one long call: the API touches the lease
@@ -179,8 +179,10 @@ What limits a CPU worker is rarely its slots:
   about half of what is left: it runs on every clip, on the CPU (profiled on a
   worker, 19-nov-2026). With `PREPARE_SCENES=1` on the API host, `main.py
   --prepare-only` runs it once over the whole source on the card, inside one
-  of the same `ASR_HOST_SLOTS` (`PREPARE_SCENES_WAIT` seconds at most, and not
-  for sources over `PREPARE_SCENES_MAX_MINUTES`), and leaves the per-frame
+  of `SCENE_HOST_SLOTS` (2) host slots of its own, never the transcription
+  ones (sharing them made the transcripts wait behind the scenes)
+  (`PREPARE_SCENES_WAIT` seconds at most, and not for sources over
+  `PREPARE_SCENES_MAX_MINUTES`), and leaves the per-frame
   probabilities in `.scene_probs.json` (float32, base64, tied to the source by
   name and duration). The claim announces `scenes_size`, the worker fetches
   them (`GET .../scenes`, shape-checked on both sides,

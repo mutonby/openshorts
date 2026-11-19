@@ -2100,8 +2100,8 @@ def prepare_transcript(input_video, output_dir, url, mode):
 
 def prepare_scenes(input_video, output_dir):
     """``--prepare-only``: TransNetV2 over the whole source, on this host's
-    card only and inside a host GPU slot (``PREPARE_SCENES_WAIT`` seconds at
-    most, 30), its per-frame probabilities left in the job directory for the
+    card only and inside one of ``SCENE_HOST_SLOTS`` (2) host slots of its own
+    (``PREPARE_SCENES_WAIT`` seconds at most, 30), its per-frame probabilities left in the job directory for the
     worker that renders the clips (scene_detection.use_prepared). Off the card,
     without a slot or past ``PREPARE_SCENES_MAX_MINUTES`` (45) it does
     nothing: the worker runs the network on each clip as it always did. Best
@@ -2128,13 +2128,19 @@ def prepare_scenes(input_video, output_dir):
             wait = float(os.environ.get("PREPARE_SCENES_WAIT", "") or 30)
         except ValueError:
             wait = 30.0
-        from transcribe_backends import host_asr_slot
-        t0 = time.time()
-        # Inside one of the host's GPU slots, like a transcription: twenty
-        # prepares each opening a CUDA context at once is what filled the card
-        # on 18-nov-2026.
+        from transcribe_backends import host_asr_slot, ASR_LOCK_DIR
         try:
-            with host_asr_slot(timeout=max(0.0, wait)):
+            slots = int(os.environ.get("SCENE_HOST_SLOTS", "") or 2)
+        except ValueError:
+            slots = 2
+        t0 = time.time()
+        # Inside one of the host's scene slots, a pool of its own: twenty
+        # prepares each opening a CUDA context at once is what filled the card
+        # on 18-nov-2026, and sharing the transcription slots made the
+        # transcripts wait behind the scenes (19-nov-2026).
+        try:
+            with host_asr_slot(slots=max(1, slots), timeout=max(0.0, wait),
+                               lock_dir=os.path.join(ASR_LOCK_DIR, ".scene-gpu")):
                 probs, src_fps = scene_detection.source_probabilities(input_video)
         except TimeoutError:
             print("⏭️ No free GPU slot here: the worker detects the scenes itself.")

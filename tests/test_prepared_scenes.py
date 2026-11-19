@@ -149,3 +149,34 @@ def test_prepare_does_nothing_off_the_card(tmp_path, monkeypatch):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     assert main.prepare_scenes(str(tmp_path / "V.mp4"), str(tmp_path)) is False
     assert not os.path.exists(tmp_path / sd.SCENES_CHECKPOINT)
+
+
+def test_scenes_take_their_own_slots_not_the_transcriptions(tmp_path, monkeypatch):
+    sd = _sd()
+    main = pytest.importorskip("main")
+    torch = pytest.importorskip("torch")
+    import transcribe_backends as tb
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(tb, "ASR_LOCK_DIR", str(tmp_path))
+    seen = {}
+
+    class Cap:
+        def __init__(self, *_):
+            pass
+
+        def get(self, prop):
+            return 30.0 if prop == main.cv2.CAP_PROP_FPS else 300
+
+        def release(self):
+            pass
+
+    def probs(_path):
+        seen["locks"] = sorted(os.listdir(tmp_path / ".scene-gpu"))
+        return np.zeros(300, np.float32), 30.0
+    monkeypatch.setattr(main.cv2, "VideoCapture", Cap)
+    monkeypatch.setattr(sd, "source_probabilities", probs)
+    monkeypatch.setenv("SCENE_HOST_SLOTS", "3")
+    assert main.prepare_scenes(str(tmp_path / "V.mp4"), str(tmp_path))
+    assert seen["locks"] == [".asr-gpu-0.lock"]                 # its own pool
+    assert not any(n.startswith(".asr-gpu") for n in os.listdir(tmp_path))   # never ASR's
+    assert json.load(open(tmp_path / sd.SCENES_CHECKPOINT))["frames"] == 300
