@@ -2098,6 +2098,62 @@ def prepare_transcript(input_video, output_dir, url, mode):
         return False
 
 
+def prepare_scenes(input_video, output_dir):
+    """``--prepare-only``: TransNetV2 over the whole source, on this host's
+    card only and inside a host GPU slot (``PREPARE_SCENES_WAIT`` seconds at
+    most, 30), its per-frame probabilities left in the job directory for the
+    worker that renders the clips (scene_detection.use_prepared). Off the card,
+    without a slot or past ``PREPARE_SCENES_MAX_MINUTES`` (45) it does
+    nothing: the worker runs the network on each clip as it always did. Best
+    effort."""
+    try:
+        import torch
+        import scene_detection
+        if not torch.cuda.is_available():
+            return False
+        if os.environ.get("SCENE_ENGINE", "transnetv2").strip().lower() == "pyscenedetect":
+            return False
+        cap = cv2.VideoCapture(input_video)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        duration = frame_count / fps if fps else 0
+        try:
+            max_minutes = float(os.environ.get("PREPARE_SCENES_MAX_MINUTES", "") or 45)
+        except ValueError:
+            max_minutes = 45.0
+        if not duration or duration > max_minutes * 60:
+            return False
+        try:
+            wait = float(os.environ.get("PREPARE_SCENES_WAIT", "") or 30)
+        except ValueError:
+            wait = 30.0
+        from transcribe_backends import host_asr_slot
+        t0 = time.time()
+        # Inside one of the host's GPU slots, like a transcription: twenty
+        # prepares each opening a CUDA context at once is what filled the card
+        # on 18-nov-2026.
+        try:
+            with host_asr_slot(timeout=max(0.0, wait)):
+                probs, src_fps = scene_detection.source_probabilities(input_video)
+        except TimeoutError:
+            print("⏭️ No free GPU slot here: the worker detects the scenes itself.")
+            return False
+        if not len(probs) or len(probs) > scene_detection.MAX_PREPARED_FRAMES:
+            return False
+        payload = scene_detection.scenes_payload(input_video, duration, probs, src_fps)
+        tmp = os.path.join(output_dir, scene_detection.SCENES_CHECKPOINT + ".tmp")
+        with open(tmp, "w") as f:
+            json.dump(payload, f)
+        os.replace(tmp, os.path.join(output_dir, scene_detection.SCENES_CHECKPOINT))
+        print(f"🎬 Scene probabilities prepared ({len(probs)} frames, "
+              f"{time.time() - t0:.1f}s).")
+        return True
+    except Exception as e:
+        print(f"⚠️ Scenes not prepared ({type(e).__name__}: {e}).")
+        return False
+
+
 def clear_transcript_checkpoint(output_dir):
     try:
         os.remove(os.path.join(output_dir, TRANSCRIPT_CHECKPOINT))
@@ -2878,6 +2934,8 @@ if __name__ == '__main__':
         _mode = os.environ.get("PREPARE_TRANSCRIPT", "").strip().lower()
         if _mode in ("1", "cache") and not args.skip_analysis and not args.transcript:
             prepare_transcript(input_video, output_dir, args.url, _mode)
+        if os.environ.get("PREPARE_SCENES", "").strip() == "1" and not args.skip_analysis:
+            prepare_scenes(input_video, output_dir)
         sys.exit(0)
 
     # Layout choice is per SOURCE video, not per clip: one upload and one call
@@ -2939,6 +2997,10 @@ if __name__ == '__main__':
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         duration = frame_count / fps
         cap.release()
+        # Scene probabilities the GPU host prepared for this source (a remote
+        # worker's job): the clips map them instead of running TransNetV2.
+        import scene_detection
+        scene_detection.use_prepared(output_dir, input_video, duration)
 
         # 3. Transcribe — unless the video has no audio, in which case fall back
         # to Gemini vision (picks clips from the imagery instead of the speech).
@@ -3058,6 +3120,8 @@ if __name__ == '__main__':
                 try:
                     # ffmpeg cut — re-encoding for precision on strict seconds
                     cut_clip(input_video, clip_temp_path, start, end, i + 1)
+                    import scene_detection
+                    scene_detection.register_clip(clip_temp_path, start)
 
                     # Layer order: the canonical reframe stays CLEAN, the hook
                     # is a derived hooked_ file, captions go last on top of

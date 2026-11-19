@@ -107,18 +107,10 @@ def _extract_frames_small(video_path):
                          dtype=np.uint8).reshape(n, _TN2_H, _TN2_W, 3)
 
 
-def _detect_transnetv2(video_path):
+def _predict(frames):
+    """TransNetV2's per-frame shot-boundary probabilities for ``frames``."""
     import torch
-
-    cap = cv2.VideoCapture(video_path)
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    cap.release()
-
-    frames = _extract_frames_small(video_path)
     model = _get_tn2_model()
-    threshold = float(os.environ.get("TRANSNETV2_THRESHOLD", "0.5"))
-
     with _TN2_LOCK, torch.no_grad():
         tensor = torch.from_numpy(np.ascontiguousarray(frames)).to(model.device)
         single_frame_pred, _ = model.predict_frames(tensor, quiet=True)
@@ -128,10 +120,137 @@ def _detect_transnetv2(video_path):
         # the rest of the process; eight jobs doing that filled a 20 GB card.
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+    return single_frame_pred.numpy().ravel()
+
+
+# --- Prepared probabilities (a remote worker's clips) --------------------------
+# The host with the GPU runs TransNetV2 once over the whole source (main.py
+# --prepare-only, PREPARE_SCENES) and leaves its per-frame probabilities in the
+# job directory; a CPU worker that renders the job reads them instead of
+# running the network on every clip, which was about half of its CPU. A clip
+# is cut out of the source at a known start, so its frames map onto the
+# source's by time (cut_rate_filter may change the frame rate). Measured over
+# 24 clips of 8 corpus sources (19-nov-2026): the 72 cuts found clip by clip
+# were all found from the sliced probabilities within 1.5 frames, plus one
+# extra. The clip is still decoded small: its exact frame count drives the
+# sparse trajectory pass (gpu_decode.remember_count).
+SCENES_CHECKPOINT = ".scene_probs.json"
+# Longest source the probabilities are kept for, in frames (2 h at 60 fps;
+# remote_worker.MAX_SCENES_FRAMES checks the same on the wire).
+MAX_PREPARED_FRAMES = 432_000
+_prepared = {"probs": None, "fps": None}
+_clip_starts = {}
+_clip_lock = threading.Lock()
+
+
+def _source_key(video_path, duration):
+    return {"name": os.path.basename(video_path), "duration": round(float(duration), 1)}
+
+
+def source_probabilities(video_path):
+    """(probabilities, fps) of the whole source, for main.prepare_scenes."""
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    cap.release()
+    frames = _extract_frames_small(video_path)
+    return _predict(frames), float(fps)
+
+
+def encode_probabilities(probs):
+    """Probabilities as base64 of their float32 bytes (little-endian): the
+    very numbers the network gave, so no cut moves on the way."""
+    import base64
+    return base64.b64encode(np.asarray(probs, dtype="<f4").tobytes()).decode("ascii")
+
+
+def decode_probabilities(text, n):
+    import base64
+    raw = base64.b64decode(text, validate=True)
+    if len(raw) != 4 * n:
+        raise ValueError("probabilities do not match their frame count")
+    probs = np.frombuffer(raw, dtype="<f4").astype(np.float32)
+    if not np.isfinite(probs).all():
+        raise ValueError("probabilities are not finite")
+    return probs
+
+
+def scenes_payload(video_path, duration, probs, fps):
+    return {"source": _source_key(video_path, duration), "fps": round(float(fps), 6),
+            "frames": int(len(probs)), "probs": encode_probabilities(probs)}
+
+
+def valid_scenes_payload(payload):
+    """The same shape check the API host makes (remote_worker.valid_scenes)."""
+    import remote_worker
+    return remote_worker.valid_scenes(payload)
+
+
+def use_prepared(output_dir, video_path, duration):
+    """Load the job's prepared probabilities when they belong to THIS source.
+    True when the clips will use them. Any problem: False, and every clip
+    runs the network as it always did."""
+    import json
+    path = os.path.join(output_dir, SCENES_CHECKPOINT)
+    if not os.path.isfile(path) or os.path.islink(path):
+        return False
+    try:
+        with open(path) as f:
+            payload = json.load(f)
+        if not valid_scenes_payload(payload):
+            raise ValueError("bad shape")
+        expected = _source_key(video_path, duration)
+        if payload["source"]["name"] != expected["name"] \
+                or abs(float(payload["source"]["duration"]) - expected["duration"]) > 0.5:
+            print("⏭️ Prepared scenes belong to another source — ignoring them.")
+            return False
+        _prepared["probs"] = decode_probabilities(payload["probs"], payload["frames"])
+        _prepared["fps"] = float(payload["fps"])
+        print(f"⏩ Scene probabilities prepared for this source "
+              f"({payload['frames']} frames): the clips skip TransNetV2.")
+        return True
+    except Exception as e:
+        print(f"⚠️ Ignoring unusable prepared scenes ({type(e).__name__}: {e}).")
+        return False
+
+
+def register_clip(clip_path, start):
+    """``clip_path`` was cut out of the source from ``start`` seconds."""
+    with _clip_lock:
+        _clip_starts[os.path.abspath(clip_path)] = float(start)
+
+
+def _prepared_for(video_path, n, fps):
+    """The source's probabilities mapped onto this clip's ``n`` frames, or
+    None when there are none for it."""
+    probs, src_fps = _prepared["probs"], _prepared["fps"]
+    with _clip_lock:
+        start = _clip_starts.get(os.path.abspath(video_path))
+    if probs is None or start is None or not fps or n <= 0:
+        return None
+    t = start + np.arange(n) / float(fps)
+    idx = np.rint(t * src_fps).astype(np.int64)
+    if idx[-1] >= len(probs) + 2:
+        return None  # the clip runs past the prepared source: not this one
+    return probs[np.clip(idx, 0, len(probs) - 1)]
+
+
+def _detect_transnetv2(video_path):
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+
+    frames = _extract_frames_small(video_path)
+    model = _get_tn2_model()
+    threshold = float(os.environ.get("TRANSNETV2_THRESHOLD", "0.5"))
+
+    single_frame_pred = _prepared_for(video_path, len(frames), fps)
+    if single_frame_pred is None:
+        single_frame_pred = _predict(frames)
 
     # predictions_to_scenes returns [[start, end], ...] with INCLUSIVE ends;
     # downstream expects PySceneDetect's exclusive ends.
-    raw = model.predictions_to_scenes(single_frame_pred.numpy(), threshold=threshold)
+    raw = model.predictions_to_scenes(single_frame_pred, threshold=threshold)
     bounds = [(int(s), int(e) + 1) for s, e in raw]
 
     # cv2's frame count can differ by a few frames from what ffmpeg decodes;

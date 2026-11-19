@@ -162,6 +162,33 @@ def fetch_transcript(job_id, claim, out_dir):
         return False
 
 
+def fetch_scenes(job_id, claim, out_dir):
+    """The scene probabilities the API host's card prepared for this source,
+    left where main.py looks for them: no TransNetV2 on this CPU. Anything
+    wrong with them and the clips run the network, as they always did."""
+    try:
+        r = _call("GET", f"/internal/worker/jobs/{job_id}/scenes", claim,
+                  tries=2, stream=True, timeout=120)
+        if r.status_code != 200:
+            return False
+        body = b""
+        for chunk in r.iter_content(256 * 1024):
+            body += chunk
+            if len(body) > remote_worker.MAX_SCENES_BYTES:
+                return False
+        payload = json.loads(body)
+        if not remote_worker.valid_scenes(payload):
+            return False
+        with open(os.path.join(out_dir, remote_worker.SCENES_FILE), "w") as f:
+            json.dump({k: payload[k] for k in ("source", "fps", "frames", "probs")}, f)
+        return True
+    except Gone:
+        raise
+    except Exception as e:
+        log(f"{job_id}: scenes not fetched ({type(e).__name__})")
+        return False
+
+
 def upload_file(job_id, claim, out_dir, rel):
     """Send one output file in chunks; a refused offset starts it over once."""
     path = os.path.join(out_dir, rel)
@@ -255,9 +282,11 @@ def run_job(job_id, claim):
             raise RuntimeError("arguments refused")
         fetch_source(job_id, claim, source, info.get("source_size"))
         prepared = bool(info.get("transcript_size")) and fetch_transcript(job_id, claim, out_dir)
+        scenes = bool(info.get("scenes_size")) and fetch_scenes(job_id, claim, out_dir)
         cmd = [sys.executable, "-u", "main.py", "-i", source, "-o", out_dir] + args
         log(f"{job_id}: rendering ({os.path.getsize(source) >> 20} MB source"
-            f"{', transcript prepared' if prepared else ''})")
+            f"{', transcript prepared' if prepared else ''}"
+            f"{', scenes prepared' if scenes else ''})")
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 env=job_env(info.get("env")), cwd=os.getcwd(),
                                 preexec_fn=(lambda: os.nice(NICE)) if NICE else None)

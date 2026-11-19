@@ -238,8 +238,10 @@ def set_ready(job_dir, source, rest, options):
     except OSError:
         return False
     transcript = transcript_path(job_dir)
+    scenes = scenes_path(job_dir)
     data.update(state=READY, source=source, source_size=size,
                 transcript_size=os.path.getsize(transcript) if transcript else 0,
+                scenes_size=os.path.getsize(scenes) if scenes else 0,
                 args=list(rest), env=dict(options), ready_at=time.time())
     write_json_atomic(os.path.join(job_dir, CLAIM_FILE), data)
     return True
@@ -575,10 +577,70 @@ def read_transcript(job_dir):
 
 
 def drop_transcript(job_dir):
+    for name in (TRANSCRIPT_FILE, SCENES_FILE):
+        try:
+            os.remove(os.path.join(job_dir, name))
+        except OSError:
+            pass
+
+
+# The per-frame scene probabilities this host's card computed for the whole
+# source (main.prepare_scenes), served like the transcript: the worker maps
+# them onto its clips instead of running TransNetV2 on its CPU
+# (scene_detection.use_prepared, which checks them again on that side).
+SCENES_FILE = ".scene_probs.json"
+MAX_SCENES_FRAMES = 432_000
+MAX_SCENES_BYTES = _SMALL_FILE_BYTES
+
+
+def valid_scenes(payload) -> bool:
+    """Shape only: a plain file name and a length for the source, a sane
+    frame rate and frame count, base64 text of exactly that many float32s."""
+    if not isinstance(payload, dict):
+        return False
+    source = payload.get("source")
+    if not isinstance(source, dict):
+        return False
+    name, duration = source.get("name"), source.get("duration")
+    fps, frames, probs = payload.get("fps"), payload.get("frames"), payload.get("probs")
+    if not (isinstance(name, str) and name and os.path.basename(name) == name):
+        return False
+    if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+        return False
+    if isinstance(fps, bool) or not isinstance(fps, (int, float)) or not 1 <= fps <= 240:
+        return False
+    if isinstance(frames, bool) or not isinstance(frames, int) or not 0 < frames <= MAX_SCENES_FRAMES:
+        return False
+    return (isinstance(probs, str) and len(probs) == 4 * ((4 * frames + 2) // 3)
+            and re.fullmatch(r"[A-Za-z0-9+/]*={0,2}", probs) is not None)
+
+
+def scenes_path(job_dir):
+    """The job's prepared scene probabilities if there is a usable file."""
+    path = os.path.join(job_dir, SCENES_FILE)
     try:
-        os.remove(os.path.join(job_dir, TRANSCRIPT_FILE))
+        if os.path.islink(path) or not os.path.isfile(path):
+            return None
+        if not 0 < os.path.getsize(path) <= MAX_SCENES_BYTES:
+            return None
     except OSError:
-        pass
+        return None
+    return path
+
+
+def read_scenes(job_dir):
+    """The prepared scene probabilities re-serialised as data, or None."""
+    path = scenes_path(job_dir)
+    if path is None:
+        return None
+    try:
+        with open(path) as f:
+            payload = json.load(f)
+    except (OSError, ValueError, RecursionError):
+        return None
+    if not valid_scenes(payload):
+        return None
+    return json.dumps({k: payload[k] for k in ("source", "fps", "frames", "probs")})
 
 
 MAX_CLIPS = 60

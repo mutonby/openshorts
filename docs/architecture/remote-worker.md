@@ -73,10 +73,10 @@ the API host.
   settings cross by name from a closed list (`remote_worker.allowed_option`:
   `WATERMARK`, the source caps, `AUTO_*`, `CLIP_*`), checked on both sides, and
   the command is `--format <choice>` or nothing (`worker_args`, `safe_args`).
-- It can read two things, both of a job it holds a live claim for: the source
-  and, when this host prepared one, the source's transcript
-  (`.../transcript`, see below). It can never write the transcript back: it
-  is a dotfile.
+- It can read three things, all of a job it holds a live claim for: the
+  source and, when this host prepared them, the source's transcript
+  (`.../transcript`) and scene probabilities (`.../scenes`, see below). It can
+  never write either back: they are dotfiles.
 - It can write only render outputs into that job's directory
   (`remote_worker.safe_relpath`): one plain file name with a known extension,
   no subdirectory, no link, **no dotfile**, and never a file that was there
@@ -134,7 +134,9 @@ it may hold at once), `REMOTE_LEASE_SECONDS`, `REMOTE_MAX_SECONDS`,
 like `55-5`, with no new claim: when the worker's host shares its link with
 something that peaks at fixed times), `REMOTE_SOURCE_MBPS` (cap for all source
 transfers together, 0 for none), `PREPARE_TRANSCRIPT` (`1`, `cache` or unset:
-whether the source's transcript is prepared for the worker).
+whether the source's transcript is prepared for the worker), `PREPARE_SCENES`
+(`1` or unset: whether the source's scene probabilities are),
+`PREPARE_SCENES_WAIT` (30), `PREPARE_SCENES_MAX_MINUTES` (45).
 
 The source download is the worker's one long call: the API touches the lease
 while it streams the file (`_source_chunks`), so a slow transfer is not taken
@@ -173,6 +175,21 @@ What limits a CPU worker is rarely its slots:
   that fails leaves the checkpoint for the retry on the API host; a completed
   one removes it. Watch `asr_wait_s` in the API host's `[job-cpu]` lines: the
   prepared transcripts share its transcription turns.
+- **Scene detection.** Once the transcript comes prepared, TransNetV2 is
+  about half of what is left: it runs on every clip, on the CPU (profiled on a
+  worker, 19-nov-2026). With `PREPARE_SCENES=1` on the API host, `main.py
+  --prepare-only` runs it once over the whole source on the card, inside one
+  of the same `ASR_HOST_SLOTS` (`PREPARE_SCENES_WAIT` seconds at most, and not
+  for sources over `PREPARE_SCENES_MAX_MINUTES`), and leaves the per-frame
+  probabilities in `.scene_probs.json` (float32, base64, tied to the source by
+  name and duration). The claim announces `scenes_size`, the worker fetches
+  them (`GET .../scenes`, shape-checked on both sides,
+  `remote_worker.valid_scenes`) and main.py maps them onto each clip by time
+  from the clip's cut start (`scene_detection.use_prepared`,
+  `register_clip`): the clip is still decoded small for its frame count, the
+  network does not run. Measured over 24 clips of 8 corpus sources: every cut
+  found clip by clip is found within 1.5 frames. Anything wrong with them and
+  each clip runs the network as before; they are removed with the transcript.
 - **Transcription turns.** `ASR_HOST_SLOTS` (default 2) is sized for a GPU's
   memory. On a CPU host a transcription takes minutes, so with 2 turns most
   slots sit waiting for one (the job's `asr_wait_s`). Raise it on a CPU host

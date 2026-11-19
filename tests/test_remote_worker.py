@@ -777,7 +777,7 @@ def test_worker_round_trip_over_http(api, client):
     info = client.get(f"/internal/worker/jobs/{job_id}", headers=h).json()
     assert info == {"state": "ready", "source": src, "source_size": 12,
                     "args": ["--format", "square"], "env": {"WATERMARK": "1"},
-                    "transcript_size": 0}
+                    "transcript_size": 0, "scenes_size": 0}
     assert client.get(f"/internal/worker/jobs/{job_id}/source", headers=h).content == b"source-bytes"
     assert client.get(f"/internal/worker/jobs/{job_id}/transcript", headers=h).status_code == 404
 

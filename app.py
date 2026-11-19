@@ -5355,8 +5355,9 @@ async def _run_job_remote(job_id, job_data):
                 return
         _finish_job(job_id, returncode, output_dir)
         if returncode == 0:
-            # The worker's run is the job: the transcript prepared for it has
-            # no reader left (a failed run keeps it for the retry here).
+            # The worker's run is the job: the transcript and scenes prepared
+            # for it have no reader left (a failed run keeps them for the retry
+            # here).
             remote_worker.drop_transcript(output_dir)
         if (returncode == 0 and remote_worker.source_is_url(cmd)
                 and "--keep-original" not in cmd):
@@ -5485,7 +5486,8 @@ async def worker_job(job_id: str, request: Request):
     return {"state": remote_worker.READY, "source": data.get("source"),
             "source_size": data.get("source_size"), "args": data.get("args") or [],
             "env": data.get("env") or {},
-            "transcript_size": int(data.get("transcript_size") or 0)}
+            "transcript_size": int(data.get("transcript_size") or 0),
+            "scenes_size": int(data.get("scenes_size") or 0)}
 
 
 @app.get("/internal/worker/jobs/{job_id}/transcript")
@@ -5497,6 +5499,21 @@ async def worker_transcript(job_id: str, request: Request):
     body = None
     if data.get("state") == remote_worker.READY:
         body = await asyncio.to_thread(remote_worker.read_transcript, job_dir)
+    if body is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    remote_worker.touch_seen(job_dir)
+    return Response(content=body, media_type="application/json")
+
+
+@app.get("/internal/worker/jobs/{job_id}/scenes")
+async def worker_scenes(job_id: str, request: Request):
+    """The scene probabilities this host's card prepared for the job's source
+    (``main.prepare_scenes``), as data: the worker maps them onto its clips
+    instead of running TransNetV2 on its CPU. Same rules as the transcript."""
+    job_dir, data = _worker_job(request, job_id)
+    body = None
+    if data.get("state") == remote_worker.READY:
+        body = await asyncio.to_thread(remote_worker.read_scenes, job_dir)
     if body is None:
         raise HTTPException(status_code=404, detail="Not found")
     remote_worker.touch_seen(job_dir)
