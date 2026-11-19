@@ -280,6 +280,20 @@ recent activity (`GET /users/{id}/activity`) and fix it with one action at a tim
 - Checkout buttons reset their spinner on a back/forward-cache restore
   (`lib/backFromStripe.js`); without it every plan stayed disabled after Back.
 
+## Webhook catch-up (`billing.reconcile_undelivered_events`)
+
+Stripe waits about 20 s for the webhook's answer. When the API is saturated or
+restarting the delivery times out or gets a 5xx, and Stripe retries it only 30
+minutes to a few hours later: until then a customer who paid stays on the free
+plan (and tends to pay again). The engine therefore asks Stripe every
+`STRIPE_RECONCILE_SECONDS` (60; 0 turns it off) for the events of the handled
+types whose delivery has not succeeded (`delivery_success=false`, created
+between 24 h and 90 s ago) and applies the ones `stripe_events` does not have,
+through `apply_event`, the webhook's own path. One application per event at a
+time in the process (`_applying`); Stripe's later retry finds it recorded and
+gets its 200. Paused while the instance drains, so one container of a deploy
+runs it.
+
 ## Social posting and connecting are paid
 
 Free accounts used to connect their channels through the managed Upload-Post
