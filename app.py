@@ -7254,12 +7254,14 @@ async def edit_clip(
                 # 2. Get duration
                 import cv2
                 cap = cv2.VideoCapture(safe_input_path)
-                fps = cap.get(cv2.CAP_PROP_FPS)
-                frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                duration = frame_count / fps if fps else 0
-                cap.release()
+                try:
+                    fps = cap.get(cv2.CAP_PROP_FPS)
+                    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    duration = frame_count / fps if fps else 0
+                finally:
+                    cap.release()
                 
                 # Load transcript from metadata
                 transcript = None
@@ -7457,18 +7459,21 @@ async def get_clip_transcript(job_id: str, clip_index: int, request: Request):
 
 def _source_duration_seconds(path):
     """Probe a video's duration; None when it can't be read."""
+    cap = None
     try:
         import cv2
         cap = cv2.VideoCapture(path)
         fps = cap.get(cv2.CAP_PROP_FPS)
         frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-        cap.release()
         # OpenCV reports -1/-1 for files it can't read — a naive truthiness
         # check would turn that into a phantom 1.0s duration.
         if fps > 0 and frames > 0:
             return round(frames / fps, 3)
     except Exception:
         pass
+    finally:
+        if cap is not None:
+            cap.release()
     return None
 
 
@@ -8120,6 +8125,7 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
         preview_name = f"temp_preview_{clip_index}.mp4"
         preview_path = os.path.join(output_dir, preview_name)
         work_path = _clip_scene_workfile(source_path, segments, output_dir, work_token)
+        cap = None
         try:
             scenes, fps = m.detect_scenes(work_path)
             fps = float(fps) or 30.0
@@ -8170,9 +8176,10 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
                     "suggested_center": round(suggested, 4),
                     "suggested_center_y": round(suggested_y, 4),
                 })
-            cap.release()
             return orig_w, orig_h, out, preview_name
         finally:
+            if cap is not None:
+                cap.release()
             # The uncropped cut becomes a light preview instead of being
             # discarded: judging the framing means knowing who is talking, and
             # the delivered 9:16 file no longer shows the rest of the room.
