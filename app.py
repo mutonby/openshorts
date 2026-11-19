@@ -7429,6 +7429,18 @@ async def get_clip_transcript(job_id: str, clip_index: int, request: Request):
         clip_start = clip_data.get('start', 0)
         clip_end = clip_data.get('end', 0)
 
+    # ?format=srt|vtt downloads standard captions (grouped like the burned-in
+    # text, same CAPTION_OFFSET_SECONDS nudge); default stays the Remotion JSON.
+    fmt = (request.query_params.get("format") or "json").lower()
+    if fmt in ("srt", "vtt"):
+        from subtitles import clip_subtitle_text
+        text = clip_subtitle_text(transcript, clip_start, clip_end, fmt=fmt)
+        media = ("text/vtt; charset=utf-8" if fmt == "vtt"
+                 else "application/x-subrip; charset=utf-8")
+        filename = f"{job_id}_clip_{clip_index + 1:02d}.{fmt}"
+        return Response(content=text, media_type=media,
+                        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
     # Extract words within clip range and convert to CaptionWord format
     captions = []
     for segment in transcript.get('segments', []):

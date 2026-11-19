@@ -149,6 +149,22 @@ def generate_srt_from_video(video_path, output_path, max_chars=20, max_duration=
     return generate_srt(transcript, 0, duration, output_path, max_chars, max_duration)
 
 
+def caption_offset_seconds():
+    """A global caption sync nudge, in seconds, read from CAPTION_OFFSET_SECONDS.
+
+    Positive delays every caption, negative pulls them earlier. The cut itself
+    is frame-accurate (cut_clip re-encodes with an input seek), so a steady
+    lead/lag is ASR word-timing drift on a given source; this lets a self-host
+    dial it out without re-transcribing. Default 0 keeps today's behaviour, and
+    it applies at the one place every burned and exported caption is grouped
+    (``_collect_word_blocks``), so the download matches the burned-in text.
+    """
+    try:
+        return float(os.environ.get("CAPTION_OFFSET_SECONDS", "0") or 0)
+    except ValueError:
+        return 0.0
+
+
 def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_duration=2.0,
                          fits=None):
     """
@@ -169,6 +185,7 @@ def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_dur
         flat_words.extend(segment.get('words', []))
     flat_words = merge_continuation_words(flat_words)
 
+    offset = caption_offset_seconds()
     words = []
     for word_info in flat_words:
         if word_info.get('end', 0) > clip_start and word_info.get('start', 0) < clip_end:
@@ -177,8 +194,8 @@ def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_dur
                 continue
             words.append({
                 'word': cleaned_word,
-                'start': max(0, word_info['start'] - clip_start),
-                'end': max(0, word_info['end'] - clip_start),
+                'start': max(0, word_info['start'] - clip_start + offset),
+                'end': max(0, word_info['end'] - clip_start + offset),
             })
 
     blocks = []
@@ -227,6 +244,39 @@ def generate_srt(transcript, clip_start, clip_end, output_path, max_chars=20, ma
         f.write(srt_content)
 
     return True
+
+
+def _format_vtt_time(seconds):
+    seconds = max(0.0, seconds)
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    millis = int(round((seconds - int(seconds)) * 1000))
+    if millis >= 1000:  # rounding can tip .9996 to a full second
+        secs += 1
+        millis = 0
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}"
+
+
+def clip_subtitle_text(transcript, clip_start, clip_end, fmt="srt",
+                       max_chars=20, max_duration=2.0):
+    """Clip captions as an SRT or WebVTT string, grouped the same way the
+    burned captions are (so a downloaded file matches what is rendered) and
+    carrying the same CAPTION_OFFSET_SECONDS nudge. Returns "" (SRT) or a bare
+    "WEBVTT" header (VTT) when the clip has no words.
+    """
+    blocks = _collect_word_blocks(transcript, clip_start, clip_end, max_chars, max_duration)
+    is_vtt = (fmt or "srt").lower() == "vtt"
+    out = ["WEBVTT\n\n"] if is_vtt else []
+    for index, block in enumerate(blocks, 1):
+        text = " ".join(w['word'] for w in block).strip()
+        start, end = block[0]['start'], block[-1]['end']
+        if is_vtt:
+            out.append(f"{index}\n{_format_vtt_time(start)} --> "
+                       f"{_format_vtt_time(end)}\n{text}\n\n")
+        else:
+            out.append(format_srt_block(index, start, end, text))
+    return "".join(out)
 
 
 # Vertical margin for burned captions, in PlayResY=288 units (so ~15% of the
