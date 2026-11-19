@@ -6725,8 +6725,12 @@ async def list_jobs(request: Request, limit: int = 50):
         if not isinstance(job, dict):
             continue
         if BILLING_ENABLED:
+            # Cloud: only an authenticated caller's own jobs. list_jobs
+            # enumerates, so (unlike the per-id guard) it can't lean on UUID
+            # unguessability — never list an ownerless job, and never to an
+            # anonymous caller.
             owner = job.get("user_id")
-            if owner is not None and (caller is None or str(owner) != str(caller)):
+            if caller is None or owner is None or str(owner) != str(caller):
                 continue
         out.append({
             "job_id": job_id,

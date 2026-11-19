@@ -32,6 +32,32 @@ def test_limit_caps_the_list(client):
     assert client.get("/api/jobs?limit=2").json()["count"] == 2
 
 
+def test_cloud_mode_shows_only_the_callers_own_jobs(client, monkeypatch):
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", True)
+
+    async def _caller(_request):
+        return "user-A"
+
+    monkeypatch.setattr(app_module, "_owner_id_from_request", _caller)
+    app_module.jobs["mine"] = {"status": "completed", "user_id": "user-A"}
+    app_module.jobs["theirs"] = {"status": "completed", "user_id": "user-B"}
+    app_module.jobs["ownerless"] = {"status": "completed"}
+    ids = {j["job_id"] for j in client.get("/api/jobs").json()["jobs"]}
+    assert ids == {"mine"}  # never another owner's job, never an ownerless one
+
+
+def test_cloud_mode_anonymous_caller_sees_nothing(client, monkeypatch):
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", True)
+
+    async def _anon(_request):
+        return None
+
+    monkeypatch.setattr(app_module, "_owner_id_from_request", _anon)
+    app_module.jobs["mine"] = {"status": "completed", "user_id": "user-A"}
+    app_module.jobs["ownerless"] = {"status": "completed"}
+    assert client.get("/api/jobs").json()["count"] == 0
+
+
 def test_mcp_oauth_scope_allows_the_listing():
     from cloud.scopes import allows, MCP_SCOPE
     assert allows(MCP_SCOPE, "GET", "/api/jobs")
