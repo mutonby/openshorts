@@ -37,6 +37,8 @@ _MCP_ROUTES = tuple((method, re.compile(pattern)) for method, pattern in (
     ("POST", r"/api/subtitle"),
     ("POST", r"/api/clip/rerender"),
     ("POST", r"/api/social/post"),
+    ("GET", r"/api/translate/languages"),
+    ("POST", r"/api/translate"),
     # Getting the results out.
     ("GET", r"/videos/.+"),
     ("GET", r"/thumbnails/.+"),
