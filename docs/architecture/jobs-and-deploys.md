@@ -480,6 +480,11 @@ coordinates them:
   keep the interpreter alive). `/health` stays a plain liveness probe.
 - `/api/status` answers from disk for a job this instance never held, so a poll
   landing on either container during the handover is fine.
+- The per-plan job limit (`PLAN_JOB_LIMIT`) counts the owner's open `process`
+  reservations in the ledger (`metering.reserved_process_jobs`) as well as this
+  instance's `jobs`: neither container's memory holds the other's newest jobs,
+  and counting memory alone let a free account queue a second job on the other
+  one. The ledger count fails open on a database error.
 - **Reservations of live jobs are never swept.** The metering sweeper
   (`metering._sweep_once`, every 15 min) releases `reserved` rows older than
   `STUCK_RESERVATION_HOURS` (3) only when `app._live_reservation_ids` does not
