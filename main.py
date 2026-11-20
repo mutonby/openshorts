@@ -2908,8 +2908,83 @@ if __name__ == '__main__':
                      and os.environ.get("EARLY_AUDIO", "1").strip() != "0"
                      and not os.environ.get("MAX_SOURCE_MINUTES", "").strip()
                      and not os.path.exists(os.path.join(output_dir, TRANSCRIPT_CHECKPOINT)))
-        input_video, video_title = download_youtube_video(
-            args.url, output_dir, on_audio=_on_audio if use_early else None, use_cache=True)
+        # Audio-first mode: fetch the lightweight audio track, transcribe and
+        # select moments on the ORIGINAL 11-hour timeline, then fetch ONLY the
+        # selected video ranges. The normal rendering/editor pipeline receives
+        # a compact concatenation of those ranges, never the full VOD.
+        audio_first = (
+            not args.skip_analysis and not args.prepare_only and not args.transcript
+            and os.environ.get("AUDIO_FIRST_SELECTED_RANGES", "1").strip() != "0"
+            and not os.environ.get("MAX_SOURCE_MINUTES", "").strip()
+            and not os.environ.get("SOURCE_CAP_MINUTES", "").strip()
+        )
+        if audio_first:
+            import youtube_segments as _yt_segments
+            print("⚡ AUDIO-FIRST: downloading audio only for full-stream analysis.")
+            audio_path, video_title = download_youtube_video(
+                args.url, output_dir, allow_paid=True, use_cache=False,
+                audio_only=True, output_suffix=".analysis_audio")
+            try:
+                source_duration = _yt_segments.probe_duration(audio_path)
+                print(f"🎧 Audio track ready ({source_duration / 3600:.2f} hours). "
+                      "Transcribing before fetching any video.")
+                from transcribe_backends import NoAudioError
+                transcript_full = transcribe_video(audio_path)
+            finally:
+                try:
+                    os.remove(audio_path)
+                except OSError:
+                    pass
+
+            if not transcript_full or speech_is_sparse(transcript_full, source_duration):
+                raise RuntimeError(
+                    "Audio-first selection found too little speech to choose clips. "
+                    "Set AUDIO_FIRST_SELECTED_RANGES=0 to use the original full-video workflow."
+                )
+
+            print("🧠 Selecting viral moments from the full-stream transcript.")
+            selected_data = get_viral_clips(
+                transcript_full, source_duration, viewer_clips=viewer_clips)
+            if not selected_data or not selected_data.get("shorts"):
+                raise RuntimeError("AI did not return usable clip timestamps for this stream.")
+
+            _ranges = _yt_segments.plan_ranges(selected_data["shorts"], source_duration)
+            if not _ranges:
+                raise RuntimeError("The AI clip timestamps did not produce valid video ranges.")
+            print(f"📌 Selected {len(selected_data['shorts'])} clip(s) across "
+                  f"{len(_ranges)} unique video range(s). Fetching only those ranges.")
+
+            _segment_paths = []
+            try:
+                for _i, _range in enumerate(_ranges, 1):
+                    _segment_path, _ = download_youtube_video(
+                        args.url, output_dir, allow_paid=True, use_cache=False,
+                        download_range=(_range["start"], _range["end"]),
+                        output_suffix=f".selected_{_i:02d}")
+                    _segment_paths.append(_segment_path)
+                input_video = os.path.join(output_dir, f"{video_title}_selected.mp4")
+                _yt_segments.concat_segments(_segment_paths, input_video)
+            finally:
+                for _path in _segment_paths:
+                    try:
+                        os.remove(_path)
+                    except OSError:
+                        pass
+
+            _mapped_shorts, _selected_duration = _yt_segments.remap_clips(
+                selected_data["shorts"], _ranges)
+            _mapped_transcript = _yt_segments.remap_transcript(
+                transcript_full, _ranges)
+            early["started"] = True
+            early["transcript"] = _mapped_transcript
+            early["clips"] = dict(selected_data)
+            early["clips"]["shorts"] = _mapped_shorts
+            early["done"].set()
+            print(f"✅ Selected source assembled: {_selected_duration / 60:.1f} minutes "
+                  f"of footage downloaded from {source_duration / 60:.1f} minutes.")
+        else:
+            input_video, video_title = download_youtube_video(
+                args.url, output_dir, on_audio=_on_audio if use_early else None, use_cache=True)
     else:
         input_video = args.input
         video_title = os.path.splitext(os.path.basename(input_video))[0]
