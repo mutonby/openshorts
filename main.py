@@ -2921,8 +2921,10 @@ if __name__ == '__main__':
         if audio_first:
             import youtube_segments as _yt_segments
             print("⚡ AUDIO-FIRST: downloading audio only for full-stream analysis.")
+            # Full-length audio can still be hundreds of MB: never send it
+            # through the per-GB paid proxy. Direct/static routes are tried.
             audio_path, video_title = download_youtube_video(
-                args.url, output_dir, allow_paid=True, use_cache=False,
+                args.url, output_dir, allow_paid=False, use_cache=False,
                 audio_only=True, output_suffix=".analysis_audio")
             try:
                 source_duration = _yt_segments.probe_duration(audio_path)
