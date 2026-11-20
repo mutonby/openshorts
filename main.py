@@ -2930,7 +2930,18 @@ if __name__ == '__main__':
                 source_duration = _yt_segments.probe_duration(audio_path)
                 print(f"🎧 Audio track ready ({source_duration / 3600:.2f} hours). "
                       "Transcribing before fetching any video.")
-                from transcribe_backends import NoAudioError
+                # On a local GPU machine (e.g. RTX 4060), use CUDA for the
+                # long audio pass unless the operator explicitly chose a device.
+                # transcribe_backends falls back to CPU if CUDA is unavailable.
+                if "WHISPER_DEVICE" not in os.environ:
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            os.environ["WHISPER_DEVICE"] = "cuda"
+                            os.environ.setdefault("WHISPER_COMPUTE", "float16")
+                            print("🚀 Long-stream transcription: using CUDA.")
+                    except Exception:
+                        pass
                 transcript_full = transcribe_video(audio_path)
             finally:
                 try:
