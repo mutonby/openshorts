@@ -38,6 +38,10 @@ const fmtDate = (iso) => {
 // last step, and at period end (backend: cloud/cancellation.py), so every
 // "keep my plan" exit leaves the subscription untouched. The last step leads
 // with the retention offer when the server says this subscription gets one.
+// The offer is stated in money and dates (what each renewal costs, from which
+// day, and that nothing moves today): read as a bare percentage it was taken
+// for an immediate refund, and accepted by people who then cancelled anyway.
+// The confirm step also says what happens to the library once the plan ends.
 export default function CancelPlanModal({ plan, periodEnd, onClose, onCanceled }) {
   const [step, setStep] = useState(0);
   const [reason, setReason] = useState('');
@@ -67,6 +71,23 @@ export default function CancelPlanModal({ plan, periodEnd, onClose, onCanceled }
   }, []);
   const pause = pauseInfo && (pauseInfo.pause_reasons || []).includes(reason) ? pauseInfo : null;
 
+  // What the plan costs a month, to put the discount in money. The offer only
+  // exists for monthly plans; without a price the copy falls back to the percentage.
+  const [price, setPrice] = useState(null);
+  useEffect(() => {
+    apiJson('/api/billing/plans')
+      .then((d) => setPrice((d.plans || []).find((p) => p.plan === plan && p.interval === 'month') || null))
+      .catch(() => {});
+  }, [plan]);
+  const money = (cents) => new Intl.NumberFormat('en-US', {
+    style: 'currency', currency: (price?.currency || 'usd').toUpperCase(),
+    minimumFractionDigits: cents % 100 ? 2 : 0, maximumFractionDigits: 2,
+  }).format(cents / 100);
+  // { was, now } per renewal with the offer's discount, or null.
+  const deal = (percentOff) => (price?.amount && percentOff
+    ? { was: money(price.amount), now: money(Math.round(price.amount * (100 - percentOff) / 100)) }
+    : null);
+
   useEffect(() => {
     if (step === 2 && offer) track('RetentionOfferShown', { props: { plan, reason } });
     if (step === 2 && pause) track('PauseOfferShown', { props: { plan, reason } });
@@ -91,7 +112,7 @@ export default function CancelPlanModal({ plan, periodEnd, onClose, onCanceled }
         headers: { 'Content-Type': 'application/json' },
         body: feedback(),
       });
-      track('RetentionOfferAccepted', { props: { plan, reason } });
+      track('RetentionOfferAccepted', { props: { plan, reason, priced: deal(offer?.percent_off) ? '1' : '0' } });
       setSaved(out);
     } catch (e) {
       setError(e?.detail || 'Could not apply the discount. Please try again or email info@openshorts.app.');
@@ -147,6 +168,9 @@ export default function CancelPlanModal({ plan, periodEnd, onClose, onCanceled }
 
   const shown = hover || rating;
   const months = offer?.months ? ` for the next ${offer.months} months` : '';
+  const offerDeal = deal(offer?.percent_off);
+  const savedDeal = deal(saved?.percent_off);
+  const renewals = (n) => (n ? `next ${n} renewal${n > 1 ? 's' : ''}` : 'renewals');
 
   if (paused) {
     return (
@@ -170,11 +194,19 @@ export default function CancelPlanModal({ plan, periodEnd, onClose, onCanceled }
     return (
       <Modal isOpen onClose={onCanceled} eyebrow="YOU'RE STAYING" title="Discount applied">
         <div className="space-y-4 text-sm text-ink2">
-          <p>
-            Thanks for giving us another go. Your plan stays as it is, and your next
-            {saved.months ? ` ${saved.months}` : ''} invoice{saved.months > 1 ? 's are' : ' is'}{' '}
-            <b className="text-ink">{saved.percent_off}% off</b>.
-          </p>
+          {savedDeal ? (
+            <p>
+              Thanks for giving us another go. Your plan stays as it is, and your {renewals(saved.months)} cost{' '}
+              <b className="text-ink">{savedDeal.now} instead of {savedDeal.was}</b>, starting{' '}
+              {fmtDate(periodEnd)}. Nothing was charged or refunded today.
+            </p>
+          ) : (
+            <p>
+              Thanks for giving us another go. Your plan stays as it is, and your next
+              {saved.months ? ` ${saved.months}` : ''} invoice{saved.months > 1 ? 's are' : ' is'}{' '}
+              <b className="text-ink">{saved.percent_off}% off</b>. Nothing was charged or refunded today.
+            </p>
+          )}
           <p>We read every answer you gave us and will work on it.</p>
           <div className="flex justify-end pt-1">
             <button onClick={onCanceled} className="btn-primary px-4 py-2 text-xs">Done</button>
@@ -263,13 +295,21 @@ export default function CancelPlanModal({ plan, periodEnd, onClose, onCanceled }
           )}
           {offer && (
             <div className="rounded-card border border-brass bg-brass/5 p-4 space-y-3">
-              <p className="text-ink">
-                Stay and get <b>{offer.percent_off}% off{months}</b>. Same plan, same
-                minutes, half the price.
-              </p>
+              {offerDeal ? (
+                <p className="text-ink">
+                  Stay and your {renewals(offer.months)} cost <b>{offerDeal.now} instead of {offerDeal.was}</b>.
+                  Same plan, same minutes. Nothing is charged or refunded today: the lower
+                  price starts with your renewal on {fmtDate(periodEnd)}.
+                </p>
+              ) : (
+                <p className="text-ink">
+                  Stay and get <b>{offer.percent_off}% off{months}</b>. Same plan, same
+                  minutes. Nothing is charged or refunded today: the discount starts with your next renewal.
+                </p>
+              )}
               <button onClick={acceptOffer} disabled={busy} className="btn-primary px-4 py-2 text-xs">
                 {busy && <Loader2 size={16} className="animate-spin" />}
-                Keep my plan with {offer.percent_off}% off
+                {offerDeal ? `Keep my plan at ${offerDeal.now}/mo` : `Keep my plan with ${offer.percent_off}% off`}
               </button>
             </div>
           )}
@@ -278,6 +318,11 @@ export default function CancelPlanModal({ plan, periodEnd, onClose, onCanceled }
             {' '}{plan ? <b className="text-ink capitalize">{plan}</b> : null} plan stays active until{' '}
             <b className="text-ink">{fmtDate(periodEnd)}</b>, with every minute you have left.
             You won't be charged again.
+          </p>
+          <p>
+            After that your library is no longer kept for good: on the free plan clips are{' '}
+            <b className="text-ink">deleted 7 days after they are made</b>, so download the ones you want to keep.
+            {pause ? ' Pausing keeps them.' : ''}
           </p>
           <p>You can undo this from your account page any time before then.</p>
           {error && <p className="text-danger">{error}</p>}
