@@ -257,7 +257,7 @@ def upload_actor_to_s3(file_path, description="", owner_tag=None):
             meta_key = s3_key.rsplit('.', 1)[0] + '.json'
             meta = {
                 "description": description,
-                "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
             }
             if not owner_tag:
                 meta["url"] = url
@@ -397,7 +397,7 @@ def upload_video_to_gallery(video_path, actor_image_path, metadata, video_id=Non
         metadata["video_id"] = video_id
         metadata["video_url"] = results.get("video_url", "")
         metadata["actor_url"] = results.get("actor_url", "")
-        metadata["created_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+        metadata["created_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
         meta_json = json.dumps(metadata, ensure_ascii=False, indent=2)
         s3_key = f"videos/{video_id}/metadata.json"

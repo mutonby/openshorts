@@ -8,8 +8,11 @@ import asyncio
 import hashlib
 import json
 import os
+import sys
 import time
 from types import SimpleNamespace
+
+_HAS_FLOCK = sys.platform != "win32"
 
 import pytest
 
@@ -350,7 +353,7 @@ class Busy:
     """Holds the queue watch's lock like the other container would."""
 
     def __init__(self, d):
-        import fcntl
+        import fcntl  # only called on non-Windows (guarded by skipif below)
         self.fh = open(os.path.join(d, qw.LOCK_FILE), "a")
         fcntl.flock(self.fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
@@ -379,6 +382,7 @@ def world(sat, tmp_path, monkeypatch):
     return w
 
 
+@pytest.mark.skipif(not _HAS_FLOCK, reason="fcntl is Linux/macOS only")
 class TestBusyLock:
     def test_boot_adopts_the_shared_modes_with_the_lock_taken(self, world):
         on, _ = qm.decide(qm.default_state(), {"slow": {"wait": 13 * H}}, 1.0)
