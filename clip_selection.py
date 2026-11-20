@@ -166,28 +166,32 @@ def trim_to_best(shorts, max_clips):
 
 
 def vision_segments(video_duration, segment_seconds, max_segments):
-    """Split a silent source into near-equal ``(start, end)`` stretches for
-    the vision pass, each at most ``segment_seconds`` long.
-
-    The vision pass sends Gemini the footage itself at ~300 tokens/second, so
-    an hour (~1.08M tokens) no longer fits a 1M-token window and a silent
-    multi-hour capture failed at the model. Near-equal stretches, not fixed
-    ones: a 41-minute source split at 40 minutes would leave a one-minute
-    tail that the prompt has to fill with 3+ clips. A source that fits in one
-    stretch returns one stretch, so short videos take the single-upload path
-    unchanged. Past ``max_segments`` the source is truncated (the caller logs
-    it) rather than spending without bound on one job.
-    """
+    """Select evenly distributed windows across the entire source timeline."""
     duration = max(0.0, float(video_duration or 0))
-    seg = max(60.0, float(segment_seconds))
-    if duration <= seg:
-        return [(0.0, round(duration, 3))]
-    n = int(math.ceil(duration / seg))
-    n_kept = max(1, min(n, int(max_segments)))
-    step = duration / n
-    return [(round(i * step, 3), round(min(duration, (i + 1) * step), 3))
-            for i in range(n_kept)]
+    if duration <= 0:
+        return []
 
+    seg = max(60.0, float(segment_seconds))
+    total_segments = int(math.ceil(duration / seg))
+    count = max(1, min(total_segments, int(max_segments)))
+
+    step = duration / total_segments
+
+    if count == 1:
+        indexes = [0]
+    else:
+        indexes = sorted({
+            round(i * (total_segments - 1) / (count - 1))
+            for i in range(count)
+        })
+
+    return [
+        (
+            round(index * step, 3),
+            round(min(duration, (index + 1) * step), 3)
+        )
+        for index in indexes
+    ]
 
 def clip_duration_bounds():
     """The clip length band (seconds) the selection prompts and word-snapping
