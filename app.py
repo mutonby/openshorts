@@ -7237,7 +7237,7 @@ async def edit_clip(
 
     job = jobs[req.job_id]
     await _assert_job_owner(request, job)
-    if 'result' not in job or 'clips' not in job['result']:
+    if not isinstance(job.get('result'), dict) or 'clips' not in job['result']:
         raise HTTPException(status_code=400, detail="Job result not available")
 
     # Meter the managed Gemini call so it can't be looped for free. Skip only for
@@ -8539,7 +8539,7 @@ async def generate_effects_config(
 
     job = jobs[req.job_id]
     await _assert_job_owner(request, job)
-    if 'result' not in job or 'clips' not in job['result']:
+    if not isinstance(job.get('result'), dict) or 'clips' not in job['result']:
         raise HTTPException(status_code=400, detail="Job result not available")
 
     # Meter the managed Gemini call (no-op for self-host).
@@ -9332,7 +9332,7 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     await _assert_job_owner(request, job)
-    if 'result' not in job or 'clips' not in job['result']:
+    if not isinstance(job.get('result'), dict) or 'clips' not in job['result']:
         raise HTTPException(status_code=400, detail="Job result not available")
     await _check_social_post_rate(request)
 

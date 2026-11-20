@@ -108,3 +108,11 @@ def test_an_edit_that_wrote_no_video_is_an_error(job, editor):
     assert app_module.jobs[JOB_ID]["result"]["clips"][0]["video_url"].endswith("/t_clip_1.mp4")
     assert not (job["dir"] / "edited_t_clip_1.mp4").exists()
     assert not [f for f in os.listdir(job["dir"]) if f.startswith("temp_")]
+
+
+def test_a_job_without_a_result_yet_is_a_400_not_a_500(job, editor):
+    """A queued or failed job has result=None; `'clips' in None` used to be a 500."""
+    app_module.jobs[JOB_ID]["result"] = None
+    r = _request({"job_id": JOB_ID, "clip_index": 0})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Job result not available"
