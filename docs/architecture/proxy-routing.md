@@ -133,6 +133,13 @@ outright.
   the job waits for the cooldown like any limited download.
 - **One probe per submission.** The quality gate reuses what the metering
   probe just learned (`metering.probe_facts`) instead of asking again.
+- **No probe for a submission that cannot be queued.** The cost line
+  (`/api/process/estimate`) runs when a link is pasted, before any submit. An
+  account the slow lane's brake refuses on submit (`app._slow_lane_of` and
+  `queue_mode.brake_active`) gets no estimate and no probe: those probes were
+  a large share of the accounts' requests while the brake was on, for jobs
+  that were then refused. A length the account already has cached is still
+  shown.
 - **Wait, not fail.** A download that failed only because of the limit prints
   `YT_ACCOUNT_LIMITED`; `app._schedule_auto_retry` puts the job back in line
   for when the cooldown ends, up to `YT_LIMIT_RETRIES` (3) times, on a counter

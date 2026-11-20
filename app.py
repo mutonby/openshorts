@@ -813,6 +813,19 @@ def free_queue_full_error() -> HTTPException:
     return payment_required("free_queue_full", FREE_QUEUE_FULL_MESSAGE, retry_later=True)
 
 
+def _slow_lane_of(request, user, balance) -> bool:
+    """Whether a submission of this account from this client joins the slow
+    lane: a free-plan account with no top-up credit from a slow-lane country,
+    with the mode on."""
+    if not _saturation_on() or user.plan != "free":
+        return False
+    if float(balance.get("topup_remaining") or 0) > 0:
+        return False
+    country = _queue_mode.request_country(
+        request.headers, request.client.host if request.client else None)
+    return _queue_mode.lane_for(user.plan, country) == _queue_mode.SLOW
+
+
 def _assign_queue_lane(request, user, balance, priority) -> int:
     """The lane of a new managed job (``request.state.queue_lane``) and its
     queue priority. Slow only for a free-plan account with no top-up credit
@@ -831,11 +844,9 @@ def _assign_queue_lane(request, user, balance, priority) -> int:
     if float(balance.get("topup_remaining") or 0) > 0:
         request.state.queue_topup = True
         return min(priority, _queue_mode.PAID_PRIORITY)
-    country = _queue_mode.request_country(
-        request.headers, request.client.host if request.client else None)
-    lane = _queue_mode.lane_for(user.plan, country)
-    if lane != _queue_mode.SLOW:
+    if not _slow_lane_of(request, user, balance):
         return priority
+    lane = _queue_mode.SLOW
     if _queue_mode.brake_active():
         _queue_mode.note_rejected()
         # Who was refused, by account prefix only (no address, no country):
@@ -6022,9 +6033,17 @@ async def process_estimate(req: EstimateRequest, request: Request):
     if not managed_keys.has_active_entitlement(user):
         return {"billing": True, "outcome": None}
     url = (req.url or "").strip()
+    balance = None
     if url:
         minutes = _cached_probe(user.id, url)
         if minutes is None:
+            # An account the slow lane's brake refuses on submit gets no cost
+            # line: its probe would spend a request of a YouTube account on a
+            # job that cannot be queued, and those accounts are what every
+            # download waits for.
+            balance = await _metering.get_balance(user.id)
+            if _slow_lane_of(request, user, balance) and _queue_mode.brake_active():
+                return {"billing": True, "outcome": None}
             # Its own hourly window: pasting a few links must not use up the
             # probes the submit itself needs.
             _check_probe_rate(f"estimate:{user.id}")
@@ -6046,7 +6065,8 @@ async def process_estimate(req: EstimateRequest, request: Request):
         minutes = float(req.seconds) / 60.0
     else:
         raise HTTPException(status_code=400, detail="Send a url or the file's seconds.")
-    balance = await _metering.get_balance(user.id)
+    if balance is None:
+        balance = await _metering.get_balance(user.id)
     processed_before = True
     if balance.get("plan") == "free":
         processed_before = await _metering.has_processed_before(user.id)

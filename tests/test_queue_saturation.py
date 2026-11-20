@@ -295,6 +295,38 @@ class TestSubmit:
         assert app_module._submissions_in_flight("u-free") == 0
         assert qm.current()["brake"]["rejected"] == 1
 
+    def test_a_braked_account_gets_no_cost_line_and_spends_no_probe(self, managed, sat):
+        probed = []
+
+        async def run_probe(url, allow_paid=False):
+            probed.append(url)
+            return 12.0
+        managed.met.run_probe = run_probe
+        managed.met.balance["remaining"] = 60.0
+        sat.setattr(app_module, "_probe_cache", {})
+        sat.setattr(app_module, "_probe_times", {})
+
+        def estimate(country, url="https://youtu.be/abcdefghijk"):
+            return asyncio.run(app_module.process_estimate(
+                app_module.EstimateRequest(url=url), _request(country)))
+
+        _set_brake(True)
+        # The submit of this account would be refused: nothing is asked of YouTube.
+        assert estimate("XA") == {"billing": True, "outcome": None}
+        assert probed == [] and app_module._probe_times == {}
+        # Another lane, bought minutes, or the brake off: the cost line as always.
+        assert estimate("XC")["outcome"] is not None and len(probed) == 1
+        managed.met.balance["topup_remaining"] = 30.0
+        assert estimate("XA", "https://youtu.be/bbbbbbbbbbb")["outcome"] is not None
+        managed.met.balance["topup_remaining"] = 0.0
+        _set_brake(False)
+        assert estimate("XA", "https://youtu.be/ccccccccccc")["outcome"] is not None
+        assert len(probed) == 3
+        # A length this account already knows costs nothing to show, brake or not.
+        _set_brake(True)
+        assert estimate("XA", "https://youtu.be/ccccccccccc")["outcome"] is not None
+        assert len(probed) == 3
+
     def test_brake_lets_other_lanes_and_paid_through(self, managed):
         _set_brake(True)
         assert _reserve(_request("XC"), "j2")[1] == FREE
