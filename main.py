@@ -2257,7 +2257,7 @@ def transcribe_sampled_audio(audio_path, source_duration, output_dir):
     sample_seconds = max(30.0, float(os.environ.get("AUDIO_SAMPLE_SECONDS", "90")))
     sample_count = max(2, int(os.environ.get("AUDIO_SAMPLE_COUNT", "12")))
 
-    if source_duration <= sample_seconds * 2:
+    if source_duration <= sample_seconds * sample_count * 1.5:
         print("Audio is short enough; using full transcription.")
         return transcribe_video(audio_path)
 
