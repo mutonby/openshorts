@@ -73,6 +73,13 @@ def max_bytes():
     return int(_float_env("SOURCE_CACHE_MAX_GB", 150) * 1e9)
 
 
+def max_entry_bytes():
+    """The largest source worth keeping (``SOURCE_CACHE_MAX_ENTRY_GB``, 4; 0
+    for no limit). One many-hour stream is tens of GB: kept, it pushes dozens
+    of ordinary sources out of the cache to save a download nobody repeats."""
+    return int(_float_env("SOURCE_CACHE_MAX_ENTRY_GB", 4) * 1e9)
+
+
 def wait_seconds():
     return _float_env("SOURCE_CACHE_WAIT_SECONDS", 900)
 
@@ -261,6 +268,8 @@ def store(url, path, title):
         size = os.path.getsize(path)
         if size <= 0 or size > max_bytes():
             return False
+        if 0 < max_entry_bytes() < size:
+            return False
         d = cache_dir()
         os.makedirs(d, exist_ok=True)
         media, meta_path, _, transcript = _paths(vid)
@@ -382,7 +391,8 @@ def probe_put(url, seconds, max_height=None):
 
 
 def prune(now=None):
-    """Drop expired entries, then the least recently used past the size cap."""
+    """Drop expired entries and the ones over the entry size, then the least
+    recently used past the size cap."""
     d = cache_dir()
     if not d:
         return
@@ -417,7 +427,11 @@ def prune(now=None):
             used = os.path.getmtime(full)
         except OSError:
             used = 0.0
-        entries.append((used, vid, int(hit[1]["size"])))
+        size = int(hit[1]["size"])
+        if 0 < max_entry_bytes() < size:
+            _drop(vid)           # kept before the limit, or under a larger one
+            continue
+        entries.append((used, vid, size))
     # Media files with no entry (a meta write that failed) are garbage too,
     # and so are the lock files of videos nobody asked for in a whole TTL.
     known = {vid for _, vid, _ in entries}

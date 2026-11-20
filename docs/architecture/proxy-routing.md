@@ -177,7 +177,9 @@ empty; Cloud points it at `output/.source_cache`) a video is asked for once:
   change; a video made private meanwhile fails at the download as before.
 - **Bounded.** An entry lives `SOURCE_CACHE_HOURS` (48) from when it was
   stored; past `SOURCE_CACHE_MAX_GB` (150) the least recently used go first
-  (`prune`, on every store). It is a dot entry of `output/`: never served by
+  (`prune`, on every store). A source over `SOURCE_CACHE_MAX_ENTRY_GB` (4; 0
+  for no limit) is not kept: a handful of many-hour streams of tens of GB
+  each filled the cache and pushed the ordinary sources out within the hour. It is a dot entry of `output/`: never served by
   `/videos` (dot segments are refused), never swept, and not counted by the
   output size cap (`app._output_jobs_size`), which could only purge finished
   jobs for room it is not allowed to free.
