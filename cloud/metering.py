@@ -361,6 +361,34 @@ _PROBE_FACTS_TTL = 600
 _probe_facts: dict = {}
 
 
+def _keep_extraction(url, info, proxy, authed, extractor_args):
+    """Leave what YouTube just answered for the download that follows this
+    probe (``source_cache.info_put``): it then asks nothing of the account.
+    Best effort, and never from the per-GB proxy: its exit address changes
+    between requests, and media links only work from the one that asked."""
+    try:
+        import source_cache
+        import yt_dlp
+        if not source_cache.info_enabled() or not is_youtube_url(url):
+            return
+        clean = yt_dlp.YoutubeDL.sanitize_info(info, remove_private_keys=True)
+        # The sanitizer drops every "__" key, and one of them is how yt-dlp
+        # knows a format has to be tested before it is picked (the HLS
+        # formats of a recent upload): without it the download would take
+        # such a format untested where a fresh extraction rejects it.
+        untested = {f.get("format_id") for f in (info.get("formats") or [])
+                    if isinstance(f, dict) and f.get("__needs_testing")}
+        for f in clean.get("formats") or []:
+            if f.get("format_id") in untested:
+                f["__needs_testing"] = True
+        # Most of the result's size, and nothing a download reads.
+        for key in ("automatic_captions", "subtitles", "thumbnails", "heatmap"):
+            clean.pop(key, None)
+        source_cache.info_put(url, clean, proxy, authed, extractor_args)
+    except Exception:
+        pass
+
+
 def _remember_probe(url, info):
     try:
         heights = [f.get("height") or 0 for f in (info.get("formats") or [])
@@ -461,6 +489,8 @@ def _probe_with_proxies(url, proxies, strategies, static_errors, paid, ck_path):
                 duration = info.get("duration")
                 if duration:
                     _remember_probe(url, info)
+                    if not is_paid:
+                        _keep_extraction(url, info, proxy, authed, extractor_args)
                     if is_paid:
                         _paid_probe_events.append({
                             "url": url, "static_errors": dict(static_errors),

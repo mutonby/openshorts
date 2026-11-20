@@ -910,6 +910,45 @@ def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
 
 
 
+def _stored_extraction(url, attempts, paid_proxy, need_seconds=0):
+    """``(label, extractor args, format, proxy, cookies, info)``: the attempt
+    that can download from the extraction this video's probe kept
+    (``source_cache.info_get``), or None.
+
+    The same exit as the probe (media links are bound to the address that
+    asked for them), the same client list, and never the per-GB proxy.
+    ``need_seconds``: how long the links must still live past the usual
+    margin (the length of a ranged fetch). The attempt comes back without the
+    cookies: nothing in it is a request of the account. What
+    comes back is yt-dlp's own result, written by this host's probe into a
+    dot directory nothing else writes."""
+    try:
+        import source_cache
+        if not is_youtube_url(url):
+            return None
+        kept = source_cache.info_get(url, need_seconds=need_seconds)
+        if not kept:
+            return None
+        want = json.dumps(kept.get("args"), sort_keys=True)
+        for label, ea, fmt, proxy, cookies in attempts:
+            if paid_proxy and proxy == paid_proxy:
+                continue
+            if (source_cache.route_key(proxy) == kept["route"]
+                    and json.dumps(ea, sort_keys=True) == want):
+                return label, ea, fmt, proxy, False, kept["info"]
+    except Exception:
+        pass
+    return None
+
+
+def _forget_extraction(url):
+    try:
+        import source_cache
+        source_cache.info_drop(url)
+    except Exception:
+        pass
+
+
 def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                             cap_minutes=None, route_out=None):
     """
@@ -1095,7 +1134,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             print(f"   ℹ️ Early audio skipped ({type(e).__name__}: {e}) — "
                   f"transcribing once the video is in.")
 
-    def _attempt(extractor_args, fmt, proxy, cookies=True):
+    def _attempt(extractor_args, fmt, proxy, cookies=True, info=None):
         _dl_bytes["total"] = 0
         _dl_bytes["partial"] = 0
         # Extracted ONCE, unprocessed, and handed to the download below: a
@@ -1104,9 +1143,12 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         # An extraction that sends the account's cookies takes one of the
         # account's slots and keeps its distance from the previous one
         # (yt_account): the account's request budget is shared by every job.
-        with (yt_session.request() if (cookies and cookies_path) else contextlib.nullcontext()):
-            with yt_dlp.YoutubeDL(_base_opts(extractor_args, proxy, cookies)) as ydl:
-                info = ydl.extract_info(url, download=False, process=False)
+        # ``info``: the extraction the probe of this video left behind
+        # (_stored_extraction): nothing is asked of YouTube but the media.
+        if info is None:
+            with (yt_session.request() if (cookies and cookies_path) else contextlib.nullcontext()):
+                with yt_dlp.YoutubeDL(_base_opts(extractor_args, proxy, cookies)) as ydl:
+                    info = ydl.extract_info(url, download=False, process=False)
         # Media URLs another program will fetch (ffmpeg on a ranged or HLS
         # download) resolve outside the Python guard: check them here. YouTube's
         # own CDN hosts are skipped (dozens of them, never internal).
@@ -1193,11 +1235,34 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     # below so app.py can keep a durable trail of WHY a job reached the paid
     # proxy (the container log rotates within the hour; see cloud/proxy_ledger).
     attempt_log = []
+    # The probe of this video asked YouTube the same question minutes ago and
+    # kept the answer (source_cache.info_put): downloading from it spends no
+    # request of a YouTube account. Only on the route that asked (media links
+    # are bound to its address) and with the same client list; when it does
+    # not work the attempts below run as if it had never been there.
+    stored = _stored_extraction(url, attempts, _proxy, need_seconds=_range_cap or 0)
+    if stored is not None:
+        label, ea, fmt, proxy, cookies, info = stored
+        try:
+            print(f"📥 Download attempt: {label} (extraction reused)")
+            sanitized_title = _attempt(ea, fmt, proxy, cookies, info=info)
+            attempt_log.append({"label": label, "ok": True, "paid": False, "reused": True,
+                                "bytes": _dl_bytes["total"] + _dl_bytes["partial"]})
+            print(f"✅ Download succeeded ({label}).")
+        except Exception as e:
+            _forget_extraction(url)
+            attempt_log.append({"label": label, "ok": False, "paid": False, "reused": True,
+                                "bytes": _dl_bytes["total"] + _dl_bytes["partial"],
+                                "error": str(e)[:300]})
+            print(f"⚠️  The reused extraction did not download ({str(e)[:160]}): asking YouTube again.")
+            sanitized_title = None
     account_limited = False
     # Age-restricted: every account tried said no (or nobody is signed in).
     age_refused = False
     skip_told = False
     for label, ea, fmt, proxy, cookies in attempts:
+        if sanitized_title is not None:
+            break                 # the reused extraction already has the file
         if cookies and cookies_path and yt_session.spent:
             # YouTube said twice for this video (or, during a cooldown, to
             # everybody) that the account is limited: one more request with

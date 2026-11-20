@@ -39,6 +39,7 @@ it always did.
 """
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -343,6 +344,112 @@ def store_transcript(url, duration, transcript, source_path):
         return False
 
 
+# --- The extraction ---------------------------------------------------------
+# A probe and the download that follows it each asked YouTube for the same
+# thing: the video's formats and their media links. With the account's cookies
+# both spend its request budget, and that budget is what every download waits
+# for. The probe's answer is kept here until its links expire (about six
+# hours), so the download uses it instead of asking again.
+
+# Not used this close to the links' expiry: the download has to finish on
+# them. A source fetched in fragments does not fail when they die half-way, it
+# comes out short, and a short source would then be kept for every later job.
+INFO_MARGIN_SECONDS = 2 * 3600
+INFO_MAX_BYTES = 8 * 1024 * 1024
+INFO_FILE_SECONDS = 8 * 3600     # the file itself, whatever it says inside
+_EXPIRE = re.compile(r"[?&/]expire[=/](\d{9,11})")
+
+
+def info_enabled():
+    return enabled() and os.environ.get("SOURCE_CACHE_INFO", "1").strip() != "0"
+
+
+def _info_path(vid):
+    return os.path.join(cache_dir(), f"{vid}.info.json")
+
+
+def route_key(proxy):
+    """Which exit a request left through, as a name that can be written to
+    disk: never the proxy URL, it carries the proxy's credentials. Media links
+    are bound to the address that asked for them, so an extraction is only
+    used again through the same exit."""
+    if not proxy:
+        return "direct"
+    return "p-" + hashlib.sha256(str(proxy).encode()).hexdigest()[:16]
+
+
+def links_expire(info):
+    """When the first of the extraction's media links stops working (epoch
+    seconds), or None when none of them says."""
+    soonest = None
+    try:
+        for f in info.get("formats") or []:
+            for u in (f.get("url"), f.get("manifest_url")):
+                m = _EXPIRE.search(u) if isinstance(u, str) else None
+                if m:
+                    t = int(m.group(1))
+                    soonest = t if soonest is None else min(soonest, t)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return soonest
+
+
+def info_put(url, info, proxy, authed, extractor_args):
+    """Keep what YouTube answered a probe for the download that follows it
+    (best effort). ``info`` is yt-dlp's own sanitized result."""
+    if not info_enabled():
+        return False
+    vid = video_id(url)
+    expires = links_expire(info) if isinstance(info, dict) else None
+    if not vid or not expires or expires - time.time() <= INFO_MARGIN_SECONDS:
+        return False
+    try:
+        data = {"at": time.time(), "expires": expires, "route": route_key(proxy),
+                "authed": bool(authed), "args": extractor_args, "info": info}
+        if len(json.dumps(data)) > INFO_MAX_BYTES:
+            return False
+        os.makedirs(cache_dir(), exist_ok=True)
+        _write_json(_info_path(vid), data)
+        return True
+    except Exception:
+        return False
+
+
+def info_get(url, now=None, need_seconds=0):
+    """The stored extraction of this video while its links are good:
+    ``{"info", "route", "authed", "args"}``, or None. ``need_seconds``: extra
+    life the caller's download needs (a ranged fetch runs at about the speed
+    of the video, so it needs as long as what it fetches)."""
+    if not info_enabled():
+        return None
+    vid = video_id(url)
+    if not vid:
+        return None
+    data = _read_json(_info_path(vid))
+    now = time.time() if now is None else now
+    try:
+        if (not data or not isinstance(data.get("info"), dict)
+                or not isinstance(data.get("route"), str)
+                or float(data["expires"]) - now
+                <= INFO_MARGIN_SECONDS + max(0.0, float(need_seconds or 0))):
+            return None
+        info = data["info"]
+        if info.get("_type", "video") != "video" or not info.get("formats"):
+            return None
+        return {"info": info, "route": data["route"], "authed": bool(data.get("authed")),
+                "args": data.get("args")}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def info_drop(url):
+    """Forget the stored extraction (its links did not work)."""
+    vid = video_id(url)
+    if vid and cache_dir():
+        with contextlib.suppress(OSError):
+            os.remove(_info_path(vid))
+
+
 def _probe_path(vid):
     return os.path.join(cache_dir(), f"{vid}.probe.json")
 
@@ -413,6 +520,11 @@ def prune(now=None):
         if name.endswith(".probe.json"):
             with contextlib.suppress(OSError):
                 if now - os.path.getmtime(full) > max(3600.0, ttl_seconds()):
+                    os.remove(full)
+            continue
+        if name.endswith(".info.json"):
+            with contextlib.suppress(OSError):
+                if now - os.path.getmtime(full) > INFO_FILE_SECONDS:
                     os.remove(full)
             continue
         if not name.endswith(".json") or name.endswith(".transcript.json"):
