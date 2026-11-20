@@ -3,14 +3,19 @@ import fcntl
 import os
 import shutil
 import subprocess
+import sys
 import time
 
 import pytest
 
 WRAPPER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                       "bin", "ffmpeg")
+                       "bin", "ffmpeg.py" if os.name == "nt" else "ffmpeg")
 
 needs_flock = pytest.mark.skipif(shutil.which("flock") is None, reason="no flock binary")
+
+
+def _wrapper_cmd(*args):
+    return [sys.executable, WRAPPER, *args] if os.name == "nt" else ["sh", WRAPPER, *args]
 
 NVENC_ARGS = ["-i", "a.mp4", "-c:v", "h264_nvenc", "out.mp4"]
 
@@ -36,7 +41,7 @@ def host(tmp_path):
                "NVENC_SLOTS": slots, "NVENC_LOCK_DIR": str(locks),
                "NVENC_SLOT_WAIT": wait}
         start = time.monotonic()
-        out = subprocess.run(["sh", WRAPPER, *args], env=env, capture_output=True,
+        out = subprocess.run(_wrapper_cmd(*args), env=env, capture_output=True,
                              text=True, check=True, timeout=60).stdout
         return out.splitlines(), time.monotonic() - start
 
@@ -128,12 +133,16 @@ def test_no_cap_when_slots_unset(host, slots):
 
 
 def test_no_cap_without_a_lock_dir(tmp_path):
-    fake = tmp_path / "fake-ffmpeg"
-    fake.write_text('#!/bin/sh\necho ran\n')
+    fake_name = "fake-ffmpeg.py" if os.name == "nt" else "fake-ffmpeg"
+    fake = tmp_path / fake_name
+    if os.name == "nt":
+        fake.write_text('print("ran")\n')
+    else:
+        fake.write_text('#!/bin/sh\necho ran\n')
     fake.chmod(0o755)
     env = {"PATH": os.environ.get("PATH", ""), "FFMPEG_REAL_BIN": str(fake),
            "NVENC_SLOTS": "2", "NVENC_LOCK_DIR": str(tmp_path / "missing")}
-    out = subprocess.run(["sh", WRAPPER, *NVENC_ARGS], env=env, capture_output=True,
+    out = subprocess.run(_wrapper_cmd(*NVENC_ARGS), env=env, capture_output=True,
                          text=True, check=True, timeout=30).stdout
     assert out.splitlines() == ["ran"]
 
@@ -174,10 +183,10 @@ def test_a_waiting_encode_writes_its_wait_to_the_job_log(host, tmp_path):
     env = {"PATH": os.environ.get("PATH", ""), "FFMPEG_REAL_BIN": "/bin/true",
            "NVENC_SLOTS": "1", "NVENC_LOCK_DIR": str(tmp_path / "locks"),
            "NVENC_SLOT_WAIT": "30", "NVENC_WAIT_LOG": str(log)}
-    subprocess.run(["sh", WRAPPER, *NVENC_ARGS], env=env, check=True, timeout=60)
+    subprocess.run(_wrapper_cmd(*NVENC_ARGS), env=env, check=True, timeout=60)
     assert not log.exists()                      # no wait, no line
     busy = hold(0)
-    p = subprocess.Popen(["sh", WRAPPER, *NVENC_ARGS], env=env)
+    p = subprocess.Popen(_wrapper_cmd(*NVENC_ARGS), env=env)
     time.sleep(2.5)
     busy.close()
     assert p.wait(timeout=30) == 0
