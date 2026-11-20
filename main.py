@@ -888,7 +888,7 @@ def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         with ssrf_guard.guarded():
             return _download_youtube_video(url, output_dir, on_audio=on_audio,
                                            allow_paid=allow_paid, cap_minutes=cap_minutes,
-                                           route_out=route_out)
+                                           route_out=route_out, may_wait=use_cache)
     hit = source_cache.fetch(url, output_dir)
     if hit is None:
         with source_cache.claim(url):
@@ -899,7 +899,7 @@ def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                 with ssrf_guard.guarded():
                     path, title = _download_youtube_video(
                         url, output_dir, on_audio=on_audio, allow_paid=allow_paid,
-                        cap_minutes=cap_minutes, route_out=route)
+                        cap_minutes=cap_minutes, route_out=route, may_wait=True)
                 if source_cache.is_whole_free_download(route):
                     source_cache.store(url, path, title)
                 return path, title
@@ -951,7 +951,7 @@ def _forget_extraction(url):
 
 
 def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
-                            cap_minutes=None, route_out=None):
+                            cap_minutes=None, route_out=None, may_wait=False):
     """
     Downloads a YouTube video using yt-dlp.
     Returns the path to the downloaded video and the video title.
@@ -988,6 +988,13 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     # The account this video uses (one of YOUTUBE_COOKIES, YOUTUBE_COOKIES_2,
     # ...), as a private cookie file. Never print its CONTENT: it is a live
     # YouTube session.
+    # With every account resting, a job's download waits for one to wake
+    # instead of asking a limited one again (yt_account.REST_WAIT). Not a
+    # download that runs inside the API (``may_wait`` False): its caller is
+    # somebody waiting on a request.
+    if may_wait and is_youtube_url(url):
+        yt_account.wait_for_awake(say=lambda left: print(
+            f"⏳ Every YouTube account is resting: waiting up to {left / 60:.0f} min for one."))
     yt_session = yt_account.Session()
     cookies_path = yt_session.path
     if cookies_path:
@@ -1011,8 +1018,13 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     _statics = [p.strip() for p in
                 os.environ.get("STATIC_PROXY_URLS", "").split(",") if p.strip()]
     if _statics:
-        import random as _random
-        k = _random.randrange(len(_statics))
+        # The account's own exit first (yt_account.home_exit): each account
+        # leaves through the same address every time. With no account, any.
+        if cookies_path:
+            k = yt_account.home_exit(yt_session.account, len(_statics))
+        else:
+            import random as _random
+            k = _random.randrange(len(_statics))
         _statics = _statics[k:] + _statics[:k]
         print(f"🌐 {len(_statics)} static ISP proxies configured.")
 

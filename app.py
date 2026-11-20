@@ -3673,7 +3673,10 @@ def _schedule_auto_retry(job_id, job):
         # Back in line for when the account's cooldown is over (plus a spread,
         # so the videos that waited do not all ask YouTube in the same second).
         job['yt_retries'] = int(job.get('yt_retries') or 0) + 1
-        delay = max(delay, yt_account.cooling_down()) + 20 + (hash(job_id) % 120)
+        # ...or, with every account resting, for when the first one wakes:
+        # trying again before that asks a limited account once more.
+        delay = (max(delay, yt_account.cooling_down(), yt_account.all_resting())
+                 + 20 + (hash(job_id) % 120))
         job['logs'].append(YT_LIMITED_LOG.format(n=max(1, round(delay / 60))))
         print(f"⏳ {job_id} waits {delay:.0f}s for the YouTube account "
               f"({job['yt_retries']}/{YT_LIMIT_RETRIES}).")

@@ -232,12 +232,8 @@ def probe_url_minutes(url: str, allow_paid: bool = True) -> float:
     strategies = ([(hd_args, True)] if hd_args else []) + [
         (fallback_extractor_args(bgutil_http, bgutil_script), not hd_args)]
 
-    # Rotated per probe to spread load across the pool, like the download does.
     statics = [p.strip() for p in
                os.environ.get("STATIC_PROXY_URLS", "").split(",") if p.strip()]
-    if statics:
-        k = random.randrange(len(statics))
-        statics = statics[k:] + statics[:k]
     paid = os.environ.get("PROXY_URL", "").strip()
     if not allow_paid:
         paid = ""  # daily budget hit (cloud/proxy_ledger.budget_exceeded)
@@ -246,11 +242,6 @@ def probe_url_minutes(url: str, allow_paid: bool = True) -> float:
     # Rumble, product pages and drive links were all reaching it here.
     if not is_youtube_url(url):
         paid = ""
-    proxies = plan_probe_proxies(
-        os.environ.get("DIRECT_FIRST", "").strip() == "1",
-        statics,
-        paid,
-    )
     static_errors: dict = {}
 
     # Same cookies + PO token the download uses: an anonymous probe gets
@@ -260,6 +251,15 @@ def probe_url_minutes(url: str, allow_paid: bool = True) -> float:
     # One of the configured accounts (yt_account.Session), as a private file.
     session = yt_account.Session()
     try:
+        # The account's own exit first (yt_account.home_exit), like the
+        # download: an account leaves through the same address every time.
+        # With no account, any of them, to spread the load.
+        if statics:
+            k = (yt_account.home_exit(session.account, len(statics)) if session.path
+                 else random.randrange(len(statics)))
+            statics = statics[k:] + statics[:k]
+        proxies = plan_probe_proxies(
+            os.environ.get("DIRECT_FIRST", "").strip() == "1", statics, paid)
         minutes = _probe_with_proxies(url, proxies, strategies, static_errors,
                                       paid, session.path)
     finally:

@@ -85,6 +85,12 @@ MAX_WAIT = _float_env("YT_ACCOUNT_MAX_WAIT", 90)
 REST_SECONDS = _float_env("YT_ACCOUNT_REST_SECONDS", 900)
 REST_STRIKES = _int_env("YT_ACCOUNT_REST_STRIKES", 3)
 MAX_ACCOUNTS = 9
+# With every account resting, how long a download waits for the first one to
+# wake before it goes ahead with a resting one (0: at once, as it used to).
+# Asking a limited account again gets the same answer and counts against it:
+# a queue of downloads doing that kept every account limited for as long as
+# there were downloads to try.
+REST_WAIT = _float_env("YT_ACCOUNT_REST_WAIT", 600)
 
 _COOLDOWN_FILE = ".yt-account.cooldown"
 _REST_FILE = ".yt-account-rest-{}"
@@ -396,6 +402,50 @@ def _turn():
         return os.getpid()
     finally:
         os.close(fd)
+
+
+def all_resting(count=None, now=None) -> float:
+    """Seconds until the first account wakes when every one of them rests, 0
+    when at least one is awake (or there is none, or a single one: it never
+    rests)."""
+    count = len(accounts()) if count is None else count
+    if count < 2:
+        return 0.0
+    left = [resting(i, now) for i in range(count)]
+    return min(left) if all(x > 0 for x in left) else 0.0
+
+
+def wait_for_awake(max_wait=None, sleep=time.sleep, say=None) -> float:
+    """Block while every account rests, until one wakes or ``max_wait``
+    (``REST_WAIT``) seconds went by. Returns the seconds waited. For a job's
+    download, never for a request somebody is waiting on."""
+    max_wait = REST_WAIT if max_wait is None else max_wait
+    waited = 0.0
+    told = False
+    while waited < max_wait:
+        left = all_resting()
+        if left <= 0:
+            break
+        if say and not told:
+            say(left)
+            told = True
+        step = min(left + 1.0, 15.0, max_wait - waited)
+        sleep(step)
+        waited += step
+    return waited
+
+
+def home_exit(account, exits) -> int:
+    """Which of ``exits`` (the free routes, in the order they are configured)
+    this account's requests leave through: always the same one. A signed-in
+    session that shows up from a different address every few seconds does not
+    look like a person, and the accounts were limited far below the request
+    rate YouTube lets one through; with more accounts than exits they share,
+    which is what people behind one address do. 0 with nothing to choose."""
+    exits = int(exits or 0)
+    if exits <= 0 or account is None:
+        return 0
+    return int(account) % exits
 
 
 def pick(exclude=(), awake_only=False, count=None, now=None):

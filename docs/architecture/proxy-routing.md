@@ -111,6 +111,27 @@ outright.
   bot-checked on every IP, so a cooldown stopped every download (12-nov-2026:
   a half-limited account went to one success in a hundred). Turn it on only
   with a route that works anonymously.
+- **One account, one exit.** A probe and a download start on their
+  account's own static route (`yt_account.home_exit`: the account's index
+  over the routes as configured), not on a random one. A signed-in session
+  that shows up from every address of the pool within seconds does not look
+  like a person, and the accounts were being limited far below the request
+  rate YouTube lets one through. With more accounts than routes they share,
+  as people behind one address do. The other routes are still tried when the
+  first fails. Keep `STATIC_PROXY_URLS` in the same order across deploys.
+- **Every account resting.** A job's download waits for the first one to
+  wake, up to `YT_ACCOUNT_REST_WAIT` (600 s, 0 for none), instead of asking
+  the one closest to waking: that one answered "rate-limited" again, and a
+  queue of downloads doing it kept every account limited for as long as
+  there were downloads to try. Never a download that runs inside the API
+  (`may_wait`), and the retry of a limited video is scheduled for when an
+  account wakes (`yt_account.all_resting`).
+- **Pace for a busy host.** The defaults (2 slots, 2 s apart per account)
+  suit one account and a few jobs. With a queue behind several accounts,
+  `YT_ACCOUNT_SLOTS=1` and `YT_ACCOUNT_MIN_INTERVAL` of 6 to 8 keep each
+  account at a steady request every few seconds instead of bursts when many
+  jobs start together; it still leaves room for hundreds of extractions an
+  hour per account.
 - **Several accounts.** `YOUTUBE_COOKIES_2` .. `YOUTUBE_COOKIES_9` add
   accounts next to `YOUTUBE_COOKIES`. Each video takes the next one in turn
   (`yt_account.Session`, one private cookie file per probe or download), and
