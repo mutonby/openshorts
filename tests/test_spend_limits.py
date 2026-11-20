@@ -200,6 +200,27 @@ class TestThumbnailBilling:
         assert e.value.status_code == 413
 
 
+def test_too_big_thumbnail_upload_swept_mid_write_is_still_a_413(dirs, monkeypatch):
+    """The uploads sweep can delete the partial file while it is being
+    written; refusing the oversize upload must still answer 413, not 500."""
+    monkeypatch.setattr(app_module, "MAX_FILE_SIZE_MB", 1)
+    chunks = [b"x" * (1024 * 1024), b"x" * 10]
+
+    class _Upload:
+        filename = "My Video.mp4"
+
+        async def read(self, n):
+            if len(chunks) == 1:  # the sweep runs between two chunks
+                for name in os.listdir(dirs.up):
+                    os.remove(dirs.up / name)
+            return chunks.pop(0) if chunks else b""
+
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(app_module._save_thumbnail_upload(_Upload(), "sid"))
+    assert e.value.status_code == 413
+    assert os.listdir(dirs.up) == []
+
+
 @pytest.fixture()
 def thumb_cloud(cloud_user, dirs, monkeypatch):
     """Cloud Thumbnail Studio with a fake ledger, probe and downloader."""
