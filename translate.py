@@ -50,6 +50,52 @@ SUPPORTED_LANGUAGES = {
 _TRANSIENT_STATUS = {429, 500, 502, 503, 504}
 
 
+# --------------------------------------------------------------------------- #
+# Caption TEXT translation: localise the captions without re-dubbing the audio.
+# Only the text of each caption line changes; its start/end timing is kept, so a
+# line that showed for 1.2s still shows for 1.2s.
+# --------------------------------------------------------------------------- #
+import re as _re
+
+
+def build_caption_translation_prompt(lines, target_language):
+    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(lines))
+    return (
+        f"Translate each numbered subtitle line into {target_language}. These are "
+        f"captions for a short vertical video: keep each translation concise and "
+        f"natural. Return exactly {len(lines)} lines, same numbering, one "
+        f"translation per number, and never merge or split lines. Output only the "
+        f"numbered translations.\n\n{numbered}"
+    )
+
+
+def parse_numbered_translations(text, n):
+    """Pull ``n`` lines out of a numbered model reply; a missing one comes back ''."""
+    found = {}
+    for raw in (text or "").splitlines():
+        m = _re.match(r"\s*(\d+)[.)\]]\s*(.*)$", raw)
+        if m:
+            found[int(m.group(1))] = m.group(2).strip()
+    return [found.get(i + 1, "") for i in range(n)]
+
+
+def translate_caption_lines(lines, target_language, call_model):
+    """Translate caption lines into ``target_language``, preserving count and order.
+
+    ``call_model`` takes the prompt and returns the model's raw text; it is passed
+    in so this stays a pure function (the Gemini call lives at the call site). Any
+    line the model drops, or that the parse cannot recover, keeps its original
+    text — a partial answer degrades to a partly-translated clip, never an empty
+    one.
+    """
+    lines = list(lines)
+    if not lines:
+        return []
+    raw = call_model(build_caption_translation_prompt(lines, target_language))
+    translated = parse_numbered_translations(raw, len(lines))
+    return [t if t else original for t, original in zip(translated, lines)]
+
+
 class _TransientHTTPError(Exception):
     """Raised for retryable HTTP responses (5xx / 429)."""
 

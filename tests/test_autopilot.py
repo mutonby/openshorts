@@ -118,7 +118,7 @@ class TestOutcomeFromProcess:
 
 class TestSmallRules:
     def test_platforms_are_filtered_and_ordered(self):
-        assert ap.clean_platforms(["YouTube", "facebook", "tiktok", "x"]) == ["tiktok", "youtube", "facebook"]
+        assert ap.clean_platforms(["YouTube", "facebook", "tiktok", "snapchat"]) == ["tiktok", "youtube", "facebook"]
         assert ap.clean_platforms(None) == []
 
     def test_only_paid_plans_are_eligible(self):

@@ -87,6 +87,20 @@ def cmd_process(args):
         body["webhook_url"] = args.webhook
     if args.webhook_secret:
         body["webhook_secret"] = args.webhook_secret
+    if args.target_clips is not None:
+        body["target_clips"] = args.target_clips
+    if args.clip_min is not None:
+        body["clip_min_seconds"] = args.clip_min
+    if args.clip_max is not None:
+        body["clip_max_seconds"] = args.clip_max
+    if args.no_captions:
+        body["captions"] = False
+    if args.auto_hook:
+        body["auto_hook"] = True
+    if args.hook_style:
+        body["auto_hook_style"] = args.hook_style
+    if args.force_low_quality:
+        body["force_low_quality"] = True
     status, payload = _request("POST", "/api/process", body)
     if status >= 400:
         _die(status, payload)
@@ -203,6 +217,15 @@ def main(argv=None):
     p.add_argument("--format", help="output format, e.g. 1080p")
     p.add_argument("--webhook", help="webhook URL fired once when the job ends")
     p.add_argument("--webhook-secret", help="HMAC secret for X-OpenShorts-Signature")
+    p.add_argument("--target-clips", type=int, help="how many clips to aim for (1-15)")
+    p.add_argument("--clip-min", type=float, help="minimum clip length in seconds")
+    p.add_argument("--clip-max", type=float, help="maximum clip length in seconds")
+    p.add_argument("--no-captions", action="store_true",
+                   help="do not burn captions (source already has them)")
+    p.add_argument("--auto-hook", action="store_true", help="add an AI hook overlay")
+    p.add_argument("--hook-style", help="hook style name for --auto-hook")
+    p.add_argument("--force-low-quality", action="store_true",
+                   help="faster, lower-quality render")
     p.add_argument("--wait", action="store_true", help="stream logs until the job ends")
     p.set_defaults(func=cmd_process)
 
@@ -221,7 +244,7 @@ def main(argv=None):
     p = sub.add_parser("publish", help="post or schedule one clip to social platforms")
     p.add_argument("job_id")
     p.add_argument("clip_index", type=int)
-    p.add_argument("--platforms", required=True, help="comma list: tiktok,instagram,youtube,facebook,linkedin,threads,bluesky")
+    p.add_argument("--platforms", required=True, help="comma list: tiktok,instagram,youtube,facebook,linkedin,threads,bluesky,x,pinterest")
     p.add_argument("--title")
     p.add_argument("--schedule", help="ISO datetime for scheduled posting")
     p.add_argument("--timezone", help="IANA timezone for --schedule")
