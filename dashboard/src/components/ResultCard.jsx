@@ -275,7 +275,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     // one the server refuses, so the switch is not offered there. Unknown
     // until the video's metadata loads, and offered meanwhile.
     const [isUpright, setIsUpright] = useState(true);
-    const canSwitchMode = Boolean(onModeChanged) && (isUpright || isPro);
+    const canSwitchMode = Boolean(onModeChanged)
+        && (isPro || (isUpright && (!clip.framing_method || clip.framing_method === 'legacy')));
     const handleMode = async () => {
         setIsSwitchingMode(true);
         setEditError(null);

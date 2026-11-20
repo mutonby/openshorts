@@ -95,6 +95,14 @@ def _clip(meta_path):
 
 
 class TestSwitchToPro:
+    def test_face_model_free_clip_keeps_its_framing(self, job, fake_render):
+        meta = json.loads(job["meta_path"].read_text())
+        meta["framing_method"] = "motion"
+        job["meta_path"].write_text(json.dumps(meta))
+        resp = _switch("pro")
+        assert resp.status_code == 400
+        assert fake_render == []
+
     def test_the_clip_becomes_a_pro_recut(self, job, fake_render):
         resp = _switch("pro")
         assert resp.status_code == 200, resp.text

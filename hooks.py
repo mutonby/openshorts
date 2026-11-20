@@ -430,7 +430,8 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
     return output_image_path, canvas_w, canvas_h
 
 def _auto_place(video_path, text, target_box_width, hook_filename, font_scale, style, font,
-                video_width, video_height, duration, ranges, has_captions, first_dims):
+                video_width, video_height, duration, ranges, has_captions, first_dims,
+                face_aware=True):
     """position='auto': pick the height (and, only if every height covers a
     face, a smaller text) with hook_placement. Returns {"image": (path, w, h),
     "y_px", "y", "scale"}, or None to fall back to the legacy top spot (no
@@ -446,7 +447,7 @@ def _auto_place(video_path, text, target_box_width, hook_filename, font_scale, s
     # A WIDE picture floats in blur: keep the hook in the blur when it fits,
     # and only fall back to the caption-only rule when it does not.
     pictures = hook_placement.content_bands(ranges, 0.0, window_end)
-    frames = hook_placement.detect_faces(video_path, 0.0, window_end)
+    frames = hook_placement.detect_faces(video_path, 0.0, window_end) if face_aware else []
     if frames is None:
         print("   ℹ️ Hook placement: no frames read, keeping the top spot.")
         return None
@@ -484,7 +485,7 @@ def _auto_place(video_path, text, target_box_width, hook_filename, font_scale, s
 
 def add_hook_to_video(video_path, text, output_path, position="top", font_scale=1.0, duration=None, style="pill",
                       also=None, font=None, layout_ranges=None, has_captions=True,
-                      mark=None):
+                      mark=None, face_aware=True):
     """
     Overlays text hook onto video.
     position: 'top', 'center', 'bottom', or 'auto' (hook_placement: off the
@@ -547,7 +548,7 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
         if position == "auto":
             placed = _auto_place(video_path, text, target_box_width, hook_filename, font_scale,
                                  style, font, video_width, video_height, duration,
-                                 layout_ranges, has_captions, (box_w, box_h))
+                                 layout_ranges, has_captions, (box_w, box_h), face_aware)
             if placed:
                 img_path, box_w, box_h = placed["image"]
 

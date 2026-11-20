@@ -10,21 +10,17 @@ import threading
 import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from scenedetect import open_video, SceneManager
-from scenedetect.detectors import ContentDetector
-from ultralytics import YOLO
-import torch
 import os
 import math
 import numpy as np
 from tqdm import tqdm
 import yt_dlp
-import mediapipe as mp
 # import whisper (replaced by faster_whisper inside function)
 from google import genai
 from google.genai import types as genai_types
 
 import frame_sampler
+import framing
 import gpu_decode
 import gemini_worker
 import hook_grounding
@@ -90,16 +86,6 @@ OUTPUT — RETURN ONLY VALID JSON (no markdown, no comments). Order clips by pre
   ]
 }}
 """
-
-# Load the YOLO model once (Keep for backup or scene analysis if needed)
-# YOLO_MODEL_PATH lets deployments point at a pre-downloaded weights file so a
-# volume mounted over the workdir doesn't trigger a re-download at startup.
-model = YOLO(os.environ.get("YOLO_MODEL_PATH", "yolov8n.pt"))
-
-# --- MediaPipe Setup ---
-# Use standard Face Detection (BlazeFace) for speed
-mp_face_detection = mp.solutions.face_detection
-face_detection = mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
 
 # Consecutive detections a large target move must survive before the camera
 # follows it (see SmoothedCameraman.update_target). Env-overridable so the
@@ -418,6 +404,8 @@ DETECT_MAX_WIDTH = 640
 # in parallel, so every inference goes through this lock. Contention is small
 # (a few ms per call) — the ffmpeg renders are where the parallel time goes.
 DETECT_LOCK = threading.Lock()
+_face_detector = None
+_person_detector = None
 # Detect every Nth frame; SmoothedCameraman interpolates between updates.
 DETECT_STRIDE = max(int(os.environ.get("DETECT_STRIDE", "4")), 1)
 # YOLO fallback (no face found) is far heavier than MediaPipe — extra throttle.
@@ -436,17 +424,22 @@ def _detection_frame(frame):
     return small, scale
 
 
-def detect_face_candidates(frame):
+def detect_face_candidates(frame, full_resolution=False):
     """
     Returns list of all detected faces using lightweight FaceDetection.
     Boxes are in ORIGINAL frame coordinates (detection runs downscaled;
     MediaPipe's relative coords make the mapping exact).
     """
+    global _face_detector
     height, width, _ = frame.shape
-    small, _scale = _detection_frame(frame)
+    small = frame if full_resolution else _detection_frame(frame)[0]
     rgb_frame = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
     with DETECT_LOCK:
-        results = face_detection.process(rgb_frame)
+        if _face_detector is None:
+            from mediapipe import solutions
+            _face_detector = solutions.face_detection.FaceDetection(
+                model_selection=1, min_detection_confidence=0.5)
+        results = _face_detector.process(rgb_frame)
     
     candidates = []
     
@@ -473,10 +466,13 @@ def detect_person_yolo(frame):
     Returns [x, y, w, h] of the person's 'upper body' approximation, in
     ORIGINAL frame coordinates (inference runs on a downscaled copy).
     """
+    global _person_detector
     small, scale = _detection_frame(frame)
-    # Use the globally loaded model
     with DETECT_LOCK:
-        results = model(small, verbose=False, classes=[0]) # class 0 is person
+        if _person_detector is None:
+            from ultralytics import YOLO
+            _person_detector = YOLO(os.environ.get("YOLO_MODEL_PATH", "yolov8n.pt"))
+        results = _person_detector(small, verbose=False, classes=[0])
 
     if not results:
         return None
@@ -1509,6 +1505,8 @@ def auto_hook_clip(clip_path, clip, captions=None, mark=False):
                   "duration_seconds": seconds}
         place = {"position": "auto", "layout_ranges": clip.get('layout_ranges'),
                  "has_captions": bool(captions)}
+        if framing.resolve(clip.get('framing_method')) != "legacy":
+            place["face_aware"] = False
 
         def note(result):
             if isinstance(result, dict) and result.get("y") is not None:
@@ -1562,6 +1560,9 @@ def pro_clip(clip_path, clip, transcript):
     (pro clean path, clip-relative transcript, 0.0, duration) for the hook and
     the captions to go on that file instead; None otherwise. A busy host or a
     failed render ships the clip as it is: pro mode must never cost a clip."""
+    if framing.resolve(clip.get('framing_method')) != "legacy":
+        clip['pro_suggested'] = False
+        return None
     import pro_mode
     if pro_mode.mode() == "off":
         return None
@@ -1624,7 +1625,7 @@ def trim_subtitle_band(input_video, band):
 
 def render_clip(input_video, final_output_video, output_format="auto",
                 force_strategy=None, crop_overrides=None, watermark=False,
-                subtitle_band=None):
+                subtitle_band=None, framing_method=None):
     """Route a cut clip through the right renderer for the chosen output format.
     vertical/auto -> 9:16 reframe, square -> 1:1 reframe, horizontal -> keep.
     ``force_strategy`` (e.g. 'WIDE'/'TRACK') pins every scene's layout — the
@@ -1636,18 +1637,19 @@ def render_clip(input_video, final_output_video, output_format="auto",
     ``subtitle_band`` (the job metadata's ``source_subtitle_band``) trims the
     source's own burned-in subtitles off the bottom first, so our captions are
     the only text layer. Every render from the source passes it: the job, the
-    recut and the editor's re-render."""
+    recut and the editor's re-render.
+    ``framing_method`` selects the face-model-free or legacy camera."""
     trimmed = trim_subtitle_band(input_video, subtitle_band)
     try:
         return _render_clip(trimmed, final_output_video, output_format,
-                            force_strategy, crop_overrides, watermark)
+                            force_strategy, crop_overrides, watermark, framing_method)
     finally:
         if trimmed != input_video and os.path.exists(trimmed):
             os.remove(trimmed)
 
 
 def _render_clip(input_video, final_output_video, output_format,
-                 force_strategy, crop_overrides, watermark):
+                 force_strategy, crop_overrides, watermark, framing_method=None):
     if output_format == "horizontal":
         ok = finalize_clip_passthrough(input_video, final_output_video)
         if ok and watermark:
@@ -1657,7 +1659,7 @@ def _render_clip(input_video, final_output_video, output_format,
     return process_video_to_vertical(input_video, final_output_video, aspect_ratio=aspect,
                                      force_strategy=force_strategy,
                                      crop_overrides=crop_overrides,
-                                     watermark=watermark)
+                                     watermark=watermark, framing_method=framing_method)
 
 
 # Watermark geometry, as fractions of the clip width/height.
@@ -1772,25 +1774,24 @@ def mark_delivery(final_path, marker=None):
 
 
 def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPECT_RATIO,
-                              force_strategy=None, crop_overrides=None, watermark=False):
-    """
-    Core logic to reframe a horizontal video to a target aspect ratio using
-    scene detection and Active Speaker Tracking (MediaPipe).
+                              force_strategy=None, crop_overrides=None, watermark=False,
+                              framing_method=None):
+    """Reframe a video using the requested visual or speaker-based camera.
+
     aspect_ratio: width/height of the output (9/16 vertical, 1.0 square).
     force_strategy / crop_overrides pin layouts and scene crops by hand (v2
     engine only — the v1 loop below has no layout concept beyond its own
     classifier).
     """
-    # v2 engine: analyze downscaled, render natively in ffmpeg. Any failure
-    # falls back to the v1 frame loop below so a v2 edge case can't kill jobs.
-    if os.environ.get("REFRAME_ENGINE", "v2").strip().lower() != "v1":
+    method = framing.resolve(framing_method)
+    if method != "legacy" or os.environ.get("REFRAME_ENGINE", "v2").strip().lower() != "v1":
         try:
             import reframe_v2
             t0 = time.time()
             result = reframe_v2.render(input_video, final_output_video, aspect_ratio,
                                        force_strategy=force_strategy,
                                        crop_overrides=crop_overrides,
-                                       watermark=watermark)
+                                       watermark=watermark, framing_method=method)
             print(f"   ⏱️ Reframe v2 total: {time.time() - t0:.1f}s")
             return result
         except Exception as e:
@@ -1802,6 +1803,13 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
                 raise RuntimeError(
                     f"manual framing needs the v2 reframe engine, which failed "
                     f"({type(e).__name__}: {e})") from e
+            if method != "legacy":
+                if method == "fit":
+                    raise
+                print(f"   ⚠️ Reframe v2 failed using {method} ({type(e).__name__}: {e}); "
+                      "retrying with full-frame fit")
+                return reframe_v2.render(input_video, final_output_video, aspect_ratio,
+                                         watermark=watermark, framing_method="fit")
             print(f"   ⚠️ Reframe v2 failed ({type(e).__name__}: {e}) — "
                   f"falling back to v1 frame loop")
 
@@ -2196,8 +2204,9 @@ def transcribe_video(video_path, slot_timeout=None):
     """``slot_timeout``: seconds to wait for a host transcription slot before
     giving up with TimeoutError (None waits for as long as it takes)."""
     print("🎙️  Transcribing video...")
+    from contextlib import nullcontext
     from transcribe_backends import (transcribe_media, release_models, host_asr_slot,
-                                     media_seconds)
+                                     media_seconds, uses_gpu_for_transcription)
 
     # At most ASR_HOST_SLOTS jobs transcribe on the GPU at once, host-wide.
     # Inside the slot, the model's VRAM is handed back before the long render
@@ -2208,8 +2217,11 @@ def transcribe_video(video_path, slot_timeout=None):
     # jobs failing per hour at peak). Nothing after this point transcribes.
     # A long source never takes the last slot (ASR_LONG_SECONDS). Whisper
     # keeps the slot even if it falls to the CPU: its CUDA context stays on
-    # the card until the process exits.
-    with host_asr_slot(timeout=slot_timeout, media_seconds=media_seconds(video_path)):
+    # the card until the process exits. CPU-only jobs skip the GPU queue.
+    slot = nullcontext()
+    if uses_gpu_for_transcription():
+        slot = host_asr_slot(timeout=slot_timeout, media_seconds=media_seconds(video_path))
+    with slot:
         try:
             transcript = transcribe_media(video_path)
         finally:
@@ -2757,6 +2769,8 @@ if __name__ == '__main__':
     parser.add_argument('--skip-analysis', action='store_true', help="Skip AI analysis and convert the whole video.")
     parser.add_argument('--format', type=str, default="auto", choices=["auto", "vertical", "horizontal", "square"],
                         help="Output aspect: vertical/auto (9:16), horizontal (keep 16:9), square (1:1).")
+    parser.add_argument('--framing-method', choices=framing.FRAMING_METHODS,
+                        help="Framing method for vertical or square output.")
     parser.add_argument('--transcript', type=str,
                         help="Path to a precomputed transcript JSON (transcribe_media shape); skips transcription.")
     parser.add_argument('--prepare-only', action='store_true',
@@ -2765,6 +2779,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     output_format = args.format
+    framing_method = framing.resolve(args.framing_method)
 
     script_start_time = time.time()
 
@@ -2948,7 +2963,7 @@ if __name__ == '__main__':
     # instead of one per clip, and the answer is a property of the material
     # ("this is a screencast"), which does not change between its own clips.
     # It runs before any render so the modules are switched on in time.
-    if layout_picker.ENABLED:
+    if layout_picker.ENABLED and framing_method == "legacy" and output_format != "horizontal":
         try:
             _cap = cv2.VideoCapture(input_video)
             _fps = _cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -2995,7 +3010,7 @@ if __name__ == '__main__':
         if (not output_file or os.path.isdir(output_file)
                 or output_file.endswith(("/", os.sep))):
             output_file = os.path.join(output_dir, f"{video_title}_vertical.mp4")
-        render_clip(input_video, output_file, output_format)
+        render_clip(input_video, output_file, output_format, framing_method=framing_method)
     else:
         # Get duration (needed by both the transcript and the vision path).
         cap = cv2.VideoCapture(input_video)
@@ -3099,6 +3114,7 @@ if __name__ == '__main__':
             # --keep-original) or in uploads/ (upload jobs).
             clips_data['source_video'] = os.path.basename(input_video)
             clips_data['output_format'] = output_format
+            clips_data['framing_method'] = framing_method
             if source_subtitle_band:
                 clips_data['source_subtitle_band'] = source_subtitle_band
             metadata_file = os.path.join(output_dir, f"{video_title}_metadata.json")
@@ -3109,6 +3125,7 @@ if __name__ == '__main__':
             # clip. Renders are mostly ffmpeg subprocesses (parallelize well);
             # detector inference is serialized internally via DETECT_LOCK.
             def _process_one_clip(i, clip):
+                clip['framing_method'] = framing_method
                 if clip.get('pro_before'):
                     # A retry of a clip whose first attempt got as far as pro
                     # mode: start again from the range Gemini picked.
@@ -3138,7 +3155,8 @@ if __name__ == '__main__':
                     # made. Each worker writes only its own clip dict, so the
                     # re-dump after the pool is race-free.
                     success = render_clip(clip_temp_path, clip_final_path, output_format,
-                                          subtitle_band=source_subtitle_band)
+                                          subtitle_band=source_subtitle_band,
+                                          framing_method=framing_method)
                     if success:
                         print(f"   🎞️ Clip {i+1} framed")
                     deliver_path = clip_final_path

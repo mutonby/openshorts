@@ -401,6 +401,9 @@ openshorts clips <job_id>
 openshorts publish <job_id> 0 --platforms tiktok,youtube
 ```
 
+Use `openshorts trends` to research regional topics and `openshorts trend-generate`
+to queue clips from your own source library. [CLI guide](cli/README.md#trend-driven-clips)
+
 ### Agent skill
 
 `skills/openshorts/SKILL.md` follows the open

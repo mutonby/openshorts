@@ -6,7 +6,7 @@ the two speakers sit one above the other and the seam between the halves is
 the emptiest place in the frame, so that is where the captions go (OpusClip
 does the same). On every other layout they stay at the bottom.
 
-A WIDE stretch also records ``content``: the (top, bottom) frame fractions its
+A WIDE or FIT stretch also records ``content``: the (top, bottom) frame fractions its
 picture fills over the blurred backdrop, so the auto-placed hook can sit in
 the blur instead of over the action (hook_placement.content_bands).
 
@@ -32,7 +32,7 @@ def write(video_path, ranges):
     """``ranges``: iterable of (start_s, end_s, strategy) or (start_s, end_s,
     strategy, content), ``content`` being the (top, bottom) frame fractions
     the picture fills on a layout that floats it over a blurred backdrop
-    (WIDE), or None. Best effort: a failure here must never fail a render that
+    (WIDE or FIT), or None. Best effort: a failure here must never fail a render that
     already succeeded."""
     payload = []
     for r in ranges:

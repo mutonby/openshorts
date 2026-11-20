@@ -33,6 +33,7 @@ from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 import recut
 import layout_ranges
+import framing as visual_framing
 import watermarked
 import media_auth
 import remote_worker
@@ -462,7 +463,9 @@ def plan_source_range(probed_minutes, source_range):
     try:
         start = float(start_raw) if start_raw not in (None, "") else 0.0
         end = float(end_raw) if end_raw not in (None, "") else duration
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        raise HTTPException(status_code=400, detail="source_start / source_end must be seconds.")
+    if not (math.isfinite(start) and math.isfinite(end)):
         raise HTTPException(status_code=400, detail="source_start / source_end must be seconds.")
     start = max(0.0, start)
     end = min(duration, end) if duration else end
@@ -590,7 +593,22 @@ async def reserve_process_minutes(request, url, input_path, job_id, max_minutes=
     on the operator's key for free. Only skip metering when billing is off.
     """
     if not BILLING_ENABLED:
-        return None, 2, None, None, None
+        partial = None
+        if source_range:
+            if url:
+                probe = await _probe_youtube_quality(url)
+                request.state.source_probe = probe
+                duration = float(probe.get("duration") or 0)
+            else:
+                duration = await asyncio.to_thread(_media_duration_seconds, input_path)
+            if not math.isfinite(duration) or duration <= 0:
+                raise HTTPException(status_code=400, detail="Could not determine the duration for this range.")
+            chosen = plan_source_range(duration / 60, source_range)
+            if chosen:
+                minutes = (chosen["end_seconds"] - chosen["start_seconds"]) / 60
+                partial = {"processed_minutes": round(minutes, 2), "total_minutes": round(duration / 60, 2),
+                           **chosen, "chosen": True}
+        return None, 2, None, None, partial
     user = await _user_from_request(request)
     if not managed_keys.has_active_entitlement(user):
         return None, 2, None, None, None  # shouldn't happen (resolve_gemini would have 402'd)
@@ -2355,7 +2373,8 @@ def _install_drain_signal_handler():
 def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, watermark,
                            webhook_url=None, webhook_secret=None, base_url=None,
                            partial=None, source_cap_minutes=None, skip_statics=False,
-                           via_api_key=False, lane=None, submitted_at=None, topup=False):
+                           via_api_key=False, lane=None, submitted_at=None, topup=False,
+                           generation_options=None):
     try:
         path = os.path.join(OUTPUT_DIR, job_id, _RESUME_FILE)
         # Atomic like every manifest write: the other instance reads them.
@@ -2377,6 +2396,7 @@ def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, water
                 "partial": partial,
                 # Same reason for the whole-video jobs' safety cap.
                 "source_cap_minutes": source_cap_minutes,
+                "generation_options": generation_options or {},
                 # The probe's "statics bot-checked for this video" verdict.
                 "skip_statics": bool(skip_statics),
                 "via_api_key": bool(via_api_key),
@@ -2538,6 +2558,11 @@ def _register_resumed(picked) -> int:
         else:
             env.pop("WATERMARK", None)
         _apply_rate_cap(env)
+        generation_options = m.get("generation_options")
+        if isinstance(generation_options, dict):
+            env.update({key: value for key, value in generation_options.items()
+                        if key in _GENERATION_ENV and isinstance(value, str)
+                        and remote_worker.allowed_option(key, value)})
         partial = m.get("partial")
         _apply_source_cut(env, partial)
         if m.get("source_cap_minutes"):
@@ -5722,10 +5747,11 @@ async def _validate_source_url(url: str):
             "(youtube.com/watch?v=... or youtu.be/...)."))
 
 
-async def _quality_gate(url: str, force_low: bool):
+async def _quality_gate(url: str, force_low: bool, probe=None):
     """Run the pre-flight probe: raises 400 for a too-short source, returns
     the needs_confirmation response for a low-resolution one, else None."""
-    probe = await _probe_youtube_quality(url)
+    if probe is None:
+        probe = await _probe_youtube_quality(url)
     # Hard reject, no confirm-and-retry: a too-short source fails the same
     # way on every retry, so letting the user force it just burns the job.
     source_duration = int(probe.get("duration") or 0)
@@ -5818,6 +5844,12 @@ LAYOUT_ENV = {
 LAYOUT_IMPLIES = {
     "split": ["SPEAKER_SIGNAL"],
     "speaker_cut": ["SPEAKER_SIGNAL"],
+}
+
+_GENERATION_ENV = {
+    *LAYOUT_ENV.values(), "AUTO_LAYOUT", "SPEAKER_SIGNAL", "FRAMING_METHOD",
+    "AUTO_HOOK", "AUTO_HOOK_STYLE", "AUTO_CAPTIONS",
+    "CLIP_TARGET_MIN", "CLIP_TARGET_MAX", "CLIP_MIN_SECONDS", "CLIP_MAX_SECONDS",
 }
 
 
@@ -6059,6 +6091,7 @@ async def process_endpoint(
     acknowledged: Optional[str] = Form(None),
     output_format: Optional[str] = Form(None),
     layouts: Optional[str] = Form(None),
+    framing_method: Optional[str] = Form(None),
     force_low_quality: Optional[str] = Form(None),
     webhook_url: Optional[str] = Form(None),
     webhook_secret: Optional[str] = Form(None),
@@ -6094,6 +6127,7 @@ async def process_endpoint(
         force_low = bool(body.get("force_low_quality"))
         output_format = body.get("output_format")
         layouts = body.get("layouts")
+        framing_method = body.get("framing_method")
         webhook_url = body.get("webhook_url")
         webhook_secret = body.get("webhook_secret")
         target_clips = body.get("target_clips")
@@ -6117,6 +6151,33 @@ async def process_endpoint(
         layouts = [p for p in layouts.split(",") if p.strip()]
     elif not isinstance(layouts, list):
         layouts = []
+
+    if framing_method is not None:
+        if not isinstance(framing_method, str) or framing_method not in visual_framing.FRAMING_METHODS:
+            choices = ", ".join(sorted(visual_framing.FRAMING_METHODS))
+            raise HTTPException(status_code=400, detail=f"framing_method must be one of {choices}")
+
+    # Validate generation settings before allocating a job directory.
+    def _gen_control(raw, name, lo, hi, integer=False):
+        if raw in (None, ""):
+            return None
+        try:
+            val = float(raw)
+        except (TypeError, ValueError, OverflowError):
+            raise HTTPException(status_code=400, detail=f"{name} must be a number")
+        if not (lo <= val <= hi):
+            raise HTTPException(status_code=400,
+                                detail=f"{name} must be between {lo:g} and {hi:g}")
+        if integer and not val.is_integer():
+            raise HTTPException(status_code=400, detail=f"{name} must be an integer")
+        return int(val) if integer else val
+
+    n_clips = _gen_control(target_clips, "target_clips", 1, 15, integer=True)
+    min_secs = _gen_control(clip_min_seconds, "clip_min_seconds", 5, 175)
+    max_secs = _gen_control(clip_max_seconds, "clip_max_seconds", 10, 180)
+    if min_secs is not None and max_secs is not None and max_secs < min_secs + 5:
+        raise HTTPException(status_code=400,
+                            detail="clip_max_seconds must be at least 5s above clip_min_seconds")
 
     # Module handover (issue #68): reuse the Thumbnail Studio source video and
     # its transcript so publishing to YouTube can flow straight into clip
@@ -6201,62 +6262,38 @@ async def process_endpoint(
     # Optional layouts are per job. The renderer reads these at import time in
     # the subprocess, so they must be set before Popen — same path WATERMARK
     # already takes.
-    chosen = layout_env(layouts)
-    env.update(chosen)
-    if chosen:
-        print(f"[layouts] job={job_id} enabled={sorted(chosen)}")
+    generation_options = layout_env(layouts)
+    if generation_options:
+        print(f"[layouts] job={job_id} enabled={sorted(generation_options)}")
+    if framing_method is not None:
+        generation_options["FRAMING_METHOD"] = framing_method
 
-    # Auto-hook: burn each clip's Gemini hook text during the render. Off when
-    # the field is absent, so API/MCP/webhook callers keep their old output
-    # byte-for-byte; the dashboard sends an explicit value either way.
-    if str(auto_hook).lower() in ("1", "true", "yes"):
-        env["AUTO_HOOK"] = "1"
+    hook_flag = str(auto_hook).lower()
+    if hook_flag in ("1", "true", "yes"):
+        generation_options["AUTO_HOOK"] = "1"
         from hooks import HOOK_STYLES
-        if auto_hook_style in HOOK_STYLES:
-            env["AUTO_HOOK_STYLE"] = auto_hook_style
-        print(f"[auto-hook] job={job_id} style={env.get('AUTO_HOOK_STYLE', 'classic')}")
+        if isinstance(auto_hook_style, str) and auto_hook_style in HOOK_STYLES:
+            generation_options["AUTO_HOOK_STYLE"] = auto_hook_style
+    elif hook_flag in ("0", "false", "no"):
+        generation_options["AUTO_HOOK"] = "0"
 
-    # Manual generation controls (discussion #65): optional clip-count target
-    # and duration band, forwarded to the selection prompts via the same env
-    # overrides the A/B harness already reads (clip_selection.py). All three
-    # are honest TARGETS, not guarantees — the model may return fewer clips
-    # when the material doesn't hold them. Bad values 400 instead of silently
-    # producing something the user didn't ask for.
-    def _gen_control(raw, name, lo, hi, integer=False):
-        if raw in (None, ""):
-            return None
-        try:
-            val = float(raw)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail=f"{name} must be a number")
-        if integer and val != int(val):
-            raise HTTPException(status_code=400, detail=f"{name} must be an integer")
-        if not (lo <= val <= hi):
-            raise HTTPException(status_code=400,
-                                detail=f"{name} must be between {lo:g} and {hi:g}")
-        return int(val) if integer else val
-
-    n_clips = _gen_control(target_clips, "target_clips", 1, 15, integer=True)
-    min_secs = _gen_control(clip_min_seconds, "clip_min_seconds", 5, 175)
-    max_secs = _gen_control(clip_max_seconds, "clip_max_seconds", 10, 180)
-    if min_secs is not None and max_secs is not None and max_secs < min_secs + 5:
-        raise HTTPException(status_code=400,
-                            detail="clip_max_seconds must be at least 5s above clip_min_seconds")
+    # Optional targets for the clip selection prompts (clip_selection.py).
     if n_clips is not None:
-        env["CLIP_TARGET_MIN"] = env["CLIP_TARGET_MAX"] = str(n_clips)
+        generation_options["CLIP_TARGET_MIN"] = generation_options["CLIP_TARGET_MAX"] = str(n_clips)
     if min_secs is not None:
-        env["CLIP_MIN_SECONDS"] = str(min_secs)
+        generation_options["CLIP_MIN_SECONDS"] = str(min_secs)
     if max_secs is not None:
-        env["CLIP_MAX_SECONDS"] = str(max_secs)
+        generation_options["CLIP_MAX_SECONDS"] = str(max_secs)
     if n_clips is not None or min_secs is not None or max_secs is not None:
         print(f"[gen-controls] job={job_id} clips={n_clips} band={min_secs}-{max_secs}")
 
-    # captions=false: the source already carries burned-in subtitles (or the
-    # caller adds its own later), so skip the free auto-caption pass instead
-    # of stacking a second layer. Absent → the deployment default (on).
-    if captions is not None and str(captions).lower() in ("0", "false", "no"):
-        env["AUTO_CAPTIONS"] = "0"
+    caption_flag = str(captions).lower()
+    if caption_flag in ("1", "true", "yes"):
+        generation_options["AUTO_CAPTIONS"] = "1"
+    elif caption_flag in ("0", "false", "no"):
+        generation_options["AUTO_CAPTIONS"] = "0"
         print(f"[captions] job={job_id} auto-captions off")
+    env.update(generation_options)
 
     input_path = None
     if url:
@@ -6356,7 +6393,7 @@ async def process_endpoint(
     # rejection hands the reservation back.
     if url and (QUALITY_GATE_MIN_HEIGHT > 0 or MIN_SOURCE_SECONDS > 0):
         try:
-            gate = await _quality_gate(url, force_low)
+            gate = await _quality_gate(url, force_low, probe=getattr(request.state, "source_probe", None))
         except BaseException:
             await _drop_unstarted_job(reservation_id, job_output_dir)
             raise
@@ -6383,6 +6420,10 @@ async def process_endpoint(
         # main.py cuts the source down to this many minutes before anything
         # reads it, so the whole pipeline (and the editor) sees a short video.
         _apply_source_cut(env, partial)
+        if "--transcript" in cmd:
+            # Thumbnail Studio's transcript uses the full source timeline.
+            index = cmd.index("--transcript")
+            del cmd[index:index + 2]
     if user_plan == "free":
         # Free-plan clips carry a burned-in watermark (applied by the main.py
         # subprocess after each clip renders).
@@ -6443,7 +6484,7 @@ async def process_endpoint(
                            source_cap_minutes=source_cap, skip_statics=skip_statics,
                            via_api_key=jobs[job_id]['via_api_key'],
                            lane=jobs[job_id]['lane'], submitted_at=jobs[job_id]['submitted_at'],
-                           topup=jobs[job_id]['topup'])
+                           topup=jobs[job_id]['topup'], generation_options=generation_options)
 
     _enqueue_job(job_id, priority)
     if _saturation_on():
@@ -7744,6 +7785,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
             force_strategy=force_strategy,
             captions_transcript=v_transcript,
             captioner=_recut_captioner(clip),
+            framing_method=data.get('framing_method', 'legacy'),
             # Trim the source's own subtitles only when ours go back on.
             subtitle_band=(data.get('source_subtitle_band')
                            if v_transcript else None))
@@ -7910,6 +7952,8 @@ async def _set_clip_mode_locked(req: ClipModeRequest, request: Request, job):
     if req.clip_index < 0 or req.clip_index >= len(clips):
         raise HTTPException(status_code=404, detail="Clip not found")
     clip = clips[req.clip_index]
+    if req.mode == "pro" and visual_framing.resolve(data.get('framing_method', 'legacy')) != "legacy":
+        raise HTTPException(status_code=400, detail="Pro mode requires face tracking.")
 
     base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
     clean_name = f"{base_name}_clip_{req.clip_index + 1}.mp4"
@@ -8014,7 +8058,8 @@ async def _set_clip_mode_locked(req: ClipModeRequest, request: Request, job):
                         duration=hook.get('duration_seconds'),
                         style=hook.get('style') or "pill", font=hook.get('font'),
                         layout_ranges=clip.get('layout_ranges'),
-                        has_captions=had_captions)
+                        has_captions=had_captions,
+                        face_aware=visual_framing.resolve(data.get('framing_method', 'legacy')) == "legacy")
                     name = hooked
                 except Exception as e:
                     # The clip without its hook beats no clip.
@@ -8156,6 +8201,17 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
             else:
                 bounds = [(s.get_frames(), e.get_frames()) for s, e in scenes]
 
+            method = visual_framing.resolve(data.get('framing_method', 'legacy'))
+            offsets = ()
+            if method in ("auto", "motion", "detail"):
+                import reframe_v2
+                aspect = 1.0 if data.get('output_format') == 'square' else 9 / 16
+                crop_w = min(int(orig_h * aspect), orig_w)
+                if crop_w < orig_w:
+                    offsets = reframe_v2.visual_trajectory(
+                        work_path, bounds, ["TRACK"] * len(bounds),
+                        fps, orig_w, orig_h, crop_w, method)
+
             out = []
             for idx, (start_f, end_f) in enumerate(bounds):
                 mid = (start_f + end_f) // 2
@@ -8167,21 +8223,18 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
                 if ok:
                     cv2.imwrite(os.path.join(output_dir, thumb_name), frame,
                                 [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-                    # Start the rectangle on the biggest face in the shot, so
-                    # the common case is a nudge rather than a hunt.
-                    try:
-                        faces = m.detect_face_candidates(frame)
-                        if faces:
-                            box = max(faces,
-                                      key=lambda f: f['box'][2] * f['box'][3])['box']
-                            suggested = min(1.0, max(0.0,
-                                                     (box[0] + box[2] / 2) / orig_w))
-                            # SPLIT halves crop vertically too, so the face's
-                            # height matters there (TRACK ignores it).
-                            suggested_y = min(1.0, max(0.0,
-                                                       (box[1] + box[3] / 2) / orig_h))
-                    except Exception:
-                        pass
+                    if offsets and offsets[mid] is not None:
+                        suggested = (offsets[mid] + crop_w / 2) / orig_w
+                    elif method == "legacy":
+                        try:
+                            faces = m.detect_face_candidates(frame)
+                            if faces:
+                                box = max(faces,
+                                          key=lambda f: f['box'][2] * f['box'][3])['box']
+                                suggested = min(1.0, max(0.0, (box[0] + box[2] / 2) / orig_w))
+                                suggested_y = min(1.0, max(0.0, (box[1] + box[3] / 2) / orig_h))
+                        except Exception:
+                            pass
                 else:
                     thumb_name = None
 
@@ -8352,6 +8405,7 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
             crop_overrides=overrides,
             captions_transcript=v_transcript,
             captioner=_recut_captioner(clip),
+            framing_method=data.get('framing_method', 'legacy'),
             # Trim the source's own subtitles only when ours go back on.
             subtitle_band=(data.get('source_subtitle_band')
                            if v_transcript else None))
@@ -8991,7 +9045,8 @@ async def add_hook(req: HookRequest, request: Request):
                     input_path, req.text, output_path, position=req.position or "auto",
                     font_scale=font_scale, duration=req.duration_seconds, style=req.style,
                     font=req.font, layout_ranges=clip_data.get('layout_ranges'),
-                    has_captions=had_captions)
+                    has_captions=had_captions,
+                    face_aware=visual_framing.resolve(data.get('framing_method', 'legacy')) == "legacy")
 
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, run_hook)

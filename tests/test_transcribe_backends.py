@@ -174,6 +174,7 @@ def fake_faster_whisper(monkeypatch):
         def __init__(self, model_size, device=None, compute_type=None, **kwargs):
             self.model_size = model_size
             self.device = device
+            self.compute_type = compute_type
             self.kwargs = kwargs
             created.append(self)
 
@@ -213,6 +214,136 @@ def test_run_whisper_transcription_materializes_segments(fake_faster_whisper, mo
     assert info.language == "es"
 
 
+@pytest.mark.parametrize("configured,expected", [(None, "small"), ("base", "base")])
+def test_whisper_retries_a_lazy_cuda_failure_with_lightweight_cpu_model(
+    fake_faster_whisper, monkeypatch, configured, expected,
+):
+    monkeypatch.setenv("WHISPER_DEVICE", "cuda")
+    monkeypatch.setenv("WHISPER_MODEL", "large-v3-turbo")
+    monkeypatch.setenv("WHISPER_COMPUTE", "float16")
+    monkeypatch.delenv("WHISPER_CPU_FALLBACK_MODEL", raising=False)
+    if configured:
+        monkeypatch.setenv("WHISPER_CPU_FALLBACK_MODEL", configured)
+    monkeypatch.setattr(tb, "_whisper_force_cpu", False)
+    config = sys.modules["faster_whisper"]
+    original_transcribe = config.WhisperModel.transcribe
+
+    def transcribe(self, source, **params):
+        def failed_segments():
+            raise RuntimeError("Library libcudnn_ops.so.9 could not be loaded")
+            yield
+
+        if self.device == "cuda":
+            return failed_segments(), SimpleNamespace(language="en")
+        return original_transcribe(self, source, **params)
+
+    monkeypatch.setattr(config.WhisperModel, "transcribe", transcribe)
+    segments, info = tb.run_whisper_transcription("source.mp4")
+    assert len(segments) == 1 and info.language == "es"
+    assert [(m.model_size, m.device, m.compute_type) for m in fake_faster_whisper] == [
+        ("large-v3-turbo", "cuda", "float16"),
+        (expected, "cpu", "int8"),
+    ]
+
+
+def test_batched_whisper_preserves_word_timestamps(fake_faster_whisper, monkeypatch):
+    calls = []
+
+    class Pipeline:
+        def __init__(self, model):
+            pass
+
+        def transcribe(self, source, **params):
+            calls.append(params)
+            words = [SimpleNamespace(start=42.25, end=42.60, word=" hello")]
+            segment = SimpleNamespace(start=42.25, end=43.0, text=" hello", words=words)
+            return iter([segment]), SimpleNamespace(duration=90, language="en")
+
+    monkeypatch.setattr(sys.modules["faster_whisper"], "BatchedInferencePipeline", Pipeline,
+                        raising=False)
+    monkeypatch.setenv("WHISPER_BATCH_SIZE", "4")
+    transcript = tb._transcribe_with_whisper("source.mp4")
+    assert calls[0]["batch_size"] == 4 and calls[0]["word_timestamps"] is True
+    assert calls[0]["chunk_length"] == 12 and calls[0]["without_timestamps"] is False
+    assert transcript["segments"][0]["words"] == [
+        {"word": " hello", "start": 42.25, "end": 42.60},
+    ]
+
+
+@pytest.mark.parametrize("outcome", ["runtime error", "empty", "incomplete"])
+def test_batched_whisper_recovers_on_sequential_decode(monkeypatch, outcome):
+    calls = []
+
+    def decode(source, *, batch_size=1, **params):
+        calls.append(batch_size)
+        if batch_size > 1:
+            if outcome == "runtime error":
+                raise RuntimeError("CUDA failed to allocate the batch")
+            result = [] if outcome == "empty" else [SimpleNamespace(start=0, end=6)]
+            return result, SimpleNamespace(duration_after_vad=60)
+        return ["sequential segment"], None
+
+    monkeypatch.setattr(tb, "_run_whisper_once", decode)
+    assert tb.run_whisper_transcription("source.mp4", batch_size=4)[0] == ["sequential segment"]
+    assert calls == [4, 1]
+
+
+def test_whisper_retries_with_ffmpeg_when_pyav_changes_its_signature(monkeypatch):
+    class Model:
+        def transcribe(self, source, **params):
+            if isinstance(source, str):
+                raise TypeError("open() got an unexpected keyword argument 'metadata_errors'")
+            assert source.tolist() == [0.0, 0.5]
+            return iter([SimpleNamespace(end=1.0)]), SimpleNamespace(language="en")
+
+    def ffmpeg(command, **kwargs):
+        assert command[0] == "ffmpeg" and "0:a:0" in command
+        return SimpleNamespace(returncode=0, stdout=b"\x00\x00\x00\x40")
+
+    monkeypatch.setattr(tb, "_get_whisper_model", lambda: (Model(), "cpu"))
+    monkeypatch.setattr(tb.subprocess, "run", ffmpeg)
+    segments, info = tb.run_whisper_transcription("source.mp4")
+    assert len(segments) == 1 and info.language == "en"
+
+
+def test_gpu_slot_needed_only_for_gpu_capable_backends(monkeypatch):
+    monkeypatch.setenv("WHISPER_DEVICE", "cpu")
+    monkeypatch.setenv("TRANSCRIBE_BACKEND", "whisper")
+    monkeypatch.setattr(tb, "onnxruntime_device", lambda: "cuda")
+    assert not tb.uses_gpu_for_transcription()
+    monkeypatch.setenv("TRANSCRIBE_BACKEND", "parakeet")
+    assert tb.uses_gpu_for_transcription()
+    monkeypatch.setattr(tb, "onnxruntime_device", lambda: "cpu")
+    assert not tb.uses_gpu_for_transcription()
+
+
+def test_whisper_pinned_to_cpu_keeps_gpu_slot_requirement(monkeypatch):
+    monkeypatch.setenv("WHISPER_DEVICE", "cuda")
+    monkeypatch.setattr(tb, "_whisper_force_cpu", True)
+    assert tb.uses_gpu_for_transcription()
+
+
+def test_audio_probe_keeps_decoding_errors_distinct_from_missing_audio(monkeypatch):
+    def fail(*args, check, **kwargs):
+        assert check
+        raise tb.subprocess.CalledProcessError(1, args)
+
+    monkeypatch.setattr(tb.subprocess, "run", fail)
+    assert tb._has_audio_stream("unreadable.mp4")
+
+
+def test_failed_parakeet_audio_decode_cleans_scratch_and_reports_ffmpeg(monkeypatch, tmp_path):
+    monkeypatch.setattr(tb.tempfile, "tempdir", str(tmp_path))
+
+    def fail(cmd, **kwargs):
+        raise tb.subprocess.CalledProcessError(1, cmd, stderr="Invalid input stream\n")
+
+    monkeypatch.setattr(tb.subprocess, "run", fail)
+    with pytest.raises(RuntimeError, match="Could not decode audio: Invalid input stream"):
+        tb._extract_wav("broken.mp4")
+    assert list(tmp_path.iterdir()) == []
+
+
 # --- release_models: the API process must not keep the models resident ------
 
 class _FakeCT2:
@@ -239,6 +370,17 @@ def test_release_models_drops_both_singletons_and_unloads_whisper(monkeypatch):
     assert tb._whisper_model is None and tb._whisper_key is None
     assert tb._parakeet_model is None
     assert whisper.model.unloaded  # ctranslate2 frees VRAM on unload, not on GC
+
+
+def test_release_models_leaves_an_in_use_cpu_decoder_alive(monkeypatch):
+    whisper = _FakeWhisper()
+    monkeypatch.setattr(tb, "_whisper_model", whisper)
+    monkeypatch.setattr(tb, "_whisper_key", ("small", "cpu", "int8"))
+
+    tb.release_models()
+
+    assert tb._whisper_model is None
+    assert not whisper.model.unloaded
 
 
 def test_release_models_hands_every_gate_slot_back():
@@ -498,13 +640,19 @@ def test_segment_drifted_by_language_script():
     assert tb._segment_drifted("Καλημέρα Марк", "el")
 
 
-def test_repair_replaces_only_drifted_segments(monkeypatch):
+def test_repair_replaces_only_drifted_segments(monkeypatch, tmp_path):
+    import wave
     import numpy as np
     calls = []
-    monkeypatch.setattr(tb, "_read_wav_16k", lambda path: np.zeros(16000 * 7, dtype=np.float32))
+    wav_path = str(tmp_path / "source.wav")
+    audio = np.zeros(16000 * 7, dtype="<i2")
+    audio[int(1.85 * 16000)] = 16384
+    with wave.open(wav_path, "wb") as f:
+        f.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+        f.writeframes(audio.tobytes())
 
     def fake_span(audio, language):
-        calls.append((len(audio), language))
+        calls.append((len(audio), language, audio[0]))
         return "Today Mark is gonna tell his story.", [
             {"word": " Today", "start": 0.15, "end": 0.6},
             {"word": " story.", "start": 1.5, "end": 9.0},  # runs past the next segment
@@ -512,8 +660,8 @@ def test_repair_replaces_only_drifted_segments(monkeypatch):
 
     monkeypatch.setattr(tb, "_whisper_span", fake_span)
     t = _drift_transcript()
-    assert tb._repair_script_drift(t, "/tmp/x.wav") == 1
-    assert calls == [(int(4.15 * 16000) - int(1.85 * 16000), "en")]
+    assert tb._repair_script_drift(t, wav_path) == 1
+    assert calls == [(int(4.15 * 16000) - int(1.85 * 16000), "en", 0.5)]
     seg = t["segments"][1]
     assert seg["text"] == "Today Mark is gonna tell his story."
     assert seg["words"][0]["start"] == pytest.approx(2.0)
@@ -524,7 +672,7 @@ def test_repair_replaces_only_drifted_segments(monkeypatch):
 
 
 def test_repair_is_a_noop_without_drift(monkeypatch):
-    monkeypatch.setattr(tb, "_read_wav_16k", lambda path: pytest.fail("must not read audio"))
+    monkeypatch.setattr(tb, "_read_wav_span_16k", lambda *args: pytest.fail("must not read audio"))
     t = _drift_transcript()
     t["segments"].pop(1)
     assert tb._repair_script_drift(t, "/tmp/x.wav") == 0
@@ -532,7 +680,7 @@ def test_repair_is_a_noop_without_drift(monkeypatch):
 
 def test_repair_failure_keeps_parakeet_text(monkeypatch):
     import numpy as np
-    monkeypatch.setattr(tb, "_read_wav_16k", lambda path: np.zeros(16000 * 7, dtype=np.float32))
+    monkeypatch.setattr(tb, "_read_wav_span_16k", lambda *args: np.zeros(16000, dtype=np.float32))
 
     def boom(audio, language):
         raise RuntimeError("CUDA out of memory")
@@ -681,12 +829,14 @@ class TestRequireGpu:
         monkeypatch.setattr(tb, "_whisper_force_cpu", False)
         monkeypatch.setattr(tb, "_whisper_model", None)
 
-    def test_a_cuda_failure_raises_instead_of_going_to_the_cpu(self, monkeypatch):
+    @pytest.mark.parametrize("error", ["CUDA failed with error out of memory", "cuBLAS unavailable"])
+    def test_a_cuda_failure_raises_instead_of_going_to_the_cpu(self, monkeypatch, error):
+        monkeypatch.setenv("WHISPER_DEVICE", "cuda")
         calls = []
 
         def once(path, **params):
             calls.append(path)
-            raise RuntimeError("CUDA failed with error out of memory")
+            raise RuntimeError(error)
         monkeypatch.setattr(tb, "_run_whisper_once", once)
         with pytest.raises(tb.GpuUnavailable):
             tb.run_whisper_transcription("x.mp4")
@@ -702,6 +852,12 @@ class TestRequireGpu:
         with pytest.raises(tb.GpuUnavailable):
             tb._whisper_span(None, "en")
 
+    def test_a_cpu_parakeet_build_is_refused_before_extracting_audio(self, monkeypatch):
+        monkeypatch.setattr(tb, "onnxruntime_device", lambda: "cpu")
+        monkeypatch.setattr(tb, "_extract_wav", lambda path: pytest.fail("no CPU decode"))
+        with pytest.raises(tb.GpuUnavailable):
+            tb._transcribe_with_parakeet("x.mp4")
+
     def test_other_errors_are_not_turned_into_gpu_unavailable(self, monkeypatch):
         def once(path, **params):
             raise RuntimeError("bad input file")
@@ -711,6 +867,7 @@ class TestRequireGpu:
 
 
 def test_without_require_gpu_a_cuda_failure_still_retries_on_the_cpu(monkeypatch):
+    monkeypatch.setenv("WHISPER_DEVICE", "cuda")
     monkeypatch.setattr(tb, "_gpu_only", False)
     monkeypatch.setattr(tb, "_whisper_force_cpu", False)
     calls = []

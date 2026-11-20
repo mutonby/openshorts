@@ -22,8 +22,8 @@ TRANSCRIBE_BACKEND env: "whisper" (default) | "parakeet".
 The parakeet path falls back to whisper automatically when the model errors,
 produces no usable words, or the detected language is outside its 25
 supported European languages (e.g. Japanese/Chinese/Arabic uploads).
-GPU whisper in turn falls back to CPU whisper on CUDA errors (VRAM is shared
-with other models on the host, so loads can OOM under load).
+GPU Whisper retries accelerator failures with multilingual small INT8 on CPU.
+WHISPER_BATCH_SIZE enables an optional batched decoding pass.
 """
 import os
 import re
@@ -34,6 +34,7 @@ import threading
 import time
 
 from subtitles import (
+    DEFAULT_WHISPER_MODEL,
     get_whisper_config,
     WHISPER_TRANSCRIBE_PARAMS,
     merge_continuation_words,
@@ -234,39 +235,96 @@ def _get_whisper_model():
     on GPU would also mean re-allocating a couple of GB of VRAM per job).
     """
     global _whisper_model, _whisper_key
-    cfg = get_whisper_config()
-    if _whisper_force_cpu:
-        cfg["device"] = "cpu"
-        cfg["compute_type"] = "int8"
-    key = (cfg["model_size"], cfg["device"], cfg["compute_type"])
     with _whisper_lock:
+        cfg = get_whisper_config()
+        if _whisper_force_cpu:
+            cfg["device"] = "cpu"
+            cfg["compute_type"] = "int8"
+            cfg["model_size"] = _whisper_cpu_fallback_model()
+        key = (cfg["model_size"], cfg["device"], cfg["compute_type"])
         if _whisper_model is None or _whisper_key != key:
             from faster_whisper import WhisperModel
             kwargs = {"cpu_threads": whisper_cpu_threads()} if key[1] == "cpu" else {}
             _whisper_model = WhisperModel(key[0], device=key[1], compute_type=key[2],
                                           **kwargs)
             _whisper_key = key
-    return _whisper_model, cfg["device"]
+        return _whisper_model, cfg["device"]
 
 
 def _whisper_device():
     return "cpu" if _whisper_force_cpu else get_whisper_config()["device"]
 
 
-def _run_whisper_once(media_path, **params):
-    # A CPU decode keeps the host slot: the process still holds its CUDA
-    # context (~825 MB) until it exits, so the slot still stands for memory
-    # on the card. Handing it back let the next process in, which hit the
-    # same OOM and fell to the CPU too (prod, 18-nov-2026).
-    if _gpu_only and _whisper_device() == "cpu":
+def _whisper_cpu_fallback_model():
+    return os.environ.get("WHISPER_CPU_FALLBACK_MODEL", "").strip() or DEFAULT_WHISPER_MODEL
+
+
+def _whisper_batch_size():
+    try:
+        return max(1, min(8, int(os.environ.get("WHISPER_BATCH_SIZE", "1"))))
+    except ValueError:
+        return 1
+
+
+def _transcribe_backend():
+    return os.environ.get("TRANSCRIBE_BACKEND", "whisper").strip().lower()
+
+
+def uses_gpu_for_transcription():
+    """Whether this ASR configuration needs a host GPU slot.
+
+    Keep using the GPU slot after a CUDA failure pins Whisper to the CPU,
+    since the CUDA context can still hold GPU memory.
+    """
+    return _whisper_force_cpu or _whisper_device() != "cpu" or (
+        _transcribe_backend() == "parakeet" and onnxruntime_device() == "cuda"
+    )
+
+
+def _decode_whisper_audio(media_path):
+    """Decode the first audio stream to the waveform faster-whisper expects."""
+    import numpy as np
+
+    result = subprocess.run(
+        ["ffmpeg", "-nostdin", "-loglevel", "error", "-i", media_path,
+         "-map", "0:a:0", "-ac", "1", "-ar", "16000", "-f", "s16le", "-"],
+        capture_output=True, timeout=1800,
+    )
+    if result.returncode:
+        detail = result.stderr.decode(errors="replace").strip()[-500:]
+        raise RuntimeError(f"Could not decode audio with FFmpeg: {detail}")
+    audio = np.frombuffer(result.stdout, dtype="<i2").astype(np.float32)
+    audio /= 32768.0
+    return audio
+
+
+def _run_whisper_once(media_path, *, batch_size=1, **params):
+    on_cpu = _whisper_device() == "cpu"
+    if _gpu_only and on_cpu:
         raise GpuUnavailable("whisper is configured for the CPU")
-    gate = _ASR_GATE if _whisper_device() != "cpu" else _NULL_GATE
+    gate = _NULL_GATE if on_cpu else _ASR_GATE
     # The model is fetched inside the gate: release_models() drains the gate
     # before unloading, so a transcription can never start on a model that is
     # being dropped underneath it.
     with gate:
         model, _device = _get_whisper_model()
-        segments, info = model.transcribe(media_path, **params)
+        decoder = model
+        if batch_size > 1:
+            from faster_whisper import BatchedInferencePipeline
+            decoder = BatchedInferencePipeline(model)
+            params["batch_size"] = batch_size
+            # Preserve segment cuts and avoid packing many separated utterances
+            # into a single decode window.
+            params.setdefault("without_timestamps", False)
+            params.setdefault("chunk_length", 12)
+        try:
+            segments, info = decoder.transcribe(media_path, **params)
+        except TypeError as e:
+            # Faster-Whisper 1.2.1 uses an av.open argument removed in PyAV 19.
+            if "unexpected keyword argument 'metadata_errors'" not in str(e):
+                raise
+            print("⚠️ [ASR] PyAV audio decode is incompatible, retrying with FFmpeg", flush=True)
+            segments, info = decoder.transcribe(_decode_whisper_audio(media_path), **params)
         progress = _TranscribeProgress(getattr(info, "duration", 0))
         materialized = []
         for segment in segments:
@@ -278,36 +336,57 @@ def _run_whisper_once(media_path, **params):
         return materialized, info
 
 
-def run_whisper_transcription(media_path, **params):
+def run_whisper_transcription(media_path, *, batch_size=1, **params):
     """Transcribe and FULLY materialize the segments inside the GPU gate.
 
     faster-whisper returns a lazy generator — decoding happens while
     iterating, so the gate must wrap list(segments), not just transcribe().
     Returns (segments_list, info).
 
-    A CUDA failure (model load OOM or mid-decode) retries once on CPU and
-    pins CPU for the rest of the process — the GPU is shared with other
-    models, so a job must degrade instead of dying when VRAM runs out.
+    A failed batch retries sequentially. GPU initialization and decode
+    failures retry on CPU and pin CPU for the rest of the process.
     """
     global _whisper_model, _whisper_force_cpu
+    if batch_size > 1:
+        try:
+            segments, info = _run_whisper_once(media_path, batch_size=batch_size, **params)
+            voiced_seconds = getattr(info, "duration_after_vad", 0)
+            covered_seconds = sum(max(0, seg.end - seg.start) for seg in segments)
+            if not voiced_seconds or (
+                segments and (voiced_seconds < 12 or covered_seconds >= 0.6 * voiced_seconds)
+            ):
+                return segments, info
+            print("⚠️ [ASR] batched Whisper covered too little voiced audio, "
+                  "retrying sequentially", flush=True)
+        except (RuntimeError, ValueError) as e:
+            print(f"⚠️ [ASR] batched Whisper failed ({e}), retrying sequentially", flush=True)
+
+    device = _whisper_device()
     try:
         return _run_whisper_once(media_path, **params)
     except RuntimeError as e:
-        if _whisper_force_cpu or "cuda" not in str(e).lower():
+        error = str(e).lower()
+        if device == "cpu" or not any(
+            name in error for name in ("cuda", "cublas", "cudnn", "out of memory")
+        ):
             raise
         if _gpu_only:
             with _whisper_lock:
                 _whisper_model = None
             raise GpuUnavailable(f"whisper GPU failed ({e})") from e
-        print(f"⚠️ [ASR] whisper GPU failed ({e}) — retrying on CPU", flush=True)
-        _whisper_force_cpu = True
         with _whisper_lock:
-            _whisper_model = None  # drop the GPU model to release its VRAM
-        return _run_whisper_once(media_path, **params)
+            if not _whisper_force_cpu:
+                _whisper_force_cpu = True
+                _whisper_model = None  # drop the GPU model to release its VRAM
+        print(f"⚠️ [ASR] Whisper GPU failed ({e}), retrying with "
+              f"{_whisper_cpu_fallback_model()} INT8 on CPU", flush=True)
+    return _run_whisper_once(media_path, **params)
 
 
 def _transcribe_with_whisper(media_path):
-    segments, info = run_whisper_transcription(media_path, **WHISPER_TRANSCRIBE_PARAMS)
+    segments, info = run_whisper_transcription(
+        media_path, batch_size=_whisper_batch_size(), **WHISPER_TRANSCRIBE_PARAMS,
+    )
 
     out_segments = []
     text_parts = []
@@ -532,13 +611,16 @@ def release_models():
         _ASR_GATE.acquire()
     try:
         with _whisper_lock:
-            whisper, _whisper_model, _whisper_key = _whisper_model, None, None
+            whisper, whisper_key = _whisper_model, _whisper_key
+            _whisper_model, _whisper_key = None, None
         with _parakeet_lock:
             parakeet, _parakeet_model = _parakeet_model, None
     finally:
         for _ in range(_ASR_SLOTS):
             _ASR_GATE.release()
-    if whisper is not None:
+    # A CPU decoder can still own this instance. Its reference keeps it
+    # alive until it finishes reading the generator.
+    if whisper is not None and (whisper_key is None or whisper_key[1] != "cpu"):
         try:
             # ctranslate2 frees the weights on unload, not on garbage
             # collection: the Python wrapper can outlive the last reference.
@@ -568,11 +650,20 @@ def _extract_wav(media_path):
     fd, wav_path = tempfile.mkstemp(suffix=".wav", prefix="asr_")
     os.close(fd)
     cmd = [
-        "ffmpeg", "-y", "-loglevel", "error", "-i", media_path,
+        "ffmpeg", "-y", "-nostdin", "-loglevel", "error", "-i", media_path,
         "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", wav_path,
     ]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL,
-                   stderr=subprocess.PIPE, timeout=1800)
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.PIPE, timeout=1800, text=True, errors="replace")
+    except (OSError, subprocess.SubprocessError) as e:
+        try:
+            os.remove(wav_path)
+        except OSError:
+            pass
+        if isinstance(e, subprocess.CalledProcessError) and e.stderr:
+            raise RuntimeError(f"Could not decode audio: {e.stderr.strip()[-500:]}") from e
+        raise
     return wav_path
 
 
@@ -612,6 +703,8 @@ def _words_from_tokens(tokens, timestamps, seg_start, seg_end):
 
 
 def _transcribe_with_parakeet(media_path):
+    if _gpu_only and onnxruntime_device() != "cuda":
+        raise GpuUnavailable("parakeet is configured for the CPU")
     wav_path = _extract_wav(media_path)
     try:
         # 16kHz mono s16le wav -> 32000 bytes per second of audio.
@@ -701,19 +794,22 @@ def _segment_drifted(text, language):
     return any(_SCRIPT_RX[s].search(text or "") for s in _FOREIGN_SCRIPTS[expected])
 
 
-def _read_wav_16k(wav_path):
+def _read_wav_span_16k(wav_path, start, end):
     import wave
     import numpy as np
     with wave.open(wav_path, "rb") as w:
-        frames = w.readframes(w.getnframes())
-    return np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+        first = min(w.getnframes(), int(start * 16000))
+        last = min(w.getnframes(), int(end * 16000))
+        w.setpos(first)
+        frames = w.readframes(max(0, last - first))
+    return np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
 
 
 def _whisper_span(audio, language):
     """Whisper words for one short audio span (seconds relative to the span).
 
-    Calls the model directly rather than through run_whisper_transcription so
-    the user-facing progress lines are not printed once per span.
+    Calls the model directly so the Parakeet model can keep its GPU slot
+    and the user-facing progress lines are not printed again for each span.
     """
     params = dict(WHISPER_TRANSCRIBE_PARAMS, language=language, vad_filter=False)
     if _gpu_only and _whisper_device() == "cpu":
@@ -742,23 +838,20 @@ def _repair_script_drift(transcript, wav_path):
     drifted = [i for i, s in enumerate(segments) if _segment_drifted(s.get("text"), language)]
     if not drifted:
         return 0
-    try:
-        audio = _read_wav_16k(wav_path)
-    except Exception as e:
-        print(f"⚠️ [ASR] script drift repair skipped ({type(e).__name__}: {e})")
-        return 0
-    sr = 16000
     fixed = 0
     for i in drifted:
         seg = segments[i]
         lo = max(0.0, seg["start"] - _DRIFT_PAD)
         hi = seg["end"] + _DRIFT_PAD
         try:
-            text, words = _whisper_span(audio[int(lo * sr):int(hi * sr)], language)
+            audio = _read_wav_span_16k(wav_path, lo, hi)
+            if not len(audio):
+                continue
+            text, words = _whisper_span(audio, language)
         except Exception as e:
             print(f"⚠️ [ASR] script drift repair failed ({type(e).__name__}: {e})")
             break
-        if not words:
+        if not words or not text.strip() or _segment_drifted(text, language):
             continue
         # Keep the transcript chronological: the padded span may reach into
         # the neighbouring segments.
@@ -819,12 +912,11 @@ class NoAudioError(Exception):
 
 def _has_audio_stream(media_path) -> bool:
     """True if the file has at least one audio stream (ffprobe)."""
-    import subprocess
     try:
         out = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "a",
              "-show_entries", "stream=index", "-of", "csv=p=0", media_path],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, check=True, timeout=60,
         )
         return bool(out.stdout.strip())
     except Exception:
@@ -856,9 +948,7 @@ def transcribe_media(media_path):
             "This video has no audio track. OpenShorts finds viral moments from "
             "speech, so it needs a video with audio.")
 
-    backend = os.environ.get("TRANSCRIBE_BACKEND", "whisper").strip().lower()
-
-    if backend == "parakeet":
+    if _transcribe_backend() == "parakeet":
         try:
             transcript = _transcribe_with_parakeet(media_path)
             reason = _parakeet_fallback_reason(transcript)

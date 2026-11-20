@@ -1,5 +1,27 @@
 # Layout selection and vertical reframing
 
+## Face-model-free framing
+
+`POST /api/process` accepts `framing_method` for vertical and square outputs.
+The dashboard starts with `auto`. The API uses the deployment's
+`FRAMING_METHOD` setting when omitted and defaults to `legacy`. The direct
+pipeline CLI accepts `--framing-method`.
+
+| Method | Behavior |
+| --- | --- |
+| `auto` | Follows a distinct area of motion or visual detail. Shows the whole scene when a narrow crop would discard too much of the visual signal. |
+| `motion` | Follows local changes within each scene. Centers a scene with no reliable motion. |
+| `detail` | Follows a region of concentrated contrast or texture. Centers a scene with no reliable detail. |
+| `center` | Uses a fixed crop centered on the source. |
+| `fit` | Keeps the full source width with a blurred background. |
+| `legacy` | Uses the face and speaker detection and layout options described below. |
+
+The visual modes analyze small grayscale samples at about four frames per
+second. They reset at scene cuts and limit how fast the crop can move. The
+static methods skip the scene pass unless the editor has per-scene overrides.
+Recuts keep the project's method. Hook placement uses the layout and caption
+bands, and face-dependent Pro conversion is available with legacy framing.
+
 ## Choosing the layout (`layout_picker.py`, `app.py:layout_env`)
 
 `POST /api/process` accepts `layouts`: a JSON list or comma-separated string of

@@ -45,6 +45,44 @@ def test_concat_list_format():
     assert content == "file '/tmp/a/seg_000.mp4'\nfile '/tmp/a/seg_001.mp4'\n"
 
 
+def test_visual_render_uses_no_face_detectors_and_keeps_scene_overrides(monkeypatch, tmp_path):
+    import sys
+    from types import SimpleNamespace
+
+    import numpy as np
+    import reframe_v2
+
+    frame = np.zeros((108, 192), dtype=np.uint8)
+    frame[15:80, 145:170] = 200
+    other = np.fliplr(frame)
+    timecode = lambda n: SimpleNamespace(get_frames=lambda: n)
+    camera = lambda *_a, **_kw: SimpleNamespace(crop_width=608, crop_height=1080)
+    main = SimpleNamespace(
+        get_video_resolution=lambda _: (1920, 1080),
+        detect_scenes=lambda _: ([(timecode(0), timecode(30)),
+                                  (timecode(30), timecode(60))], 30),
+        SmoothedCameraman=camera,
+    )
+
+    def no_detector(*_args, **_kwargs):
+        raise AssertionError("a face model was called")
+
+    monkeypatch.setitem(sys.modules, "main", main)
+    monkeypatch.setattr(reframe_v2, "_analyze_trajectory", no_detector)
+    monkeypatch.setattr(reframe_v2.split_layout, "detect_split_scenes", no_detector)
+    monkeypatch.setattr(reframe_v2, "_visual_samples",
+                        lambda *_: [(0, frame), (15, frame), (30, other), (45, other)])
+
+    def verify(_path, specs, *_):
+        assert len(specs) == 2
+        assert specs[0][3][0][2] > 1100
+        assert {box[2] for box in specs[1][3]} == {656}
+
+    monkeypatch.setattr(reframe_v2, "encode_scenes", verify)
+    assert reframe_v2.render("clip", str(tmp_path / "result.mp4"), VERTICAL,
+                             framing_method="auto", crop_overrides={1: 0.5})
+
+
 class TestDeliverySize:
     """A 720p source must not produce a 406x720 clip (prod audit, 25-jul-2026)."""
 

@@ -167,23 +167,9 @@ def detect_faces_full_res(frame):
     the same frames detect fine. Six samples per scene, so the cost is paid on
     screencast candidates only.
     """
-    import cv2
     import main as m
 
-    h, w, _ = frame.shape
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    with m.DETECT_LOCK:
-        results = m.face_detection.process(rgb)
-    if not results.detections:
-        return []
-
-    out = []
-    for detection in results.detections:
-        b = detection.location_data.relative_bounding_box
-        box = [int(b.xmin * w), int(b.ymin * h),
-               int(b.width * w), int(b.height * h)]
-        out.append({'box': box, 'score': box[2] * box[3]})
-    return out
+    return m.detect_face_candidates(frame, full_resolution=True)
 
 
 def _face_centre(candidates, frame_w):

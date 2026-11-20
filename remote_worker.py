@@ -31,6 +31,7 @@ import secrets
 import time
 
 from jsonfile import write_json_atomic
+from framing import FRAMING_METHODS
 
 CLAIM_FILE = ".remote.json"
 LOG_FILE = ".remote.log"
@@ -64,7 +65,8 @@ _IMAGE_FILE_BYTES = 32 * 1024 * 1024
 # storage secret: this host downloads the source and delivers the result.
 _OPTION_NAMES = frozenset({
     "WATERMARK", "MAX_SOURCE_MINUTES", "SOURCE_CAP_MINUTES", "HOOK_LAZY",
-    "CUT_MAX_FPS"})
+    "CUT_MAX_FPS", "FRAMING_METHOD", "SPLIT_LAYOUT", "SCREENCAST_LAYOUT",
+    "SPEAKER_CUT", "SPEAKER_SIGNAL", "PUNCH_IN"})
 _OPTION_PREFIXES = ("AUTO_", "CLIP_")
 _OPTION_VALUE = re.compile(r"^[A-Za-z0-9 _.,:+-]{0,120}$")
 _FORMATS = frozenset({"auto", "vertical", "horizontal", "square"})
@@ -74,6 +76,8 @@ def allowed_option(name, value=""):
     """Whether ``name=value`` is a job setting that may cross between hosts."""
     if not isinstance(name, str) or not re.match(r"^[A-Z][A-Z0-9_]{0,63}$", name):
         return False
+    if name == "FRAMING_METHOD":
+        return value in FRAMING_METHODS
     if name not in _OPTION_NAMES and not name.startswith(_OPTION_PREFIXES):
         return False
     return bool(_OPTION_VALUE.match(str(value)))
@@ -86,7 +90,8 @@ def job_options(job_env, base_env):
     for name, value in (job_env or {}).items():
         if not allowed_option(name, value):
             continue
-        if (base_env or {}).get(name) == value:
+        # The worker's own default can differ from the server's framing choice.
+        if name != "FRAMING_METHOD" and (base_env or {}).get(name) == value:
             continue
         out[name] = str(value)
     return out

@@ -31,6 +31,7 @@ from fastapi.responses import JSONResponse, Response
 
 import mcp_ui
 import social_platforms
+from framing import FRAMING_METHODS
 from subtitles import CAPTION_PRESETS, line_budget
 
 router = APIRouter()
@@ -123,6 +124,12 @@ TOOLS = [
                     "items": {"type": "string",
                               "enum": ["auto", "split", "screencast", "speaker_cut", "punch_in"]},
                     "description": "Optional extra reframe layouts. 'auto' lets AI pick per video.",
+                },
+                "framing_method": {
+                    "type": "string",
+                    "enum": list(FRAMING_METHODS),
+                    "description": "Framing for vertical or square clips. Auto uses motion and detail "
+                                   "without face detection. Legacy enables speaker-based layouts.",
                 },
                 "output_format": {
                     "type": "string",
@@ -400,16 +407,15 @@ async def _tool_process_video(client, args):
         "webhook_url": args.get("webhook_url"),
         "webhook_secret": args.get("webhook_secret"),
     }
-    for k in ("target_clips", "clip_min_seconds", "clip_max_seconds", "captions"):
+    for k in ("target_clips", "clip_min_seconds", "clip_max_seconds", "captions", "framing_method"):
         if args.get(k) is not None:
             body[k] = args[k]
     # Same default as the dashboard: hook on unless the caller opts out. The
     # REST endpoint keeps "absent = off" for older integrations; the MCP
     # tool is newer than the hook and its users expect the dashboard output.
-    if args.get("auto_hook", True):
-        body["auto_hook"] = True
-        if args.get("hook_style"):
-            body["auto_hook_style"] = args["hook_style"]
+    body["auto_hook"] = args.get("auto_hook", True)
+    if body["auto_hook"] and args.get("hook_style"):
+        body["auto_hook_style"] = args["hook_style"]
     resp = await client.post("/api/process", json=body)
     if resp.status_code >= 400:
         return _api_error(resp), True
