@@ -236,6 +236,12 @@ Navigate to **`http://localhost:5175`**
 5. **UGC Gallery**: Browse all generated videos and avatars
 6. **AI Agent**: Drop vertical videos in a folder and an agent skill picks, edits and queues clips for your approval
 
+**Desktop shortcut (Linux, optional):** add an OpenShorts icon to your application menu and desktop (KDE, GNOME, XFCE and other freedesktop desktops):
+```bash
+desktop/install-desktop-shortcut.sh            # --no-desktop: menu entry only, --uninstall: remove it
+```
+Clicking it runs `docker compose up -d` in this checkout (with `sudo` if your user is not in the `docker` group), waits for the dashboard and opens it in your browser; if OpenShorts is already running it just opens the dashboard. Right-click the icon for **Stop OpenShorts**. The same launcher works from a terminal: `desktop/openshorts-launch.sh [start|stop|status]`.
+
 ### 5. GPU acceleration (optional, NVIDIA)
 
 The default image is CPU-only. With an NVIDIA card (any card with NVENC, e.g. RTX 4060) an 8-minute video clips in about a minute instead of 5 to 8. Nothing is passed through in the VM sense — the container just gets access to the host GPU.
