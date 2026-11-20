@@ -2937,51 +2937,54 @@ if __name__ == '__main__':
                     pass
 
             if not transcript_full or speech_is_sparse(transcript_full, source_duration):
-                raise RuntimeError(
-                    "Audio-first selection found too little speech to choose clips. "
-                    "Set AUDIO_FIRST_SELECTED_RANGES=0 to use the original full-video workflow."
-                )
-
-            print("🧠 Selecting viral moments from the full-stream transcript.")
-            selected_data = get_viral_clips(
-                transcript_full, source_duration, viewer_clips=viewer_clips)
-            if not selected_data or not selected_data.get("shorts"):
-                raise RuntimeError("AI did not return usable clip timestamps for this stream.")
-
-            _ranges = _yt_segments.plan_ranges(selected_data["shorts"], source_duration)
-            if not _ranges:
-                raise RuntimeError("The AI clip timestamps did not produce valid video ranges.")
-            print(f"📌 Selected {len(selected_data['shorts'])} clip(s) across "
-                  f"{len(_ranges)} unique video range(s). Fetching only those ranges.")
-
-            _segment_paths = []
-            try:
-                for _i, _range in enumerate(_ranges, 1):
-                    _segment_path, _ = download_youtube_video(
-                        args.url, output_dir, allow_paid=True, use_cache=False,
-                        download_range=(_range["start"], _range["end"]),
-                        output_suffix=f".selected_{_i:02d}")
-                    _segment_paths.append(_segment_path)
-                input_video = os.path.join(output_dir, f"{video_title}_selected.mp4")
-                _yt_segments.concat_segments(_segment_paths, input_video)
-            finally:
-                for _path in _segment_paths:
-                    try:
-                        os.remove(_path)
-                    except OSError:
-                        pass
-
-            _mapped_shorts, _selected_duration = _yt_segments.remap_clips(
-                selected_data["shorts"], _ranges)
-            _mapped_transcript = _yt_segments.remap_transcript(
-                transcript_full, _ranges)
-            early["started"] = True
-            early["transcript"] = _mapped_transcript
-            early["clips"] = dict(selected_data)
-            early["clips"]["shorts"] = _mapped_shorts
-            early["done"].set()
-            print(f"✅ Selected source assembled: {_selected_duration / 60:.1f} minutes "
-                  f"of footage downloaded from {source_duration / 60:.1f} minutes.")
+                # Silent / gameplay-heavy sources still need the existing visual
+                # analysis path. Fall back only for these sources; spoken streams
+                # never fetch the full video.
+                print("🔇 Sparse speech: falling back to the existing visual-analysis workflow.")
+                input_video, video_title = download_youtube_video(
+                    args.url, output_dir, use_cache=True)
+                early["invalid"] = True
+            else:
+                print("🧠 Selecting viral moments from the full-stream transcript.")
+                selected_data = get_viral_clips(
+                    transcript_full, source_duration, viewer_clips=viewer_clips)
+                if not selected_data or not selected_data.get("shorts"):
+                    raise RuntimeError("AI did not return usable clip timestamps for this stream.")
+    
+                _ranges = _yt_segments.plan_ranges(selected_data["shorts"], source_duration)
+                if not _ranges:
+                    raise RuntimeError("The AI clip timestamps did not produce valid video ranges.")
+                print(f"📌 Selected {len(selected_data['shorts'])} clip(s) across "
+                      f"{len(_ranges)} unique video range(s). Fetching only those ranges.")
+    
+                _segment_paths = []
+                try:
+                    for _i, _range in enumerate(_ranges, 1):
+                        _segment_path, _ = download_youtube_video(
+                            args.url, output_dir, allow_paid=True, use_cache=False,
+                            download_range=(_range["start"], _range["end"]),
+                            output_suffix=f".selected_{_i:02d}")
+                        _segment_paths.append(_segment_path)
+                    input_video = os.path.join(output_dir, f"{video_title}_selected.mp4")
+                    _yt_segments.concat_segments(_segment_paths, input_video)
+                finally:
+                    for _path in _segment_paths:
+                        try:
+                            os.remove(_path)
+                        except OSError:
+                            pass
+    
+                _mapped_shorts, _selected_duration = _yt_segments.remap_clips(
+                    selected_data["shorts"], _ranges)
+                _mapped_transcript = _yt_segments.remap_transcript(
+                    transcript_full, _ranges)
+                early["started"] = True
+                early["transcript"] = _mapped_transcript
+                early["clips"] = dict(selected_data)
+                early["clips"]["shorts"] = _mapped_shorts
+                early["done"].set()
+                print(f"✅ Selected source assembled: {_selected_duration / 60:.1f} minutes "
+                      f"of footage downloaded from {source_duration / 60:.1f} minutes.")
         else:
             input_video, video_title = download_youtube_video(
                 args.url, output_dir, on_audio=_on_audio if use_early else None, use_cache=True)
