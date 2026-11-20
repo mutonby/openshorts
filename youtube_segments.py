@@ -144,7 +144,7 @@ def concat_segments(paths: list[str], output_path: str) -> str:
             for path in paths:
                 absolute = os.path.abspath(path).replace("\\", "/")
                 escaped = absolute.replace("'", "'\\''")
-                handle.write(f"file '{escaped}'\\n")
+                handle.write(f"file '{escaped}'\n")
         base = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-f", "concat", "-safe", "0", "-i", list_path]
         try:
