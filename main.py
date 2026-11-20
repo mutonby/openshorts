@@ -34,6 +34,7 @@ import yt_account
 import twitch_signals
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
+                            detail_plan, vision_targets,
                             score_batches, shortlist_target,
                             snap_clip_to_words, trim_to_best,
                             vision_segments)
@@ -2489,7 +2490,14 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
         print(f"   Shortlisted {len(shortlist)} window(s) for detail.")
 
         # --- Pass 2: detailed clip extraction on the shortlist ---
-        min_clips, max_clips = clip_count_targets(len(shortlist))
+        # One call for a shortlist one call can read, as always. A long
+        # source's longer shortlist goes in groups, each a stretch of the
+        # video asked for its own share: the count follows the length
+        # (clip_selection.detail_plan).
+        groups, bands, min_clips, max_clips = detail_plan(shortlist)
+        if len(groups) > 1:
+            print(f"   A long source: {len(groups)} detail calls, "
+                  f"{min_clips}-{max_clips} clips in all.")
 
         def _detail_prompt_for(lo, hi):
             # A split batch keeps the full clip-count band: a short list can
@@ -2502,9 +2510,13 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
                     windows_json=json.dumps(_payload(ws), ensure_ascii=False))
             return build
 
-        shorts = _run_stage_split(client, model_name, shortlist,
-                                  _detail_prompt_for(min_clips, max_clips),
-                                  gemini_worker.DetailResponse, "shorts", costs, "detail")
+        shorts = []
+        for group, (lo, hi) in zip(groups, bands):
+            shorts.extend(_run_stage_split(client, model_name, group,
+                                           _detail_prompt_for(lo, hi),
+                                           gemini_worker.DetailResponse, "shorts", costs, "detail"))
+        if len(groups) > 1:
+            shorts.sort(key=lambda s: float(s.get("start") or 0))
 
         # The floor lived only in the prompt, and a prompt is not a contract:
         # the model regularly returned half of it and the job shipped that.
@@ -2759,7 +2771,10 @@ def get_visual_clips(video_path, video_duration, language="en", viewer_clips=Non
                   + (f" (only the first {covered / 60:.0f} of "
                      f"{video_duration / 60:.0f} min; VISION_MAX_SEGMENTS)"
                      if covered < float(video_duration) - 1 else ""))
-        per_min = max(1, math.ceil(v_min_clips / len(segments)))
+        # A long silent source gives clips in proportion to its length too
+        # (clip_selection.vision_targets); a short one keeps the classic band.
+        per_min, per_max, v_min_clips, v_max_clips = vision_targets(
+            covered, len(segments), v_min_clips, v_max_clips)
         clean, costs = [], []
         tmp_dir = os.path.join(os.path.dirname(os.path.abspath(video_path)),
                                f".vision_{uuid.uuid4().hex[:8]}")
@@ -2771,7 +2786,7 @@ def get_visual_clips(video_path, video_duration, language="en", viewer_clips=Non
                     _vision_proxy(video_path, s0, s1, proxy)
                     shorts, cost = _visual_pass(
                         client, model_name, proxy, round(s1 - s0, 3), language,
-                        per_min, v_max_clips, v_min_secs, v_max_secs,
+                        per_min, per_max, v_min_secs, v_max_secs,
                         hint=_viewer_hint(viewer_clips, s0, s1 - s0))
                 except gemini_worker.GeminiBlockedError:
                     raise

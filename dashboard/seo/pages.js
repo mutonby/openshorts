@@ -2716,7 +2716,8 @@ with no audio track at all, and footage whose transcript comes back under 8
 words or under 5 words per minute (music-only streams, a mic that was muted the
 whole session), both trip the same branch: the video itself goes to Gemini,
 which watches it and returns the same 3 to 15 moments in the same 15 to 60
-second band as the transcript path. Everything downstream is identical, layouts
+second band as the transcript path (more for a long recording: at least one
+for every five minutes past half an hour, up to 60). Everything downstream is identical, layouts
 and inset detection included. The one difference is that the clips come out
 without captions, which is correct rather than a bug: there is no speech to
 caption.</p>
@@ -2761,7 +2762,7 @@ ${faqBlock([
   },
   {
     q: 'Does it work on gameplay with no commentary?',
-    a: 'Yes, and it switches by itself. Footage with no audio track, or whose transcript comes back under 8 words or under 5 words per minute, goes down a vision pass instead: Gemini watches the footage and returns the same 3 to 15 moments, with the same layouts and inset detection after it. The clips come out without captions, since there is no speech to caption. A long silent capture is watched in stretches of up to 40 minutes, up to a little over five hours per job; giving it only the session you care about costs fewer minutes.',
+    a: 'Yes, and it switches by itself. Footage with no audio track, or whose transcript comes back under 8 words or under 5 words per minute, goes down a vision pass instead: Gemini watches the footage and returns the same 3 to 15 moments (more for a long capture: at least one for every five minutes past half an hour, up to 60), with the same layouts and inset detection after it. The clips come out without captions, since there is no speech to caption. A long silent capture is watched in stretches of up to 40 minutes, up to a little over five hours per job; giving it only the session you care about costs fewer minutes.',
   },
   {
     q: 'Is it free for streamers?',

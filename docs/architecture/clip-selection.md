@@ -4,9 +4,27 @@
 
 The count is not a setting, it is derived. `get_viral_clips` builds ~90 s scoring
 windows over the transcript, scores them in batches, shortlists the best
-`shortlist_target` (`min(10, duration//90 + 2)`, floor 3) and asks the detail pass
-for `clip_count_targets(len(shortlist))` clips. The floor matters: jobs that
-return only 1-3 clips retain far worse than jobs that return 4-9.
+`shortlist_target` and asks the detail pass for `clip_count_targets` clips per
+group of the shortlist (`detail_plan`). The floor matters: jobs that return
+only 1-3 clips retain far worse than jobs that return 4-9.
+
+**Up to half an hour** the shortlist is `min(10, duration//90 + 2)` (floor 3),
+one detail call, 6 to 12 clips from 12 minutes on.
+
+**Past half an hour the count follows the length** (`length_floor`): at least
+one clip for every `CLIP_LONG_SECONDS_PER_CLIP` (300 s; 0 turns it off), at
+most `CLIP_MAX_PER_JOB` (60, also what a worker's metadata may carry). The
+shortlist grows to five windows for every three clips of that floor and is
+read in groups of ten in video order (`detail_groups`), one detail call per
+group, each asked for its own 6-12: an hour gives 12-24, two hours 24-48,
+five hours 60. Until 20-nov-2026 the shortlist stopped at 10 whatever the
+length, so a five-hour source came back with the 6-12 clips of a quarter of an
+hour while it was charged for every minute. On a five-hour transcript the
+count went from 6 clips to 58, from every hour of it, with ten detail calls
+instead of one. A pinned count (`CLIP_TARGET_MIN`/`MAX`: the user's
+own number, the free plan's cap) is never added to. The public pages that
+state the count (`dashboard/seo/clip-tools.js`, the landing FAQ, the game and
+stream pages) say the same: change them with it.
 
 Two invariants keep that chain from leaking:
 
@@ -36,7 +54,9 @@ them.
 The vision pass uploads the video, Gemini returns the same `{"shorts"}` shape
 (`gemini_worker.VisualResponse`) in the same 15-60 s band, so every later stage
 is identical. `CLIP_TARGET_MIN`/`MAX` apply directly (there are no scoring
-windows). The transcript is stored as `{"language": "none", "segments": []}`, so
+windows); without them it is the classic 3-15, and past half an hour the same
+`length_floor` as the transcript path, spread over the stretches the model
+watches (`clip_selection.vision_targets`). The transcript is stored as `{"language": "none", "segments": []}`, so
 the clips have no subtitles, which is correct.
 
 **This is the one stage that sends Gemini the video instead of frames, on

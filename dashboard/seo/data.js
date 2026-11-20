@@ -49,7 +49,7 @@ export const EDITIONS = {
     // Clips one video gives: the free plan its best ones, a paid plan all of them.
     freeClips: 2,
     freeClipsQuiet: 4,
-    maxClips: 15,
+    maxClips: 60,
     lowPrice: 12,
     highPrice: 59,
     currency: 'USD',
