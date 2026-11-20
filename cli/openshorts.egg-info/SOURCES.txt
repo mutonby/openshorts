@@ -1,8 +1,0 @@
-README.md
-openshorts_cli.py
-pyproject.toml
-openshorts.egg-info/PKG-INFO
-openshorts.egg-info/SOURCES.txt
-openshorts.egg-info/dependency_links.txt
-openshorts.egg-info/entry_points.txt
-openshorts.egg-info/top_level.txt

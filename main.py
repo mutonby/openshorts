@@ -870,7 +870,8 @@ def _content_block(error_text):
 
 def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                            cap_minutes=None, route_out=None, use_cache=False,
-                           audio_only=False, download_range=None, output_suffix=""):
+                           audio_only=False, download_range=None, output_suffix="",
+                           format_override=None):
     """Download ``url`` with only public addresses resolvable (ssrf_guard): the
     checked URL is not the only one yt-dlp talks to (redirects, URLs read out
     of an extracted page, a DNS answer that changes after the check)."""
@@ -882,7 +883,7 @@ def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     # wait minutes for another job's download of the same video, which an
     # in-process caller on a shared executor must not; nor with a cap, which
     # expects the fetch itself to stop there.
-    cacheable = (use_cache and not audio_only and download_range is None
+    cacheable = (use_cache and not audio_only and download_range is None and not format_override
                  and cap_minutes is None and source_cache.enabled()
                  and bool(source_cache.video_id(url)))
     if not cacheable:
@@ -890,7 +891,7 @@ def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             return _download_youtube_video(url, output_dir, on_audio=on_audio,
                                            allow_paid=allow_paid, cap_minutes=cap_minutes,
                                            route_out=route_out, audio_only=audio_only,
-                                           download_range=download_range, output_suffix=output_suffix)
+                                           download_range=download_range, output_suffix=output_suffix, format_override=format_override
     hit = source_cache.fetch(url, output_dir)
     if hit is None:
         with source_cache.claim(url):
@@ -902,7 +903,7 @@ def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                     path, title = _download_youtube_video(
                         url, output_dir, on_audio=on_audio, allow_paid=allow_paid,
                         cap_minutes=cap_minutes, route_out=route, audio_only=audio_only,
-                        download_range=download_range, output_suffix=output_suffix)
+                        download_range=download_range, output_suffix=output_suffix, format_override=format_override
                 if source_cache.is_whole_free_download(route):
                     source_cache.store(url, path, title)
                 return path, title
@@ -916,7 +917,7 @@ def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
 
 def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                             cap_minutes=None, route_out=None, audio_only=False,
-                            download_range=None, output_suffix=""):
+                            download_range=None, output_suffix="", format_override=None):
     """
     Downloads a YouTube video using yt-dlp.
     Returns the path to the downloaded video and the video title.
@@ -1142,7 +1143,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             os.remove(expected)
         dl_opts = {
             **_base_opts(extractor_args, proxy, cookies),
-            'format': ('bestaudio[ext=m4a]/bestaudio' if audio_only else fmt),
+            'format': ('bestaudio[ext=m4a]/bestaudio' if audio_only else (format_override or fmt)),
             'outtmpl': os.path.join(output_dir, f'{sanitized}{_suffix}.%(ext)s'),
             'merge_output_format': 'mp4', 'overwrites': True,
             'progress_hooks': [_progress_hook],
@@ -2763,6 +2764,116 @@ def get_visual_clips(video_path, video_duration, language="en", viewer_clips=Non
         print(f"âŒ Gemini vision error: {e}")
         return None
 
+
+def _sample_sparse_stream_visually(url, output_dir, video_title, source_duration,
+                                   viewer_clips=None):
+    """Sample evenly spaced low-resolution windows, select moments visually,
+    then fetch only the winning source ranges in normal quality."""
+    import youtube_segments as _ys
+
+    sample_seconds = max(60.0, float(os.environ.get("VISION_SAMPLE_SECONDS", "180")))
+    sample_count = max(1, int(os.environ.get("VISION_SAMPLE_COUNT", "8")))
+    windows = vision_segments(source_duration, sample_seconds, sample_count)
+    if not windows:
+        raise RuntimeError("Could not create visual sample windows for this stream.")
+
+    low_res_format = (
+        "bestvideo[height<=360][ext=mp4]/bestvideo[height<=360]/"
+        "best[height<=360][ext=mp4]/best[height<=360]/best"
+    )
+    candidates, costs, sample_paths = [], [], []
+    print(f"Gameplay scan: checking {len(windows)} evenly spaced windows "
+          f"of up to {sample_seconds / 60:.1f} min across {source_duration / 3600:.2f} hours.")
+
+    try:
+        for index, (source_start, source_end) in enumerate(windows, 1):
+            sample_path = None
+            try:
+                sample_path, _ = download_youtube_video(
+                    url, output_dir, allow_paid=True, use_cache=False,
+                    download_range=(source_start, source_end),
+                    output_suffix=f".vision_sample_{index:02d}",
+                    format_override=low_res_format,
+                )
+                sample_paths.append(sample_path)
+                sample_duration = _ys.probe_duration(sample_path)
+                local_viewers = []
+                for item in viewer_clips or []:
+                    center = (float(item.get("start", 0)) + float(item.get("end", 0))) / 2
+                    if source_start <= center < source_end:
+                        local_item = dict(item)
+                        local_item["start"] = max(0.0, float(item["start"]) - source_start)
+                        local_item["end"] = max(0.0, float(item["end"]) - source_start)
+                        local_viewers.append(local_item)
+
+                result = get_visual_clips(sample_path, sample_duration, viewer_clips=local_viewers)
+                if result:
+                    costs.append(result.get("cost_analysis"))
+                    for clip in result.get("shorts") or []:
+                        item = dict(clip)
+                        item["start"] = round(float(item["start"]) + source_start, 3)
+                        item["end"] = round(min(source_duration, float(item["end"]) + source_start), 3)
+                        if item["end"] > item["start"]:
+                            candidates.append(item)
+                print(f"   gameplay sample {index}/{len(windows)}: "
+                      f"{len((result or {}).get('shorts') or [])} candidate(s)")
+            except gemini_worker.GeminiBlockedError:
+                raise
+            except Exception as exc:
+                print(f"Gameplay sample {index}/{len(windows)} failed: {exc}")
+            finally:
+                if sample_path and os.path.exists(sample_path):
+                    try:
+                        os.remove(sample_path)
+                    except OSError:
+                        pass
+
+        max_clips = max(1, int(os.environ.get("CLIP_TARGET_MAX", "15")))
+        candidates = trim_to_best(dedupe_overlapping(candidates), max_clips)
+        if not candidates:
+            raise RuntimeError("Gemini found no usable moments in the sampled gameplay.")
+
+        ranges = _ys.plan_ranges(candidates, source_duration)
+        if not ranges:
+            raise RuntimeError("Visual picks did not produce valid source ranges.")
+
+        selected_paths = []
+        try:
+            for index, source_range in enumerate(ranges, 1):
+                segment_path, _ = download_youtube_video(
+                    url, output_dir, allow_paid=True, use_cache=False,
+                    download_range=(source_range["start"], source_range["end"]),
+                    output_suffix=f".visual_selected_{index:02d}",
+                )
+                selected_paths.append(segment_path)
+            selected_video = os.path.join(
+                output_dir, f"{sanitize_filename(video_title)}_visual_selected.mp4"
+            )
+            _ys.concat_segments(selected_paths, selected_video)
+        finally:
+            for path in selected_paths:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+        mapped_clips, selected_duration = _ys.remap_clips(candidates, ranges)
+        result = {"shorts": mapped_clips}
+        total_cost = _sum_costs(costs, os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite")
+        if total_cost:
+            result["cost_analysis"] = total_cost
+        print(f"Gameplay scan assembled {selected_duration / 60:.1f} min "
+              f"of selected footage from {source_duration / 60:.1f} min.")
+        return selected_video, result
+    finally:
+        for path in sample_paths:
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="AutoCrop-Vertical with Viral Clip Detection.")
     
@@ -2950,13 +3061,16 @@ if __name__ == '__main__':
                     pass
 
             if not transcript_full or speech_is_sparse(transcript_full, source_duration):
-                # Silent / gameplay-heavy sources still need the existing visual
-                # analysis path. Fall back only for these sources; spoken streams
-                # never fetch the full video.
-                print("ðŸ”‡ Sparse speech: falling back to the existing visual-analysis workflow.")
-                input_video, video_title = download_youtube_video(
-                    args.url, output_dir, use_cache=True)
-                early["invalid"] = True
+                # Sample the original timeline with distributed low-resolution windows.
+                # Only the winning HD ranges are downloaded, never the full gameplay VOD.
+                print("Sparse speech: switching to distributed gameplay sampling.")
+                input_video, visual_data = _sample_sparse_stream_visually(
+                    args.url, output_dir, video_title, source_duration,
+                    viewer_clips=viewer_clips)
+                early["started"] = True
+                early["transcript"] = None
+                early["visual_clips"] = visual_data
+                early["done"].set()
             else:
                 print("ðŸ§  Selecting viral moments from the full-stream transcript.")
                 selected_data = get_viral_clips(
@@ -3187,6 +3301,10 @@ if __name__ == '__main__':
             clips_data = early_clips
         elif transcript is not None:
             clips_data = get_viral_clips(transcript, duration, viewer_clips=viewer_clips)
+        elif early_state and early_state.get("visual_clips"):
+            # Already analysed against the original VOD; timestamps now map to
+            # the compact selected-HD source used by the renderer.
+            clips_data = early_state["visual_clips"]
         else:
             clips_data = get_visual_clips(input_video, duration, viewer_clips=viewer_clips)
 
