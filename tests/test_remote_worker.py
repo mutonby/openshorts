@@ -101,6 +101,25 @@ def test_claim_lifecycle(tmp_path):
     assert sorted(os.listdir(d)) == ["V.mp4"]          # only the job's own file is left
 
 
+def test_a_worker_with_its_own_card_is_given_the_source_alone(tmp_path):
+    d = str(tmp_path)
+    claim = rw.begin(d, "w1")
+    assert not rw.source_only(d)                        # the default: this host prepares
+    claim = rw.begin(d, "gpu", source_only=True)
+    assert rw.source_only(d)
+    src = tmp_path / "V.mp4"
+    src.write_bytes(b"12345")
+    assert rw.set_ready(d, str(src), [], {})
+    assert rw.source_only(d) and rw.valid(d, claim)     # still known once the source is ready
+    assert not rw.source_only(str(tmp_path / "no-such-job"))
+    # Nothing is transcribed and no scene pass runs on this host; what the
+    # download cache holds for the source still travels.
+    assert rw.source_only_env({"PREPARE_TRANSCRIPT": "1", "PREPARE_SCENES": "1"}) == {
+        "PREPARE_TRANSCRIPT": "cache", "PREPARE_SCENES": ""}
+    assert rw.source_only_env({"PREPARE_TRANSCRIPT": "cache"})["PREPARE_TRANSCRIPT"] == "cache"
+    assert rw.source_only_env({}) == {"PREPARE_TRANSCRIPT": "", "PREPARE_SCENES": ""}
+
+
 def test_a_new_claim_voids_the_old_one(tmp_path):
     d = str(tmp_path)
     old = rw.begin(d, "w1")
@@ -343,6 +362,15 @@ def test_worker_env_never_takes_code_paths_or_credentials(monkeypatch):
     assert "LD_PRELOAD" not in env and "PROXY_URL" not in env and "WORKER_TOKEN" not in env
 
 
+def test_the_worker_asks_for_the_source_alone_only_when_told_to(monkeypatch):
+    worker = pytest.importorskip("worker")
+    monkeypatch.setattr(worker, "NAME", "w1")
+    monkeypatch.setattr(worker, "SOURCE_ONLY", False)
+    assert worker.claim_body() == {"worker": "w1"}
+    monkeypatch.setattr(worker, "SOURCE_ONLY", True)
+    assert worker.claim_body() == {"worker": "w1", "source_only": True}
+
+
 # --- inside the API -----------------------------------------------------------
 
 app_module = pytest.importorskip("app")
@@ -455,6 +483,45 @@ def test_jobs_that_stay_on_this_host(api, monkeypatch, why):
         api._remote_outcome(False)
     assert _claim(api, monkeypatch)[0] is None
     assert api.job_queue.qsize() == 1
+
+
+@pytest.mark.parametrize("source_only", [False, True])
+def test_this_host_prepares_nothing_for_a_worker_that_asked_for_the_source_alone(
+        api, monkeypatch, source_only):
+    m = api
+    job_id, d = _queued(m, enqueue=False)
+    m.jobs[job_id]["env"].update(PREPARE_TRANSCRIPT="1", PREPARE_SCENES="1")
+    m._running_jobs.add(job_id)
+    m._remote_jobs.add(job_id)
+    rw.begin(d, "w1", source_only=source_only)
+    seen = {}
+
+    async def run_main(job_id, cmd, env, tick=None):
+        seen.update(env)
+        return 1                                          # the download failed: enough here
+    monkeypatch.setattr(m, "_run_main", run_main)
+    asyncio.run(m._run_job_remote(job_id, m.jobs[job_id]))
+    assert (seen["PREPARE_TRANSCRIPT"], seen["PREPARE_SCENES"]) == (
+        ("cache", "") if source_only else ("1", "1"))
+    # The job's own settings are untouched: the retry on this host prepares as usual.
+    assert m.jobs[job_id]["env"]["PREPARE_SCENES"] == "1"
+
+
+def test_the_claim_endpoint_records_a_source_only_worker(api, client, monkeypatch):
+    api._admitting.add("someone-waiting")
+    monkeypatch.setattr(api, "run_job_wrapper", lambda jid: None)
+    monkeypatch.setattr(api.asyncio, "create_task", lambda coro: None)
+    _, plain = _queued(api)
+    _, own_card = _queued(api)
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    first = client.post("/internal/worker/claim", headers=headers, json={"worker": "w1"}).json()
+    # Anything but a JSON true is the default: this host prepares.
+    second = client.post("/internal/worker/claim", headers=headers,
+                         json={"worker": "gpu", "source_only": True}).json()
+    dirs = {first["job_id"]: False, second["job_id"]: True}
+    assert set(dirs) == {os.path.basename(plain), os.path.basename(own_card)}
+    for job_id, expected in dirs.items():
+        assert rw.source_only(os.path.join("output", job_id)) is expected
 
 
 def _fake_prepare(m, monkeypatch, d, returncode=0, source_name="V.mp4"):

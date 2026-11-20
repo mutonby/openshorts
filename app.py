@@ -5239,9 +5239,10 @@ def _remote_eligible(job_id, priority) -> bool:
     return os.path.exists(_manifest_path(job_id))
 
 
-def _claim_remote_job(worker):
+def _claim_remote_job(worker, source_only=False):
     """Hand the next eligible queued job to the remote worker, or None.
     ``(job_id, claim)``. Loop thread only: it edits the heap.
+    ``source_only``: the worker wants the source alone (it has its own card).
 
     Only while a job is already waiting for a GPU slot: with room on the card
     the job runs here, where it is faster."""
@@ -5279,7 +5280,7 @@ def _claim_remote_job(worker):
         _remote_jobs.add(job_id)
         job['run_started'] = time.time()
         _touch_manifest(job_id, started=True)
-        claim = remote_worker.begin(job['output_dir'], worker)
+        claim = remote_worker.begin(job['output_dir'], worker, source_only=source_only)
         print(f"🛰️ Job {job_id} goes to the remote worker {str(worker)[:40]!r}.")
         asyncio.create_task(run_job_wrapper(job_id))
         return job_id, claim
@@ -5304,6 +5305,10 @@ async def _run_job_remote(job_id, job_data):
         env = dict(job_data['env'])
         if await _paid_proxy_budget_exceeded():
             env.pop("PROXY_URL", None)
+        if remote_worker.source_only(output_dir):
+            # A worker with a card of its own transcribes and finds the scenes
+            # faster than it can wait for this host to do it for it.
+            env.update(remote_worker.source_only_env(env))
         jobs[job_id].pop('remote_source', None)
         returncode = await _run_main(job_id, cmd + ["--prepare-only"], env)
         source = jobs[job_id].get('remote_source')
@@ -5471,7 +5476,8 @@ async def _worker_body(request: Request) -> dict:
 async def worker_claim(request: Request):
     _worker_auth(request)
     body = await _worker_body(request)
-    claimed = _claim_remote_job(str(body.get("worker") or "worker"))
+    claimed = _claim_remote_job(str(body.get("worker") or "worker"),
+                                source_only=body.get("source_only") is True)
     if claimed is None:
         return JSONResponse({"job_id": None})
     return {"job_id": claimed[0], "claim": claimed[1]}

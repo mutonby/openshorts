@@ -194,15 +194,33 @@ def _inside(job_dir, rel):
 
 # --- The claim --------------------------------------------------------------
 
-def begin(job_dir, worker):
-    """Claim the job for ``worker``: a fresh claim id, state ``preparing``."""
+def begin(job_dir, worker, source_only=False):
+    """Claim the job for ``worker``: a fresh claim id, state ``preparing``.
+    ``source_only``: the worker asked for the source alone (it has a card of
+    its own), so this host prepares no transcript and no scenes for it."""
     clear(job_dir)
     claim = secrets.token_hex(16)
     write_json_atomic(os.path.join(job_dir, CLAIM_FILE), {
         "claim": claim, "worker": str(worker or "")[:64], "state": PREPARING,
-        "claimed_at": time.time()})
+        "source_only": source_only is True, "claimed_at": time.time()})
     touch_seen(job_dir)
     return claim
+
+
+def source_only(job_dir):
+    """Whether the worker that holds the job asked for the source alone."""
+    return (read(job_dir) or {}).get("source_only") is True
+
+
+def source_only_env(env):
+    """The settings of this host's ``--prepare-only`` run for a worker that
+    asked for the source alone: nothing is transcribed and no scene pass runs
+    here, both would only keep this host's card and cores from its own jobs
+    while the worker's sit idle. A transcript the download cache already holds
+    for the source still travels: it costs this host nothing."""
+    mode = str(env.get("PREPARE_TRANSCRIPT") or "").strip().lower()
+    return {"PREPARE_TRANSCRIPT": "cache" if mode in ("1", "cache") else "",
+            "PREPARE_SCENES": ""}
 
 
 def read(job_dir):
