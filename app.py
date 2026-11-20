@@ -9579,8 +9579,17 @@ async def get_social_user(request: Request):
             return {"profiles": profiles_list}
             
             
+        except HTTPException:
+            # Preserve the upstream status (e.g. 401 for an invalid Upload-Post
+            # key). Wrapping HTTPException here turned every provider error into
+            # a misleading 500 and hid the actual cause from the dashboard.
+            raise
         except Exception as e:
-             raise HTTPException(status_code=500, detail=str(e))
+            print(f"❌ Upload-Post profile lookup failed: {type(e).__name__}")
+            raise HTTPException(
+                status_code=502,
+                detail="Upload-Post profile service is temporarily unavailable",
+            ) from e
 
 
 # --- Social analytics (thin proxies over Upload-Post) ---
