@@ -2880,6 +2880,9 @@ def _job_is_active(job_id, now=None) -> bool:
         return True
     if (jobs.get(job_id) or {}).get('status') in ('queued', 'processing'):
         return True
+    # A library restore in flight (its ``<id>.restoring`` dir too) or just done.
+    if _restore_in_use(job_id.removesuffix(".restoring"), now):
+        return True
     try:
         age = (time.time() if now is None else now) - os.path.getmtime(_manifest_path(job_id))
     except OSError:
@@ -6989,6 +6992,30 @@ async def download_all_clips(job_id: str, request: Request):
 # edit endpoint works on it again. Restored files land with a fresh mtime, so
 # the retention clock restarts; re-restoring after a purge is cheap.
 _restore_locks: Dict[str, asyncio.Lock] = {}
+# A restore in flight, or one that just landed, is a project someone has open
+# (the dashboard, a /videos link, an agent's get_job_status). The size cap
+# ignores age, and with the disk over it every sweep took every finished dir:
+# mid-download ("Restore download failed: No such file or directory") and
+# minutes after, so the same project was pulled from R2 again and again and
+# the connector told a customer "Job not found" for a job in their library
+# (16-nov-2026). The sweeps leave both alone for this long.
+RESTORE_GRACE_SECONDS = int(os.environ.get("RESTORE_GRACE_SECONDS", "900"))
+_restored_at: Dict[str, float] = {}
+
+
+def _restore_in_use(job_id: str, now=None) -> bool:
+    lock = _restore_locks.get(job_id)
+    if lock is not None and lock.locked():
+        return True
+    at = _restored_at.get(job_id)
+    if at is None:
+        return False
+    if (time.time() if now is None else now) - at <= RESTORE_GRACE_SECONDS:
+        return True
+    _restored_at.pop(job_id, None)
+    return False
+
+
 # Job ids are uuid4 strings; anything else under /videos is not a job dir
 # (thumbnails, stray probes) and must not reach the database.
 _JOB_ID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
@@ -7117,6 +7144,7 @@ async def _restore_job_files(job_id: str, proj, user_id: str) -> bool:
             'user_id': user_id,
             'result': {'clips': clips, 'cost_analysis': data.get('cost_analysis')},
         }
+        _restored_at[job_id] = time.time()
     if pulled:
         print(f"♻️  Restored {job_id} from the library (working files were gone).")
     return pulled
@@ -11184,6 +11212,28 @@ class SaaSGenerateRequest(BaseModel):
     share_to_gallery: bool = False
 
 
+async def _archive_saas_job(job_id):
+    """Keep a finished AI Short in the owner's library (R2 + History).
+
+    Its working dir is swept with every other job dir after
+    JOB_RETENTION_SECONDS and its state only lives in ``saas_jobs``, so a
+    finished video used to be reachable for an hour (or until the next deploy)
+    and then gone for good, after the user had paid fal and ElevenLabs for it.
+    """
+    if not BILLING_ENABLED:
+        return
+    job = saas_jobs.get(job_id) or {}
+    result = job.get("result") or {}
+    if not job.get("user_id") or job.get("status") != "completed" or not result.get("video_url"):
+        return
+    clip = {"video_url": result["video_url"],
+            "title": (result.get("script") or {}).get("title") or "AI Short"}
+    try:
+        await cloud.videos.archive_job(job["user_id"], job_id, [clip], job["output_dir"])
+    except Exception as e:
+        print(f"⚠️  R2 archive error for SaaSShorts job {job_id}: {e}")
+
+
 @app.post("/api/saasshorts/generate")
 async def saasshorts_generate(
     req: SaaSGenerateRequest,
@@ -11366,6 +11416,8 @@ async def saasshorts_generate(
                             log_msg("📤 Uploaded to public gallery.")
                     except Exception as gallery_err:
                         log_msg(f"⚠️ Gallery upload skipped: {gallery_err}")
+
+                await _archive_saas_job(job_id)
 
         except Exception as e:
             print(f"[SaaSShorts] ❌ Job {job_id} failed: {e}")

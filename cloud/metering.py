@@ -680,6 +680,22 @@ async def _plan_used_this_period(session, user_id, period_end) -> Decimal:
     return _D(total)
 
 
+async def _held_this_period(session, user_id, period_end) -> tuple:
+    """Minutes still ``reserved`` (videos queued or running) in this period:
+    ``(from the plan, in total)``. They are part of ``plan_used`` and out of
+    ``remaining``, but nothing is spent until the video completes, and a video
+    that does not complete gives them back: the account shows them apart."""
+    plan, total = (await session.execute(
+        select(func.coalesce(func.sum(UsageLedger.minutes_from_plan), 0),
+               func.coalesce(func.sum(UsageLedger.minutes), 0)).where(and_(
+            UsageLedger.user_id == user_id,
+            UsageLedger.period_end == period_end,
+            UsageLedger.status == "reserved",
+        ))
+    )).one()
+    return _D(plan), _D(total)
+
+
 async def has_processed_before(user_id) -> bool:
     """True once the account has any live (reserved/committed) process job.
 
@@ -777,6 +793,7 @@ async def _balance(session, user_id, user=None):
             period_end = None
             plan_used = _D(0)
     plan_remaining = max(_D(0), plan_allowance - plan_used)
+    plan_held, held = await _held_this_period(session, user_id, period_end)
 
     topups = await _topups_fifo(session, user_id)
     topup_remaining = sum((_D(t.minutes_total) - _D(t.minutes_consumed) for t in topups), _D(0))
@@ -785,6 +802,8 @@ async def _balance(session, user_id, user=None):
         "plan": plan_name,
         "plan_allowance": float(plan_allowance),
         "plan_used": float(plan_used),
+        "plan_held": float(plan_held),
+        "held": float(held),
         "plan_remaining": float(plan_remaining),
         "topup_remaining": float(topup_remaining),
         "remaining": float(plan_remaining + topup_remaining),
