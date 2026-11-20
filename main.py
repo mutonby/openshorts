@@ -869,7 +869,8 @@ def _content_block(error_text):
 
 
 def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
-                           cap_minutes=None, route_out=None, use_cache=False):
+                           cap_minutes=None, route_out=None, use_cache=False,
+                           audio_only=False, download_range=None, output_suffix=""):
     """Download ``url`` with only public addresses resolvable (ssrf_guard): the
     checked URL is not the only one yt-dlp talks to (redirects, URLs read out
     of an extracted page, a DNS answer that changes after the check)."""
@@ -881,13 +882,15 @@ def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     # wait minutes for another job's download of the same video, which an
     # in-process caller on a shared executor must not; nor with a cap, which
     # expects the fetch itself to stop there.
-    cacheable = (use_cache and cap_minutes is None and source_cache.enabled()
+    cacheable = (use_cache and not audio_only and download_range is None
+                 and cap_minutes is None and source_cache.enabled()
                  and bool(source_cache.video_id(url)))
     if not cacheable:
         with ssrf_guard.guarded():
             return _download_youtube_video(url, output_dir, on_audio=on_audio,
                                            allow_paid=allow_paid, cap_minutes=cap_minutes,
-                                           route_out=route_out)
+                                           route_out=route_out, audio_only=audio_only,
+                                           download_range=download_range, output_suffix=output_suffix)
     hit = source_cache.fetch(url, output_dir)
     if hit is None:
         with source_cache.claim(url):
@@ -898,7 +901,8 @@ def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                 with ssrf_guard.guarded():
                     path, title = _download_youtube_video(
                         url, output_dir, on_audio=on_audio, allow_paid=allow_paid,
-                        cap_minutes=cap_minutes, route_out=route)
+                        cap_minutes=cap_minutes, route_out=route, audio_only=audio_only,
+                        download_range=download_range, output_suffix=output_suffix)
                 if source_cache.is_whole_free_download(route):
                     source_cache.store(url, path, title)
                 return path, title
@@ -911,7 +915,8 @@ def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
 
 
 def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
-                            cap_minutes=None, route_out=None):
+                            cap_minutes=None, route_out=None, audio_only=False,
+                            download_range=None, output_suffix=""):
     """
     Downloads a YouTube video using yt-dlp.
     Returns the path to the downloaded video and the video title.
@@ -1055,9 +1060,9 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     # with no known duration) only the paid range plus a margin is fetched;
     # cap_source_duration still makes the exact cut afterwards.
     _range_cap = None
-    if cap_minutes is not None:
+    if download_range is None and cap_minutes is not None:
         _range_cap = float(cap_minutes) * 60.0 + 60.0
-    for _var, _margin in (() if cap_minutes is not None else
+    for _var, _margin in (() if (cap_minutes is not None or download_range is not None) else
                           (("MAX_SOURCE_MINUTES", 5.0), ("SOURCE_CAP_MINUTES", 60.0))):
         _raw = os.environ.get(_var, "").strip()
         if _raw:
@@ -1119,30 +1124,39 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         # download of a source a bit over the cap takes seconds. A 21-min video
         # on a 19-min cap took 8 min ranged against ~30 s whole (prod,
         # 25-sep-2026); a finished 6.7 h livestream is ~13 GB whole.
-        ranged = False
-        if _range_cap:
+        ranged = bool(download_range)
+        if _range_cap and not audio_only and download_range is None:
             _dur = info.get('duration')
             ranged = not _dur or float(_dur) > max(3 * _range_cap, _range_cap + 2700)
         # Once per download, and not on the per-GB proxy (that is paid bytes,
         # and it is the last resort anyway). Not for a ranged download either:
         # the early audio would be the whole source.
-        if (on_audio and not _early["started"] and info.get('formats') and not ranged
+        if (not audio_only and download_range is None and on_audio and not _early["started"] and info.get('formats') and not ranged
                 and not (_proxy and proxy == _proxy)):
             _early["started"] = True
             threading.Thread(target=_early_audio, args=(info, extractor_args, proxy, cookies),
                              daemon=True).start()
-        expected = os.path.join(output_dir, f'{sanitized}.mp4')
+        _suffix = str(output_suffix or '')
+        expected = os.path.join(output_dir, f'{sanitized}{_suffix}.mp4')
         if os.path.exists(expected):
             os.remove(expected)
         dl_opts = {
             **_base_opts(extractor_args, proxy, cookies),
-            'format': fmt,
-            'outtmpl': os.path.join(output_dir, f'{sanitized}.%(ext)s'),
+            'format': ('bestaudio[ext=m4a]/bestaudio' if audio_only else fmt),
+            'outtmpl': os.path.join(output_dir, f'{sanitized}{_suffix}.%(ext)s'),
             'merge_output_format': 'mp4', 'overwrites': True,
             'progress_hooks': [_progress_hook],
         }
         _dl_bytes["ranged"] = ranged
-        if ranged:
+        if download_range is not None:
+            from yt_dlp.utils import download_range_func
+            _rs, _re = float(download_range[0]), float(download_range[1])
+            if _re <= _rs:
+                raise ValueError('Invalid selected video range')
+            dl_opts['download_ranges'] = download_range_func(None, [(_rs, _re)])
+            dl_opts['force_keyframes_at_cuts'] = True
+            print(f"✂️ Downloading selected video range {_rs:.1f}s–{_re:.1f}s only.")
+        elif ranged:
             from yt_dlp.utils import download_range_func
             dl_opts['download_ranges'] = download_range_func(None, [(0, _range_cap)])
             print(f"✂️ Source is {'of unknown length' if not info.get('duration') else 'longer than the paid minutes'}"
@@ -1307,12 +1321,16 @@ Technical Details: {str(last_err)}
         time.sleep(0.5)
         raise last_err
 
-    downloaded_file = os.path.join(output_dir, f'{sanitized_title}.mp4')
-    if not os.path.exists(downloaded_file):
-        for f in os.listdir(output_dir):
-            if f.startswith(sanitized_title) and f.endswith('.mp4'):
-                downloaded_file = os.path.join(output_dir, f)
+    _wanted_prefix = f'{sanitized_title}{str(output_suffix or '')}'
+    downloaded_file = None
+    for f in os.listdir(output_dir):
+        if f.startswith(_wanted_prefix) and not f.endswith(('.part', '.ytdl')):
+            candidate = os.path.join(output_dir, f)
+            if os.path.isfile(candidate):
+                downloaded_file = candidate
                 break
+    if not downloaded_file:
+        raise RuntimeError(f'yt-dlp reported success but no output file matched {_wanted_prefix!r}')
 
     # Paid bytes across EVERY attempt that used the per-GB proxy, failed ones
     # included: a paid attempt that died after three 10 MB fragments was
@@ -2890,8 +2908,99 @@ if __name__ == '__main__':
                      and os.environ.get("EARLY_AUDIO", "1").strip() != "0"
                      and not os.environ.get("MAX_SOURCE_MINUTES", "").strip()
                      and not os.path.exists(os.path.join(output_dir, TRANSCRIPT_CHECKPOINT)))
-        input_video, video_title = download_youtube_video(
-            args.url, output_dir, on_audio=_on_audio if use_early else None, use_cache=True)
+        # Audio-first mode: fetch the lightweight audio track, transcribe and
+        # select moments on the ORIGINAL 11-hour timeline, then fetch ONLY the
+        # selected video ranges. The normal rendering/editor pipeline receives
+        # a compact concatenation of those ranges, never the full VOD.
+        audio_first = (
+            not args.skip_analysis and not args.prepare_only and not args.transcript
+            and os.environ.get("AUDIO_FIRST_SELECTED_RANGES", "1").strip() != "0"
+            and not os.environ.get("MAX_SOURCE_MINUTES", "").strip()
+            and not os.environ.get("SOURCE_CAP_MINUTES", "").strip()
+        )
+        if audio_first:
+            import youtube_segments as _yt_segments
+            print("⚡ AUDIO-FIRST: downloading audio only for full-stream analysis.")
+            # Full-length audio can still be hundreds of MB: never send it
+            # through the per-GB paid proxy. Direct/static routes are tried.
+            audio_path, video_title = download_youtube_video(
+                args.url, output_dir, allow_paid=False, use_cache=False,
+                audio_only=True, output_suffix=".analysis_audio")
+            try:
+                source_duration = _yt_segments.probe_duration(audio_path)
+                print(f"🎧 Audio track ready ({source_duration / 3600:.2f} hours). "
+                      "Transcribing before fetching any video.")
+                # On a local GPU machine (e.g. RTX 4060), use CUDA for the
+                # long audio pass unless the operator explicitly chose a device.
+                # transcribe_backends falls back to CPU if CUDA is unavailable.
+                if "WHISPER_DEVICE" not in os.environ:
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            os.environ["WHISPER_DEVICE"] = "cuda"
+                            os.environ.setdefault("WHISPER_COMPUTE", "float16")
+                            print("🚀 Long-stream transcription: using CUDA.")
+                    except Exception:
+                        pass
+                transcript_full = transcribe_video(audio_path)
+            finally:
+                try:
+                    os.remove(audio_path)
+                except OSError:
+                    pass
+
+            if not transcript_full or speech_is_sparse(transcript_full, source_duration):
+                # Silent / gameplay-heavy sources still need the existing visual
+                # analysis path. Fall back only for these sources; spoken streams
+                # never fetch the full video.
+                print("🔇 Sparse speech: falling back to the existing visual-analysis workflow.")
+                input_video, video_title = download_youtube_video(
+                    args.url, output_dir, use_cache=True)
+                early["invalid"] = True
+            else:
+                print("🧠 Selecting viral moments from the full-stream transcript.")
+                selected_data = get_viral_clips(
+                    transcript_full, source_duration, viewer_clips=viewer_clips)
+                if not selected_data or not selected_data.get("shorts"):
+                    raise RuntimeError("AI did not return usable clip timestamps for this stream.")
+    
+                _ranges = _yt_segments.plan_ranges(selected_data["shorts"], source_duration)
+                if not _ranges:
+                    raise RuntimeError("The AI clip timestamps did not produce valid video ranges.")
+                print(f"📌 Selected {len(selected_data['shorts'])} clip(s) across "
+                      f"{len(_ranges)} unique video range(s). Fetching only those ranges.")
+    
+                _segment_paths = []
+                try:
+                    for _i, _range in enumerate(_ranges, 1):
+                        _segment_path, _ = download_youtube_video(
+                            args.url, output_dir, allow_paid=True, use_cache=False,
+                            download_range=(_range["start"], _range["end"]),
+                            output_suffix=f".selected_{_i:02d}")
+                        _segment_paths.append(_segment_path)
+                    input_video = os.path.join(output_dir, f"{video_title}_selected.mp4")
+                    _yt_segments.concat_segments(_segment_paths, input_video)
+                finally:
+                    for _path in _segment_paths:
+                        try:
+                            os.remove(_path)
+                        except OSError:
+                            pass
+    
+                _mapped_shorts, _selected_duration = _yt_segments.remap_clips(
+                    selected_data["shorts"], _ranges)
+                _mapped_transcript = _yt_segments.remap_transcript(
+                    transcript_full, _ranges)
+                early["started"] = True
+                early["transcript"] = _mapped_transcript
+                early["clips"] = dict(selected_data)
+                early["clips"]["shorts"] = _mapped_shorts
+                early["done"].set()
+                print(f"✅ Selected source assembled: {_selected_duration / 60:.1f} minutes "
+                      f"of footage downloaded from {source_duration / 60:.1f} minutes.")
+        else:
+            input_video, video_title = download_youtube_video(
+                args.url, output_dir, on_audio=_on_audio if use_early else None, use_cache=True)
     else:
         input_video = args.input
         video_title = os.path.splitext(os.path.basename(input_video))[0]
