@@ -2245,6 +2245,107 @@ def transcribe_video(video_path, slot_timeout=None):
 
     return transcript
 
+
+def transcribe_sampled_audio(audio_path, source_duration, output_dir):
+    """Transcribe evenly spaced audio windows across a long stream.
+
+    Timestamps are shifted back to the original source timeline, so clip
+    selection, selected-range downloads, and rendering remain unchanged.
+    """
+    from transcribe_backends import transcribe_media, release_models, host_asr_slot
+
+    sample_seconds = max(30.0, float(os.environ.get("AUDIO_SAMPLE_SECONDS", "90")))
+    sample_count = max(2, int(os.environ.get("AUDIO_SAMPLE_COUNT", "12")))
+
+    if source_duration <= sample_seconds * 2:
+        print("Audio is short enough; using full transcription.")
+        return transcribe_video(audio_path)
+
+    last_start = max(0.0, float(source_duration) - sample_seconds)
+    starts = [round(last_start * i / (sample_count - 1), 3)
+              for i in range(sample_count)]
+    print(
+        f"🎙️ Long stream: sampling {sample_count} audio windows "
+        f"of {sample_seconds / 60:.1f} min across {source_duration / 3600:.2f} hours "
+        f"({sample_count * sample_seconds / 60:.1f} min total audio)."
+    )
+
+    all_segments, text_parts, language_votes = [], [], {}
+    completed_audio_seconds = 0.0
+
+    # Keep one ASR model loaded for the whole sample batch.
+    with host_asr_slot(media_seconds=sample_seconds):
+        try:
+            for index, start in enumerate(starts, 1):
+                duration = min(sample_seconds, max(0.0, source_duration - start))
+                if duration <= 1:
+                    continue
+                sample_path = os.path.join(output_dir, f".audio_sample_{uuid.uuid4().hex}.wav")
+                command = [
+                    "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                    "-ss", f"{start:.3f}", "-i", audio_path,
+                    "-t", f"{duration:.3f}", "-vn", "-ac", "1", "-ar", "16000",
+                    "-c:a", "pcm_s16le", sample_path,
+                ]
+                try:
+                    subprocess.run(command, check=True, capture_output=True,
+                                   text=True, timeout=600)
+                    print(f"   Audio sample {index}/{len(starts)}: "
+                          f"{start / 60:.1f}-{(start + duration) / 60:.1f} min")
+                    sample = transcribe_media(sample_path)
+                    language = str(sample.get("language") or "unknown")
+                    language_votes[language] = language_votes.get(language, 0) + 1
+                    if sample.get("text"):
+                        text_parts.append(sample["text"].strip())
+
+                    for segment in sample.get("segments") or []:
+                        shifted = dict(segment)
+                        shifted["start"] = round(float(segment.get("start", 0)) + start, 3)
+                        shifted["end"] = round(float(segment.get("end", 0)) + start, 3)
+                        shifted_words = []
+                        for word in segment.get("words") or []:
+                            shifted_word = dict(word)
+                            if "start" in shifted_word:
+                                shifted_word["start"] = round(float(shifted_word["start"]) + start, 3)
+                            if "end" in shifted_word:
+                                shifted_word["end"] = round(float(shifted_word["end"]) + start, 3)
+                            shifted_words.append(shifted_word)
+                        if "words" in shifted:
+                            shifted["words"] = shifted_words
+                        all_segments.append(shifted)
+                    completed_audio_seconds += duration
+                except Exception as exc:
+                    print(f"   Audio sample {index}/{len(starts)} failed "
+                          f"({type(exc).__name__}: {exc}); continuing.")
+                finally:
+                    try:
+                        if os.path.exists(sample_path):
+                            os.remove(sample_path)
+                    except OSError:
+                        pass
+        finally:
+            try:
+                release_models()
+            except Exception as exc:
+                print(f"⚠️ Could not release ASR models: {exc}")
+
+    all_segments.sort(key=lambda item: float(item.get("start", 0)))
+    if not all_segments:
+        raise RuntimeError("All sampled audio windows failed transcription.")
+
+    language = max(language_votes, key=language_votes.get) if language_votes else "unknown"
+    transcript = {
+        "text": " ".join(text_parts),
+        "language": language,
+        "segments": all_segments,
+        "sampled_duration": completed_audio_seconds,
+    }
+    print(f"✅ Sampled transcript ready: {len(all_segments)} segments from "
+          f"{completed_audio_seconds / 60:.1f} min of audio, distributed across "
+          f"{source_duration / 3600:.2f} hours.")
+    return transcript
+
+
 def _run_gemini_stage(client, model_name, prompt, schema):
     """One schema-enforced model call with transient-error backoff.
     Returns (parsed_dict, cost_analysis).
@@ -3053,14 +3154,15 @@ if __name__ == '__main__':
                             print("ðŸš€ Long-stream transcription: using CUDA.")
                     except Exception:
                         pass
-                transcript_full = transcribe_video(audio_path)
+                transcript_full = transcribe_sampled_audio(audio_path, source_duration, output_dir)
             finally:
                 try:
                     os.remove(audio_path)
                 except OSError:
                     pass
 
-            if not transcript_full or speech_is_sparse(transcript_full, source_duration):
+            if not transcript_full or speech_is_sparse(
+                    transcript_full, transcript_full.get("sampled_duration", source_duration)):
                 # Sample the original timeline with distributed low-resolution windows.
                 # Only the winning HD ranges are downloaded, never the full gameplay VOD.
                 print("Sparse speech: switching to distributed gameplay sampling.")
