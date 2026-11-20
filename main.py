@@ -891,7 +891,7 @@ def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             return _download_youtube_video(url, output_dir, on_audio=on_audio,
                                            allow_paid=allow_paid, cap_minutes=cap_minutes,
                                            route_out=route_out, audio_only=audio_only,
-                                           download_range=download_range, output_suffix=output_suffix, format_override=format_override
+                                           download_range=download_range, output_suffix=output_suffix, format_override=format_override)
     hit = source_cache.fetch(url, output_dir)
     if hit is None:
         with source_cache.claim(url):
@@ -903,7 +903,7 @@ def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                     path, title = _download_youtube_video(
                         url, output_dir, on_audio=on_audio, allow_paid=allow_paid,
                         cap_minutes=cap_minutes, route_out=route, audio_only=audio_only,
-                        download_range=download_range, output_suffix=output_suffix, format_override=format_override
+                        download_range=download_range, output_suffix=output_suffix, format_override=format_override)
                 if source_cache.is_whole_free_download(route):
                     source_cache.store(url, path, title)
                 return path, title
