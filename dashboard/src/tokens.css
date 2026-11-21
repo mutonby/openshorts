@@ -21,12 +21,12 @@
   --rule-blueprint: oklch(96% 0.006 262 / 0.04);
 
   /* accents */
-  --color-accent: oklch(76% 0.17 50);
-  --color-accent-ink: oklch(17% 0.03 50);
-  --color-accent-2: oklch(68% 0.16 18);
-  --color-glow: oklch(80% 0.16 50 / 0.42);
-  --color-paper-emit: oklch(76% 0.17 50 / 0.04);
-  --color-focus: oklch(76% 0.17 50);
+  --color-accent: oklch(78% 0.15 205);
+  --color-accent-ink: oklch(14% 0.025 250);
+  --color-accent-2: oklch(70% 0.18 285);
+  --color-glow: oklch(78% 0.15 205 / 0.38);
+  --color-paper-emit: oklch(78% 0.15 205 / 0.06);
+  --color-focus: oklch(78% 0.15 205);
 
   /* states */
   --color-ok: oklch(75% 0.11 150);
@@ -42,7 +42,7 @@
   --tracking-micro: 0.10em;
 
   /* geometry */
-  --radius-card: 10px;
+  --radius-card: 14px;
   --radius-input: 8px;
 
   /* motion */
