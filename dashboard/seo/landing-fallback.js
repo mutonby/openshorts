@@ -134,7 +134,6 @@ const WORKS_WITH = [
   ['/platforms/youtube', 'YouTube'],
   ['/platforms/twitch', 'Twitch'],
   ['/platforms/kick', 'Kick'],
-  ['/platforms/tiktok', 'TikTok'],
   ['/podcast-to-shorts', 'podcasts'],
 ]
 
@@ -178,7 +177,7 @@ ${NAV_SCRIPT}
   ${HERO_FORM}
   <p style="${S.muted};max-width:44rem">45,000+ accounts created &middot; 32,900+ videos clipped &middot; 8,300+ hours of video processed &middot; 7.5k GitHub stars.</p>
   <p style="${S.muted};max-width:44rem"><strong style="color:oklch(75% 0.11 150)">No credit card required.</strong> Your first video is free up to 60 minutes, then 20 free minutes every month, and each video gives its 2 to 4 best clips. Paid plans from $12/month without a watermark and with every clip of the video. Prefer to run it yourself? <a style="${S.a}" href="https://github.com/mutonby/openshorts" rel="noopener">Self-host free on GitHub</a>.</p>
-  <p style="${S.muted};max-width:44rem">Works with links from ${WORKS_WITH.map(link).join(' &middot; ')}.</p>
+  <p style="${S.muted};max-width:44rem">Paste a link to your video on ${WORKS_WITH.map(link).join(' &middot; ')}.</p>
 </div></section>
 
 <section id="platforms" style="${S.section}"><div style="${S.wrap}">

@@ -253,11 +253,12 @@ const FAQItem = ({ question, answer, isOpen, onClick }) => (
 // are in seo/landing-fallback.js so they exist in the static HTML too.
 const LINK = 'text-ink2 underline underline-offset-2 hover:text-ink transition-colors';
 
+// The hero names where the user's own long video lives. TikTok is a place
+// the clips go to, so its page is linked from PLATFORMS and the footer.
 const WORKS_WITH = [
   ['/platforms/youtube', 'youtube'],
   ['/platforms/twitch', 'twitch'],
   ['/platforms/kick', 'kick'],
-  ['/platforms/tiktok', 'tiktok'],
   ['/podcast-to-shorts', 'podcasts'],
 ];
 
@@ -636,7 +637,7 @@ export default function Landing({ onLaunchApp }) {
             </p>
 
             <p className="mt-4 text-sm text-muted lowercase">
-              works with links from{' '}
+              paste a link to your video on{' '}
               {WORKS_WITH.map(([href, label], i) => (
                 <React.Fragment key={href}>
                   {i > 0 && ' · '}
