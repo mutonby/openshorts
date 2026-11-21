@@ -2928,21 +2928,34 @@ if __name__ == '__main__':
                 audio_only=True, output_suffix=".analysis_audio")
             try:
                 source_duration = _yt_segments.probe_duration(audio_path)
-                print(f"ðŸŽ§ Audio track ready ({source_duration / 3600:.2f} hours). "
-                      "Transcribing before fetching any video.")
-                # On a local GPU machine (e.g. RTX 4060), use CUDA for the
-                # long audio pass unless the operator explicitly chose a device.
-                # transcribe_backends falls back to CPU if CUDA is unavailable.
-                if "WHISPER_DEVICE" not in os.environ:
-                    try:
-                        import torch
-                        if torch.cuda.is_available():
-                            os.environ["WHISPER_DEVICE"] = "cuda"
-                            os.environ.setdefault("WHISPER_COMPUTE", "float16")
-                            print("ðŸš€ Long-stream transcription: using CUDA.")
-                    except Exception:
-                        pass
-                transcript_full = transcribe_video(audio_path)
+                print(f"ðŸŽ§ Audio track ready ({source_duration / 3600:.2f} hours).")
+                # PeakCut-style fast path: use YouTube's original-language,
+                # word-timed captions to find moments without running ASR over
+                # an entire multi-hour stream. Selected footage is transcribed
+                # locally below for accurate burned captions.
+                borrowed_transcript = False
+                try:
+                    from youtube_transcript_fast import fetch as _fetch_youtube_transcript
+                    transcript_full = _fetch_youtube_transcript(args.url, source_duration)
+                    borrowed_transcript = bool(transcript_full)
+                except Exception as e:
+                    print(f"   ℹ️ YouTube transcript unavailable ({type(e).__name__}: {e}); using local ASR.")
+                    transcript_full = None
+                if borrowed_transcript:
+                    print("   ⚡ Using YouTube's timestamped transcript for highlight selection.")
+                else:
+                    print("   🎙️ No usable YouTube transcript; transcribing the audio track.")
+                    # Prefer CUDA on machines with an NVIDIA GPU unless explicitly configured.
+                    if "WHISPER_DEVICE" not in os.environ:
+                        try:
+                            import torch
+                            if torch.cuda.is_available():
+                                os.environ["WHISPER_DEVICE"] = "cuda"
+                                os.environ.setdefault("WHISPER_COMPUTE", "float16")
+                                print("ðŸš€ Long-stream transcription: using CUDA.")
+                        except Exception:
+                            pass
+                    transcript_full = transcribe_video(audio_path)
             finally:
                 try:
                     os.remove(audio_path)
@@ -2991,6 +3004,13 @@ if __name__ == '__main__':
                     selected_data["shorts"], _ranges)
                 _mapped_transcript = _yt_segments.remap_transcript(
                     transcript_full, _ranges)
+                if borrowed_transcript:
+                    # ASR only the compact selected footage for accurate final captions.
+                    try:
+                        _mapped_transcript = transcribe_video(input_video)
+                        print("   ✅ Selected footage transcribed for final captions.")
+                    except Exception as e:
+                        print(f"   ⚠️ Selected-footage ASR failed; keeping YouTube timings ({type(e).__name__}: {e}).")
                 early["started"] = True
                 early["transcript"] = _mapped_transcript
                 early["clips"] = dict(selected_data)
