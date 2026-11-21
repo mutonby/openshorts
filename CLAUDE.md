@@ -88,6 +88,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 
 **Download proxies**
 - Route order is direct → static → paid (per-GB `PROXY_URL`). Never use the paid proxy for non-YouTube URLs, nor for failures another IP cannot fix (`static_failure_warrants_paid`).
+- A non-YouTube link stops at the first static that reaches the site; only a static that refuses the tunnel (`main.exit_refused`) passes it to the next one, and that refusal is never a credits alert.
 - The probe also carries `YOUTUBE_COOKIES`, like the download does; first attempt with cookies, second anonymous, on probe and download alike.
 - Keep the explicit `yt_clients.py` client list; never put `player_skip: webpage` back. `noplaylist` always; non-video URLs refused by an allowlist.
 - Every yt-dlp extraction that sends `YOUTUBE_COOKIES` takes its cookie file from a `yt_account.Session` (one of the configured accounts, `YOUTUBE_COOKIES_2`.. add more) and runs inside its `request()`, and none is sent while `yt_account.cooling_down()`: each account's budget is shared by every probe and download. A failure that is only the account limit is retried after the cooldown (`YT_ACCOUNT_LIMITED`), never reported as a broken video. An age-restricted refusal moves the video to another account (`Session.age_gated`), never to the paid proxy.

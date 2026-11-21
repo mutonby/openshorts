@@ -37,6 +37,12 @@ identically.
   errors). Never for a private/removed/members-only video, an uploader's country
   block, or a live stream with no duration (those fail the same on every IP).
 - **Never for a non-YouTube URL** (Twitch, Kick, Rumble, product pages...).
+  Such a link goes from the server's own address (a connection that never
+  came up is tried once more) and then through the statics, stopping at the
+  first one that reaches the site. A static whose provider does not carry the
+  site answers the CONNECT itself with a 403 (`main.exit_refused`): the next
+  static is asked, and that refusal is never read as a proxy without credits
+  (`alerts._looks_like_proxy_error`).
 - Both probe and download pass `noplaylist`: a `watch?v=X&list=...` or mix link
   is the one video the user was watching; otherwise yt-dlp walks the whole list
   and dies on an entry nobody pasted.

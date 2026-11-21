@@ -47,8 +47,24 @@ _PROXY_HINTS = (
 )
 
 
+# An exit that answers the CONNECT with 403 is up and paid for: it refuses
+# that one site (a provider that does not carry it). Topping up changes
+# nothing, so only the signatures that do speak of the account count.
+_EXIT_REFUSAL = "tunnel connection failed: 403"
+_ACCOUNT_HINTS = (
+    "proxy authentication required",
+    "407 proxy",
+    "http error 407",
+    "402 payment required",
+    "out of credits",
+    "insufficient balance",
+)
+
+
 def _looks_like_proxy_error(err: str) -> bool:
     e = (err or "").lower()
+    if _EXIT_REFUSAL in e:
+        return any(k in e for k in _ACCOUNT_HINTS)
     return any(k in e for k in _PROXY_HINTS)
 
 

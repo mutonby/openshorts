@@ -702,6 +702,25 @@ def is_youtube_url(url):
     return host.endswith(("youtube.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com"))
 
 
+def exit_refused(err) -> bool:
+    """A proxy answered the CONNECT itself with a refusal (a provider that does
+    not carry that site, an ACL): the site was never reached, so the failure
+    says nothing about the video and another exit may open the tunnel."""
+    e = str(err or "").lower()
+    return "tunnel connection failed" in e
+
+
+def transient_connection(err) -> bool:
+    """The connection never came up (no route for the address family the
+    resolver picked, a reset, a name that did not resolve that second): the
+    same request a moment later usually goes through."""
+    e = str(err or "").lower()
+    return any(k in e for k in (
+        "network is unreachable", "failed to establish a new connection",
+        "connection reset", "temporary failure in name resolution",
+        "name or service not known", "remote end closed connection"))
+
+
 def plan_download_attempts(direct_first, statics, paid, have_hd, youtube=True,
                            skip_statics=False):
     """Ordered (label, capped, proxy) download plan — pure, unit-tested.
@@ -713,8 +732,10 @@ def plan_download_attempts(direct_first, statics, paid, have_hd, youtube=True,
     would only add latency and more hits on IPs YouTube is scoring. Ignored
     without a paid proxy: the statics are then all there is.
 
-    ``youtube=False`` (a direct file URL): the server's own IP first, then one
-    static proxy as the only fallback; the paid per-GB proxy is never used.
+    ``youtube=False`` (a direct file URL, another site): the server's own IP
+    first, then the static proxies; the paid per-GB proxy is never used. The
+    caller stops at the first static that reaches the site: the next one is
+    only for an exit that refuses the tunnel (``exit_refused``).
 
     Cheapest bandwidth first: the server's own IP, then the flat-rate static
     ISP proxies (uncapped 1080p, free bytes), then the per-GB paid proxy
@@ -723,8 +744,8 @@ def plan_download_attempts(direct_first, statics, paid, have_hd, youtube=True,
     ``capped`` marks attempts whose bytes are billed per GB."""
     if not youtube:
         plan = [('direct', False, None)]
-        if statics:
-            plan.append(('static-fallback', False, statics[0]))
+        for i, static in enumerate(statics):
+            plan.append(('static-fallback' + (str(i + 1) if i else ''), False, static))
         return plan
     if skip_statics and paid:
         statics, direct_first = [], False
@@ -1238,7 +1259,8 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             _direct_first, _statics, _proxy, bool(hd_args), youtube=is_youtube_url(url),
             skip_statics=_skip_statics)
     ]
-    if not is_youtube_url(url):
+    youtube = is_youtube_url(url)
+    if not youtube:
         print("🌐 Direct file URL: downloading from the server's own IP (no proxy).")
 
     sanitized_title = None
@@ -1333,11 +1355,22 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                     else:
                         age_refused = True
                     break
-                retryable = '403' in str(e) or 'Forbidden' in str(e)
+                # An exit that refuses the tunnel answers the same a second
+                # time: the next route is the retry. A connection that never
+                # came up on a site without a paid route is worth one more go.
+                retryable = (('403' in str(e) or 'Forbidden' in str(e))
+                             and not exit_refused(e)) or (
+                                 not youtube and transient_connection(e))
                 if not retryable or retry == 1:
                     break
                 time.sleep(3)
         if sanitized_title is not None:
+            break
+        if (not youtube and proxy is not None and last_err is not None
+                and not exit_refused(last_err)):
+            # This exit reached the site and the download still failed:
+            # another exit gets the same answer. Only a refused tunnel moves
+            # on to the next static.
             break
         # The video itself is off limits: another route (or the paid proxy)
         # cannot change that, so stop instead of spending every attempt.
