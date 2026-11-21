@@ -332,7 +332,7 @@
           // Second gate: hosts allowed to report. A dist/ built with credentials
           // stays inert anywhere else (a fork, a mirror, a preview domain), so a
           // deployment can never report into somebody else's dashboard.
-          var ANALYTICS_HOSTS = /^(www\.)?openshorts\.app$/;
+          var ANALYTICS_HOSTS = /^(www\.)?plic\.app$/;
           if (!ANALYTICS_HOSTS.test(location.hostname)) return false;
 
           started = true;
