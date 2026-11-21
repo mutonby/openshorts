@@ -262,6 +262,16 @@ AUTO_CAPTION_STYLE = {
     "max_duration": 1.4,
 }
 
+GAMEPLAY_CAPTION_STYLE = {
+    **AUTO_CAPTION_STYLE,
+    "font_size": 29,
+    "effect": "none",
+    "highlight_color": "#FFFFFF",
+    "uppercase": False,
+    "max_chars": 24,
+    "max_duration": 2.2,
+}
+
 
 # Named looks for /api/subtitle `preset` (and the MCP add_subtitles tool), in
 # request-field names. Mirrors the dashboard's CAPTION_PRESETS in

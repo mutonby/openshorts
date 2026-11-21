@@ -1,5 +1,31 @@
 # Layout selection and vertical reframing
 
+## Face-model-free framing
+
+`POST /api/process` accepts `framing_method` for vertical and square outputs.
+The dashboard starts with `auto`. The API uses the deployment's
+`FRAMING_METHOD` setting when omitted and defaults to `legacy`. The direct
+pipeline CLI accepts `--framing-method`.
+
+| Method | Behavior |
+| --- | --- |
+| `auto` | Follows a distinct area of motion or visual detail. Shows the whole scene when a narrow crop would discard too much of the visual signal. |
+| `motion` | Follows local changes within each scene. Centers a scene with no reliable motion. |
+| `detail` | Follows a region of concentrated contrast or texture. Centers a scene with no reliable detail. |
+| `center` | Uses a fixed crop centered on the source. |
+| `fit` | Keeps the full source width with a blurred background. |
+| `gameplay` | Preserves the whole game, HUD, and embedded facecam in one foreground. The background is strongly blurred. |
+| `legacy` | Uses the face and speaker detection and layout options described below. |
+
+The visual modes analyze small grayscale samples at about four frames per
+second. They reset at scene cuts and limit how fast the crop can move. The
+static methods skip the scene pass unless the editor has per-scene overrides.
+Gameplay Priority cuts and frames each selected range in one FFmpeg encode.
+It keeps source subtitles in the picture. If they are detected it skips
+automatic captions, otherwise it applies a smaller bottom caption style.
+Recuts keep the project's method. Hook placement uses the layout and caption
+bands, and face-dependent Pro conversion is available with legacy framing.
+
 ## Choosing the layout (`layout_picker.py`, `app.py:layout_env`)
 
 `POST /api/process` accepts `layouts`: a JSON list or comma-separated string of
@@ -57,10 +83,10 @@ editor's re-render pass the same band, but only when captions go back on.
 The hook and title come from the detail pass, which only reads the transcript, so
 on a clip whose meaning is on screen they summarise the video's topic instead of
 naming what is shown. After the render, if the `<clip>.layout.json` sidecar says
-at least 25% of the clip is `screencast` / `wide` / `inset` (plus `general` when
+at least 25% of the clip is `screencast` / `wide` / `gameplay` (plus `general` when
 the layout picker called the video a screencast), three frames from those
 stretches at 1024px plus the clip's own words go to Gemini (`GroundedHook`) and
-`viral_hook_text` / `video_title_for_youtube_short` are rewritten in place before
+the hook, title and both social descriptions are refreshed together before
 `auto_hook_clip` burns them; the originals stay under `hook_grounding.before`.
 Gemini-only (frames): with just a local LLM it logs one line and keeps the
 transcript hook. `HOOK_GROUNDING=0` disables it. The detail prompt also carries
@@ -119,7 +145,7 @@ width, so an explicit GENERAL override on a portrait clip cannot shrink it.
   screen tutorial rendered GENERAL/TRACK, even when forced. Now each clip asks
   (`reframe_v2.screen_ranges` → `screencast_layout.detect_content_ranges`): one
   1024px still per shot, one Gemini call per clip, a closed choice per shot
-  (`screen` / `beside` / `camera`, `gemini_worker.SHOT_CONTENT_PROMPT`) plus the
+  (`screen` / `beside` / `camera` / `gameplay`, `gemini_worker.SHOT_CONTENT_PROMPT`) plus the
   horizontal **reading area** of a screen. `camera` shots keep the face
   classifier's verdict. `beside` (width 0.7) stacks **only the content
   columns** (the side away from the presenter's body, `content_side`) over the
@@ -146,26 +172,11 @@ width, so an explicit GENERAL override on a portrait clip cannot shrink it.
   "full frame" framing (`force_strategy='WIDE'`) still keeps the whole width.
   `WIDE_CONTENT_HEIGHT_RATIO=0.32` restores the old full-width WIDE. If the check cannot answer (no key, API error) the
   scenes the classifier sent to GENERAL are taken as the screen
-  (`fallback_ranges`), so an explicit choice never silently renders GENERAL. One
-  still per scene means a long scene that mixes screen and camera is judged by
-  its middle frame. A `screen` scene with the presenter's camera floating over
-  it (a QuickTime/Loom window mid-screen, not only in a corner) becomes INSET
-  with a box centred on that face (`camera_inset.detect_in_scene`: small,
-  still across 5 samples); the clip-wide corner inset is applied only to the
-  scenes where a face actually sits in its box (`present_in_scene`), since a
-  tutorial clip mixes shots with and without it. The old whole-video detector (time ranges + width_fraction)
-  was never called in production and is gone: it uploaded the source, ~670k
-  tokens for a 37-min tutorial.
-- **INSET** (`camera_inset.py`): full-width screen on top, the enlarged webcam
-  box below, for a single source with the camera composited in a corner (OBS,
-  stream VODs). Chained after the `screencast` decision, **not** asked of Gemini
-  (offered as a fourth option it answered `screencast` and overall accuracy
-  dropped). The geometric detector needs three filters: a **small** subject,
-  **horizontally off-centre** (a talking-head face is centred even when high),
-  and **still between samples**. A **face** detection is grown to three face
-  widths (the webcam's head-and-shoulders framing) and the box never starts
-  below the head (`FACE_HEADROOM`): grown like YOLO's torso box and pinned to
-  the bottom edge it cut the forehead off.
+  (`fallback_ranges`). If a shot is gameplay, the model reports an embedded
+  webcam, or the inset detector finds one in that shot, the renderer preserves
+  the full source in one foreground. A separate presenter panel is used for a
+  beside layout, where the screen columns exclude the presenter. Older results
+  may have an `inset` sidecar entry.
 - **ALTERNATE** (`active_speaker.py`, `SPEAKER_SIGNAL=1` + `SPEAKER_CUT=1`):
   hard cuts to whoever is talking, rendered through the TRACK path as a
   trajectory with jumps. `SPEAKER_SIGNAL=1` alone just gates SPLIT on both people

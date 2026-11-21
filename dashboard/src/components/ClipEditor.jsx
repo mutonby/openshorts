@@ -1473,9 +1473,10 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                         {/* framing override */}
                         <div>
                             <p className="eyebrow mb-2">Framing</p>
-                            <div className="grid grid-cols-3 gap-1.5">
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                                 {[
                                     { value: 'auto', label: 'auto', hint: 'AI decides per scene' },
+                                    { value: 'gameplay', label: 'gameplay', hint: 'whole game and original facecam' },
                                     { value: 'full', label: 'full frame', hint: 'whole shot, no side-crop' },
                                     { value: 'track', label: 'track subject', hint: 'crop follows the person' },
                                 ].map((f) => (

@@ -26,7 +26,7 @@ const clock = (seconds) => {
 
 const looksLikeUrl = (u) => /^https?:\/\/\S+\.\S+/.test((u || '').trim());
 
-export default function SourceCost({ mode, url, fileSeconds, range, onRangeChange }) {
+export default function SourceCost({ mode, url, file, fileSeconds, range, onRangeChange, localRanges }) {
     const { isManaged } = useAuth();
     const [estimate, setEstimate] = useState(null);
     const [loading, setLoading] = useState(false);
@@ -35,6 +35,7 @@ export default function SourceCost({ mode, url, fileSeconds, range, onRangeChang
     // A new source starts from the whole video again.
     useEffect(() => {
         setEstimate(null);
+        setLoading(false);
         setPicking(false);
         onRangeChange(null);
         if (!isManaged) return undefined;
@@ -66,7 +67,53 @@ export default function SourceCost({ mode, url, fileSeconds, range, onRangeChang
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isManaged, mode, url, fileSeconds]);
 
-    if (!isManaged) return null;
+    if (!isManaged) {
+        const duration = mode === 'file' ? fileSeconds : null;
+        if (!localRanges || (mode === 'url' ? !looksLikeUrl(url) : !file || (duration && duration <= MIN_RANGE_SECONDS))) {
+            return null;
+        }
+        const from = Number(range?.start || 0);
+        const to = Number(range?.end || 0);
+        return (
+            <fieldset className="mt-3 rounded-input border border-rule px-3 py-2.5">
+                <label className="flex items-center gap-2 text-xs text-ink2">
+                    <input type="checkbox" className="accent-brass" checked={picking}
+                        onChange={(event) => {
+                            const open = event.target.checked;
+                            setPicking(open);
+                            onRangeChange(open ? { start: '0', end: duration ? String(Math.floor(duration)) : '' } : null);
+                        }} />
+                    Analyze a source section
+                    {duration > 0 && <span className="readout ml-auto">{clock(duration)} source</span>}
+                </label>
+                {picking && range && (
+                    <>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                            <label>
+                                <span className="eyebrow block mb-1">Start (s)</span>
+                                <input type="number" className="input-field" required min="0" step="1"
+                                    max={duration ? Math.floor(duration) - MIN_RANGE_SECONDS : undefined}
+                                    value={range.start}
+                                    onChange={(event) => onRangeChange({ ...range, start: event.target.value })} />
+                            </label>
+                            <label>
+                                <span className="eyebrow block mb-1">End (s)</span>
+                                <input type="number" className="input-field" required min={from + MIN_RANGE_SECONDS} step="1"
+                                    max={duration ? Math.floor(duration) : undefined}
+                                    value={range.end}
+                                    onChange={(event) => onRangeChange({ ...range, end: event.target.value })} />
+                            </label>
+                        </div>
+                        <p className="text-xs text-muted mt-2">
+                            {to - from >= MIN_RANGE_SECONDS
+                                ? `Analyze ${clock(to - from)} of source footage.`
+                                : `Choose a section of at least ${MIN_RANGE_SECONDS}s.`}
+                        </p>
+                    </>
+                )}
+            </fieldset>
+        );
+    }
     if (loading && !estimate) {
         return (
             <p className="mt-3 flex items-center gap-2 text-xs text-muted">

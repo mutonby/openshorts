@@ -2,10 +2,11 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
+import CandidateReview from './components/CandidateReview';
 import McpConnectCard from './components/McpConnectCard';
 import ResultCard from './components/ResultCard';
 import ProcessingAnimation from './components/ProcessingAnimation';
-import { clipProgress, FREE_CLIPS_PER_VIDEO, FREE_CLIPS_QUIET, MAX_CLIPS_PER_VIDEO } from './lib/clipProgress';
+import { clipProgress, lastJobError, FREE_CLIPS_PER_VIDEO, FREE_CLIPS_QUIET, MAX_CLIPS_PER_VIDEO } from './lib/clipProgress';
 // import Gallery from './components/Gallery';
 import ThumbnailStudio from './components/ThumbnailStudio';
 import SaaShortsTab from './components/SaaShortsTab';
@@ -17,7 +18,6 @@ import UsageMeter from './components/UsageMeter';
 import TopUpModal from './components/TopUpModal';
 import WatermarkModal, { watermarkNoticeDismissed } from './components/WatermarkModal';
 import { getApiUrl } from './config';
-import StarBanner from './components/StarBanner';
 import PlanChoiceModal from './components/PlanChoiceModal';
 import ClipTutorial from './components/ClipTutorial';
 import OnboardingSurvey from './components/OnboardingSurvey';
@@ -785,7 +785,7 @@ function App() {
         if (session.projectState) setProjectState(session.projectState);
         if (session.activeTab) setActiveTab(session.activeTab);
         // If was processing, resume polling; if complete/error, just show results
-        setStatus(session.status === 'processing' ? 'processing' : session.status);
+        setStatus(session.status === 'review' ? 'processing' : session.status);
         setSessionRecovered(true);
         setTimeout(() => setSessionRecovered(false), 5000);
       }
@@ -932,8 +932,8 @@ function App() {
         inFlight = true;
         try {
           const data = await pollJob(jobId);
+          if (stopped) return;
           failures = 0;
-          console.log("Job status:", data);
 
           // Update results if available (real-time)
           if (data.result) {
@@ -943,27 +943,27 @@ function App() {
           if (data.partial) setPartialJob(data.partial);
           setQueueInfo(data.status === 'queued' && data.queue ? data.queue : null);
           nextDelay = data.status === 'queued' ? 5000 : 2000;
+          if (data.logs) {
+            setLogs(data.logs);
+            setLogTimes(data.log_times || []);
+          }
 
           if (data.status === 'completed') {
             setQueueInfo(null);
             setStatus('complete');
             stop();
             refreshMe();
+          } else if (data.status === 'review') {
+            setStatus('review');
+            stop();
           } else if (data.status === 'failed') {
             setStatus('error');
-            const errorMsg = data.error || (data.logs && data.logs.length > 0 ? data.logs[data.logs.length - 1] : "Process failed");
-            setJobError(readableError(errorMsg));
-            setLogs(prev => [...prev, "Error: " + errorMsg]);
+            setJobError(readableError(data.error || lastJobError(data.logs || [])));
             stop();
             refreshMe();
-          } else {
-            // Update logs if available
-            if (data.logs) {
-              setLogs(data.logs);
-              setLogTimes(data.log_times || []);
-            }
           }
         } catch (e) {
+          if (stopped) return;
           console.error("Polling error", e);
           failures += 1;
           if (pollFailureAction(e, failures) === 'gone') {
@@ -1287,6 +1287,9 @@ function App() {
         // but the dashboard always states the user's choice.
         auto_hook: data.autoHook ? '1' : '0',
         auto_hook_style: data.autoHook ? (data.autoHookStyle || 'pill') : null,
+        captions: typeof data.captions === 'boolean' ? String(data.captions) : null,
+        framing_method: data.framingMethod || null,
+        review_candidates: data.reviewCandidates ? 'true' : null,
         // 'auto' is the server default, so only a deliberate choice travels.
         layouts: data.layout && data.layout !== 'auto' ? data.layout : null,
         // Set when the user took the quota wall's "clip the first N minutes"
@@ -1396,6 +1399,17 @@ function App() {
       setStatus('error');
       setLogs(l => [...l, `Error starting job: ${reason}`]);
     }
+  };
+
+  const handleApproveCandidates = async (candidateIds) => {
+    await apiJson(`/api/jobs/${jobId}/render-candidates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(apiKey ? { 'X-Gemini-Key': apiKey } : {}) },
+      body: JSON.stringify({ candidate_ids: candidateIds }),
+    });
+    setProcessingMedia({ type: 'server', payload: `/api/source/${jobId}` });
+    setResults(null);
+    setStatus('processing');
   };
 
   // Resume the job the visitor started before signing in. Runs on the render
@@ -2262,45 +2276,40 @@ function App() {
           {/* View: Dashboard (Idle) */}
           {activeTab === 'dashboard' && status === 'idle' && (
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
-              <div className="min-h-full flex flex-col items-center justify-center px-4 py-5 sm:p-6">
+              <div className="min-h-full flex flex-col items-center px-4 py-6 sm:px-6 sm:py-10">
               {/* On a phone the hero used to fill the fold on its own and push
                   the uploader — the whole point of the screen — below it. The
                   eyebrow, the display size and the gaps all shrink first. */}
-              <div className="max-w-xl w-full text-center space-y-5 sm:space-y-8">
-                <div className="space-y-2.5 sm:space-y-4">
-                  <p className="eyebrow hidden sm:block">01 · CLIP GENERATOR</p>
-                  <h1 className="font-display lowercase text-3xl sm:text-4xl md:text-5xl text-ink">
-                    Create Viral Shorts
+              <div className="max-w-xl w-full space-y-4 sm:space-y-6">
+                <div className="space-y-2">
+                  <h1 className="font-display lowercase text-3xl sm:text-4xl text-ink">
+                    Create shorts
                   </h1>
-                  <p className="text-muted text-[15px] sm:text-lg leading-snug sm:leading-normal max-w-sm sm:max-w-none mx-auto">
-                    Drop your long-form video below to instantly generate viral clips with AI.
+                  <p className="text-muted text-sm leading-relaxed">
+                    Turn a long video into short clips for YouTube, Instagram, and TikTok.
                   </p>
-                  {/* The same pipeline is an MCP server: point people at the
-                      one place that explains how to drive it from an agent. */}
-                  {!tutorialLock && (
-                  <p className="text-xs text-muted">
-                    Or let an agent do it:{' '}
+                </div>
+
+                <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} />
+
+                {!tutorialLock && (
+                  <p className="text-xs text-muted text-center">
                     <a
                       href={billingEnabled ? '#/account' : '#app'}
                       onClick={(e) => { if (!billingEnabled) { e.preventDefault(); goToTab('settings'); } }}
                       className="text-ink2 underline underline-offset-2 hover:text-brass transition-colors"
                     >
-                      connect Claude, ChatGPT or n8n →
+                      Generate clips with Claude, ChatGPT, or n8n
                     </a>
                   </p>
-                  )}
-                </div>
-
-                <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} />
-
-                <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-8 text-muted text-xs sm:text-sm">
-                  <span className="flex items-center gap-2"><Youtube size={16} /> YouTube</span>
-                  <span className="flex items-center gap-2"><Instagram size={16} /> Instagram</span>
-                  <span className="flex items-center gap-2"><TikTokIcon size={16} /> TikTok</span>
-                </div>
+                )}
               </div>
               </div>
             </div>
+          )}
+
+          {activeTab === 'dashboard' && status === 'review' && (
+            <CandidateReview key={jobId} jobId={jobId} results={results} onApprove={handleApproveCandidates} />
           )}
 
           {/* View: Processing / Results (Split View) */}
@@ -2312,7 +2321,7 @@ function App() {
                 <div className="mb-4 sm:mb-6 flex items-center justify-between gap-2">
                   <h2 className="text-sm font-medium text-ink lowercase flex items-center gap-2">
                     <Activity className={`text-brass ${status === 'processing' ? 'animate-pulse' : ''}`} size={18} />
-                    Live Analysis
+                    Processing
                   </h2>
                   <span className={status === 'processing' ? 'badge-brass' :
                     status === 'complete' ? 'badge-ok' :
@@ -2321,6 +2330,18 @@ function App() {
                     {status.toUpperCase()}
                   </span>
                 </div>
+
+                {status === 'processing' && (
+                  <p role="status" className="flex items-center gap-2 mb-4 text-sm text-ink2">
+                    <Loader2 size={16} className="animate-spin text-brass shrink-0" aria-hidden="true" />
+                    <span>{queueInfo ? 'In queue' : !jobId && processingMedia?.type === 'file' ? 'Uploading source' : progress.stage}</span>
+                  </p>
+                )}
+                {status === 'error' && (
+                  <p role="alert" className="mb-4 rounded-input border border-rule2 bg-paper px-3 py-2.5 text-sm text-danger break-words">
+                    {jobError || 'Clip generation failed.'}
+                  </p>
+                )}
 
                 {/* Trimmed run: say it while it renders, not only once the
                     clips land, so the shorter result is no surprise. */}
@@ -2377,36 +2398,17 @@ function App() {
                   </div>
                 )}
 
-                {/* Video Preview */}
+                {/* Keep the source monitor distinct from the downloadable render. */}
                 {processingMedia && (
-                  <ProcessingAnimation
-                    media={processingMedia}
-                    isComplete={status === 'complete'}
-                    syncedTime={syncedTime}
-                    isSyncedPlaying={isSyncedPlaying}
-                    syncTrigger={syncTrigger}
-                  />
-                )}
-
-                {/* Phones only. The scan box drops its invented telemetry at
-                    this size and the log terminal below starts collapsed, so
-                    without this the screen would say nothing about what the job
-                    is actually doing. The log tail is the real answer. */}
-                {status === 'processing' && (
-                  <div className="sm:hidden mb-3 flex items-start gap-2 text-xs text-ink2 min-w-0">
-                    <Loader2 size={14} className="animate-spin text-brass shrink-0 mt-px" />
-                    <span className="min-w-0 leading-snug break-words">
-                      {logs.length ? logs[logs.length - 1] : 'starting up…'}
-                    </span>
-                  </div>
-                )}
-
-                {/* The render is dead time: the user is watching a progress bar
-                    with nothing to do, so this is where the one star ask goes. */}
-                {status === 'processing' && (
-                  <div className="my-3">
-                    <StarBanner message="Got a minute while this renders?" />
-                  </div>
+                  <figure>
+                    <figcaption className="text-xs text-muted mb-2">Original source footage</figcaption>
+                    <ProcessingAnimation
+                      media={processingMedia}
+                      syncedTime={syncedTime}
+                      isSyncedPlaying={isSyncedPlaying}
+                      syncTrigger={syncTrigger}
+                    />
+                  </figure>
                 )}
 
                 {/* Logs Terminal */}
@@ -2452,7 +2454,7 @@ function App() {
                     "schedule week" pill under the title on a phone. */}
                 <div className="mb-4 sm:mb-6 shrink-0 space-y-3">
                   <h2 className="font-display lowercase text-lg sm:text-xl text-ink flex flex-wrap items-center gap-2">
-                    <span className="mr-auto">Generated Shorts</span>
+                    <span className="mr-auto">Rendered clips</span>
                     {clipsMaking ? (
                       <span className="readout bg-paper3 px-2.5 py-1 rounded-full text-brass">
                         {progress.ready}/{progress.total} Clips
@@ -2674,15 +2676,14 @@ function App() {
                       <div className="h-full min-h-[140px] flex flex-col items-center justify-center text-muted space-y-3 text-center px-4">
                         <Loader2 size={28} className="animate-spin text-brass" />
                         <p className="text-sm lowercase">
-                          {clipsMaking ? `Making ${progress.total} ${progress.total === 1 ? 'clip' : 'clips'}...` : 'Waiting for clips...'}
-                        </p>
-                        <p className="text-xs text-muted/80 max-w-[26ch] leading-snug">
-                          They appear here one by one as each finishes rendering.
+                          Waiting for the first clip
                         </p>
                       </div>
+                    ) : results?.no_highlights ? (
+                      <p className="text-sm text-muted">No moments with a clear payoff were found.</p>
                     ) : status === 'error' ? (
-                      <div className="h-full min-h-[120px] flex flex-col items-center justify-center text-danger space-y-2">
-                        <p>Generation failed.</p>
+                      <div className="h-full min-h-[120px] flex items-center justify-center text-muted text-sm">
+                        <p>No clips available</p>
                       </div>
                     ) : null
                   )}

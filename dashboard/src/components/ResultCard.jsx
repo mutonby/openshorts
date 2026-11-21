@@ -5,6 +5,7 @@ import { apiFetch, QuotaError, openQuotaWall } from '../lib/api';
 import { platformOptions as buildPlatformOptions, defaultPlatformFlags, flagsFromList } from '../lib/socialPlatforms';
 import { track } from '../lib/analytics';
 import SubtitleModal from './SubtitleModal';
+import CampaignChecklist from './CampaignChecklist';
 import HookModal from './HookModal';
 import TranslateModal from './TranslateModal';
 import Modal from './ui/Modal';
@@ -104,9 +105,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     // copy is the PRE-edit clip. Preferring it blindly would silently show the
     // clip without the subtitles/hook the user just burned.
     //
-    // This is display-only: currentVideoUrl remains the source of truth for the
-    // download button and for every server operation, so no edit can be routed
-    // to the wrong file by this.
+    // The player and download can use this copy once it matches the current
+    // edit. Server-side edits still use serverVideoFile to identify their input.
     const [durableSrc, setDurableSrc] = useState(null);
     const [durableFailed, setDurableFailed] = useState(false);
     // Switching src reloads the element and restarts playback, so the durable copy
@@ -151,7 +151,12 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     response = null;
                 }
             }
-            if (!response) response = await fetch(currentVideoUrl);
+            if (!response) {
+                response = await fetch(playbackUrl);
+                if (!response.ok && playbackUrl !== currentVideoUrl) {
+                    response = await fetch(currentVideoUrl);
+                }
+            }
             if (!response.ok) throw new Error('Download failed');
             const total = Number(response.headers.get('content-length')) || 0;
             let blob;
@@ -186,10 +191,18 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 score: Number.isFinite(clip.predicted_score) ? clip.predicted_score : undefined } });
         } catch (err) {
             console.error('Download error:', err);
-            window.open(currentVideoUrl, '_blank');
+            window.open(playbackUrl, '_blank', 'noopener');
         } finally {
             setDownloadPct(null);
         }
+    };
+
+    const startDownload = () => {
+        if (plan === 'free' && !watermarkNoticeDismissed(jobId)) {
+            setShowWatermarkModal(true);
+            return;
+        }
+        downloadClip();
     };
     // Latest file that exists ON THE SERVER (blob: previews don't count).
     // All server-side operations must chain from this, so burned-in edits
@@ -197,14 +210,17 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     // A reopened project seeds it from the persisted project state.
     const [serverVideoFile, setServerVideoFile] = useState(initialState?.server_file || (clip.video_url || '').split('/').pop());
     const [videoErrored, setVideoErrored] = useState(false);
-    const [resolution, setResolution] = useState(null);
+    const [mediaInfo, setMediaInfo] = useState(null);
+    const resolution = mediaInfo ? `${mediaInfo.width}×${mediaInfo.height}` : null;
 
     // Adopt the durable copy only while it matches the current server file, and
     // pin the first signed URL seen for that file: /api/history mints a fresh
     // signature on every call, and swapping src mid-playback restarts the video.
     useEffect(() => {
         if (durable?.url && durable.filename && durable.filename === serverVideoFile && !hasPlayed) {
-            setDurableSrc((prev) => prev || durable.url);
+            setDurableSrc((prev) => prev?.file === serverVideoFile ? prev : {
+                file: serverVideoFile, url: durable.url,
+            });
         } else {
             setDurableSrc(null);
         }
@@ -212,15 +228,14 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
 
     // If the local video failed and a durable R2 URL is (now) available, use it.
     // Handles the race where the video errors before the durable URL has loaded.
-    // Deliberately NOT version-gated: reaching here means the local file is gone
-    // (retention sweep after a reload), so an older durable copy still beats a
-    // broken player.
+    // A saved file must match the current edit for preview and export.
     useEffect(() => {
-        if (videoErrored && durable?.url && currentVideoUrl !== durable.url) {
+        if (videoErrored && durable?.url && durable.filename === serverVideoFile
+                && currentVideoUrl !== durable.url) {
             setCurrentVideoUrl(durable.url);
             setVideoErrored(false);
         }
-    }, [videoErrored, durable, currentVideoUrl]);
+    }, [videoErrored, durable, currentVideoUrl, serverVideoFile]);
 
     // When an external refresh changes this clip's server file (e.g. bulk
     // subtitles applied from another card), adopt it so the card shows the
@@ -275,7 +290,10 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     // one the server refuses, so the switch is not offered there. Unknown
     // until the video's metadata loads, and offered meanwhile.
     const [isUpright, setIsUpright] = useState(true);
-    const canSwitchMode = Boolean(onModeChanged) && (isUpright || isPro);
+    const canSwitchMode = Boolean(onModeChanged)
+        && (isPro || (isUpright && (!clip.framing_method || clip.framing_method === 'legacy')
+            && clip.recipe?.framing !== 'gameplay'
+            && !clip.layout_ranges?.some((range) => range.layout === 'gameplay')));
     const handleMode = async () => {
         setIsSwitchingMode(true);
         setEditError(null);
@@ -851,9 +869,11 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
 
     // Browser-rendered previews (Remotion) live in a blob: URL that exists only
     // in this tab, so they always win over the durable copy.
-    const playbackUrl = (durableSrc && !durableFailed && !String(currentVideoUrl || '').startsWith('blob:'))
-        ? durableSrc
+    const durablePreview = durableSrc?.file === serverVideoFile && !durableFailed ? durableSrc.url : null;
+    const playbackUrl = (durablePreview && !String(currentVideoUrl || '').startsWith('blob:'))
+        ? durablePreview
         : currentVideoUrl;
+    const exportMedia = mediaInfo?.url === playbackUrl ? mediaInfo : null;
 
     const durationReadout = formatDuration(clip);
 
@@ -868,12 +888,14 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 <video
                     ref={videoRef}
                     src={playbackUrl}
+                    aria-label="Final rendered clip"
                     controls
                     className="w-full h-full object-contain"
                     playsInline
                     onLoadedMetadata={(e) => {
                         if (e.target.videoWidth) {
-                            setResolution(`${e.target.videoWidth}×${e.target.videoHeight}`);
+                            setMediaInfo({ url: playbackUrl, width: e.target.videoWidth,
+                                height: e.target.videoHeight, duration: e.target.duration });
                             setIsUpright(e.target.videoHeight > e.target.videoWidth);
                         }
                     }}
@@ -881,14 +903,15 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         // The durable copy is unreachable (signature expired after an
                         // hour on an idle tab, object purged) → serve from the API for
                         // the rest of this card's life.
-                        if (playbackUrl === durableSrc) {
+                        if (playbackUrl === durablePreview) {
                             setDurableFailed(true);
                             return;
                         }
                         // Local /videos/ file gone (e.g. cleaned up after a reload) →
                         // fall back to the durable R2 copy for managed users. If the
                         // durable URL hasn't loaded yet, the effect above retries.
-                        if (durable?.url && currentVideoUrl !== durable.url) setCurrentVideoUrl(durable.url);
+                        if (durable?.url && durable.filename === serverVideoFile
+                                && currentVideoUrl !== durable.url) setCurrentVideoUrl(durable.url);
                         else setVideoErrored(true);
                     }}
                     onPlay={() => {
@@ -915,13 +938,13 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     {/* A bare number on a thumbnail reads as a duration, a
                         position, anything — it has to name itself and carry
                         its scale, or it is decoration. */}
-                    {Number.isFinite(clip.predicted_score) && (
+                    {!clip.assessment && Number.isFinite(clip.predicted_score) && (
                         <span
                             className="bg-black/70 font-mono text-micro uppercase px-2 py-1 rounded-full flex items-center gap-1"
-                            title="openshorts' prediction of how well this clip will perform, from 0 to 100"
+                            title="AI ranking within the source based on hook, clarity, and payoff"
                         >
                             <TrendingUp size={11} className="shrink-0 text-muted" />
-                            <span className="text-muted">viral</span>
+                            <span className="text-muted">AI rank</span>
                             <b className={
                                 clip.predicted_score >= 80 ? 'text-ok'
                                     : clip.predicted_score >= 65 ? 'text-brass'
@@ -981,8 +1004,6 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         {resolution && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">{resolution}</span>}
                         {isPro && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0 text-brass">pro mode</span>}
                         {!isPro && clip.pro_suggested && <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0 text-brass">pro recommended</span>}
-                        <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">#shorts</span>
-                        <span className="readout bg-paper3 px-2 py-0.5 rounded-full shrink-0">#viral</span>
                     </div>
                 </div>
 
@@ -1023,6 +1044,14 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         <FileText size={14} /> view descriptions
                     </button>
                 </div>
+
+                <CampaignChecklist
+                    key={playbackUrl}
+                    description={clip.video_description_for_tiktok || clip.video_description_for_instagram}
+                    media={exportMedia}
+                    downloading={downloadPct !== null}
+                    onDownload={startDownload}
+                />
 
                 {/* Error Message */}
                 {editError && (
@@ -1140,16 +1169,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         <Share2 size={16} className="shrink-0" /> post
                     </button>
                     <button
-                        onClick={(e) => {
-                            e.preventDefault();
-                            // Free clips are watermarked — surface the upsell once
-                            // before the first download, then get out of the way.
-                            if (plan === 'free' && !watermarkNoticeDismissed(jobId)) {
-                                setShowWatermarkModal(true);
-                                return;
-                            }
-                            downloadClip();
-                        }}
+                        type="button"
+                        onClick={startDownload}
                         className={`${QUIET_BTN}${onEditClip ? ' col-span-2' : ''}`}
                     >
                         <Download size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />
