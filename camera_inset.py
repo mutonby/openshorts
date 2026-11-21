@@ -393,63 +393,65 @@ MAX_CAMERA_RATIO = 0.40
 
 
 def inset_filtergraph(orig_w, orig_h, out_w, out_h, box, camera_ratio=None):
-    """Screen on top at full width, the webcam inset below.
+    """Plic AI gaming layout: facecam in the top half, gameplay in the bottom.
 
-    The screen keeps its whole width, which is the point: a game HUD or a
-    desktop puts what matters at the edges. The inset is scaled up so the person
-    reads at a size the source never gave them.
-
-    The camera band takes its height from the INSET'S OWN aspect ratio rather
-    than a fixed share of the frame. A fixed share was tried first and stretched
-    every face sideways: a 16:9 inset forced into a 2:1 band is a 12% horizontal
-    stretch, and it is immediately visible on a face.
+    The facecam crop uses a 15% horizontal object-position bias. The gameplay
+    crop is shifted away from the detected webcam corner where possible, so the
+    same webcam is not repeated in the lower panel.
     """
-    box_w = max(2, box[2])
-    box_h = max(2, box[3])
+    panel_h = max(2, (int(out_h * 0.5) // 2) * 2)
+    game_h = max(2, out_h - panel_h)
+    target_aspect = out_w / float(panel_h)
 
-    if camera_ratio is not None:
-        cam_h = int(out_h * camera_ratio)
-    else:
-        cam_h = int(round(out_w * box_h / float(box_w)))
-    cam_h = min(cam_h, int(out_h * MAX_CAMERA_RATIO))
-    cam_h -= cam_h % 2
+    x, y, w, h = (int(v) for v in box)
+    x, y, w, h = max(0, x), max(0, y), max(2, w), max(2, h)
 
-    screen_h = int(round(out_w * orig_h / float(orig_w)))
-    screen_h -= screen_h % 2
-    screen_h = max(2, min(screen_h, out_h - cam_h - 2))
-
-    # Widen (or heighten) the crop to the band's aspect so the scale below is
-    # uniform. Clamped to the frame, so an inset hard against an edge simply
-    # keeps whatever it can reach.
-    target_aspect = out_w / float(cam_h)
-    x, y, w, h = box
-    if w / float(h) < target_aspect:
-        want_w = min(orig_w, int(round(h * target_aspect)))
-        x = int(round(x + w / 2.0 - want_w / 2.0))
+    # Cover the top panel without stretching the person's face. When the
+    # webcam is wider than the panel, bias the crop toward the left 15%.
+    if w / float(h) > target_aspect:
+        want_w = min(orig_w, max(2, int(round(h * target_aspect))))
+        x += int(round((w - want_w) * 0.15))
         w = want_w
     else:
-        want_h = min(orig_h, int(round(w / target_aspect)))
-        y = int(round(y + h / 2.0 - want_h / 2.0))
+        want_h = min(orig_h, max(2, int(round(w / target_aspect))))
+        y += (h - want_h) // 2
         h = want_h
     x = max(0, min(x, orig_w - w))
     y = max(0, min(y, orig_h - h))
-
-    w -= w % 2
-    h -= h % 2
     x -= x % 2
     y -= y % 2
+    w -= w % 2
+    h -= h % 2
 
-    filler_h = out_h - screen_h - cam_h
+    # Fill the lower panel with gameplay. Pick the nearest crop to centre that
+    # excludes the webcam rectangle, if a full-height horizontal crop allows it.
+    if orig_w / float(orig_h) >= target_aspect:
+        game_crop_h = orig_h - (orig_h % 2)
+        game_crop_w = max(2, min(orig_w, int(round(game_crop_h * target_aspect))))
+        centre_x = (orig_w - game_crop_w) // 2
+        if x + w / 2.0 >= orig_w / 2.0:
+            max_x = max(0, min(orig_w - game_crop_w, x - game_crop_w))
+            game_x = min(centre_x, max_x)
+        else:
+            min_x = max(0, min(orig_w - game_crop_w, x + w))
+            game_x = max(centre_x, min_x)
+        game_y = 0
+    else:
+        game_crop_w = orig_w - (orig_w % 2)
+        game_crop_h = max(2, min(orig_h, int(round(game_crop_w / target_aspect))))
+        game_x = 0
+        game_y = (orig_h - game_crop_h) // 2
+
+    game_x -= game_x % 2
+    game_y -= game_y % 2
+    game_crop_w -= game_crop_w % 2
+    game_crop_h -= game_crop_h % 2
 
     return (
-        f"[0:v]split=3[bga][sa][ca];"
-        # Blurred backdrop so the leftover strip is not a black bar. Scaled by
-        # HEIGHT: scaling a 16:9 source to 1080 wide gives 608 tall, and there
-        # is no 1920-tall crop to take out of that.
-        f"[bga]{blurred_backdrop(out_w, out_h, 14)}[bg];"
-        f"[sa]scale={out_w}:{screen_h}[screen];"
-        f"[ca]crop=w={w}:h={h}:x={x}:y={y},scale={out_w}:{cam_h}[cam];"
-        f"[bg][screen]overlay=x=0:y={filler_h // 2}[withscreen];"
-        f"[withscreen][cam]overlay=x=0:y={filler_h // 2 + screen_h},"
-        f"setsar=1[v]"
+        f"[0:v]split=2[game_src][cam_src];"
+        f"[cam_src]crop=w={w}:h={h}:x={x}:y={y},"
+        f"scale={out_w}:{panel_h}[cam];"
+        f"[game_src]crop=w={game_crop_w}:h={game_crop_h}:x={game_x}:y={game_y},"
+        f"scale={out_w}:{game_h}[game];"
+        f"[cam][game]vstack=inputs=2,setsar=1[v]"
     )
