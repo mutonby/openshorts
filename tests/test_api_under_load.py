@@ -153,6 +153,19 @@ def test_no_claim_in_a_quiet_minute(monkeypatch):
     assert app_module._claim_remote_job("w1") is None
 
 
+def test_the_quiet_minutes_can_be_for_some_workers_only(monkeypatch):
+    monkeypatch.setattr(app_module, "REMOTE_QUIET_MINUTES", {0, 1, 2})
+    monkeypatch.setattr(app_module, "REMOTE_QUIET_WORKERS", frozenset())
+    assert app_module._remote_quiet("shared", minute=1)          # unset: everybody
+    assert app_module._remote_quiet("alone", minute=1)
+    assert not app_module._remote_quiet("shared", minute=30)
+    monkeypatch.setattr(app_module, "REMOTE_QUIET_WORKERS", frozenset({"shared"}))
+    assert app_module._remote_quiet("shared", minute=1)
+    assert not app_module._remote_quiet("alone", minute=1)       # a host of its own
+    assert not app_module._remote_quiet(None, minute=1)
+    assert not app_module._remote_quiet("shared", minute=30)
+
+
 def test_the_source_transfer_can_be_capped(tmp_path, monkeypatch):
     src = tmp_path / "V.mp4"
     src.write_bytes(b"x" * 250_000)

@@ -2041,10 +2041,21 @@ def _quiet_minutes(spec):
     return out
 
 
-# No new claim in these minutes of the hour: the worker's host also carries
-# Upload-Post, whose scheduled posts fill its link at :00-:05. A claim is a
-# ~1 GB source sent over that link a minute or two later.
+# No new claim in these minutes of the hour: a worker's host may also carry
+# another service whose scheduled work fills its link at fixed minutes. A claim
+# is a ~1 GB source sent over that link a minute or two later.
 REMOTE_QUIET_MINUTES = _quiet_minutes(os.environ.get("REMOTE_QUIET_MINUTES", ""))
+# The workers those minutes are for, by the name they claim with ("a,b").
+# Empty: every worker. A worker on a host of its own keeps claiming.
+REMOTE_QUIET_WORKERS = frozenset(
+    w.strip() for w in os.environ.get("REMOTE_QUIET_WORKERS", "").split(",") if w.strip())
+
+
+def _remote_quiet(worker, minute=None) -> bool:
+    """Whether this worker gets no new job this minute of the hour (UTC)."""
+    if REMOTE_QUIET_WORKERS and str(worker or "") not in REMOTE_QUIET_WORKERS:
+        return False
+    return (time.gmtime().tm_min if minute is None else minute) in REMOTE_QUIET_MINUTES
 # Per-transfer cap on the source sent to the worker, in Mbit/s (0: none).
 REMOTE_SOURCE_MBPS = _int_env("REMOTE_SOURCE_MBPS", 0)
 _remote_jobs: set = set()            # the subset of _running_jobs run remotely
@@ -5268,7 +5279,7 @@ def _claim_remote_job(worker, source_only=False, downloads=False):
         return None
     if time.time() < _remote_breaker["until"]:
         return None
-    if time.gmtime().tm_min in REMOTE_QUIET_MINUTES:
+    if _remote_quiet(worker):
         return None
     heap = job_queue._queue
     for entry in sorted(heap):
