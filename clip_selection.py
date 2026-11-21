@@ -68,18 +68,125 @@ def clip_count_targets(n_windows):
     return low, max(low, high)
 
 
+# --- A long source gives clips in proportion to its length -----------------
+# The count used to stop growing at twelve minutes of source: the shortlist
+# was capped at 10 windows, so a five-hour video came back with the same 6-12
+# clips as a quarter of an hour, while the minutes charged for it grew with
+# every minute of it.
+
+DETAIL_GROUP = 10            # windows one detail call reads
+
+
+def _env_number(name, default):
+    import os
+    try:
+        return max(0.0, float(os.environ.get(name, "") or default))
+    except ValueError:
+        return float(default)
+
+
+def max_clips_per_job():
+    """The most clips one job delivers (``CLIP_MAX_PER_JOB``, 60)."""
+    return max(1, int(_env_number("CLIP_MAX_PER_JOB", 60)))
+
+
+def targets_pinned():
+    """Whether the count was set from outside (``CLIP_TARGET_MIN`` / ``MAX``:
+    the user's own number, or the free plan's cap): then nothing here adds to it."""
+    import os
+    return bool(os.environ.get("CLIP_TARGET_MIN") or os.environ.get("CLIP_TARGET_MAX"))
+
+
+def length_floor(video_duration):
+    """The clips a source this long gives at least: one per
+    ``CLIP_LONG_SECONDS_PER_CLIP`` (300, five minutes; 0 turns it off), up to
+    ``max_clips_per_job``. 0 while the fixed band already covers the source
+    (half an hour is six clips either way) or when the count is pinned."""
+    try:
+        seconds = float(video_duration or 0)
+    except (TypeError, ValueError):
+        return 0
+    per = _env_number("CLIP_LONG_SECONDS_PER_CLIP", 300)
+    if per <= 0 or targets_pinned():
+        return 0
+    n = int(seconds // per)
+    return min(max_clips_per_job(), n) if n > 6 else 0
+
+
 def shortlist_target(video_duration):
     """How many scored windows the detail pass should get.
 
-    Scales with duration so a long video surfaces more candidates without
-    exploding the detail call, floored at 3 so a short one still gets a
-    choice. ``score_batches`` exists to make this number reachable.
+    Scales with duration, floored at 3 so a short source still gets a choice.
+    Up to half an hour it stops at 10. Past that it follows ``length_floor``:
+    five windows for every three clips of the floor, which is the share of a
+    group of ten the detail pass is asked to turn into clips
+    (``clip_count_targets``), so the floor is reachable without making every
+    shortlisted window yield one. ``score_batches`` exists to make this number
+    reachable.
     """
     try:
         seconds = float(video_duration or 0)
     except (TypeError, ValueError):
         seconds = 0.0
-    return max(3, min(10, int(seconds // 90) + 2))
+    base = max(3, min(10, int(seconds // 90) + 2))
+    return max(base, math.ceil(length_floor(seconds) * 5 / 3))
+
+
+def detail_groups(shortlist):
+    """The shortlist in the groups the detail pass reads, one call each.
+
+    A shortlist one call can read (``DETAIL_GROUP`` windows) is one group, as
+    it always was and in the order it came. A longer one (a long source) goes
+    in video order in near-equal groups: each call then covers one stretch of
+    the video, asked for its own 6-12 clips, so the clips come from all of it
+    and the total follows the length."""
+    shortlist = list(shortlist or [])
+    if len(shortlist) <= DETAIL_GROUP:
+        return [shortlist] if shortlist else []
+
+    def start(w):
+        try:
+            return float(w.get("start") or 0)
+        except (AttributeError, TypeError, ValueError):
+            return 0.0
+    return score_batches(sorted(shortlist, key=start), DETAIL_GROUP)
+
+
+def detail_plan(shortlist):
+    """``(groups, bands, min_clips, max_clips)`` for the detail pass: each
+    group with its own ``clip_count_targets`` band, and the job's totals. One
+    group: exactly its band. Several: the sum, the ceiling never past
+    ``max_clips_per_job``."""
+    groups = detail_groups(shortlist)
+    if not groups:
+        low, high = clip_count_targets(0)
+        return [], [], low, high
+    bands = [clip_count_targets(len(g)) for g in groups]
+    if len(groups) == 1:
+        return groups, bands, bands[0][0], bands[0][1]
+    cap = max_clips_per_job()
+    low = min(cap, sum(b[0] for b in bands))
+    high = max(low, min(cap, sum(b[1] for b in bands)))
+    return groups, bands, low, high
+
+
+def vision_targets(video_duration, n_segments, low, high):
+    """``(min per stretch, max per stretch, job minimum, job maximum)`` for the
+    vision pass (footage with no speech), from its classic ``low``-``high``.
+
+    It has no scoring windows, so a long source's count comes straight from
+    ``length_floor``: at least that many clips, at most twice (never past
+    ``max_clips_per_job``), spread over the stretches the model watches.
+    Without a floor (a short source, a pinned count) it is what it was: every
+    stretch may return up to ``high`` and the job keeps the best ``high``."""
+    n = max(1, int(n_segments or 1))
+    floor = length_floor(video_duration)
+    if not floor:
+        return max(1, math.ceil(low / n)), high, low, high
+    job_low = max(low, floor)
+    job_high = max(high, job_low, min(max_clips_per_job(), 2 * floor))
+    per_low = max(1, math.ceil(job_low / n))
+    return per_low, max(per_low, math.ceil(job_high / n)), job_low, job_high
 
 
 def score_batches(windows, batch_size):

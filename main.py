@@ -29,8 +29,9 @@ import layout_picker
 import llm_backend
 import yt_account
 import twitch_signals
-from clip_selection import (build_transcript_windows, clip_count_targets,
-                            clip_duration_bounds, dedupe_overlapping,
+from clip_selection import (build_transcript_windows, clip_duration_bounds,
+                            dedupe_overlapping,
+                            detail_plan, vision_targets,
                             score_batches, shortlist_target,
                             snap_clip_to_words, trim_to_best,
                             vision_segments)
@@ -884,7 +885,7 @@ def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         with ssrf_guard.guarded():
             return _download_youtube_video(url, output_dir, on_audio=on_audio,
                                            allow_paid=allow_paid, cap_minutes=cap_minutes,
-                                           route_out=route_out)
+                                           route_out=route_out, may_wait=use_cache)
     hit = source_cache.fetch(url, output_dir)
     if hit is None:
         with source_cache.claim(url):
@@ -895,7 +896,7 @@ def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                 with ssrf_guard.guarded():
                     path, title = _download_youtube_video(
                         url, output_dir, on_audio=on_audio, allow_paid=allow_paid,
-                        cap_minutes=cap_minutes, route_out=route)
+                        cap_minutes=cap_minutes, route_out=route, may_wait=True)
                 if source_cache.is_whole_free_download(route):
                     source_cache.store(url, path, title)
                 return path, title
@@ -907,8 +908,47 @@ def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
 
 
 
+def _stored_extraction(url, attempts, paid_proxy, need_seconds=0):
+    """``(label, extractor args, format, proxy, cookies, info)``: the attempt
+    that can download from the extraction this video's probe kept
+    (``source_cache.info_get``), or None.
+
+    The same exit as the probe (media links are bound to the address that
+    asked for them), the same client list, and never the per-GB proxy.
+    ``need_seconds``: how long the links must still live past the usual
+    margin (the length of a ranged fetch). The attempt comes back without the
+    cookies: nothing in it is a request of the account. What
+    comes back is yt-dlp's own result, written by this host's probe into a
+    dot directory nothing else writes."""
+    try:
+        import source_cache
+        if not is_youtube_url(url):
+            return None
+        kept = source_cache.info_get(url, need_seconds=need_seconds)
+        if not kept:
+            return None
+        want = json.dumps(kept.get("args"), sort_keys=True)
+        for label, ea, fmt, proxy, cookies in attempts:
+            if paid_proxy and proxy == paid_proxy:
+                continue
+            if (source_cache.route_key(proxy) == kept["route"]
+                    and json.dumps(ea, sort_keys=True) == want):
+                return label, ea, fmt, proxy, False, kept["info"]
+    except Exception:
+        pass
+    return None
+
+
+def _forget_extraction(url):
+    try:
+        import source_cache
+        source_cache.info_drop(url)
+    except Exception:
+        pass
+
+
 def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
-                            cap_minutes=None, route_out=None):
+                            cap_minutes=None, route_out=None, may_wait=False):
     """
     Downloads a YouTube video using yt-dlp.
     Returns the path to the downloaded video and the video title.
@@ -945,6 +985,13 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     # The account this video uses (one of YOUTUBE_COOKIES, YOUTUBE_COOKIES_2,
     # ...), as a private cookie file. Never print its CONTENT: it is a live
     # YouTube session.
+    # With every account resting, a job's download waits for one to wake
+    # instead of asking a limited one again (yt_account.REST_WAIT). Not a
+    # download that runs inside the API (``may_wait`` False): its caller is
+    # somebody waiting on a request.
+    if may_wait and is_youtube_url(url):
+        yt_account.wait_for_awake(say=lambda left: print(
+            f"⏳ Every YouTube account is resting: waiting up to {left / 60:.0f} min for one."))
     yt_session = yt_account.Session()
     cookies_path = yt_session.path
     if cookies_path:
@@ -968,8 +1015,13 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     _statics = [p.strip() for p in
                 os.environ.get("STATIC_PROXY_URLS", "").split(",") if p.strip()]
     if _statics:
-        import random as _random
-        k = _random.randrange(len(_statics))
+        # The account's own exit first (yt_account.home_exit): each account
+        # leaves through the same address every time. With no account, any.
+        if cookies_path:
+            k = yt_account.home_exit(yt_session.account, len(_statics))
+        else:
+            import random as _random
+            k = _random.randrange(len(_statics))
         _statics = _statics[k:] + _statics[:k]
         print(f"🌐 {len(_statics)} static ISP proxies configured.")
 
@@ -1092,7 +1144,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             print(f"   ℹ️ Early audio skipped ({type(e).__name__}: {e}) — "
                   f"transcribing once the video is in.")
 
-    def _attempt(extractor_args, fmt, proxy, cookies=True):
+    def _attempt(extractor_args, fmt, proxy, cookies=True, info=None):
         _dl_bytes["total"] = 0
         _dl_bytes["partial"] = 0
         # Extracted ONCE, unprocessed, and handed to the download below: a
@@ -1101,9 +1153,12 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         # An extraction that sends the account's cookies takes one of the
         # account's slots and keeps its distance from the previous one
         # (yt_account): the account's request budget is shared by every job.
-        with (yt_session.request() if (cookies and cookies_path) else contextlib.nullcontext()):
-            with yt_dlp.YoutubeDL(_base_opts(extractor_args, proxy, cookies)) as ydl:
-                info = ydl.extract_info(url, download=False, process=False)
+        # ``info``: the extraction the probe of this video left behind
+        # (_stored_extraction): nothing is asked of YouTube but the media.
+        if info is None:
+            with (yt_session.request() if (cookies and cookies_path) else contextlib.nullcontext()):
+                with yt_dlp.YoutubeDL(_base_opts(extractor_args, proxy, cookies)) as ydl:
+                    info = ydl.extract_info(url, download=False, process=False)
         # Media URLs another program will fetch (ffmpeg on a ranged or HLS
         # download) resolve outside the Python guard: check them here. YouTube's
         # own CDN hosts are skipped (dozens of them, never internal).
@@ -1190,11 +1245,34 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     # below so app.py can keep a durable trail of WHY a job reached the paid
     # proxy (the container log rotates within the hour; see cloud/proxy_ledger).
     attempt_log = []
+    # The probe of this video asked YouTube the same question minutes ago and
+    # kept the answer (source_cache.info_put): downloading from it spends no
+    # request of a YouTube account. Only on the route that asked (media links
+    # are bound to its address) and with the same client list; when it does
+    # not work the attempts below run as if it had never been there.
+    stored = _stored_extraction(url, attempts, _proxy, need_seconds=_range_cap or 0)
+    if stored is not None:
+        label, ea, fmt, proxy, cookies, info = stored
+        try:
+            print(f"📥 Download attempt: {label} (extraction reused)")
+            sanitized_title = _attempt(ea, fmt, proxy, cookies, info=info)
+            attempt_log.append({"label": label, "ok": True, "paid": False, "reused": True,
+                                "bytes": _dl_bytes["total"] + _dl_bytes["partial"]})
+            print(f"✅ Download succeeded ({label}).")
+        except Exception as e:
+            _forget_extraction(url)
+            attempt_log.append({"label": label, "ok": False, "paid": False, "reused": True,
+                                "bytes": _dl_bytes["total"] + _dl_bytes["partial"],
+                                "error": str(e)[:300]})
+            print(f"⚠️  The reused extraction did not download ({str(e)[:160]}): asking YouTube again.")
+            sanitized_title = None
     account_limited = False
     # Age-restricted: every account tried said no (or nobody is signed in).
     age_refused = False
     skip_told = False
     for label, ea, fmt, proxy, cookies in attempts:
+        if sanitized_title is not None:
+            break                 # the reused extraction already has the file
         if cookies and cookies_path and yt_session.spent:
             # YouTube said twice for this video (or, during a cooldown, to
             # everybody) that the account is limited: one more request with
@@ -2445,9 +2523,17 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None, editor
         print(f"   Shortlisted {len(shortlist)} window(s) for detail.")
 
         # --- Pass 2: detailed clip extraction on the shortlist ---
-        min_clips, max_clips = clip_count_targets(len(shortlist))
+        # One call for a shortlist one call can read, as always. A long
+        # source's longer shortlist goes in groups, each a stretch of the
+        # video asked for its own share: the count follows the length
+        # (clip_selection.detail_plan).
+        groups, bands, min_clips, max_clips = detail_plan(shortlist)
         if editorial:
             min_clips = 0
+            bands = [(0, high) for _, high in bands]
+        if len(groups) > 1:
+            print(f"   A long source: {len(groups)} detail calls, "
+                  f"{min_clips}-{max_clips} clips in all.")
 
         def _detail_prompt_for(lo, hi):
             # A split batch keeps the full clip-count band: a short list can
@@ -2465,9 +2551,13 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None, editor
                 return prompt
             return build
 
-        shorts = _run_stage_split(client, model_name, shortlist,
-                                  _detail_prompt_for(min_clips, max_clips),
-                                  gemini_worker.DetailResponse, "shorts", costs, "detail")
+        shorts = []
+        for group, (lo, hi) in zip(groups, bands):
+            shorts.extend(_run_stage_split(client, model_name, group,
+                                           _detail_prompt_for(lo, hi),
+                                           gemini_worker.DetailResponse, "shorts", costs, "detail"))
+        if len(groups) > 1:
+            shorts.sort(key=lambda s: float(s.get("start") or 0))
 
         # The floor lived only in the prompt, and a prompt is not a contract:
         # the model regularly returned half of it and the job shipped that.
@@ -2722,7 +2812,12 @@ def get_visual_clips(video_path, video_duration, language="en", viewer_clips=Non
                   + (f" (only the first {covered / 60:.0f} of "
                      f"{video_duration / 60:.0f} min; VISION_MAX_SEGMENTS)"
                      if covered < float(video_duration) - 1 else ""))
-        per_min = 0 if editorial else max(1, math.ceil(v_min_clips / len(segments)))
+        # A long silent source gives clips in proportion to its length too
+        # (clip_selection.vision_targets); a short one keeps the classic band.
+        per_min, per_max, v_min_clips, v_max_clips = vision_targets(
+            covered, len(segments), v_min_clips, v_max_clips)
+        if editorial:
+            per_min = 0
         clean, costs = [], []
         answered = False
         tmp_dir = os.path.join(os.path.dirname(os.path.abspath(video_path)),
@@ -2735,9 +2830,9 @@ def get_visual_clips(video_path, video_duration, language="en", viewer_clips=Non
                     _vision_proxy(video_path, s0, s1, proxy)
                     shorts, cost = _visual_pass(
                         client, model_name, proxy, round(s1 - s0, 3), language,
-                        per_min, v_max_clips, v_min_secs, v_max_secs,
+                        per_min, per_max, v_min_secs, v_max_secs,
                         hint=_viewer_hint(viewer_clips, s0, s1 - s0))
-                    answered = True
+                    answered = answered or shorts is not None
                 except gemini_worker.GeminiBlockedError:
                     raise
                 except Exception as e:

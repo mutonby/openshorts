@@ -832,6 +832,19 @@ def free_queue_full_error() -> HTTPException:
     return payment_required("free_queue_full", FREE_QUEUE_FULL_MESSAGE, retry_later=True)
 
 
+def _slow_lane_of(request, user, balance) -> bool:
+    """Whether a submission of this account from this client joins the slow
+    lane: a free-plan account with no top-up credit from a slow-lane country,
+    with the mode on."""
+    if not _saturation_on() or user.plan != "free":
+        return False
+    if float(balance.get("topup_remaining") or 0) > 0:
+        return False
+    country = _queue_mode.request_country(
+        request.headers, request.client.host if request.client else None)
+    return _queue_mode.lane_for(user.plan, country) == _queue_mode.SLOW
+
+
 def _assign_queue_lane(request, user, balance, priority) -> int:
     """The lane of a new managed job (``request.state.queue_lane``) and its
     queue priority. Slow only for a free-plan account with no top-up credit
@@ -850,11 +863,9 @@ def _assign_queue_lane(request, user, balance, priority) -> int:
     if float(balance.get("topup_remaining") or 0) > 0:
         request.state.queue_topup = True
         return min(priority, _queue_mode.PAID_PRIORITY)
-    country = _queue_mode.request_country(
-        request.headers, request.client.host if request.client else None)
-    lane = _queue_mode.lane_for(user.plan, country)
-    if lane != _queue_mode.SLOW:
+    if not _slow_lane_of(request, user, balance):
         return priority
+    lane = _queue_mode.SLOW
     if _queue_mode.brake_active():
         _queue_mode.note_rejected()
         # Who was refused, by account prefix only (no address, no country):
@@ -3694,7 +3705,10 @@ def _schedule_auto_retry(job_id, job):
         # Back in line for when the account's cooldown is over (plus a spread,
         # so the videos that waited do not all ask YouTube in the same second).
         job['yt_retries'] = int(job.get('yt_retries') or 0) + 1
-        delay = max(delay, yt_account.cooling_down()) + 20 + (hash(job_id) % 120)
+        # ...or, with every account resting, for when the first one wakes:
+        # trying again before that asks a limited account once more.
+        delay = (max(delay, yt_account.cooling_down(), yt_account.all_resting())
+                 + 20 + (hash(job_id) % 120))
         job['logs'].append(YT_LIMITED_LOG.format(n=max(1, round(delay / 60))))
         print(f"⏳ {job_id} waits {delay:.0f}s for the YouTube account "
               f"({job['yt_retries']}/{YT_LIMIT_RETRIES}).")
@@ -5292,9 +5306,10 @@ def _remote_eligible(job_id, priority) -> bool:
     return os.path.exists(_manifest_path(job_id))
 
 
-def _claim_remote_job(worker):
+def _claim_remote_job(worker, source_only=False):
     """Hand the next eligible queued job to the remote worker, or None.
     ``(job_id, claim)``. Loop thread only: it edits the heap.
+    ``source_only``: the worker wants the source alone (it has its own card).
 
     Only while a job is already waiting for a GPU slot: with room on the card
     the job runs here, where it is faster."""
@@ -5332,7 +5347,7 @@ def _claim_remote_job(worker):
         _remote_jobs.add(job_id)
         job['run_started'] = time.time()
         _touch_manifest(job_id, started=True)
-        claim = remote_worker.begin(job['output_dir'], worker)
+        claim = remote_worker.begin(job['output_dir'], worker, source_only=source_only)
         print(f"🛰️ Job {job_id} goes to the remote worker {str(worker)[:40]!r}.")
         asyncio.create_task(run_job_wrapper(job_id))
         return job_id, claim
@@ -5357,6 +5372,10 @@ async def _run_job_remote(job_id, job_data):
         env = dict(job_data['env'])
         if await _paid_proxy_budget_exceeded():
             env.pop("PROXY_URL", None)
+        if remote_worker.source_only(output_dir):
+            # A worker with a card of its own transcribes and finds the scenes
+            # faster than it can wait for this host to do it for it.
+            env.update(remote_worker.source_only_env(env))
         jobs[job_id].pop('remote_source', None)
         returncode = await _run_main(job_id, cmd + ["--prepare-only"], env)
         source = jobs[job_id].get('remote_source')
@@ -5524,7 +5543,8 @@ async def _worker_body(request: Request) -> dict:
 async def worker_claim(request: Request):
     _worker_auth(request)
     body = await _worker_body(request)
-    claimed = _claim_remote_job(str(body.get("worker") or "worker"))
+    claimed = _claim_remote_job(str(body.get("worker") or "worker"),
+                                source_only=body.get("source_only") is True)
     if claimed is None:
         return JSONResponse({"job_id": None})
     return {"job_id": claimed[0], "claim": claimed[1]}
@@ -6077,9 +6097,17 @@ async def process_estimate(req: EstimateRequest, request: Request):
     if not managed_keys.has_active_entitlement(user):
         return {"billing": True, "outcome": None}
     url = (req.url or "").strip()
+    balance = None
     if url:
         minutes = _cached_probe(user.id, url)
         if minutes is None:
+            # An account the slow lane's brake refuses on submit gets no cost
+            # line: its probe would spend a request of a YouTube account on a
+            # job that cannot be queued, and those accounts are what every
+            # download waits for.
+            balance = await _metering.get_balance(user.id)
+            if _slow_lane_of(request, user, balance) and _queue_mode.brake_active():
+                return {"billing": True, "outcome": None}
             # Its own hourly window: pasting a few links must not use up the
             # probes the submit itself needs.
             _check_probe_rate(f"estimate:{user.id}")
@@ -6101,7 +6129,8 @@ async def process_estimate(req: EstimateRequest, request: Request):
         minutes = float(req.seconds) / 60.0
     else:
         raise HTTPException(status_code=400, detail="Send a url or the file's seconds.")
-    balance = await _metering.get_balance(user.id)
+    if balance is None:
+        balance = await _metering.get_balance(user.id)
     processed_before = True
     if balance.get("plan") == "free":
         processed_before = await _metering.has_processed_before(user.id)

@@ -47,6 +47,16 @@ def test_uncertain_moments_require_review_and_get_neutral_copy(monkeypatch):
                                    gameplay=True, manual_review=False) == []
 
 
+def test_review_takes_the_best_suggestions_across_the_source(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    proposals = [proposed(i * 30, i * 30 + 20) for i in range(candidate_review.MAX_CANDIDATES + 1)]
+    proposals[-1]["predicted_score"] = 95
+    kept = candidate_review.assess("source.mp4", proposals, {}, 500,
+                                  gameplay=True, manual_review=True)
+    assert len(kept) == candidate_review.MAX_CANDIDATES
+    assert any(clip["start"] == proposals[-1]["start"] for clip in kept)
+
+
 def test_approval_restores_a_review_from_disk_and_queues_only_selected_ids(tmp_path, monkeypatch):
     app = pytest.importorskip("app")
     from httpx import ASGITransport, AsyncClient

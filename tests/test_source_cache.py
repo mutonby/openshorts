@@ -139,6 +139,24 @@ def test_least_recently_used_goes_first_past_the_cap(tmp_path, monkeypatch):
     assert left == ["aaaaaaaaaaa.mp4", "ccccccccccc.mp4"]
 
 
+def test_a_source_too_big_to_be_worth_its_room_is_not_kept(tmp_path, monkeypatch):
+    monkeypatch.setenv("SOURCE_CACHE_MAX_ENTRY_GB", "0.000002")       # 2 kB
+    _, small = _download(tmp_path, "a", b"x" * 1000)
+    _, giant = _download(tmp_path, "b", b"x" * 5000)
+    other = "https://youtu.be/bbbbbbbbbbb"
+    assert source_cache.store(URL, small, "small")
+    assert not source_cache.store(other, giant, "giant")
+    assert source_cache.fetch(other, str(tmp_path / "c")) is None
+    assert source_cache.fetch(URL, str(tmp_path / "a")) is not None   # the small one stays
+    monkeypatch.setenv("SOURCE_CACHE_MAX_ENTRY_GB", "0")              # no limit
+    assert source_cache.store(other, giant, "giant")
+    # One kept under a larger limit goes at the next clean-up, the others stay.
+    monkeypatch.setenv("SOURCE_CACHE_MAX_ENTRY_GB", "0.000002")
+    source_cache.prune()
+    assert source_cache.fetch(other, str(tmp_path / "b")) is None
+    assert source_cache.fetch(URL, str(tmp_path / "a")) is not None
+
+
 def test_only_whole_free_downloads_are_kept():
     ok = {"winner": "HD-static1", "attempts": [
         {"label": "HD-static1", "ok": False, "paid": False},

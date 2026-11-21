@@ -111,6 +111,27 @@ outright.
   bot-checked on every IP, so a cooldown stopped every download (12-nov-2026:
   a half-limited account went to one success in a hundred). Turn it on only
   with a route that works anonymously.
+- **One account, one exit.** A probe and a download start on their
+  account's own static route (`yt_account.home_exit`: the account's index
+  over the routes as configured), not on a random one. A signed-in session
+  that shows up from every address of the pool within seconds does not look
+  like a person, and the accounts were being limited far below the request
+  rate YouTube lets one through. With more accounts than routes they share,
+  as people behind one address do. The other routes are still tried when the
+  first fails. Keep `STATIC_PROXY_URLS` in the same order across deploys.
+- **Every account resting.** A job's download waits for the first one to
+  wake, up to `YT_ACCOUNT_REST_WAIT` (600 s, 0 for none), instead of asking
+  the one closest to waking: that one answered "rate-limited" again, and a
+  queue of downloads doing it kept every account limited for as long as
+  there were downloads to try. Never a download that runs inside the API
+  (`may_wait`), and the retry of a limited video is scheduled for when an
+  account wakes (`yt_account.all_resting`).
+- **Pace for a busy host.** The defaults (2 slots, 2 s apart per account)
+  suit one account and a few jobs. With a queue behind several accounts,
+  `YT_ACCOUNT_SLOTS=1` and `YT_ACCOUNT_MIN_INTERVAL` of 6 to 8 keep each
+  account at a steady request every few seconds instead of bursts when many
+  jobs start together; it still leaves room for hundreds of extractions an
+  hour per account.
 - **Several accounts.** `YOUTUBE_COOKIES_2` .. `YOUTUBE_COOKIES_9` add
   accounts next to `YOUTUBE_COOKIES`. Each video takes the next one in turn
   (`yt_account.Session`, one private cookie file per probe or download), and
@@ -133,6 +154,29 @@ outright.
   the job waits for the cooldown like any limited download.
 - **One probe per submission.** The quality gate reuses what the metering
   probe just learned (`metering.probe_facts`) instead of asking again.
+- **The download starts from the probe's answer.** The probe and the
+  download asked YouTube the same thing minutes apart (the formats and their
+  media links), each with the account's cookies. With the download cache on,
+  the probe keeps yt-dlp's sanitized result per video id
+  (`source_cache.info_put`, `<id>.info.json`) until 15 minutes before the
+  first of its media links expires (they carry their own `expire`, about six
+  hours), and `main._stored_extraction` hands it to the download, which then
+  asks nothing of the account: for a whole download and for a ranged one
+  alike, and for another user's job on the same video too. Media links are
+  bound to the address that asked for them, so it is used only through the
+  same exit (`source_cache.route_key`: a digest, the proxy URL with its
+  credentials is never written) with the same client list, and never from
+  or on the per-GB proxy, whose exit changes. A kept extraction that does
+  not download is dropped and the usual attempts run as if it had never been
+  there; that failure is a media request, not one of the account's.
+  `SOURCE_CACHE_INFO=0` turns it off.
+- **No probe for a submission that cannot be queued.** The cost line
+  (`/api/process/estimate`) runs when a link is pasted, before any submit. An
+  account the slow lane's brake refuses on submit (`app._slow_lane_of` and
+  `queue_mode.brake_active`) gets no estimate and no probe: those probes were
+  a large share of the accounts' requests while the brake was on, for jobs
+  that were then refused. A length the account already has cached is still
+  shown.
 - **Wait, not fail.** A download that failed only because of the limit prints
   `YT_ACCOUNT_LIMITED`; `app._schedule_auto_retry` puts the job back in line
   for when the cooldown ends, up to `YT_LIMIT_RETRIES` (3) times, on a counter
@@ -170,7 +214,9 @@ empty; Cloud points it at `output/.source_cache`) a video is asked for once:
   change; a video made private meanwhile fails at the download as before.
 - **Bounded.** An entry lives `SOURCE_CACHE_HOURS` (48) from when it was
   stored; past `SOURCE_CACHE_MAX_GB` (150) the least recently used go first
-  (`prune`, on every store). It is a dot entry of `output/`: never served by
+  (`prune`, on every store). A source over `SOURCE_CACHE_MAX_ENTRY_GB` (4; 0
+  for no limit) is not kept: a handful of many-hour streams of tens of GB
+  each filled the cache and pushed the ordinary sources out within the hour. It is a dot entry of `output/`: never served by
   `/videos` (dot segments are refused), never swept, and not counted by the
   output size cap (`app._output_jobs_size`), which could only purge finished
   jobs for room it is not allowed to free.

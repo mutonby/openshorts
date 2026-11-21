@@ -94,6 +94,8 @@ every refusal, API and MCP included. Refusals are counted in the queue alerts.
 - Every surface that opens the plan modal passes a `source` (`meter`, `menu`, `results_banner`, `partial_banner`, `partial_processing`, `first_video_banner`, `watermark`, `autopilot`, `queue`, `queue_full`, `thumbnails`, `clip_editor`, `autopilot_run`); it rides on `UpsellModalSeen`/`QuotaWallSeen` and on the checkout events, so each surface can be measured on its own.
 - A 402 outside the main clip flow calls `lib/api.openQuotaWall(err, source)`; the app shell listens for it and opens the quota wall instead of an error string.
 - The wall's "this video is N min long" copy only applies when the user still has at least a minute: the pre-probe 402 sends a floor of 1 for `minutes_required`, which is not a duration.
+- A subscriber who runs out of plan minutes gets the wall with the one-time packs as the main action (`packsFirst`): no plan cards (the checkout refuses a second plan), and the copy names the day the plan's minutes come back (`me.period_end`). `QuotaWallSeen` and the checkout events carry `account_plan`.
+- The sign-in modal leads with Google when it is enabled and names the stashed plan and its price (`LoginModalSeen`, `LoginMethodChosen`).
 - A plan picked while signed out is stashed (`lib/pendingPlan.js`, two-hour TTL). `#/pricing` opens the sign-in at once, AuthContext sends the new session back to `#/pricing`, and the section opens that checkout (`CheckoutStarted` with `resumed=1`).
 - `#/pricing?plan=<plan>[&interval=year]` opens that plan's checkout (through the sign-in when signed out) and drops the param afterwards.
 - Emails link to `#/pricing?src=email_<kind>`; checkouts from there are tagged `pricing_email_<kind>`. In nginx, `/pricing?<query>` redirects to the picker at `/#/pricing?<query>`; a bare `/pricing` goes to the homepage plan table (`/#pricing`).
@@ -134,6 +136,10 @@ with the account) and flips the local row, so the webhook sees no transition and
 the generic churn alert does not fire twice. The alert names the reason and
 rating, never the written text (see `alerts.user_ref`): read reviews in the
 table.
+
+The offer is worded in money and dates (each renewal's price with and without
+the discount, the day it starts, nothing charged or refunded today), and the
+confirm step says the library stops being permanent once the plan ends.
 
 The last step leads with a retention offer (`RETENTION_COUPON_ID` env):
 `GET /api/billing/retention-offer` says whether this subscription gets it (live

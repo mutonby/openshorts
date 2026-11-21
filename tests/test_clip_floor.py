@@ -99,3 +99,80 @@ def test_scoring_fills_the_shortlist_it_targets(monkeypatch):
                                        for i in range(6)]])
     detail_windows = [c[1] for c in calls if c[0] == "detail"][0]
     assert len(detail_windows) == 8
+
+
+# --- a long source: one detail call per stretch, clips from all of it ---------
+
+def _run_long(monkeypatch, minutes, per_window=1):
+    """get_viral_clips on a source ``minutes`` long whose every window holds a
+    clip; returns (clips, detail calls)."""
+    for name in ("CLIP_TARGET_MIN", "CLIP_TARGET_MAX", "CLIP_LONG_SECONDS_PER_CLIP",
+                 "CLIP_MAX_PER_JOB"):
+        monkeypatch.delenv(name, raising=False)
+    calls = []
+
+    def fake_stage(client, model, prompt, schema):
+        if schema is main.gemini_worker.ScoreResponse:
+            payload = json.loads(prompt.split("WINDOWS_JSON:")[-1].split("Return only:")[0])
+            return {"windows": [{"id": w["id"], "start": w["start"], "end": w["end"],
+                                 "score": 50 + (hash(w["id"]) % 40), "reason": "r"}
+                                for w in payload]}, None
+        windows = json.loads(prompt.split("CANDIDATE_WINDOWS_JSON:")[-1]
+                             .split("Return only:")[0])
+        calls.append(windows)
+        return {"shorts": [_clip(float(w["start"]) + 5, w["id"])
+                           for w in windows[:len(windows) * per_window]]}, None
+
+    monkeypatch.setattr(main, "_run_gemini_stage", fake_stage)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(main.genai, "Client", lambda api_key=None: object())
+    seconds = minutes * 60.0
+    out = main.get_viral_clips(_transcript(int(seconds // 15)), seconds)
+    return (out or {}).get("shorts", []), calls
+
+
+def test_a_two_hour_source_gives_the_clips_of_two_hours(monkeypatch):
+    clips, calls = _run_long(monkeypatch, 120)
+    # It was 6-12 clips whatever the length. Now: four stretches of the video,
+    # one detail call each, and at least a clip per five minutes.
+    assert len(calls) == 4 and all(len(c) == 10 for c in calls)
+    starts = [float(w["start"]) for c in calls for w in c]
+    assert starts == sorted(starts)                         # each call its own stretch
+    assert 24 <= len(clips) <= 48
+    assert max(c["start"] for c in clips) > 3600            # from the second hour too
+    assert [c["start"] for c in clips] == sorted(c["start"] for c in clips)
+
+
+def test_half_an_hour_is_still_one_call_and_six_to_twelve_clips(monkeypatch):
+    clips, calls = _run_long(monkeypatch, 30)
+    assert len(calls) == 1 and len(calls[0]) == 10
+    assert 6 <= len(clips) <= 12
+
+
+def test_a_job_never_delivers_more_than_its_cap(monkeypatch):
+    clips, calls = _run_long(monkeypatch, 480)
+    assert len(calls) == 10
+    assert len(clips) == 60
+
+
+def test_a_capped_plan_gets_its_cap_however_long_the_source(monkeypatch):
+    clips, calls = _run_long(monkeypatch, 120)
+    assert len(clips) >= 24
+    monkeypatch.setenv("CLIP_TARGET_MIN", "2")
+    monkeypatch.setenv("CLIP_TARGET_MAX", "2")
+    calls.clear()
+
+    def fake_stage(client, model, prompt, schema):
+        if schema is main.gemini_worker.ScoreResponse:
+            payload = json.loads(prompt.split("WINDOWS_JSON:")[-1].split("Return only:")[0])
+            return {"windows": [{"id": w["id"], "start": w["start"], "end": w["end"],
+                                 "score": 60, "reason": "r"} for w in payload]}, None
+        windows = json.loads(prompt.split("CANDIDATE_WINDOWS_JSON:")[-1]
+                             .split("Return only:")[0])
+        calls.append(windows)
+        return {"shorts": [_clip(float(w["start"]) + 5, w["id"]) for w in windows]}, None
+
+    monkeypatch.setattr(main, "_run_gemini_stage", fake_stage)
+    out = main.get_viral_clips(_transcript(480), 7200.0)
+    assert len(calls) == 1 and len(calls[0]) == 10          # the old shortlist, one call
+    assert len(out["shorts"]) == 2

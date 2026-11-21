@@ -3,6 +3,7 @@ import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 
+from clip_selection import trim_to_best
 from jsonfile import write_json_atomic
 
 
@@ -127,7 +128,7 @@ def assess_clip(video, clip, transcript, api_key, gameplay=False):
 
 def assess(video, shorts, transcript, duration, *, gameplay, manual_review):
     """Limit work to the shortlist and avoid filling an empty quota with filler."""
-    items = [clip for clip in shorts if _valid_span(clip, duration)][:MAX_CANDIDATES]
+    items = trim_to_best([clip for clip in shorts if _valid_span(clip, duration)], MAX_CANDIDATES)
     if not items:
         return []
     print(f"   Checking source evidence for {len(items)} proposed moment(s)…")

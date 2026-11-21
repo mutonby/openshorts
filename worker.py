@@ -35,6 +35,10 @@ READY_TIMEOUT = float(os.environ.get("WORKER_READY_TIMEOUT", "1800") or 1800)
 CHUNK = 32 * 1024 * 1024
 NICE = max(0, min(19, int(os.environ.get("JOB_NICE", "10") or 10)))
 MAX_SOURCE_BYTES = int(float(os.environ.get("WORKER_MAX_SOURCE_GB", "20") or 20) * 1024 ** 3)
+# A worker with a GPU of its own asks the API host for the source alone: it
+# transcribes and finds the scenes itself sooner than that host, busy with its
+# own jobs, can prepare them for it.
+SOURCE_ONLY = os.environ.get("WORKER_SOURCE_ONLY", "").strip() == "1"
 
 _stop = threading.Event()
 
@@ -101,6 +105,14 @@ def safe_job_path(job_id, path):
     if parts[0] == "uploads" and len(parts) == 2:
         return os.path.join(*parts)
     return None
+
+
+def claim_body():
+    """What this worker says of itself when it asks for a job."""
+    body = {"worker": NAME}
+    if SOURCE_ONLY:
+        body["source_only"] = True
+    return body
 
 
 def job_env(options):
@@ -375,14 +387,14 @@ def main():
         sys.exit("WORKER_API_URL must be https")
     signal.signal(signal.SIGTERM, lambda *_: _stop.set())
     signal.signal(signal.SIGINT, lambda *_: _stop.set())
-    log(f"{NAME}: {SLOTS} slot(s), API {API}")
+    log(f"{NAME}: {SLOTS} slot(s){', source only' if SOURCE_ONLY else ''}, API {API}")
     running = []
     while not _stop.is_set():
         running = [t for t in running if t.is_alive()]
         claimed = False
         if len(running) < SLOTS:
             try:
-                r = _call("POST", "/internal/worker/claim", tries=1, json={"worker": NAME})
+                r = _call("POST", "/internal/worker/claim", tries=1, json=claim_body())
                 body = r.json() if r.status_code == 200 else {}
                 if body.get("job_id") and not valid_job_id(body["job_id"]):
                     log("claim: job id refused")

@@ -31,6 +31,21 @@ Everything the worker sends lands as files in the job directory
 deploy handover either container can answer the worker while the one that
 dispatched the job keeps following it.
 
+## A worker with a GPU of its own
+
+The same `worker.py` runs from the GPU image (`--build-arg GPU=1`) on a host
+with a card, with the container given the GPU: it then transcribes, finds the
+scenes and encodes on that card, like the API host does. Set
+`WORKER_SOURCE_ONLY=1` on it. Its claim says so (`source_only`, kept in the
+claim file), and the API host's `--prepare-only` run for that job downloads
+and cuts the source and nothing more: no transcription and no scene pass
+(`remote_worker.source_only_env`). Preparing them there made such a worker
+wait for a host that is busy by definition (a job only goes out while another
+waits for a slot), while its own card sat idle. A transcript the download
+cache already holds for the source still travels: it costs the API host
+nothing. The worker is no more trusted for it: it still holds no download
+credential and gets the source from the API host.
+
 ## Which jobs go
 
 `app._remote_eligible`: a free job (normal or slow lane) that never failed
@@ -146,7 +161,8 @@ tripped the breaker, leaving the worker idle exactly when the API host was
 short of CPU.
 
 Worker: `WORKER_API_URL` (https), `WORKER_TOKEN`, `WORKER_SLOTS`,
-`GEMINI_API_KEY`, plus the pipeline defaults the API host sets for itself
+`GEMINI_API_KEY`, `WORKER_SOURCE_ONLY` (`1` on a worker with a GPU: the source
+alone, see above), plus the pipeline defaults the API host sets for itself
 (`AUTO_LAYOUT`, `TRANSCRIBE_BACKEND`, `FFMPEG_THREADS`, `CLIP_WORKERS`...): only
 per-job options travel with a job.
 

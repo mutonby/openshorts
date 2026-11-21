@@ -300,15 +300,92 @@ class TestScoreBatches:
 
 
 class TestShortlistTarget:
-    def test_scales_with_duration_and_is_capped(self):
+    def test_scales_with_duration(self):
         assert shortlist_target(60) == 3          # floor
         assert shortlist_target(9 * 60) == 8      # the measured job
-        assert shortlist_target(60 * 60) == 10    # ceiling
-        assert shortlist_target(3 * 60 * 60) == 10
+        assert shortlist_target(30 * 60) == 10    # one detail call reads this many
+        # Past half an hour it follows the length (it stopped at 10 until
+        # 20-nov-2026, so five hours gave the clips of a quarter of an hour).
+        assert shortlist_target(60 * 60) == 20
+        assert shortlist_target(3 * 60 * 60) == 60
+        assert shortlist_target(5 * 60 * 60) == shortlist_target(12 * 60 * 60) == 100
 
     def test_degenerate_input_does_not_crash(self):
         assert shortlist_target(None) == 3
         assert shortlist_target("nonsense") == 3
+
+
+# --- a long source gives clips in proportion to its length ------------------ #
+
+def _windows(n):
+    return [{"id": f"window_{i + 1:03d}", "start": i * 90.0} for i in range(n)]
+
+
+@pytest.fixture
+def unpinned(monkeypatch):
+    for name in ("CLIP_TARGET_MIN", "CLIP_TARGET_MAX", "CLIP_LONG_SECONDS_PER_CLIP",
+                 "CLIP_MAX_PER_JOB"):
+        monkeypatch.delenv(name, raising=False)
+    return monkeypatch
+
+
+@pytest.mark.parametrize("minutes,low,high", [
+    (10, 6, 12), (30, 6, 12),            # the fixed band, untouched
+    (60, 12, 24), (120, 24, 48),         # one clip per five minutes at least
+    (300, 60, 60), (900, 60, 60),        # and no more than a job delivers
+])
+def test_the_clip_count_follows_the_length_of_the_source(unpinned, minutes, low, high):
+    from clip_selection import detail_plan, length_floor
+    shortlist = _windows(shortlist_target(minutes * 60))
+    groups, bands, lo, hi = detail_plan(shortlist)
+    assert (lo, hi) == (low, high)
+    assert lo >= length_floor(minutes * 60)
+    assert sum(len(g) for g in groups) == len(shortlist)
+    assert all(len(g) <= 10 for g in groups)
+    assert len(bands) == len(groups)
+
+
+def test_a_long_shortlist_is_read_in_stretches_of_the_video(unpinned):
+    from clip_selection import detail_groups
+    ranked = list(reversed(_windows(25)))          # as it arrives: best score first
+    groups = detail_groups(ranked)
+    assert [len(g) for g in groups] == [9, 8, 8]
+    starts = [w["start"] for g in groups for w in g]
+    assert starts == sorted(starts)                # video order, each group one stretch
+    # One call's worth is one group, in the order it came (what it always was).
+    assert detail_groups(ranked[:10]) == [ranked[:10]]
+    assert detail_groups([]) == []
+
+
+def test_a_pinned_count_is_never_added_to(unpinned):
+    from clip_selection import detail_plan, length_floor
+    unpinned.setenv("CLIP_TARGET_MIN", "2")        # the free plan's cap, or the user's number
+    unpinned.setenv("CLIP_TARGET_MAX", "2")
+    assert length_floor(5 * 3600) == 0
+    assert shortlist_target(5 * 3600) == 10
+    assert detail_plan(_windows(10))[2:] == (2, 2)
+
+
+def test_the_length_rule_can_be_switched_off_and_the_cap_moved(unpinned):
+    from clip_selection import length_floor
+    assert length_floor(30 * 60) == 0 and length_floor(35 * 60) == 7
+    assert length_floor(5 * 3600) == 60
+    unpinned.setenv("CLIP_MAX_PER_JOB", "40")
+    assert length_floor(5 * 3600) == 40
+    unpinned.setenv("CLIP_LONG_SECONDS_PER_CLIP", "0")
+    assert length_floor(5 * 3600) == 0 and shortlist_target(5 * 3600) == 10
+
+
+def test_silent_footage_follows_the_length_too(unpinned):
+    from clip_selection import vision_targets
+    # Half an hour, one stretch: the classic 3-15.
+    assert vision_targets(1800, 1, 3, 15) == (3, 15, 3, 15)
+    # Two hours in three stretches: 24-48 in all, 8-16 from each.
+    assert vision_targets(7200, 3, 3, 15) == (8, 16, 24, 48)
+    # Five hours in eight: the job's most, spread over them.
+    assert vision_targets(5 * 3600, 8, 3, 15) == (8, 8, 60, 60)
+    unpinned.setenv("CLIP_TARGET_MAX", "4")
+    assert vision_targets(5 * 3600, 8, 3, 4) == (1, 4, 3, 4)
 
 
 # --- vision_segments: silent footage longer than the model window ---------- #

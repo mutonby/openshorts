@@ -21,6 +21,9 @@ services:
       WORKER_TOKEN: ${WORKER_TOKEN:?set WORKER_TOKEN}
       GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY}
       WORKER_SLOTS: ${WORKER_SLOTS:-4}
+      # 1 on a worker with a GPU (image built with GPU=1): the API host sends
+      # the source alone and prepares no transcript or scenes for it.
+      WORKER_SOURCE_ONLY: ${WORKER_SOURCE_ONLY:-0}
       TRANSCRIBE_BACKEND: ${TRANSCRIBE_BACKEND:-parakeet}
       AUTO_LAYOUT: ${AUTO_LAYOUT:-1}
       FFMPEG_THREADS: ${FFMPEG_THREADS:-2}

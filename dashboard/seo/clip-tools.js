@@ -169,7 +169,7 @@ const ytClipFaq = [
   { q: 'Is this YouTube clip maker free?', a: `On OpenShorts Cloud the free plan clips your first video whole up to ${FIRST_VIDEO_MINUTES} minutes, then ${CLOUD.freeMinutes} minutes of source video a month, with a watermark and no credit card. Paid plans start at $${CLOUD.lowPrice}/month and remove the watermark. The self-hosted edition is free and open source under MIT, with no watermark and no cap, on your own hardware and API keys.` },
   { q: 'Do free clips have a watermark?', a: 'Yes, on the hosted free plan. Upgrading to a paid plan removes it, including from the clips you already made: the clean file is kept alongside the marked copy, so nothing is rendered again. The self-hosted edition never adds one.' },
   { q: 'Do I need a credit card to start?', a: 'No. You sign in with Google or an email link and the free minutes are there. A card is only asked for when you choose a paid plan.' },
-  { q: 'How many clips does one YouTube video give?', a: 'It depends on the length and on how much of it stands alone. For anything longer than about 12 minutes the AI is asked for 6 to 12 clips, and it returns fewer rather than padding when the material does not hold them. You can pin an exact number from 1 to 15 in the advanced options. On the free Cloud plan a video gives its 2 to 4 best clips.' },
+  { q: 'How many clips does one YouTube video give?', a: 'It depends on the length and on how much of it stands alone. A video between about 12 minutes and half an hour is asked for 6 to 12 clips. A longer one is asked for more, at least one for every five minutes and up to 60 per video (an hour gives 12 to 24), and it returns fewer rather than padding when the material does not hold them. You can pin an exact number from 1 to 15 in the advanced options. On the free Cloud plan a video gives its 2 to 4 best clips.' },
   { q: 'How long can the YouTube video be?', a: `There is no fixed maximum on the link itself; the limit that matters is your minute balance on Cloud. On the free plan a source longer than your balance is clipped from the start up to what you have left (your first video is clipped whole up to ${FIRST_VIDEO_MINUTES} minutes). The minimum is 45 seconds of material. You can also pick just a stretch of a long video and pay only for that stretch.` },
   { q: 'How long is each clip?', a: 'Between 15 and 60 seconds by default. In the advanced options you can set the minimum anywhere from 5 to 175 seconds and the maximum from 10 to 180 seconds, which covers the 3-minute ceiling of a YouTube Short.' },
   { q: 'What format are the clips?', a: 'MP4 files in 9:16, at least 1080 pixels wide (1080x1920 from a 1080p source), with captions and the hook burned in. Each clip also comes with an AI-written title and description.' },
@@ -361,7 +361,7 @@ const shortsFaq = [
   { q: 'How long can a YouTube Short be?', a: `Up to 3 minutes, in a vertical or square aspect ratio, according to YouTube's help pages (checked ${SPECS_CHECKED}). OpenShorts cuts 15 to 60 seconds by default; set the maximum up to 180 seconds in the advanced options when a longer Short suits the moment.` },
   { q: 'Can it post straight to my YouTube channel?', a: 'Yes. Connect the channel once in the dashboard and publish a Short with its title and description, or schedule a week of them. TikTok and Instagram can be posted to from the same screen.' },
   { q: 'Can it make Shorts from every new upload automatically?', a: 'Yes, with Autopilot on a paid plan. Every new video on your connected channel is clipped on its own, and if you turn on publishing the best Shorts are scheduled one a day at the hour you choose. It never touches your back catalogue and skips videos that are already Shorts.' },
-  { q: 'How many Shorts does one video give?', a: 'For a video longer than about 12 minutes the AI is asked for 6 to 12, fewer when the material does not hold them. Shorter videos give fewer. You can set an exact number from 1 to 15.' },
+  { q: 'How many Shorts does one video give?', a: 'A video between about 12 minutes and half an hour is asked for 6 to 12, fewer when the material does not hold them. A longer one is asked for more, at least one for every five minutes and up to 60 per video. Shorter videos give fewer. You can set an exact number from 1 to 15.' },
   { q: 'Does it write the titles?', a: 'Yes. Every clip comes with an AI-written title and description meant for a Short, and the hook text burned over the opening seconds is generated from what is said in that clip.' },
   { q: 'What is the difference from the YouTube to Shorts converter page?', a: 'Same pipeline, different question. The converter page is about the link-first flow: paste a YouTube URL, get clips. This page is about the Shorts themselves: length, hooks, captions, titles, posting and doing it on a schedule.' },
   { q: 'What aspect ratio does a YouTube Short need?', a: `9:16 vertical, 1080x1920 pixels for a 1080p video, up to 3 minutes long; YouTube also takes square uploads as Shorts (its help pages, checked ${SPECS_CHECKED}). Every Short made here is 9:16 and at least 1080 pixels wide.` },
@@ -385,7 +385,7 @@ const youtubeShortsMaker = () => common('/platforms/youtube-shorts', {
   },
   related: ['/platforms/youtube', '/how-to/youtube-shorts-aspect-ratio', '/platforms/instagram-reels', '/how-to/clip-a-youtube-video', '/platforms/tiktok', '/opus-clip-free-alternative'],
   tldr: [
-    'A one-hour podcast episode is, as far as YouTube Shorts are concerned, a quarry. OpenShorts reads the whole of it, ranks every stretch for how well it would play to someone who has never heard of you, and cuts the best 6 to 12 into vertical Shorts with captions, a hook over the opening seconds and a title written for the Shorts feed.',
+    'A one-hour podcast episode is, as far as YouTube Shorts are concerned, a quarry. OpenShorts reads the whole of it, ranks every stretch for how well it would play to someone who has never heard of you, and cuts the best 12 to 24 into vertical Shorts with captions, a hook over the opening seconds and a title written for the Shorts feed.',
     'Then it can post them to your channel for you, one a day if you like, so the long video you already made keeps feeding the Shorts shelf for a week or more.',
   ],
   body: `
@@ -533,7 +533,7 @@ const tiktokFaq = [
   { q: 'How do I turn a YouTube video into TikToks?', a: 'Paste the YouTube link above. The video is fetched, transcribed and cut into vertical clips with captions and hooks, which you can send to TikTok or download. You do not need to download the YouTube video first.' },
   { q: 'Can I clip a TikTok video or a TikTok LIVE?', a: 'A public TikTok video link works as a source if it has at least 45 seconds of material, which mostly means long uploads. A LIVE cannot be clipped while it is on air; if you saved the replay, upload that file.' },
   { q: 'How long should a TikTok clip be?', a: 'The default here is 15 to 60 seconds, because that is how long most moments that stand alone run. TikTok accepts far longer uploads; raise the maximum up to 180 seconds in the advanced options for a story that needs it.' },
-  { q: 'How many TikToks does one video give?', a: 'A video longer than about 12 minutes is asked for 6 to 12 clips, and fewer come back when fewer moments stand alone. You can ask for an exact number from 1 to 15.' },
+  { q: 'How many TikToks does one video give?', a: 'A video between about 12 minutes and half an hour is asked for 6 to 12 clips, and fewer come back when fewer moments stand alone. A longer one is asked for more, at least one for every five minutes and up to 60 per video. You can ask for an exact number from 1 to 15.' },
   { q: 'Can it make TikTok clips from a long video without me picking the moments?', a: 'Yes. The AI reads the whole transcript and picks the moments itself; you can override any of it afterwards in the clip editor, or mark one stretch with "clip only part of it" before the job starts so it only looks there.' },
   { q: 'Is it an AI TikTok generator?', a: `It is a clipper: every TikTok is cut from your own footage. For videos made from a script with no footage at all, the AI Shorts tab makes UGC-style videos with AI actors, from ${UGC_PRICE} a video.` },
   { q: 'Can I schedule TikToks?', a: 'Yes. Schedule a week spreads a batch of clips over the coming days. On TikTok each one still arrives as a draft at its scheduled time, so you finish it in the app.' },
@@ -675,7 +675,7 @@ const reelFaq = [
   { q: 'Does it work for Facebook Reels?', a: 'The clips are the right shape for Facebook Reels, but OpenShorts does not publish to Facebook. Download the MP4 and post it from the Facebook app or Meta Business Suite.' },
   { q: 'How long can an Instagram Reel be?', a: 'Instagram raised the Reels limit to 3 minutes in January 2025. Clips here are 15 to 60 seconds by default; set the maximum up to 180 seconds in the advanced options for longer Reels.' },
   { q: 'Will the captions be covered by the Instagram buttons?', a: 'They are placed about 15% above the bottom edge, which keeps them clear of the caption text and account name Instagram draws at the bottom of a Reel.' },
-  { q: 'How many Reels does one video give?', a: 'A video longer than about 12 minutes is asked for 6 to 12 Reels, fewer when fewer moments stand alone. You can ask for an exact number from 1 to 15.' },
+  { q: 'How many Reels does one video give?', a: 'A video between about 12 minutes and half an hour is asked for 6 to 12 Reels, fewer when fewer moments stand alone. A longer one is asked for more, at least one for every five minutes and up to 60 per video. You can ask for an exact number from 1 to 15.' },
   { q: 'Can I make Reels from an Instagram Live or a Facebook Live?', a: 'From the replay, once it has ended: paste the link of a public Facebook Live replay, or upload the file of an Instagram Live you downloaded. Nothing is clipped while a broadcast is on air.' },
   { q: 'Can the Reels be in another language?', a: 'Yes, with your own ElevenLabs API key: dubbing translates a clip into more than 30 languages, keeps the speaker\'s voice and re-captions it in the new language.' },
   { q: 'Is the reel maker AI picking the moments, or me?', a: 'The AI picks them, from the transcript. You can then trim, extend or reorder any clip in the clip editor, move the crop scene by scene, restyle the captions and rewrite the hook.' },
@@ -697,7 +697,7 @@ const aiReelGenerator = () => common('/platforms/instagram-reels', {
   },
   related: ['/how-to/instagram-reel-dimensions', '/how-to/make-a-reel-on-facebook', '/platforms/tiktok', '/platforms/youtube-shorts', '/use-cases/sermons', '/alternatives/vidyo-ai'],
   tldr: [
-    'A one-hour webinar, recorded on Zoom and sitting in a folder, holds a month of Reels for most businesses. Upload it here and the AI reads all of it, finds the 6 to 12 passages that make sense on their own, and returns each one as a vertical Reel with captions, a hook over the first seconds and a description written for Instagram.',
+    'A one-hour webinar, recorded on Zoom and sitting in a folder, holds a month of Reels for most businesses. Upload it here and the AI reads all of it, finds the 12 to 24 passages that make sense on their own, and returns each one as a vertical Reel with captions, a hook over the first seconds and a description written for Instagram.',
     'Publish them to Instagram as Reels from the same screen, one a day if you schedule a week, or download them for Facebook. Nothing is generated from stock footage: every Reel is you, or your guest, saying the thing.',
   ],
   body: `
@@ -715,8 +715,9 @@ watching the whole thing to find the moments.</p>
 timestamp on every word, the transcript is split into windows of about 90
 seconds, and Gemini scores every window on hook strength, emotional payload
 and how well it stands alone. The best windows go to a second pass that cuts
-each Reel on sentence boundaries. For anything over about 12 minutes it is
-asked for 6 to 12 Reels, and returns fewer rather than padding.</p>
+each Reel on sentence boundaries. Up to half an hour it is asked for 6 to 12
+Reels, a longer video for at least one every five minutes (up to 60), and it
+returns fewer rather than padding.</p>
 
 <h2>What makes a clip work as a Reel</h2>
 <h3>The full screen, with the person in it</h3>
@@ -828,7 +829,7 @@ const twitchSteps = [
 
 const twitchFaq = [
   { q: 'Is this Twitch clip maker free?', a: `The hosted free plan clips your first video whole up to ${FIRST_VIDEO_MINUTES} minutes, then ${CLOUD.freeMinutes} minutes a month, watermarked, no credit card. A multi-hour VOD is longer than that, so on the free plan pick the stretch you want. Paid plans start at $${CLOUD.lowPrice}/month. Self-hosted OpenShorts is free under MIT with no meter, which is the edition that suits streamers with hours of VODs.` },
-  { q: 'Does it work with a whole Twitch VOD?', a: 'Yes. Paste the twitch.tv/videos/ link of the past broadcast. Moment scoring reads the transcript rather than every frame, so a long VOD is analysed the same way as a short one. One job returns the best 6 to 12 moments of whatever it is given, so for a long stream it usually pays to clip it in parts.' },
+  { q: 'Does it work with a whole Twitch VOD?', a: 'Yes. Paste the twitch.tv/videos/ link of the past broadcast. Moment scoring reads the transcript rather than every frame, so a long VOD is analysed the same way as a short one. A long VOD gives clips in proportion to its length: at least one for every five minutes past half an hour, up to 60 per job.' },
   { q: 'Can it clip my stream while I am live?', a: 'No. It works from recordings: paste the VOD once the broadcast has ended, before Twitch removes the past broadcast.' },
   { q: 'Will my facecam stay in the clip?', a: 'Yes, with the vertical layout on auto. A webcam box composited into a corner is detected by its geometry (small, off centre, still) and the clip renders with the gameplay full width on top and the facecam cropped out and enlarged below.' },
   { q: 'What about gameplay with no commentary?', a: 'When the transcript comes back with under 8 words, or under 5 words a minute, OpenShorts switches to a vision pass where Gemini watches the footage and picks the moments. Those clips have no captions. A long silent VOD is watched in stretches of up to 40 minutes and the best picks of all of them are kept, up to a little over five hours per job.' },

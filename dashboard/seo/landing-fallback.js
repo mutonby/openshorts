@@ -80,7 +80,7 @@ const FAQ = [
   ],
   [
     'How many clips do I get from one video?',
-    'Between 3 and 15, each 15 to 60 seconds long. The AI scores every moment of the video and keeps the ones that hold up as standalone clips, so the number depends on the source, not on a fixed quota.',
+    'From 3 for a short video to 6 to 12 for half an hour, and more for a longer one: at least one clip for every five minutes, up to 60 per video. Each is 15 to 60 seconds long. The AI scores every moment of the video and keeps the ones that hold up as standalone clips, so the number depends on the source, not on a fixed quota.',
   ],
   [
     'Can I clip someone else\'s YouTube video?',

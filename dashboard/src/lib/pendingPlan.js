@@ -10,7 +10,8 @@ const PENDING_PLAN_TTL_MS = 2 * 60 * 60 * 1000;
 export function stashPendingPlan(entry, source = null) {
   try {
     localStorage.setItem(PENDING_PLAN_KEY, JSON.stringify({
-      price_id: entry.price_id, plan: entry.plan, interval: entry.interval, source, ts: Date.now(),
+      price_id: entry.price_id, plan: entry.plan, interval: entry.interval,
+      amount: entry.amount, currency: entry.currency, source, ts: Date.now(),
     }));
   } catch (_) { /* ignore storage errors */ }
 }
