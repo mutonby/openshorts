@@ -1,6 +1,5 @@
 import React from "react";
-import { AbsoluteFill } from "remotion";
-import { Video } from "@remotion/media";
+import { AbsoluteFill, Video } from "remotion";
 import type { ShortVideoProps } from "../lib/types";
 import { Subtitles } from "./Subtitles";
 import { HookOverlay } from "./HookOverlay";
@@ -8,7 +7,6 @@ import { VideoEffects } from "./VideoEffects";
 
 /**
  * Main composition that layers all post-processing on top of the base video.
- * Uses @remotion/media Video for browser-side rendering compatibility.
  */
 export const ShortVideo: React.FC<Record<string, unknown>> = (rawProps) => {
   const { videoUrl, subtitles, hook, effects } =

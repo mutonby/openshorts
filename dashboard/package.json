@@ -10,7 +10,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@remotion/media": "^4.0.447",
     "@remotion/media-utils": "^4.0.447",
     "@remotion/player": "^4.0.447",
     "@remotion/web-renderer": "^4.0.447",
