@@ -16,6 +16,21 @@ jobs:
       - name: Check out Plic AI
         uses: actions/checkout@v4
 
+      - name: Check Python syntax
+        run: python -m compileall -q .
+
+      - name: Build dashboard
+        working-directory: dashboard
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build Remotion renderer
+        working-directory: remotion
+        run: |
+          npm ci
+          npm run build
+
       - name: Build clean source archive
         shell: bash
         run: |
