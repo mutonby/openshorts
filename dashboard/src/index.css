@@ -264,3 +264,46 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+
+/* Plic AI visual refresh: graphite surfaces, cyan-to-violet signal accents. */
+body {
+  background:
+    radial-gradient(ellipse at 12% -8%, color-mix(in oklab, var(--color-accent) 10%, transparent), transparent 42rem),
+    radial-gradient(ellipse at 92% 4%, color-mix(in oklab, var(--color-accent-2) 8%, transparent), transparent 36rem),
+    var(--color-paper);
+}
+
+.card,
+.glass-panel {
+  background:
+    linear-gradient(145deg, color-mix(in oklab, var(--color-paper-2) 96%, white 4%), var(--color-paper-2));
+  border-color: color-mix(in oklab, var(--color-accent) 12%, var(--color-rule));
+  border-radius: var(--radius-card);
+}
+
+.card-hover:hover {
+  border-color: color-mix(in oklab, var(--color-accent) 42%, var(--color-rule-2));
+  box-shadow: 0 12px 36px color-mix(in oklab, var(--color-accent) 7%, transparent);
+}
+
+.btn-primary {
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-accent) 30%, transparent),
+              0 8px 24px color-mix(in oklab, var(--color-accent) 13%, transparent);
+}
+
+.btn-primary:hover {
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-accent) 55%, transparent),
+              0 10px 28px color-mix(in oklab, var(--color-accent) 22%, transparent);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-accent) 13%, transparent);
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-accent) 35%, transparent);
+  color: var(--color-ink);
+}
