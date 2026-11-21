@@ -33,6 +33,8 @@ docker compose up -d --build
 
 Open the dashboard at [http://localhost:5175](http://localhost:5175). The API is available at [http://localhost:8000](http://localhost:8000).
 
+A clean source ZIP is built by the GitHub Actions workflow **Build plic.ai ZIP**. Open the repository's [Actions page](https://github.com/Gurmehtab1/openshorts/actions/workflows/build-plic-ai-zip.yml), open the latest successful run, and download the `plic-ai-source` artifact. The archive excludes the separately licensed `cloud/` directory, local data, credentials and generated media.
+
 For a non-Docker Python setup, install the packages in `requirements.txt` and start the FastAPI application using the project's existing startup instructions.
 
 ## Useful settings
