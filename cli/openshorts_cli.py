@@ -31,7 +31,7 @@ import xml.etree.ElementTree as ET
 
 DEFAULT_API = "https://api.openshorts.app"
 POLL_SECONDS = 10
-FRAMING_METHODS = ("auto", "motion", "detail", "center", "fit", "legacy")
+FRAMING_METHODS = ("auto", "motion", "detail", "center", "fit", "gameplay", "legacy")
 TREND_PROFILES = {
     "explainer": {"clip_min_seconds": 20, "clip_max_seconds": 45,
                   "auto_hook": True, "auto_hook_style": "pill"},

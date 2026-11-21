@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
+import CandidateReview from './components/CandidateReview';
 import McpConnectCard from './components/McpConnectCard';
 import ResultCard from './components/ResultCard';
 import ProcessingAnimation from './components/ProcessingAnimation';
@@ -784,7 +785,7 @@ function App() {
         if (session.projectState) setProjectState(session.projectState);
         if (session.activeTab) setActiveTab(session.activeTab);
         // If was processing, resume polling; if complete/error, just show results
-        setStatus(session.status === 'processing' ? 'processing' : session.status);
+        setStatus(session.status === 'review' ? 'processing' : session.status);
         setSessionRecovered(true);
         setTimeout(() => setSessionRecovered(false), 5000);
       }
@@ -952,6 +953,9 @@ function App() {
             setStatus('complete');
             stop();
             refreshMe();
+          } else if (data.status === 'review') {
+            setStatus('review');
+            stop();
           } else if (data.status === 'failed') {
             setStatus('error');
             setJobError(readableError(data.error || lastJobError(data.logs || [])));
@@ -1285,6 +1289,7 @@ function App() {
         auto_hook_style: data.autoHook ? (data.autoHookStyle || 'pill') : null,
         captions: typeof data.captions === 'boolean' ? String(data.captions) : null,
         framing_method: data.framingMethod || null,
+        review_candidates: data.reviewCandidates ? 'true' : null,
         // 'auto' is the server default, so only a deliberate choice travels.
         layouts: data.layout && data.layout !== 'auto' ? data.layout : null,
         // Set when the user took the quota wall's "clip the first N minutes"
@@ -1394,6 +1399,17 @@ function App() {
       setStatus('error');
       setLogs(l => [...l, `Error starting job: ${reason}`]);
     }
+  };
+
+  const handleApproveCandidates = async (candidateIds) => {
+    await apiJson(`/api/jobs/${jobId}/render-candidates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(apiKey ? { 'X-Gemini-Key': apiKey } : {}) },
+      body: JSON.stringify({ candidate_ids: candidateIds }),
+    });
+    setProcessingMedia({ type: 'server', payload: `/api/source/${jobId}` });
+    setResults(null);
+    setStatus('processing');
   };
 
   // Resume the job the visitor started before signing in. Runs on the render
@@ -2292,6 +2308,10 @@ function App() {
             </div>
           )}
 
+          {activeTab === 'dashboard' && status === 'review' && (
+            <CandidateReview key={jobId} jobId={jobId} results={results} onApprove={handleApproveCandidates} />
+          )}
+
           {/* View: Processing / Results (Split View) */}
           {activeTab === 'dashboard' && (status === 'processing' || status === 'complete' || status === 'error') && (
             <div className="h-full flex flex-col md:flex-row gap-3 md:gap-4 p-3 md:p-4 overflow-y-auto md:overflow-y-hidden custom-scrollbar animate-fade">
@@ -2378,14 +2398,17 @@ function App() {
                   </div>
                 )}
 
-                {/* Video Preview */}
+                {/* Keep the source monitor distinct from the downloadable render. */}
                 {processingMedia && (
-                  <ProcessingAnimation
-                    media={processingMedia}
-                    syncedTime={syncedTime}
-                    isSyncedPlaying={isSyncedPlaying}
-                    syncTrigger={syncTrigger}
-                  />
+                  <figure>
+                    <figcaption className="text-xs text-muted mb-2">Original source footage</figcaption>
+                    <ProcessingAnimation
+                      media={processingMedia}
+                      syncedTime={syncedTime}
+                      isSyncedPlaying={isSyncedPlaying}
+                      syncTrigger={syncTrigger}
+                    />
+                  </figure>
                 )}
 
                 {/* Logs Terminal */}
@@ -2431,7 +2454,7 @@ function App() {
                     "schedule week" pill under the title on a phone. */}
                 <div className="mb-4 sm:mb-6 shrink-0 space-y-3">
                   <h2 className="font-display lowercase text-lg sm:text-xl text-ink flex flex-wrap items-center gap-2">
-                    <span className="mr-auto">Generated Shorts</span>
+                    <span className="mr-auto">Rendered clips</span>
                     {clipsMaking ? (
                       <span className="readout bg-paper3 px-2.5 py-1 rounded-full text-brass">
                         {progress.ready}/{progress.total} Clips
@@ -2656,6 +2679,8 @@ function App() {
                           Waiting for the first clip
                         </p>
                       </div>
+                    ) : results?.no_highlights ? (
+                      <p className="text-sm text-muted">No moments with a clear payoff were found.</p>
                     ) : status === 'error' ? (
                       <div className="h-full min-h-[120px] flex items-center justify-center text-muted text-sm">
                         <p>No clips available</p>

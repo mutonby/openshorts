@@ -21,6 +21,7 @@ from google.genai import types as genai_types
 
 import frame_sampler
 import framing
+import candidate_review
 import gpu_decode
 import gemini_worker
 import hook_grounding
@@ -1505,7 +1506,9 @@ def auto_hook_clip(clip_path, clip, captions=None, mark=False):
                   "duration_seconds": seconds}
         place = {"position": "auto", "layout_ranges": clip.get('layout_ranges'),
                  "has_captions": bool(captions)}
-        if framing.resolve(clip.get('framing_method')) != "legacy":
+        if framing.resolve(clip.get('framing_method')) != "legacy" or any(
+            span.get("layout") == "gameplay" for span in clip.get("layout_ranges") or []
+        ):
             place["face_aware"] = False
 
         def note(result):
@@ -1639,7 +1642,9 @@ def render_clip(input_video, final_output_video, output_format="auto",
     the only text layer. Every render from the source passes it: the job, the
     recut and the editor's re-render.
     ``framing_method`` selects the face-model-free or legacy camera."""
-    trimmed = trim_subtitle_band(input_video, subtitle_band)
+    preserve_picture = (framing.resolve(framing_method) == "gameplay"
+                        or force_strategy in ("GAMEPLAY", "INSET"))
+    trimmed = trim_subtitle_band(input_video, None if preserve_picture else subtitle_band)
     try:
         return _render_clip(trimmed, final_output_video, output_format,
                             force_strategy, crop_overrides, watermark, framing_method)
@@ -2334,7 +2339,7 @@ def score_batch_size():
     return 3 if llm_backend.active() else 8
 
 
-def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
+def get_viral_clips(transcript_result, video_duration, viewer_clips=None, editorial=False):
     """Two-pass clip selection: score transcript windows, then detail the best.
 
     Windowing gives even coverage on long videos (a single call over the whole
@@ -2410,9 +2415,13 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
             return out
 
         def _score_prompt(ws):
-            return gemini_worker.SCORE_PROMPT_TEMPLATE.format(
+            prompt = gemini_worker.SCORE_PROMPT_TEMPLATE.format(
                 video_duration=video_duration, language=language,
                 windows_json=json.dumps(_payload(ws), ensure_ascii=False))
+            if editorial:
+                prompt += ("\nScore complete incidents with a clear setup and payoff. Mere speech, "
+                           "reaction without context, routine driving and menu navigation are weak.")
+            return prompt
 
         for batch in score_batches(windows, SCORE_BATCH):
             scored.extend(_run_stage_split(
@@ -2437,16 +2446,23 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
 
         # --- Pass 2: detailed clip extraction on the shortlist ---
         min_clips, max_clips = clip_count_targets(len(shortlist))
+        if editorial:
+            min_clips = 0
 
         def _detail_prompt_for(lo, hi):
             # A split batch keeps the full clip-count band: a short list can
             # still hold the best clips, and the model returns fewer anyway.
             def build(ws):
-                return gemini_worker.DETAIL_PROMPT_TEMPLATE.format(
+                prompt = gemini_worker.DETAIL_PROMPT_TEMPLATE.format(
                     video_duration=video_duration, language=language,
                     min_clips=lo, max_clips=hi,
                     min_secs=min_secs, max_secs=max_secs,
                     windows_json=json.dumps(_payload(ws), ensure_ascii=False))
+                if editorial:
+                    prompt += ("\nReturn fewer or zero clips when the speech establishes no interesting "
+                               "outcome. Treat dialogue as dialogue, including jokes and in-game claims. "
+                               "Only propose an action or payoff that this interval supports.")
+                return prompt
             return build
 
         shorts = _run_stage_split(client, model_name, shortlist,
@@ -2509,7 +2525,7 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
             }
             print(f"\U0001f4b0 Total cost ({model_name}, 2-pass, {len(costs)} calls): ${cost_analysis['total_cost']:.6f}")
 
-        if not shorts:
+        if not shorts and not editorial:
             print("⚠️ 2-pass returned no clips.")
             return None
 
@@ -2658,7 +2674,7 @@ def _visual_pass(client, model_name, video_path, duration, language,
                 pass
 
 
-def get_visual_clips(video_path, video_duration, language="en", viewer_clips=None):
+def get_visual_clips(video_path, video_duration, language="en", viewer_clips=None, editorial=False):
     """Clip a SILENT video by vision: Gemini watches the footage and picks the
     most engaging visual moments (no transcript). Returns the same
     {"shorts", "cost_analysis"} shape as get_viral_clips, or None.
@@ -2706,8 +2722,9 @@ def get_visual_clips(video_path, video_duration, language="en", viewer_clips=Non
                   + (f" (only the first {covered / 60:.0f} of "
                      f"{video_duration / 60:.0f} min; VISION_MAX_SEGMENTS)"
                      if covered < float(video_duration) - 1 else ""))
-        per_min = max(1, math.ceil(v_min_clips / len(segments)))
+        per_min = 0 if editorial else max(1, math.ceil(v_min_clips / len(segments)))
         clean, costs = [], []
+        answered = False
         tmp_dir = os.path.join(os.path.dirname(os.path.abspath(video_path)),
                                f".vision_{uuid.uuid4().hex[:8]}")
         os.makedirs(tmp_dir, exist_ok=True)
@@ -2720,6 +2737,7 @@ def get_visual_clips(video_path, video_duration, language="en", viewer_clips=Non
                         client, model_name, proxy, round(s1 - s0, 3), language,
                         per_min, v_max_clips, v_min_secs, v_max_secs,
                         hint=_viewer_hint(viewer_clips, s0, s1 - s0))
+                    answered = True
                 except gemini_worker.GeminiBlockedError:
                     raise
                 except Exception as e:
@@ -2742,7 +2760,7 @@ def get_visual_clips(video_path, video_duration, language="en", viewer_clips=Non
 
         if not clean:
             print("⚠️ Vision pass returned no usable clips.")
-            return None
+            return {"shorts": []} if editorial and answered else None
         cost = _sum_costs(costs, model_name)
         if cost:
             print(f"💰 Vision cost ({model_name}): ${cost.get('total_cost', 0):.6f}")
@@ -2776,10 +2794,21 @@ if __name__ == '__main__':
     parser.add_argument('--prepare-only', action='store_true',
                         help="Fetch the source (download, cut to the paid minutes), print "
                              "SOURCE_READY <path> and exit: a remote worker renders it.")
+    review_args = parser.add_mutually_exclusive_group()
+    review_args.add_argument('--review-candidates', action='store_true',
+                             help="Save a candidate review and stop before rendering.")
+    review_args.add_argument('--render-candidates', nargs='+', type=int, metavar="ID",
+                             help="Render only these IDs from the saved review in the output directory.")
 
     args = parser.parse_args()
+    if args.review_candidates or args.render_candidates:
+        if args.skip_analysis or args.prepare_only or not args.output:
+            parser.error("Candidate review needs an output directory and a clip-generation run.")
+        if args.render_candidates and not args.input:
+            parser.error("Rendering a saved review needs the retained local source.")
     output_format = args.format
     framing_method = framing.resolve(args.framing_method)
+    editorial = args.review_candidates or framing_method == "gameplay"
 
     script_start_time = time.time()
 
@@ -2881,7 +2910,7 @@ if __name__ == '__main__':
                 early["transcript"] = t
                 if audio_duration and not speech_is_sparse(t, audio_duration):
                     early["clips"] = get_viral_clips(t, audio_duration,
-                                                     viewer_clips=viewer_clips)
+                                                     viewer_clips=viewer_clips, editorial=editorial)
             except Exception as e:
                 print(f"   ℹ️ Early transcription skipped ({type(e).__name__}: {e}).")
                 early["transcript"] = early["clips"] = None
@@ -2929,10 +2958,10 @@ if __name__ == '__main__':
 
     # Quota-wall offer: only the first N minutes were paid for (see
     # cap_source_duration). Must run before anything reads the file.
-    if os.environ.get("MAX_SOURCE_MINUTES", "").strip():
+    if not args.render_candidates and os.environ.get("MAX_SOURCE_MINUTES", "").strip():
         input_video = cap_source_duration(input_video, os.environ["MAX_SOURCE_MINUTES"],
                                           start_seconds=os.environ.get("SOURCE_START_SECONDS", 0))
-    elif os.environ.get("SOURCE_CAP_MINUTES", "").strip():
+    elif not args.render_candidates and os.environ.get("SOURCE_CAP_MINUTES", "").strip():
         # Whole-video metered job: never process more than was reserved.
         def _stamp(path):
             try:
@@ -2963,7 +2992,8 @@ if __name__ == '__main__':
     # instead of one per clip, and the answer is a property of the material
     # ("this is a screencast"), which does not change between its own clips.
     # It runs before any render so the modules are switched on in time.
-    if layout_picker.ENABLED and framing_method == "legacy" and output_format != "horizontal":
+    if (not args.review_candidates and layout_picker.ENABLED
+            and framing_method == "legacy" and output_format != "horizontal"):
         try:
             _cap = cv2.VideoCapture(input_video)
             _fps = _cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -2986,7 +3016,8 @@ if __name__ == '__main__':
     # our captions are the only text layer (burned_subtitles.py). Only when we
     # caption at all, and never on a vertical source, which is passed through.
     source_subtitle_band = None
-    if (not args.skip_analysis
+    if (not args.skip_analysis and not args.review_candidates
+            and not (args.render_candidates and framing_method == "gameplay")
             and os.environ.get("AUTO_CAPTIONS", "1").strip() != "0"):
         try:
             import burned_subtitles
@@ -2999,6 +3030,11 @@ if __name__ == '__main__':
                 source_subtitle_band = burned_subtitles.detect(input_video)
         except Exception as e:
             print(f"⚠️ Burned-in subtitle check skipped ({e}).")
+    # A gaming HUD and in-game captions belong to the full source frame.
+    # For those layouts keep the picture and skip competing auto captions.
+    source_has_captions = bool(source_subtitle_band)
+    if framing_method == "gameplay" or hook_grounding.screen_video():
+        source_subtitle_band = None
 
     # 2. Decision: Analyze clips or process whole?
     if args.skip_analysis:
@@ -3012,89 +3048,99 @@ if __name__ == '__main__':
             output_file = os.path.join(output_dir, f"{video_title}_vertical.mp4")
         render_clip(input_video, output_file, output_format, framing_method=framing_method)
     else:
-        # Get duration (needed by both the transcript and the vision path).
-        cap = cv2.VideoCapture(input_video)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        duration = frame_count / fps
-        cap.release()
-        # Scene probabilities the GPU host prepared for this source (a remote
-        # worker's job): the clips map them instead of running TransNetV2.
-        import scene_detection
-        scene_detection.use_prepared(output_dir, input_video, duration)
-
-        # 3. Transcribe — unless the video has no audio, in which case fall back
-        # to Gemini vision (picks clips from the imagery instead of the speech).
-        from transcribe_backends import NoAudioError
-        transcript = None
-        # Module handover (issue #68): another module already transcribed this
-        # exact source with the same backend, so reuse its output. Any problem
-        # with the file falls back to transcribing normally rather than failing.
-        if args.transcript:
-            try:
-                with open(args.transcript, 'r') as f:
-                    transcript = json.load(f)
-                if not transcript.get('segments'):
-                    raise ValueError("transcript has no segments")
-                print(f"⏩ Reusing precomputed transcript "
-                      f"({len(transcript['segments'])} segments) — skipping transcription.")
-            except Exception as e:
-                print(f"⚠️ Could not use precomputed transcript ({e}) — transcribing normally.")
-                transcript = None
-        early_state = globals().get("early")
-        if transcript is None and early_state is not None:
-            with early_state["lock"]:
-                early_state["abandoned"] = True  # a late audio would only duplicate work
-                started = early_state["started"]
-            if started and not early_state["invalid"]:
-                early_state["done"].wait()
-                if early_state["transcript"] is not None:
-                    transcript = early_state["transcript"]
-                    print(f"♻️ Using the transcript made while the video downloaded "
-                          f"({len(transcript['segments'])} segments).")
-                    save_transcript_checkpoint(output_dir, transcript, input_video, duration)
-        if transcript is None:
-            transcript = load_transcript_checkpoint(output_dir, input_video, duration)
-            if transcript is not None:
-                print(f"♻️ Reusing the transcript from the interrupted run "
-                      f"({len(transcript['segments'])} segments) — skipping transcription.")
-        # Another job already transcribed this very source (download cache).
-        transcript_from_cache = False
-        if transcript is None and args.url:
-            import source_cache
-            transcript = source_cache.fetch_transcript(args.url, duration)
-            if transcript is not None:
-                transcript_from_cache = True
-                save_transcript_checkpoint(output_dir, transcript, input_video, duration)
-        if transcript is None:
-            try:
-                transcript = transcribe_video(input_video)
-                save_transcript_checkpoint(output_dir, transcript, input_video, duration)
-            except NoAudioError as e:
-                print(f"🔇 {e} — switching to visual analysis.")
-        if transcript is not None and args.url and not transcript_from_cache:
-            # Kept only when this job's source is the cached file, uncut.
-            import source_cache
-            source_cache.store_transcript(args.url, duration, transcript, input_video)
-
-        # Music-only or wordless footage transcribes to a handful of words.
-        # Clip it by what is on screen instead, like a video with no audio.
-        if transcript is not None and speech_is_sparse(transcript, duration):
-            n_words = sum(len((sg.get("text") or "").split()) for sg in transcript["segments"])
-            print(f"🔇 Only {n_words} word(s) of speech in {duration:.0f}s — "
-                  f"switching to visual analysis.")
-            transcript = None
-
-        # 4. Gemini Analysis (transcript-driven, or vision for silent videos)
-        early_clips = (early_state or {}).get("clips") if early_state else None
-        if (transcript is not None and early_clips
-                and transcript is early_state["transcript"]):
-            print("♻️ Using the clips Gemini picked while the video downloaded.")
-            clips_data = early_clips
-        elif transcript is not None:
-            clips_data = get_viral_clips(transcript, duration, viewer_clips=viewer_clips)
+        if args.render_candidates:
+            saved = candidate_review.read(output_dir)
+            if not saved or saved["source_video"] != os.path.basename(input_video):
+                raise RuntimeError("The saved review or its source is unavailable.")
+            clips_data = candidate_review.select(saved, args.render_candidates)
+            transcript = clips_data.get("transcript")
+            duration = clips_data["source_duration"]
+            print("Using the saved candidate review and transcript…")
         else:
-            clips_data = get_visual_clips(input_video, duration, viewer_clips=viewer_clips)
+            # Get duration (needed by both the transcript and the vision path).
+            cap = cv2.VideoCapture(input_video)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration = frame_count / fps
+            cap.release()
+
+            # A remote legacy render can map the host's prepared scene probabilities.
+            if framing_method == "legacy" and not args.review_candidates:
+                import scene_detection
+                scene_detection.use_prepared(output_dir, input_video, duration)
+
+            # 3. Transcribe — unless the video has no audio, in which case fall back
+            # to Gemini vision (picks clips from the imagery instead of the speech).
+            from transcribe_backends import NoAudioError
+            transcript = None
+            # Module handover (issue #68): another module already transcribed this
+            # exact source with the same backend, so reuse its output. Any problem
+            # with the file falls back to transcribing normally rather than failing.
+            if args.transcript:
+                try:
+                    with open(args.transcript, 'r') as f:
+                        transcript = json.load(f)
+                    if not transcript.get('segments'):
+                        raise ValueError("transcript has no segments")
+                    print(f"⏩ Reusing precomputed transcript "
+                          f"({len(transcript['segments'])} segments) — skipping transcription.")
+                except Exception as e:
+                    print(f"⚠️ Could not use precomputed transcript ({e}) — transcribing normally.")
+                    transcript = None
+            early_state = globals().get("early")
+            if transcript is None and early_state is not None:
+                with early_state["lock"]:
+                    early_state["abandoned"] = True  # a late audio would only duplicate work
+                    started = early_state["started"]
+                if started and not early_state["invalid"]:
+                    early_state["done"].wait()
+                    if early_state["transcript"] is not None:
+                        transcript = early_state["transcript"]
+                        print(f"♻️ Using the transcript made while the video downloaded "
+                              f"({len(transcript['segments'])} segments).")
+                        save_transcript_checkpoint(output_dir, transcript, input_video, duration)
+            if transcript is None:
+                transcript = load_transcript_checkpoint(output_dir, input_video, duration)
+                if transcript is not None:
+                    print(f"♻️ Reusing the transcript from the interrupted run "
+                          f"({len(transcript['segments'])} segments) — skipping transcription.")
+            # Another job already transcribed this very source (download cache).
+            transcript_from_cache = False
+            if transcript is None and args.url:
+                import source_cache
+                transcript = source_cache.fetch_transcript(args.url, duration)
+                if transcript is not None:
+                    transcript_from_cache = True
+                    save_transcript_checkpoint(output_dir, transcript, input_video, duration)
+            if transcript is None:
+                try:
+                    transcript = transcribe_video(input_video)
+                    save_transcript_checkpoint(output_dir, transcript, input_video, duration)
+                except NoAudioError as e:
+                    print(f"🔇 {e} — switching to visual analysis.")
+            if transcript is not None and args.url and not transcript_from_cache:
+                # Kept only when this job's source is the cached file, uncut.
+                import source_cache
+                source_cache.store_transcript(args.url, duration, transcript, input_video)
+
+            # Music-only or wordless footage transcribes to a handful of words.
+            # Clip it by what is on screen instead, like a video with no audio.
+            if transcript is not None and speech_is_sparse(transcript, duration):
+                n_words = sum(len((sg.get("text") or "").split()) for sg in transcript["segments"])
+                print(f"🔇 Only {n_words} word(s) of speech in {duration:.0f}s — "
+                      f"switching to visual analysis.")
+                transcript = None
+
+            # 4. Gemini Analysis (transcript-driven, or vision for silent videos)
+            early_clips = (early_state or {}).get("clips") if early_state else None
+            if (transcript is not None and early_clips
+                    and transcript is early_state["transcript"]):
+                print("♻️ Using the clips Gemini picked while the video downloaded.")
+                clips_data = early_clips
+            elif transcript is not None:
+                clips_data = get_viral_clips(transcript, duration, viewer_clips=viewer_clips, editorial=editorial)
+            else:
+                clips_data = get_visual_clips(input_video, duration, viewer_clips=viewer_clips, editorial=editorial)
 
         if not clips_data or 'shorts' not in clips_data:
             # Deliberately fail instead of reframing the whole video: that path
@@ -3103,8 +3149,6 @@ if __name__ == '__main__':
             raise RuntimeError(
                 "Clip detection failed — the AI model did not return usable clips for this video.")
         else:
-            print(f"🔥 Found {len(clips_data['shorts'])} clips!")
-
             # Save metadata. Silent videos have no transcript → no subtitles,
             # which is correct (there's no speech to caption).
             clips_data['transcript'] = transcript or {"language": "none", "segments": []}
@@ -3115,9 +3159,26 @@ if __name__ == '__main__':
             clips_data['source_video'] = os.path.basename(input_video)
             clips_data['output_format'] = output_format
             clips_data['framing_method'] = framing_method
+            if editorial and not args.render_candidates:
+                clips_data["shorts"] = candidate_review.assess(
+                    input_video, clips_data["shorts"], transcript, duration,
+                    gameplay=framing_method == "gameplay", manual_review=args.review_candidates)
+            if args.review_candidates:
+                clips_data["source_duration"] = duration
+                clips_data["source_offset"] = float(os.environ.get("SOURCE_START_SECONDS", "0") or 0)
+                candidate_review.write(output_dir, clips_data)
+                print(f"Candidate review ready. {len(clips_data['shorts'])} moment(s) to review.")
+                sys.exit(0)
             if source_subtitle_band:
                 clips_data['source_subtitle_band'] = source_subtitle_band
             metadata_file = os.path.join(output_dir, f"{video_title}_metadata.json")
+            if not clips_data['shorts']:
+                clips_data["no_highlights"] = True
+                write_json_atomic(metadata_file, clips_data)
+                clear_transcript_checkpoint(output_dir)
+                print("No moments with a clear payoff were found.")
+                sys.exit(0)
+            print(f"🔥 Found {len(clips_data['shorts'])} clips!")
             write_json_atomic(metadata_file, clips_data, indent=2)
             print(f"   Saved metadata to {metadata_file}")
 
@@ -3141,11 +3202,6 @@ if __name__ == '__main__':
                 clip_final_path = os.path.join(output_dir, clip_filename)
 
                 try:
-                    # ffmpeg cut — re-encoding for precision on strict seconds
-                    cut_clip(input_video, clip_temp_path, start, end, i + 1)
-                    import scene_detection
-                    scene_detection.register_clip(clip_temp_path, start)
-
                     # Layer order: the canonical reframe stays CLEAN, the hook
                     # is a derived hooked_ file, captions go last on top of
                     # whichever is current, and on the free plan the served
@@ -3154,9 +3210,18 @@ if __name__ == '__main__':
                     # permanent: paying could not remove it from clips already
                     # made. Each worker writes only its own clip dict, so the
                     # re-dump after the pool is race-free.
-                    success = render_clip(clip_temp_path, clip_final_path, output_format,
-                                          subtitle_band=source_subtitle_band,
-                                          framing_method=framing_method)
+                    if framing_method == "gameplay" and output_format != "horizontal":
+                        from reframe_v2 import render_gameplay_range
+                        aspect = 1.0 if output_format == "square" else ASPECT_RATIO
+                        success = render_gameplay_range(input_video, clip_final_path, aspect, start, end)
+                    else:
+                        cut_clip(input_video, clip_temp_path, start, end, i + 1)
+                        if framing_method == "legacy":
+                            import scene_detection
+                            scene_detection.register_clip(clip_temp_path, start)
+                        success = render_clip(clip_temp_path, clip_final_path, output_format,
+                                              subtitle_band=source_subtitle_band,
+                                              framing_method=framing_method)
                     if success:
                         print(f"   🎞️ Clip {i+1} framed")
                     deliver_path = clip_final_path
@@ -3167,15 +3232,24 @@ if __name__ == '__main__':
                     # The hook was written from the transcript alone. When the
                     # render put this clip's meaning on the screen, rewrite hook
                     # and title from three of its frames BEFORE burning them.
-                    if success and hook_grounding.wanted(clip['layout_ranges'], end - start):
+                    if (success and not clip.get("assessment")
+                            and hook_grounding.wanted(clip['layout_ranges'], end - start)):
                         hook_grounding.reground(clip_final_path, clip, transcript, start, end)
                     captioned = None
                     # Pro mode replaces the file the hook and the captions go
                     # on, and the timeline they are laid on (its cuts); the
                     # canonical reframe stays, it is the clip's normal mode.
                     base_path, words, w_start, w_end = clip_final_path, transcript, start, end
-                    pro = pro_clip(clip_final_path, clip, transcript) if success else None
                     cap_style = None
+                    gameplay = framing_method == "gameplay" or any(
+                        span["layout"] == "gameplay" for span in clip["layout_ranges"])
+                    if gameplay:
+                        from subtitles import GAMEPLAY_CAPTION_STYLE
+                        cap_style = GAMEPLAY_CAPTION_STYLE
+                        if source_has_captions or (clip.get("assessment") or {}).get("source_captions"):
+                            words = None
+                            print(f"   Clip {i+1} keeps its source captions.")
+                    pro = pro_clip(clip_final_path, clip, transcript) if success and not gameplay else None
                     if pro:
                         deliver_path = base_path = pro[0]
                         words, w_start, w_end = pro[1:]
@@ -3261,11 +3335,9 @@ if __name__ == '__main__':
 
             # Persist per-clip render results added by the workers (auto_hook)
             # so the editor can see what is already burned into each clip.
-            if any('auto_hook' in c or 'hook_grounding' in c or 'pro_suggested' in c
-                   for c in shorts):
-                # Atomic: the dashboard is already reading this file for the
-                # clips announced above (CLIP_READY).
-                write_json_atomic(metadata_file, clips_data, indent=2)
+            # Persist layout sidecars and the method even when there is no
+            # opening title, caption overlay or Pro suggestion to record.
+            write_json_atomic(metadata_file, clips_data, indent=2)
 
     # Clean up original if requested
     if args.url and not args.keep_original and os.path.exists(input_video):

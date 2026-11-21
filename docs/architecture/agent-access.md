@@ -5,7 +5,7 @@
 - `POST /api/process`: submit a video for processing. Optional `source_start` /
   `source_end` (seconds) clip and bill only that stretch.
   Optional `framing_method` selects `auto`, `motion`, `detail`, `center`,
-  `fit`, or `legacy` for vertical and square output. MCP `process_video`
+  `fit`, `gameplay`, or `legacy` for vertical and square output. MCP `process_video`
   accepts the same field. Omitting it uses the deployment default.
 - `GET /api/status/{job_id}`: poll job status and logs.
 - `POST /api/edit`: apply AI video effects.

@@ -3,7 +3,7 @@
 import os
 
 
-FRAMING_METHODS = ("auto", "motion", "detail", "center", "fit", "legacy")
+FRAMING_METHODS = ("auto", "motion", "detail", "center", "fit", "gameplay", "legacy")
 SAMPLES_PER_SECOND = 4
 ANALYSIS_WIDTH = 192
 

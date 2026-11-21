@@ -1,5 +1,28 @@
 # Clip selection
 
+## Review candidate moments before rendering
+
+On a self-hosted installation, send `review_candidates: true` to
+`POST /api/process`. The dashboard has this option on by default. The first
+stage picks candidates and examines source stills and the words spoken inside
+each candidate. It rates the hook, action, reaction, clarity and payoff and can
+return fewer clips or an empty review. A weak moment is dropped. An uncertain
+moment keeps a neutral title and is flagged for manual review. When the visual
+check is unavailable, the dashboard can still preview transcript suggestions.
+The same event description goes to TikTok and Instagram, and the title and
+opening overlay describe that event.
+
+Poll `GET /api/status/{job_id}` for `status: "review"`. Its result includes
+candidate IDs and time ranges on the retained source. If an explicit section
+was selected, `source_offset` gives its start on the original timeline. Review
+does not occupy a worker slot. The review survives a restart while its source
+and job directory are retained.
+
+Send `{"candidate_ids":[2,4]}` to
+`POST /api/jobs/{job_id}/render-candidates` to render those moments. The second
+stage reads the previously saved timestamps and transcript and uses the same
+local source file. It skips download, speech recognition and moment picking.
+
 ## How many clips a job returns (`clip_selection.py`, `main.get_viral_clips`)
 
 The count is not a setting, it is derived. `get_viral_clips` builds ~90 s scoring

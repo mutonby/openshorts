@@ -13,6 +13,7 @@ const SUPPORTED_PLATFORMS = [
 
 const FRAMING_OPTIONS = [
     { value: 'auto', label: 'Smart framing', hint: 'Uses motion and visual detail, and keeps the whole picture when the focus is unclear.' },
+    { value: 'gameplay', label: 'Gameplay priority', hint: 'Keeps the complete game, HUD and original facecam. Auto captions use a smaller style.' },
     { value: 'motion', label: 'Follow motion', hint: 'Frames the action in moving footage, such as gameplay and sports.' },
     { value: 'detail', label: 'Follow detail', hint: 'Frames the strongest visual detail in steadier shots.' },
     { value: 'center', label: 'Center crop', hint: 'Fills the output frame with a fixed crop from the center.' },
@@ -50,6 +51,8 @@ const readVideoDuration = (file) => new Promise((resolve) => {
 export default function MediaInput({ onProcess, isProcessing }) {
     const { plan } = useAuth();
     const [youtubeUrlEnabled, setYoutubeUrlEnabled] = useState(true);
+    const [reviewAvailable, setReviewAvailable] = useState(false);
+    const [reviewCandidates, setReviewCandidates] = useState(true);
     // File upload is the primary path; the link is secondary.
     const [mode, setMode] = useState('file'); // 'file' | 'url'
     const [url, setUrl] = useState('');
@@ -127,6 +130,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
         fetch(getApiUrl('/api/config'))
             .then((r) => r.ok ? r.json() : null)
             .then((cfg) => {
+                if (cfg?.candidateReview === true) setReviewAvailable(true);
                 if (cfg && cfg.youtubeUrlEnabled === false) {
                     setYoutubeUrlEnabled(false);
                     setMode('file');
@@ -162,6 +166,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
             framingMethod: showFraming ? framingMethod : null,
             layout: showLegacyLayout ? layout : null,
             captions,
+            reviewCandidates: reviewAvailable && reviewCandidates,
             sourceStart: range ? Math.round(range.start) : null,
             sourceEnd: range ? Math.round(range.end) : null,
         };
@@ -306,9 +311,11 @@ export default function MediaInput({ onProcess, isProcessing }) {
                 <SourceCost
                     mode={mode}
                     url={url}
+                    file={file}
                     fileSeconds={fileSeconds}
                     range={range}
                     onRangeChange={setRange}
+                    localRanges={reviewAvailable}
                 />
 
                 {/* Output format selector */}
@@ -368,7 +375,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                 <select value={layout} onChange={(e) => setLayout(e.target.value)} className="input-field text-sm">
                                     <option value="auto">Automatic layout</option>
                                     <option value="split">Two speakers stacked</option>
-                                    <option value="screencast">Screen over presenter</option>
+                                    <option value="screencast">Screen over separate presenter</option>
                                     <option value="none">Single crop only</option>
                                 </select>
                             </label>
@@ -467,6 +474,16 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     </p>
                 )}
 
+                {reviewAvailable && (
+                    <label className="flex items-start gap-2.5 mt-4 text-sm text-ink2">
+                        <input type="checkbox" className="mt-0.5 w-4 h-4 accent-brass"
+                            checked={reviewCandidates} onChange={(e) => setReviewCandidates(e.target.checked)} />
+                        <span>
+                            Review moments before rendering
+                            <span className="block text-xs text-muted mt-1">Preview source ranges and render only the ones you choose.</span>
+                        </span>
+                    </label>
+                )}
                 <label className="flex items-start gap-2.5 mt-5 text-left text-[13px] sm:text-xs leading-relaxed text-muted cursor-pointer select-none">
                     <input
                         type="checkbox"
@@ -492,7 +509,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                         </>
                     ) : (
                         <>
-                            Generate Clips
+                            {reviewAvailable && reviewCandidates ? 'Find candidate moments' : 'Generate clips'}
                         </>
                     )}
                 </button>

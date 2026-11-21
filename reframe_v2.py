@@ -31,7 +31,8 @@ import punch_in
 import screencast_layout
 import layout_ranges
 import split_layout
-from ffmpeg_utils import (video_encode_args, blurred_backdrop, escape_filter_value,
+from ffmpeg_utils import (video_encode_args, audio_encode_args, cut_rate_filter,
+                          blurred_backdrop, escape_filter_value,
                           QUALITY_FAST, METADATA_SCRUB)
 
 ANALYSIS_MAX_WIDTH = 640
@@ -158,7 +159,8 @@ def _wide_crop(input_video, orig_w, orig_h, out_w, out_h, start_f, end_f, focus)
     return screencast_layout.wide_crop(orig_w, orig_h, out_w, out_h, centre)
 
 
-def general_filtergraph(out_w, out_h, content_h=None, orig_w=None, orig_h=None):
+def general_filtergraph(out_w, out_h, content_h=None, orig_w=None, orig_h=None,
+                        blur_sigma=12):
     """Blurred-background 'general shot' layout: bg fills the frame (centre-
     cropped, blurred), fg is scaled to a readable share of the height and
     centred, overflowing the sides rather than floating small in the middle.
@@ -180,7 +182,7 @@ def general_filtergraph(out_w, out_h, content_h=None, orig_w=None, orig_h=None):
     fg_h += fg_h % 2
     return (
         f"[0:v]split=2[bga][fga];"
-        f"[bga]{blurred_backdrop(out_w, out_h, 12)}[bg];"
+        f"[bga]{blurred_backdrop(out_w, out_h, blur_sigma)}[bg];"
         # Scale by HEIGHT, then trim any overflow to the output width. crop
         # centres by default, and min() makes it a no-op when the scaled source
         # is already narrower than the frame (portrait/square sources).
@@ -274,7 +276,7 @@ def apply_crop_overrides(xs, strategies, scene_boundaries, overrides,
 
 
 # Layouts whose crop is fixed for the whole scene: no camera trajectory.
-_STATIC_LAYOUTS = ('GENERAL', 'SPLIT', 'SCREENCAST', 'WIDE', 'FIT', 'INSET', 'ALTERNATE')
+_STATIC_LAYOUTS = ('GENERAL', 'SPLIT', 'SCREENCAST', 'WIDE', 'FIT', 'GAMEPLAY', 'ALTERNATE')
 
 # Decode only the frames the trajectory runs a detector on (see
 # _detection_frames). SPARSE_TRAJECTORY=0 pipes every frame again.
@@ -613,18 +615,21 @@ def _run(cmd):
         raise _ffmpeg_failure("final mux", result)
 
 
-def _run_segment(input_video, ss, dur, extra_inputs, graph, out_label, seg_path):
+def _run_segment(input_video, ss, dur, extra_inputs, graph, out_label, seg_path,
+                 with_audio=False):
     """Encode one scene. The clip is decoded on the card when it can
     (gpu_decode: the same frames, so the same segment) and on the CPU if that
     ffmpeg fails."""
     def build(on_gpu):
         on_gpu = on_gpu and gpu_decode.graph_ok(graph)
+        audio = (["-map", "0:a:0?", *audio_encode_args(), *METADATA_SCRUB,
+                  "-movflags", "+faststart"] if with_audio else ["-an"])
         return [
             "ffmpeg", "-y", "-loglevel", "error",
             "-ss", f"{ss:.4f}", "-t", f"{dur:.4f}",
             *gpu_decode.input_args(on_gpu), "-i", input_video, *extra_inputs,
             "-filter_complex", gpu_decode.graph(graph, on_gpu), "-map", out_label,
-            *video_encode_args(QUALITY_FAST), "-an", seg_path,
+            *video_encode_args(QUALITY_FAST), *audio, seg_path,
         ]
 
     def runner(cmd):
@@ -634,6 +639,24 @@ def _run_segment(input_video, ss, dur, extra_inputs, graph, out_label, seg_path)
     result = gpu_decode.run(build, runner, path=input_video)
     if result.returncode != 0:
         raise _ffmpeg_failure(f"scene encode at {ss:.2f}s", result)
+
+
+def render_gameplay_range(input_video, output_video, aspect_ratio, start, end):
+    """Cut and fit an approved gameplay interval in one accurate encode."""
+    import main as m
+
+    orig_w, orig_h = m.get_video_resolution(input_video)
+    out_w, out_h = delivery_size(orig_w, orig_h, aspect_ratio)
+    fg_h = min(out_h, full_width_content_height(orig_w, orig_h, out_w))
+    graph = general_filtergraph(out_w, out_h, fg_h, blur_sigma=96)
+    rate = cut_rate_filter(input_video)
+    if rate:
+        graph = f"[0:v]{rate[1]}[limited];" + graph.replace("[0:v]", "[limited]", 1)
+    _run_segment(input_video, start, end - start, [], graph, "[v]", output_video, with_audio=True)
+    layout_ranges.write(output_video, [
+        (0, end - start, "GAMEPLAY", screencast_layout.content_band(out_h, fg_h)),
+    ])
+    return True
 
 
 def screen_ranges(input_video, scenes, fps, strategies):
@@ -741,6 +764,11 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     import main as m
     content_ranges = content_ranges or []
     method = framing.resolve(framing_method)
+    if force_strategy in ("GAMEPLAY", "INSET"):
+        # Older callers may have saved INSET. Its source already includes the
+        # webcam, so render the complete picture with one foreground.
+        method = "gameplay"
+        force_strategy = "GAMEPLAY"
     visual = method != "legacy"
 
     print("   🚀 Reframe engine v2 (ffmpeg-native render)")
@@ -749,7 +777,7 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     passthrough = source_already_fits(orig_w, orig_h, aspect_ratio)
     already_sized = abs(orig_w / (orig_h * aspect_ratio) - 1.0) <= 0.01
 
-    static = method in ("center", "fit") or passthrough or force_strategy == "WIDE"
+    static = method in ("center", "fit", "gameplay") or passthrough or force_strategy == "WIDE"
     if visual and not crop_overrides and static:
         # Static modes have no layout switches or motion between shots.
         scenes, fps = [], None
@@ -778,8 +806,8 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
         strategies = [strategy] * len(scenes)
         content_ranges = []  # no screencast/inset upgrades over an explicit choice
         print(f"   🎯 Framing override: every scene -> {force_strategy}")
-    elif visual and not already_sized and (method == "fit" or (passthrough and method == "auto")):
-        strategies = ['FIT'] * len(scenes)
+    elif visual and not already_sized and (method in ("fit", "gameplay") or (passthrough and method == "auto")):
+        strategies = ['GAMEPLAY' if method == "gameplay" else 'FIT'] * len(scenes)
         content_ranges = []
         print("   🎯 Face-model-free framing: full-frame fit")
     elif passthrough:
@@ -835,16 +863,10 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     if alternates:
         print(f"   🎬 Speaker-cut layout on {len(alternates)} scene(s)")
 
-    # SCREENCAST wins over SPLIT on the rare scene that qualifies for both: two
-    # faces beside a chart still means the chart is what the shot is about, and
-    # stacking the two speakers would crop it away entirely.
-    # A screen with a webcam composited into a corner gets its own layout, and
-    # the question "is there an inset" is settled geometrically rather than by
-    # asking Gemini: offered as a fourth choice it answered "screencast" on all
-    # five clips that had one, while camera_inset.detect finds all five with no
-    # false positives. The box is fixed for the whole video, so it is found once.
+    # A webcam composited into a screen already appears in the picture. Use
+    # inset detection as a guard against stacking it again or tracking into it.
     inset = None
-    if content_ranges and screencast_layout.ENABLED:
+    if not visual and not passthrough and not force_strategy and screencast_layout.ENABLED:
         try:
             inset = camera_inset.detect(input_video)
         except Exception as e:
@@ -854,39 +876,26 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
 
     screencasts = {}
     focus_crops = {}
-    insets = {}
     wide_count = 0
-    inset_count = 0
-    if content_ranges:
-        for scene_idx, (plan, centre) in screencast_layout.detect_screencast_scenes(
-                input_video, scenes, strategies, content_ranges).items():
-            # An inset beats both screen plans: it is the only one that can show
-            # the screen whole AND the person at a readable size. But only on
-            # the scenes the camera is actually in: the box is found once per
-            # clip, and a tutorial clip mixes shots with and without it.
-            start_f, end_f = scene_boundaries[scene_idx]
-            box = None
-            if inset and camera_inset.present_in_scene(
-                    input_video, inset, start_f, end_f):
-                box = inset
-            elif plan == 'WIDE' and screencast_layout.presenter_cam(
-                    start_f / fps, end_f / fps, content_ranges):
-                # A full screen with the presenter's camera floating over it
-                # anywhere, not only in a corner: show it below, enlarged,
-                # instead of leaving it a thumbnail inside the screen. Only
-                # where the shot check saw a live webcam window: geometry alone
-                # also enlarged game characters, photos on slides and cover art.
-                box = camera_inset.detect_in_scene(input_video, start_f, end_f)
-            if box:
-                plan, centre = 'INSET', None
+    if content_ranges or inset:
+        screen_plans = screencast_layout.detect_screencast_scenes(
+            input_video, scenes, strategies, content_ranges)
+        for scene_idx, (start_f, end_f) in enumerate(scene_boundaries):
+            start, end = start_f / fps, end_f / fps
+            if (screencast_layout.gameplay_scene(start, end, content_ranges)
+                    or screencast_layout.presenter_cam(start, end, content_ranges)
+                    or (inset and camera_inset.present_in_scene(input_video, inset, start_f, end_f))):
+                plan, centre = "GAMEPLAY", None
+            else:
+                plan, centre = screen_plans.get(scene_idx, (None, None))
+            if not plan:
+                continue
             strategies[scene_idx] = plan
             splits.pop(start_f, None)
+            alternates.pop(start_f, None)
             if plan == 'SCREENCAST':
                 screencasts[start_f] = centre  # (face centre, content columns)
-            elif plan == 'INSET':
-                insets[start_f] = box
-                inset_count += 1
-            else:
+            elif plan == 'WIDE':
                 wide_count += 1
                 crop = screencast_layout.focus_crop(
                     orig_w, orig_h, out_w, out_h, centre)
@@ -899,8 +908,6 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
         print(f"   🖥️ SCREENCAST layout on {len(screencasts)} scene(s)")
     if wide_count:
         print(f"   📐 Full-width layout on {wide_count} scene(s)")
-    if inset_count:
-        print(f"   📹 Camera-inset layout on {inset_count} scene(s)")
 
     # The crop geometry comes from the SOURCE dims only — SmoothedCameraman
     # derives crop_width/crop_height from video_width/video_height and never
@@ -910,7 +917,8 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     crop_w, crop_h = cameraman.crop_width, cameraman.crop_height
 
     if visual:
-        mode = "center" if passthrough or (force_strategy == "TRACK" and method == "fit") else method
+        mode = "center" if passthrough or method == "gameplay" or (
+            force_strategy == "TRACK" and method == "fit") else method
         xs = visual_trajectory(input_video, scene_boundaries, strategies, fps,
                                orig_w, orig_h, crop_w, mode, forced=bool(force_strategy))
     else:
@@ -967,10 +975,7 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
             dur = (end_f - start_f) / fps
             boxes = None
 
-            if strategy == 'INSET':
-                graph = camera_inset.inset_filtergraph(
-                    orig_w, orig_h, out_w, out_h, insets.get(start_f, inset))
-            elif strategy == 'SCREENCAST':
+            if strategy == 'SCREENCAST':
                 graph = screencast_layout.screencast_filtergraph(
                     orig_w, orig_h, out_w, out_h, *screencasts[start_f])
             elif strategy == 'WIDE' and start_f in focus_crops:
@@ -979,11 +984,16 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
                 bands[start_f] = screencast_layout.content_band(
                     out_h, screencast_layout.crop_content_height(
                         orig_h, out_w, out_h, focus_crops[start_f][1]))
-            elif strategy in ('WIDE', 'FIT'):
+            elif strategy in ('WIDE', 'FIT', 'GAMEPLAY'):
                 fg_h = full_width_content_height(orig_w, orig_h, out_w)
-                if strategy == 'FIT':
+                if strategy in ('FIT', 'GAMEPLAY'):
                     fg_h = min(out_h, fg_h)
-                graph = general_filtergraph(out_w, out_h, fg_h)
+                if strategy == 'GAMEPLAY':
+                    # The blurred fill carries color and motion at low detail.
+                    # The original aspect ratio and every HUD edge stay visible.
+                    graph = general_filtergraph(out_w, out_h, fg_h, blur_sigma=96)
+                else:
+                    graph = general_filtergraph(out_w, out_h, fg_h)
                 bands[start_f] = screencast_layout.content_band(out_h, fg_h)
             elif strategy == 'SPLIT':
                 left, right = splits[start_f]

@@ -83,6 +83,30 @@ def test_visual_render_uses_no_face_detectors_and_keeps_scene_overrides(monkeypa
                              framing_method="auto", crop_overrides={1: 0.5})
 
 
+def test_gameplay_renders_the_selected_source_interval_with_audio_in_one_pass(monkeypatch, tmp_path):
+    import sys
+    from types import SimpleNamespace
+
+    import reframe_v2
+
+    monkeypatch.setitem(sys.modules, "main", SimpleNamespace(get_video_resolution=lambda _: (1920, 1080)))
+    monkeypatch.setattr(reframe_v2, "cut_rate_filter", lambda _: [])
+    calls = []
+
+    def encode(source, start, length, extra, graph, label, path, with_audio):
+        assert graph.count("overlay=") == 1
+        assert "scale=-2:608" in graph and "[cam]" not in graph
+        calls.append((source, start, length, extra, label, path, with_audio))
+
+    monkeypatch.setattr(reframe_v2, "_run_segment", encode)
+    path = str(tmp_path / "clip.mp4")
+    assert reframe_v2.render_gameplay_range("source.mp4", path, VERTICAL, 620.5, 645.5)
+    assert calls == [("source.mp4", 620.5, 25.0, [], "[v]", path, True)]
+    assert reframe_v2.layout_ranges.read(path) == [
+        {"start": 0.0, "end": 25.0, "layout": "gameplay", "content": [0.342, 0.658]},
+    ]
+
+
 class TestDeliverySize:
     """A 720p source must not produce a 406x720 clip (prod audit, 25-jul-2026)."""
 

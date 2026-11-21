@@ -29,11 +29,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import (HTMLResponse, FileResponse, JSONResponse, StreamingResponse,
                                RedirectResponse, Response)
 from starlette.background import BackgroundTask
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictInt
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 import recut
 import layout_ranges
 import framing as visual_framing
+import candidate_review
 import watermarked
 import media_auth
 import remote_worker
@@ -1916,7 +1917,8 @@ def _recover_jobs_from_disk():
                 'logs': _TimedLog(["♻️ Job recovered from disk after server restart."]),
                 'output_dir': job_path,
                 'user_id': owner,
-                'result': {'clips': clips, 'cost_analysis': data.get('cost_analysis')},
+                'result': {'clips': clips, 'cost_analysis': data.get('cost_analysis'),
+                           **({"no_highlights": True} if data.get("no_highlights") is True else {})},
             }
             recovered += 1
         except Exception as e:
@@ -2468,6 +2470,9 @@ def _resume_candidates(held: set, now: float):
             continue
         if not isinstance(m, dict):
             continue
+
+        if m.get("stage") == candidate_review.STATUS:
+            continue  # this job is waiting for the editor, not for a worker
 
         if m.get("reservation_id"):
             keep_reservations.add(str(m["reservation_id"]))
@@ -3430,10 +3435,12 @@ async def run_job_wrapper(job_id):
         # next job now and the delivery runs outside it. The job enters the
         # delivery stage (manifest stamped, ``_delivering_jobs``) BEFORE it
         # leaves ``_running_jobs``: a drain or a scan never sees it in neither.
-        if job is not None:
+        if job is not None and job.get("status") != candidate_review.STATUS:
             _begin_delivery(job_id, job)
         _release_slot(job_id)
         print(f"✅ Released slot for job: {job_id}")
+    if job is not None and job.get("status") == candidate_review.STATUS:
+        return
     if job is not None:
         await _deliver_job(job_id, job)
     else:
@@ -5105,15 +5112,22 @@ def _refresh_partial_result(job_id, output_dir):
 def _finish_job(job_id, returncode, output_dir):
     """main.py exited (here or on the remote worker): the job's final status
     and result, from the exit code and what is on disk."""
+    job = jobs[job_id]
+    if returncode == 0 and "--review-candidates" in (job.get("cmd") or []):
+        plan = candidate_review.read(output_dir)
+        manifest = _read_manifest(job_id)
+        if plan is None or manifest is None:
+            job["status"] = "failed"
+            job["logs"].append("❌ The candidate review could not be saved.")
+            return
+        manifest["stage"] = candidate_review.STATUS
+        write_json_atomic(_manifest_path(job_id), manifest)
+        job["status"] = candidate_review.STATUS
+        job["result"] = candidate_review.public_result(plan)
+        return
     if returncode == 0:
         jobs[job_id]['status'] = 'completed'
         jobs[job_id]['logs'].append("Process finished successfully.")
-
-        # Self-host: silent AWS S3 backup. Cloud mode stores to R2 instead
-        # (see _archive_managed_job), so skip the redundant/paid AWS upload.
-        if not BILLING_ENABLED:
-            loop = asyncio.get_event_loop()
-            loop.run_in_executor(None, upload_job_artifacts, output_dir, job_id)
 
         # Find result JSON
         json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
@@ -5130,6 +5144,13 @@ def _finish_job(job_id, returncode, output_dir):
             base_name = os.path.basename(target_json).replace('_metadata.json', '')
             clips = data.get('shorts', [])
             cost_analysis = data.get('cost_analysis')
+            if not clips and data.get("no_highlights") is True:
+                if BILLING_ENABLED:
+                    job["status"] = "failed"  # release the reservation
+                    job["logs"].append("❌ No moments with a clear payoff were found.")
+                else:
+                    job["result"] = {"clips": [], "no_highlights": True, "cost_analysis": cost_analysis}
+                return
 
             rendered, missing = _clips_actually_rendered(
                 job_id, output_dir, base_name, clips)
@@ -5144,12 +5165,19 @@ def _finish_job(job_id, returncode, output_dir):
                     jobs[job_id]['logs'].append(
                         f"⚠️ {missing} of {len(clips)} clips failed to render.")
                 jobs[job_id]['result'] = {'clips': rendered, 'cost_analysis': cost_analysis}
+                if not BILLING_ENABLED:
+                    loop = asyncio.get_event_loop()
+                    loop.run_in_executor(None, upload_job_artifacts, output_dir, job_id)
         else:
             jobs[job_id]['status'] = 'failed'
             jobs[job_id]['logs'].append("No metadata file generated.")
     else:
         jobs[job_id]['status'] = 'failed'
         jobs[job_id]['logs'].append(_scrub_secrets(f"Process failed with exit code {returncode}"))
+        if returncode == -9:
+            job["logs"].append("❌ The system killed the processing job (SIGKILL). "
+                               "Check the host or container logs for the cause. "
+                               "A shorter source range can reduce resource use.")
 
 
 async def _run_main(job_id, cmd, env, tick=None):
@@ -5695,6 +5723,7 @@ async def get_config(response: Response):
         "billingEnabled": BILLING_ENABLED,
         "googleAuthEnabled": bool(BILLING_ENABLED and cloud.settings.google_auth_enabled),
         "jobRetentionSeconds": JOB_RETENTION_SECONDS,
+        "candidateReview": not BILLING_ENABLED,
         # Self-host only: tells the dashboard the Gemini key is optional
         # because the moment picker runs on an OpenAI-compatible server.
         "localLlm": None if BILLING_ENABLED else llm_backend.describe(),
@@ -6092,6 +6121,7 @@ async def process_endpoint(
     output_format: Optional[str] = Form(None),
     layouts: Optional[str] = Form(None),
     framing_method: Optional[str] = Form(None),
+    review_candidates: Optional[str] = Form(None),
     force_low_quality: Optional[str] = Form(None),
     webhook_url: Optional[str] = Form(None),
     webhook_secret: Optional[str] = Form(None),
@@ -6128,6 +6158,7 @@ async def process_endpoint(
         output_format = body.get("output_format")
         layouts = body.get("layouts")
         framing_method = body.get("framing_method")
+        review_candidates = body.get("review_candidates")
         webhook_url = body.get("webhook_url")
         webhook_secret = body.get("webhook_secret")
         target_clips = body.get("target_clips")
@@ -6156,6 +6187,10 @@ async def process_endpoint(
         if not isinstance(framing_method, str) or framing_method not in visual_framing.FRAMING_METHODS:
             choices = ", ".join(sorted(visual_framing.FRAMING_METHODS))
             raise HTTPException(status_code=400, detail=f"framing_method must be one of {choices}")
+
+    wants_review = str(review_candidates).lower() in ("1", "true", "yes")
+    if wants_review and BILLING_ENABLED:
+        raise HTTPException(status_code=400, detail="Candidate review is available on self-hosted installations.")
 
     # Validate generation settings before allocating a job directory.
     def _gen_control(raw, name, lo, hi, integer=False):
@@ -6364,6 +6399,8 @@ async def process_endpoint(
     cmd.extend(["-o", job_output_dir])
     if output_format and output_format != "auto":
         cmd.extend(["--format", output_format])
+    if wants_review:
+        cmd.append("--review-candidates")
 
     print(f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true")
 
@@ -6506,6 +6543,13 @@ def _job_view_from_disk(job_id):
     if not os.path.isdir(job_path):
         return None
     m = _read_manifest(job_id)
+    if m and m.get("stage") == candidate_review.STATUS and not BILLING_ENABLED:
+        plan = candidate_review.read(job_path)
+        if plan is None:
+            return None
+        return {"status": candidate_review.STATUS, "user_id": None,
+                "logs": _TimedLog(["Candidate review ready."]),
+                "result": candidate_review.public_result(plan), "partial": m.get("partial")}
     if m is None and os.path.exists(os.path.join(job_path, _EXPIRED_MARKER)):
         owner = None
         try:
@@ -6792,6 +6836,13 @@ def _locate_source(job_id: str):
                     return candidate
     except Exception:
         pass
+    if not BILLING_ENABLED:
+        job_dir = os.path.join(OUTPUT_DIR, job_id)
+        plan = candidate_review.read(job_dir)
+        if plan:
+            retained = os.path.join(job_dir, plan["source_video"])
+            if os.path.isfile(retained):
+                return retained
     # A paid job's source brought back from R2 (_locate_or_fetch_source): a
     # fixed dot name, never one read from the job directory.
     if _source_archive is not None:
@@ -6802,6 +6853,72 @@ def _locate_source(job_id: str):
 
 
 _source_fetch_locks: Dict[str, asyncio.Lock] = {}
+
+
+class CandidateApproval(BaseModel):
+    candidate_ids: list[StrictInt] = Field(min_length=1, max_length=candidate_review.MAX_CANDIDATES)
+
+
+@app.post("/api/jobs/{job_id}/render-candidates", status_code=202)
+async def render_candidates(job_id: str, req: CandidateApproval, request: Request):
+    """Queue the selected candidates against the source and transcript already on disk."""
+    if BILLING_ENABLED or not _JOB_ID_RE.fullmatch(job_id):
+        raise HTTPException(status_code=404, detail="Review not found")
+    if _draining or _stopping:
+        raise HTTPException(status_code=503, detail="The server is restarting. Try again shortly.")
+    key = await resolve_gemini(request)
+    lock = _rerender_locks.setdefault(job_id, asyncio.Lock())
+    async with lock:
+        job = jobs.get(job_id) or _job_view_from_disk(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Review not found")
+        await _assert_job_owner(request, job)
+        manifest = _read_manifest(job_id)
+        if job.get("status") != candidate_review.STATUS or (manifest or {}).get("stage") != candidate_review.STATUS:
+            raise HTTPException(status_code=409, detail="This job is no longer awaiting candidate selection.")
+
+        output_dir = os.path.join(OUTPUT_DIR, job_id)
+        plan = candidate_review.read(output_dir)
+        source = _locate_source(job_id)
+        if not plan or not source or os.path.basename(source) != plan["source_video"]:
+            raise HTTPException(status_code=409, detail="The saved review or its source is unavailable.")
+        try:
+            candidate_review.select(plan, req.candidate_ids)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        env = child_env()
+        options = manifest.get("generation_options")
+        if isinstance(options, dict):
+            env.update({name: value for name, value in options.items()
+                        if name in _GENERATION_ENV and isinstance(value, str)
+                        and remote_worker.allowed_option(name, value)})
+        # Retain the live job's original BYOK key when the same dashboard tab
+        # approves it. No key or API header is ever stored with the review.
+        key = key or (job.get("env") or {}).get("GEMINI_API_KEY")
+        if key:
+            env["GEMINI_API_KEY"] = key
+        mode = visual_framing.resolve(plan.get("framing_method", "legacy"))
+        fmt = plan.get("output_format")
+        if fmt not in ("auto", "vertical", "square", "horizontal"):
+            fmt = "auto"
+        cmd = [sys.executable, "-u", "main.py", "-i", source, "-o", output_dir,
+               "--format", fmt, "--framing-method", mode,
+               "--render-candidates", *(str(i) for i in req.candidate_ids)]
+        submitted_at = _arrival_now()
+        manifest.update(cmd=cmd, attempts=0, submitted_at=submitted_at)
+        for name in ("stage", "heartbeat", "run_started", "resumed_at", "instance", "retry_at"):
+            manifest.pop(name, None)
+        write_json_atomic(_manifest_path(job_id), manifest)
+        job.update(
+            status="queued", result=None, cmd=cmd, env=env, output_dir=output_dir,
+            submitted_at=submitted_at, webhook_url=manifest.get("webhook_url"),
+            webhook_secret=manifest.get("webhook_secret"), base_url=manifest.get("base_url"),
+        )
+        job["logs"].append(f"Queued {len(req.candidate_ids)} approved moment(s) for rendering.")
+        jobs[job_id] = job
+        _enqueue_job(job_id, int(manifest.get("priority", 2)))
+        return {"job_id": job_id, "status": "queued"}
 
 
 async def _archived_source(job_id: str):
@@ -7648,7 +7765,7 @@ class RerenderRequest(BaseModel):
 # Manual framing -> reframe-engine strategy. 'full' shows the whole source
 # frame (WIDE: no side-cropping, blurred filler bands); 'track' forces the
 # subject-tracking crop. Anything non-auto needs the retained source video.
-_FRAMING_STRATEGIES = {"auto": None, "full": "WIDE", "track": "TRACK"}
+_FRAMING_STRATEGIES = {"auto": None, "full": "WIDE", "track": "TRACK", "gameplay": "GAMEPLAY"}
 
 
 # One lock per job (same pattern as _restore_locks): rerenders on the same job
@@ -7719,7 +7836,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
     framing = req.framing or (clip.get('recipe') or {}).get('framing') or 'auto'
     if framing not in _FRAMING_STRATEGIES:
         raise HTTPException(status_code=400,
-                            detail="framing must be one of: auto, full, track")
+                            detail="framing must be one of: auto, full, track, gameplay")
     force_strategy = _FRAMING_STRATEGIES[framing]
 
     try:
@@ -7766,8 +7883,10 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
     reservation_id = await reserve_managed_action(
         request, rerender_minutes, req.job_id, "rerender")
 
+    keep_source_captions = force_strategy == "GAMEPLAY" and (
+        data.get("source_subtitle_band") or (clip.get("assessment") or {}).get("source_captions"))
     v_transcript = (recut.virtual_transcript(transcript, segments)
-                    if req.reapply_captions else None)
+                    if req.reapply_captions and not keep_source_captions else None)
 
     def run_recut():
         if fast:
@@ -7952,7 +8071,11 @@ async def _set_clip_mode_locked(req: ClipModeRequest, request: Request, job):
     if req.clip_index < 0 or req.clip_index >= len(clips):
         raise HTTPException(status_code=404, detail="Clip not found")
     clip = clips[req.clip_index]
-    if req.mode == "pro" and visual_framing.resolve(data.get('framing_method', 'legacy')) != "legacy":
+    if req.mode == "pro" and (
+        visual_framing.resolve(data.get('framing_method', 'legacy')) != "legacy"
+        or (clip.get("recipe") or {}).get("framing") == "gameplay"
+        or any(r["layout"] == "gameplay" for r in layout_ranges.normalise(clip.get("layout_ranges")))
+    ):
         raise HTTPException(status_code=400, detail="Pro mode requires face tracking.")
 
     base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')

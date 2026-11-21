@@ -28,7 +28,8 @@ export function clipProgress(logs) {
     }
     const done = READY.exec(text);
     if (done) ready.add(done[1]);
-    if (SELECTING.test(text)) stage = 'Finding clip moments';
+    if (/Checking source evidence/i.test(text)) stage = 'Checking candidate moments';
+    else if (SELECTING.test(text)) stage = 'Finding clip moments';
     else if (TRANSCRIBING.test(text) && stage !== 'Finding clip moments') stage = 'Transcribing audio';
     else if (DOWNLOADING.test(text) && stage === 'Starting job') stage = 'Downloading source';
     else if (VIDEO_DOWNLOADED.test(text) && stage === 'Downloading source') stage = 'Preparing source';
