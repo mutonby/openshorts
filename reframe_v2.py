@@ -749,11 +749,15 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     # five clips that had one, while camera_inset.detect finds all five with no
     # false positives. The box is fixed for the whole video, so it is found once.
     inset = None
-    if content_ranges and screencast_layout.ENABLED:
+    if (not passthrough
+            and os.environ.get("PLIC_GAMEPLAY_LAYOUT", "1").strip() != "0"):
         try:
+            # Gaming videos often have no detected screen-content ranges at
+            # all. Facecam detection must therefore run independently of the
+            # screencast classifier, not only inside its branch.
             inset = camera_inset.detect(input_video)
         except Exception as e:
-            print(f"   ⚠️ Inset check failed ({e}) — using the screen layouts.")
+            print(f"   ⚠️ Facecam inset check failed ({e}) — using the standard layout.")
         if inset:
             print(f"   📹 Webcam inset at {inset}")
 
@@ -800,6 +804,20 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
                                       start_f, end_f, centre)
                 if crop:
                     focus_crops[start_f] = crop
+
+    # Apply the facecam layout to ordinary gaming scenes too. This pass is
+    # independent of SCREENCAST detection, and validates the inset per scene
+    # so cuts away from the webcam return to the normal face-tracked layout.
+    if inset:
+        for scene_idx, (start_f, end_f) in enumerate(scene_boundaries):
+            if strategies[scene_idx] in ("SPLIT", "INSET"):
+                continue
+            if camera_inset.present_in_scene(input_video, inset, start_f, end_f):
+                strategies[scene_idx] = "INSET"
+                splits.pop(start_f, None)
+                insets[start_f] = inset
+                inset_count += 1
+
     if screencasts:
         print(f"   🖥️ SCREENCAST layout on {len(screencasts)} scene(s)")
     if wide_count:
