@@ -48,6 +48,6 @@ For a non-Docker Python setup, install the packages in `requirements.txt` and st
 
 The core application is distributed under the MIT licence. The original copyright and permission notice in [LICENSE](LICENSE) is intentionally retained as required by that licence.
 
-The original `cloud/` directory has a separate commercial licence in [cloud/LICENSE](cloud/LICENSE). It is not covered by the root MIT licence. Do not redistribute, white-label, or offer that directory as a hosted service without permission from its copyright holder. The self-hosted core runs with billing disabled and does not require the commercial cloud code.
+The upstream repository's `cloud/` directory has a separate commercial licence and is intentionally excluded from the plic.ai ZIP. It is not covered by the root MIT licence. Do not redistribute, white-label, or offer that commercial code as a hosted service without permission from its copyright holder. The self-hosted core runs with billing disabled and does not require it.
 
 Plic AI's transcript-first optimization is an independent implementation inspired by the publicly documented workflow of PeakCut. The PeakCut source code is not bundled into this project.
