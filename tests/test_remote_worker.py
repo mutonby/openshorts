@@ -1080,3 +1080,312 @@ def test_worker_lines_cannot_set_this_hosts_markers(api):
     assert "remote_source" not in job and "proxy_bytes" not in job and "proxy_route" not in job
     assert job["ready_files"] == {2: "V_clip_3.mp4"}
     assert job["logs"] == []
+
+
+# --- a worker that fetches the link itself -----------------------------------
+#
+# A worker with video-site accounts of its own says so in its claim and is
+# given the link instead of the source: this host then neither downloads nor
+# sends it. No credential crosses for it (the accounts are the ones its
+# operator set on that machine), and a link it cannot fetch comes back here
+# without counting against the worker.
+
+LINK = "https://www.youtube.com/watch?v=abcdefghijk"
+URL_CMD = ["python", "-u", "main.py", "-u", LINK, "--keep-original", "-o", "output/x"]
+
+
+# --- what crosses the wire --------------------------------------------------
+
+@pytest.mark.parametrize("url", [
+    LINK, "https://youtu.be/abcdefghijk", "https://m.youtube.com/watch?v=abcdefghijk&t=3"])
+def test_links_a_worker_may_fetch(url):
+    assert rw.safe_link(url) == url
+
+
+@pytest.mark.parametrize("url", [
+    "http://www.youtube.com/watch?v=x",                  # not https
+    "https://www.twitch.tv/videos/1",                    # not on the closed list
+    "https://youtube.com.evil.example/watch?v=x",
+    "https://evil.example/?u=youtube.com",
+    "https://user:pw@www.youtube.com/watch?v=x",
+    "https://www.youtube.com:8443/watch?v=x",
+    "https://www.youtube.com/watch?v=x y",
+    "https://www.youtube.com/watch?v=x\n--exec",
+    "file:///etc/passwd", "", None, 7, "https://www.youtube.com/" + "a" * 2100])
+def test_links_a_worker_is_never_sent(url):
+    assert rw.safe_link(url) is None
+
+
+def test_only_a_link_job_has_a_link():
+    assert rw.link_of(URL_CMD) == LINK
+    assert rw.link_of(["python", "-u", "main.py", "-i", "uploads/v.mp4", "-o", "output/x"]) is None
+    assert rw.link_of(["python", "-u", "main.py", "-u", "https://www.twitch.tv/videos/1",
+                       "-o", "output/x"]) is None
+    # A command the worker cannot repeat has no link either.
+    assert rw.link_of(URL_CMD + ["--skip-analysis"]) is None
+
+
+def test_where_the_stretch_starts_travels_only_with_a_link():
+    env = {"SOURCE_START_SECONDS": "120", "MAX_SOURCE_MINUTES": "20", "PROXY_URL": "p",
+           "YOUTUBE_COOKIES": "c", "STATIC_PROXY_URLS": "s"}
+    assert rw.job_options(env, {}) == {"MAX_SOURCE_MINUTES": "20"}
+    assert rw.job_options(env, {}, link=True) == {
+        "MAX_SOURCE_MINUTES": "20", "SOURCE_START_SECONDS": "120"}
+    assert not rw.allowed_option("SOURCE_START_SECONDS", "120")
+    assert rw.allowed_option("SOURCE_START_SECONDS", "120", link=True)
+    assert not rw.allowed_option("YOUTUBE_COOKIES", "c", link=True)
+
+
+def test_the_claim_keeps_that_the_worker_downloads(tmp_path):
+    d = str(tmp_path)
+    rw.begin(d, "w1")
+    assert rw.downloads(d) is False
+    rw.begin(d, "gpu", source_only=True, downloads=True)
+    assert rw.downloads(d) is True and rw.source_only(d) is True
+    assert rw.set_ready_link(d, "https://evil.example/v", [], {}) is False
+    assert rw.read(d)["state"] == rw.PREPARING
+    assert rw.set_ready_link(d, LINK, ["--format", "vertical"], {"WATERMARK": "1"})
+    data = rw.read(d)
+    assert (data["state"], data["link"], data["source"], data["source_size"]) == (
+        rw.READY, LINK, "", 0)
+    assert data["args"] == ["--format", "vertical"] and data["env"] == {"WATERMARK": "1"}
+
+
+def test_a_link_that_could_not_be_fetched_is_no_failure_of_the_worker(tmp_path):
+    d = str(tmp_path)
+    rw.begin(d, "w1", downloads=True)
+    rw.mark_done(d, 1)
+    assert rw.read_stopping(d) is False
+    rw.mark_done(d, 1, no_source=True)
+    assert rw.read_done(d) == 1 and rw.read_stopping(d) is True
+
+
+# --- the worker ---------------------------------------------------------------
+
+def test_the_worker_says_it_downloads_only_when_told_to(monkeypatch):
+    worker = pytest.importorskip("worker")
+    monkeypatch.setattr(worker, "NAME", "w1")
+    monkeypatch.setattr(worker, "SOURCE_ONLY", True)
+    monkeypatch.setattr(worker, "DOWNLOADS", False)
+    assert worker.claim_body() == {"worker": "w1", "source_only": True}
+    monkeypatch.setattr(worker, "DOWNLOADS", True)
+    assert worker.claim_body() == {"worker": "w1", "source_only": True, "downloads": True}
+
+
+def test_the_workers_own_accounts_stay_its_own(monkeypatch):
+    """The cookies main.py uses on the worker are the operator's: nothing the
+    API sends can set or replace them."""
+    worker = pytest.importorskip("worker")
+    monkeypatch.setenv("YOUTUBE_COOKIES", "operator")
+    env = worker.job_env({"YOUTUBE_COOKIES": "theirs", "YOUTUBE_COOKIES_2": "theirs",
+                          "PROXY_URL": "p", "STATIC_PROXY_URLS": "s",
+                          "SOURCE_START_SECONDS": "90"}, link=True)
+    assert env["YOUTUBE_COOKIES"] == "operator" and "YOUTUBE_COOKIES_2" not in env
+    assert "PROXY_URL" not in env and "STATIC_PROXY_URLS" not in env
+    assert env["SOURCE_START_SECONDS"] == "90"
+    assert "SOURCE_START_SECONDS" not in worker.job_env({"SOURCE_START_SECONDS": "90"})
+
+
+# --- inside the API -----------------------------------------------------------
+
+def _link_job(m, **env):
+    job_id, d = _queued(m, enqueue=False, cmd=[
+        "python", "-u", "main.py", "-u", LINK, "--keep-original", "-o", "output/x"])
+    m.jobs[job_id]["env"].update(env)
+    m._running_jobs.add(job_id)
+    m._remote_jobs.add(job_id)
+    return job_id, d
+
+
+def test_when_the_worker_is_given_the_link(api, monkeypatch):
+    m = api
+    job_id, d = _link_job(m)
+    env = m.jobs[job_id]["env"]
+    cmd = m.jobs[job_id]["cmd"]
+    monkeypatch.setattr(m.source_cache, "has", lambda url: False)
+    rw.begin(d, "w1", source_only=True)
+    assert m._worker_link(d, cmd, env) is None               # it did not ask to download
+    rw.begin(d, "gpu", source_only=True, downloads=True)
+    assert m._worker_link(d, cmd, env) == LINK
+    # A whole copy this host already keeps is sent as before: no account's request.
+    monkeypatch.setattr(m.source_cache, "has", lambda url: True)
+    assert m._worker_link(d, cmd, env) is None
+    # ...but a cut is never served from the cache, so the worker fetches it.
+    assert m._worker_link(d, cmd, dict(env, MAX_SOURCE_MINUTES="20")) == LINK
+    upload = ["python", "-u", "main.py", "-i", "uploads/v.mp4", "-o", "output/x"]
+    assert m._worker_link(d, upload, env) is None
+
+
+def _run_link_job(m, monkeypatch, job_id, d, worker_does):
+    claim = rw.begin(d, "gpu", source_only=True, downloads=True)
+    monkeypatch.setattr(m.source_cache, "has", lambda url: False)
+    prepared = []
+
+    async def run_main(job_id, cmd, env, tick=None):
+        prepared.append(cmd)
+        return 1
+    monkeypatch.setattr(m, "_run_main", run_main)
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(_):
+        await real_sleep(0)
+    monkeypatch.setattr(m.asyncio, "sleep", fast_sleep)
+    seen = {}
+
+    async def scenario():
+        task = asyncio.ensure_future(m._run_job_remote(job_id, m.jobs[job_id]))
+        for _ in range(200):
+            await real_sleep(0)
+            if (rw.read(d) or {}).get("state") == rw.READY:
+                break
+        seen.update(rw.read(d) or {})
+        worker_does(claim)
+        await task
+    asyncio.run(scenario())
+    return prepared, seen
+
+
+def test_this_host_downloads_nothing_for_a_worker_that_fetches_the_link(api, monkeypatch):
+    m = api
+    job_id, d = _link_job(m, SOURCE_START_SECONDS="60", MAX_SOURCE_MINUTES="20")
+    prepared, seen = _run_link_job(m, monkeypatch, job_id, d,
+                                   lambda claim: rw.mark_done(d, 1, no_source=True))
+    assert prepared == []                                    # no --prepare-only run here
+    assert seen["state"] == rw.READY and seen["link"] == LINK and seen["source"] == ""
+    # The cut travels, the credentials and this host's routes do not.
+    assert seen["env"]["SOURCE_START_SECONDS"] == "60" and seen["env"]["MAX_SOURCE_MINUTES"] == "20"
+    assert seen["env"]["HOOK_LAZY"] == "0" and "PROXY_URL" not in seen["env"]
+    # Free plan: marked before the worker can send anything, link or not.
+    assert os.path.exists(os.path.join(d, ".marked"))
+
+
+def test_a_link_the_worker_cannot_fetch_runs_here_and_does_not_trip_the_breaker(api, monkeypatch):
+    m = api
+    monkeypatch.setattr(m, "REMOTE_BREAKER_FAILURES", 4)
+    m._remote_breaker.update(recent=[], until=0.0)
+    for _ in range(4):
+        job_id, d = _link_job(m)
+        _run_link_job(m, monkeypatch, job_id, d,
+                      lambda claim, d=d: rw.mark_done(d, 1, no_source=True))
+        job = m.jobs[job_id]
+        # Failed as a remote run: the auto-retry runs it on this host.
+        assert job["status"] == "failed" and job["remote_failed"]
+    assert m._remote_breaker["until"] == 0.0 and m._remote_breaker["recent"] == []
+    # A render that fails after the source was fetched still counts.
+    for _ in range(4):
+        job_id, d = _link_job(m)
+        _run_link_job(m, monkeypatch, job_id, d, lambda claim, d=d: rw.mark_done(d, 1))
+    assert m._remote_breaker["until"] > time.time()
+
+
+def test_the_endpoints_carry_the_link_and_the_reason(api, client, monkeypatch):
+    m = api
+    m._admitting.add("someone-waiting")
+    monkeypatch.setattr(m, "run_job_wrapper", lambda jid: None)
+    monkeypatch.setattr(m.asyncio, "create_task", lambda coro: None)
+    job_id, d = _queued(m, cmd=["python", "-u", "main.py", "-u", LINK, "--keep-original",
+                                "-o", "output/x"])
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    got = client.post("/internal/worker/claim", headers=headers,
+                      json={"worker": "gpu", "source_only": True, "downloads": True}).json()
+    assert got["job_id"] == job_id and rw.downloads(d) is True
+    headers["X-Worker-Claim"] = got["claim"]
+    assert rw.set_ready_link(d, LINK, [], {"WATERMARK": "1"})
+    info = client.get(f"/internal/worker/jobs/{job_id}", headers=headers).json()
+    assert info["state"] == rw.READY and info["link"] == LINK and not info["source"]
+    r = client.post(f"/internal/worker/jobs/{job_id}/done", headers=headers,
+                    json={"returncode": 1, "no_source": True})
+    assert r.status_code == 200 and rw.read_stopping(d) is True
+
+
+STUB_MAIN_LINK = r'''
+import json, os, sys, time
+a = sys.argv
+link, out = a[a.index("-u") + 1], a[a.index("-o") + 1]
+assert "-i" not in a and "--keep-original" in a and "--format" in a
+os.makedirs(out, exist_ok=True)
+print("SEEN link=%s cookies=%s start=%s proxy=%s" % (
+    link, os.environ.get("YOUTUBE_COOKIES"), os.environ.get("SOURCE_START_SECONDS"),
+    os.environ.get("PROXY_URL")), flush=True)
+if os.environ.get("STUB_CANNOT_FETCH"):
+    print("FATAL ERROR: YOUTUBE DOWNLOAD FAILED (all strategies)", flush=True)
+    sys.exit(1)
+open(os.path.join(out, "V.mp4"), "wb").write(b"fetched-by-the-worker")
+print('PROXY_ROUTE={"winner": "HD", "paid_bytes": 0, "attempts": []}', flush=True)
+json.dump({"shorts": [{"title": "a"}], "source_video": "V.mp4"},
+          open(os.path.join(out, "V_metadata.json"), "w"))
+open(os.path.join(out, "V_clip_1.mp4"), "wb").write(b"1" * 70000)
+print("CLIP_READY 0 V_clip_1.mp4", flush=True)
+'''
+
+
+@pytest.mark.parametrize("fetches", [True, False])
+def test_end_to_end_with_a_worker_that_fetches_the_link(api, monkeypatch, tmp_path, fetches):
+    uvicorn = pytest.importorskip("uvicorn")
+    pytest.importorskip("requests")
+    import socket
+    import subprocess
+    import sys
+    import threading
+    m = api
+    m._admitting.add("someone-waiting-for-the-gpu")
+    monkeypatch.setattr(m.source_cache, "has", lambda url: False)
+    job_id, d = _queued(m, cmd=["python", "-u", "main.py", "-u", LINK, "--keep-original",
+                                "-o", "output/x", "--format", "square"])
+    m.jobs[job_id]["env"]["SOURCE_START_SECONDS"] = "45"
+    prepared = []
+
+    async def prepare(jid, cmd, env, tick=None):
+        prepared.append(cmd)                # the retry on this host, if it comes to that
+        return 1
+    monkeypatch.setattr(m, "_run_main", prepare)
+    retried = []
+    monkeypatch.setattr(m, "_schedule_auto_retry", lambda jid, job: retried.append(jid))
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(m.app, host="127.0.0.1", port=port,
+                                           lifespan="off", log_level="error"))
+    threading.Thread(target=server.run, daemon=True).start()
+    host = tmp_path / "workerhost"
+    host.mkdir()
+    (host / "main.py").write_text(STUB_MAIN_LINK)
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env = dict(os.environ, WORKER_API_URL=f"http://127.0.0.1:{port}", WORKER_TOKEN=TOKEN,
+               WORKER_ALLOW_HTTP="1", WORKER_SLOTS="1", WORKER_POLL_SECONDS="0.2",
+               WORKER_SOURCE_ONLY="1", WORKER_DOWNLOADS="1", JOB_NICE="0",
+               GEMINI_API_KEY="the-workers-own-key", YOUTUBE_COOKIES="the-operators-own")
+    if not fetches:
+        env["STUB_CANNOT_FETCH"] = "1"
+    worker = subprocess.Popen([sys.executable, os.path.join(repo, "worker.py")],
+                              cwd=str(host), env=env, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT)
+    try:
+        deadline = time.time() + 40
+        job = m.jobs[job_id]
+        while time.time() < deadline and (job["status"] not in ("completed", "failed")
+                                          or job_id in m._running_jobs):
+            time.sleep(0.2)
+    finally:
+        worker.terminate()
+        out = worker.communicate(timeout=30)[0].decode("utf-8", "replace")
+        server.should_exit = True
+    told = out + "\n" + "\n".join(map(str, job["logs"]))
+    assert prepared == [], told                               # this host fetched nothing
+    assert not rw.is_remote(d) and not m._remote_jobs
+    assert os.listdir(str(host / "output")) == []            # the worker kept nothing
+    if fetches:
+        assert job["status"] == "completed", told
+        # The worker's own account, the stretch's start, and none of this host's routes.
+        assert f"SEEN link={LINK} cookies=the-operators-own start=45 proxy=None" in job["logs"]
+        # What it fetched is here for the editor, next to the clip.
+        assert open(os.path.join(d, "V.mp4"), "rb").read() == b"fetched-by-the-worker"
+        assert open(os.path.join(d, "V_clip_1.mp4"), "rb").read() == b"1" * 70000
+        assert m._remote_breaker["recent"] == [True]
+    else:
+        # Handed back: it runs here next, and says nothing about the worker.
+        assert job["status"] == "failed" and job["remote_failed"], told
+        assert "the source could not be fetched here" in out
+        assert not os.path.exists(os.path.join(d, "V.mp4"))
+        assert m._remote_breaker["recent"] == [] and m._remote_breaker["until"] == 0.0

@@ -39,6 +39,11 @@ MAX_SOURCE_BYTES = int(float(os.environ.get("WORKER_MAX_SOURCE_GB", "20") or 20)
 # transcribes and finds the scenes itself sooner than that host, busy with its
 # own jobs, can prepare them for it.
 SOURCE_ONLY = os.environ.get("WORKER_SOURCE_ONLY", "").strip() == "1"
+# A worker whose operator gave it video-site accounts of its own
+# (``YOUTUBE_COOKIES``.. in its environment) fetches a job's link itself: the
+# API host then neither downloads the source nor sends it over. What it
+# fetches goes back with the clips, for the editor on that host.
+DOWNLOADS = os.environ.get("WORKER_DOWNLOADS", "").strip() == "1"
 
 _stop = threading.Event()
 
@@ -112,16 +117,19 @@ def claim_body():
     body = {"worker": NAME}
     if SOURCE_ONLY:
         body["source_only"] = True
+    if DOWNLOADS:
+        body["downloads"] = True
     return body
 
 
-def job_env(options):
+def job_env(options, link=False):
     """This worker's environment plus the job's settings, from the same
     closed list of names the API sends (``remote_worker.allowed_option``):
-    never a path, an endpoint or a credential."""
+    never a path, an endpoint or a credential. ``link``: this worker fetches
+    the source, so the settings of the fetch are taken too."""
     env = dict(os.environ)
     for name, value in (options or {}).items():
-        if remote_worker.allowed_option(name, value):
+        if remote_worker.allowed_option(name, value, link=link):
             env[name] = str(value)
     for name in ("WORKER_TOKEN", "WORKER_API_URL"):
         env.pop(name, None)       # main.py has no use for them
@@ -283,33 +291,50 @@ def run_job(job_id, claim):
                 raise RuntimeError("the source never became ready")
             time.sleep(3)
 
-        source = safe_job_path(job_id, info.get("source"))
-        if source is None:
-            raise RuntimeError("source path refused")
-        os.makedirs(out_dir, exist_ok=True)
-        if int(info.get("source_size") or 0) > MAX_SOURCE_BYTES:
-            raise RuntimeError("source too large for this worker")
         args = remote_worker.safe_args(info.get("args"))
         if args is None:
             raise RuntimeError("arguments refused")
-        fetch_source(job_id, claim, source, info.get("source_size"))
-        prepared = bool(info.get("transcript_size")) and fetch_transcript(job_id, claim, out_dir)
-        scenes = bool(info.get("scenes_size")) and fetch_scenes(job_id, claim, out_dir)
-        cmd = [sys.executable, "-u", "main.py", "-i", source, "-o", out_dir] + args
-        log(f"{job_id}: rendering ({os.path.getsize(source) >> 20} MB source"
-            f"{', transcript prepared' if prepared else ''}"
-            f"{', scenes prepared' if scenes else ''})")
+        link = None
+        if info.get("link"):
+            # Only a worker that asked to download is ever sent a link, and
+            # only one of the closed list of sites.
+            link = remote_worker.safe_link(info.get("link")) if DOWNLOADS else None
+            if link is None:
+                raise RuntimeError("link refused")
+            os.makedirs(out_dir, exist_ok=True)
+            # The source stays next to the clips and is sent back with them.
+            cmd = [sys.executable, "-u", "main.py", "-u", link, "-o", out_dir,
+                   "--keep-original"] + args
+            log(f"{job_id}: fetching the source and rendering")
+        else:
+            source = safe_job_path(job_id, info.get("source"))
+            if source is None:
+                raise RuntimeError("source path refused")
+            os.makedirs(out_dir, exist_ok=True)
+            if int(info.get("source_size") or 0) > MAX_SOURCE_BYTES:
+                raise RuntimeError("source too large for this worker")
+            fetch_source(job_id, claim, source, info.get("source_size"))
+            prepared = bool(info.get("transcript_size")) and fetch_transcript(job_id, claim, out_dir)
+            scenes = bool(info.get("scenes_size")) and fetch_scenes(job_id, claim, out_dir)
+            cmd = [sys.executable, "-u", "main.py", "-i", source, "-o", out_dir] + args
+            log(f"{job_id}: rendering ({os.path.getsize(source) >> 20} MB source"
+                f"{', transcript prepared' if prepared else ''}"
+                f"{', scenes prepared' if scenes else ''})")
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                env=job_env(info.get("env")), cwd=os.getcwd(),
+                                env=job_env(info.get("env"), link=link is not None),
+                                cwd=os.getcwd(),
                                 preexec_fn=(lambda: os.nice(NICE)) if NICE else None)
-        uploader = Uploader(job_id, claim, out_dir, skip=[source])
+        uploader = Uploader(job_id, claim, out_dir, skip=[source] if source else [])
         pending, lock = [], threading.Lock()
+        fetched = threading.Event()      # main.py has the source on disk
 
         def reader():
             for raw in iter(proc.stdout.readline, b""):
                 line = raw.decode("utf-8", "replace").rstrip()
                 if not line:
                     continue
+                if line.startswith("PROXY_ROUTE="):
+                    fetched.set()        # printed once the download is over
                 if line.startswith("CLIP_READY "):
                     # The API serves a clip as soon as it hears this line: the
                     # file and the metadata that lists it go first.
@@ -350,11 +375,17 @@ def run_job(job_id, claim):
             flush()                          # also the heartbeat
             time.sleep(3)
         t.join(30)
-        uploader.send_all()
+        # A link this worker could not fetch (its accounts are limited, the
+        # video needs another route) is no failure of the worker: the API
+        # host is told so and runs the job with its own routes.
+        no_source = bool(link) and proc.returncode != 0 and not fetched.is_set()
+        if not no_source:
+            uploader.send_all()
         flush()
         _call("POST", f"/internal/worker/jobs/{job_id}/done", claim,
-              json={"returncode": int(proc.returncode)})
-        log(f"{job_id}: done (exit {proc.returncode})")
+              json={"returncode": int(proc.returncode), "no_source": no_source})
+        log(f"{job_id}: " + ("the source could not be fetched here, handed back"
+                             if no_source else f"done (exit {proc.returncode})"))
     except Gone:
         log(f"{job_id}: no longer ours, dropped")
     except Exception as e:
@@ -387,7 +418,8 @@ def main():
         sys.exit("WORKER_API_URL must be https")
     signal.signal(signal.SIGTERM, lambda *_: _stop.set())
     signal.signal(signal.SIGINT, lambda *_: _stop.set())
-    log(f"{NAME}: {SLOTS} slot(s){', source only' if SOURCE_ONLY else ''}, API {API}")
+    log(f"{NAME}: {SLOTS} slot(s){', source only' if SOURCE_ONLY else ''}"
+        f"{', fetches links itself' if DOWNLOADS else ''}, API {API}")
     running = []
     while not _stop.is_set():
         running = [t for t in running if t.is_alive()]

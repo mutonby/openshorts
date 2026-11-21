@@ -36,6 +36,7 @@ import layout_ranges
 import watermarked
 import media_auth
 import remote_worker
+import source_cache
 import yt_account
 import api_role as _api_role
 from jsonfile import write_json_atomic
@@ -5253,10 +5254,11 @@ def _remote_eligible(job_id, priority) -> bool:
     return os.path.exists(_manifest_path(job_id))
 
 
-def _claim_remote_job(worker, source_only=False):
+def _claim_remote_job(worker, source_only=False, downloads=False):
     """Hand the next eligible queued job to the remote worker, or None.
     ``(job_id, claim)``. Loop thread only: it edits the heap.
     ``source_only``: the worker wants the source alone (it has its own card).
+    ``downloads``: it fetches a video link itself (``_worker_link``).
 
     Only while a job is already waiting for a GPU slot: with room on the card
     the job runs here, where it is faster."""
@@ -5294,19 +5296,39 @@ def _claim_remote_job(worker, source_only=False):
         _remote_jobs.add(job_id)
         job['run_started'] = time.time()
         _touch_manifest(job_id, started=True)
-        claim = remote_worker.begin(job['output_dir'], worker, source_only=source_only)
+        claim = remote_worker.begin(job['output_dir'], worker, source_only=source_only,
+                                    downloads=downloads)
         print(f"🛰️ Job {job_id} goes to the remote worker {str(worker)[:40]!r}.")
         asyncio.create_task(run_job_wrapper(job_id))
         return job_id, claim
     return None
 
 
+def _worker_link(output_dir, cmd, env):
+    """The link the worker that claimed the job fetches on its own, or None
+    when this host prepares the source as usual: the worker did not ask to
+    download, the job is not a link of a site on the closed list, or a whole
+    copy is already in the download cache here (sending that costs no
+    request of anybody's account)."""
+    if not remote_worker.downloads(output_dir):
+        return None
+    link = remote_worker.link_of(cmd)
+    if link is None:
+        return None
+    capped = any(str(env.get(name) or "").strip() not in ("", "0")
+                 for name in ("MAX_SOURCE_MINUTES", "SOURCE_CAP_MINUTES"))
+    if not capped and source_cache.has(link):
+        return None
+    return link
+
+
 async def _run_job_remote(job_id, job_data):
     """A job whose main.py runs on the remote worker. This host fetches the
-    source (download and cut, ``main.py --prepare-only``: the worker has no
-    proxy or cookie), publishes the command, then follows the files the worker
-    sends into the job dir exactly as it follows a subprocess. A worker that
-    goes quiet fails the job as a transient error, so it is retried here."""
+    source (download and cut, ``main.py --prepare-only``) unless the worker
+    fetches the link itself (``_worker_link``), publishes the command, then
+    follows the files the worker sends into the job dir exactly as it follows
+    a subprocess. A worker that goes quiet fails the job as a transient error,
+    so it is retried here."""
     cmd = list(job_data['cmd'])
     output_dir = job_data['output_dir']
     jobs[job_id]['status'] = 'processing'
@@ -5324,12 +5346,18 @@ async def _run_job_remote(job_id, job_data):
             # faster than it can wait for this host to do it for it.
             env.update(remote_worker.source_only_env(env))
         jobs[job_id].pop('remote_source', None)
-        returncode = await _run_main(job_id, cmd + ["--prepare-only"], env)
-        source = jobs[job_id].get('remote_source')
-        if returncode != 0 or not source or parsed is None:
-            _finish_job(job_id, returncode or 1, output_dir)
-            return
-        options = remote_worker.job_options(job_data['env'], os.environ)
+        link = _worker_link(output_dir, cmd, job_data['env'])
+        source = None
+        if link is None:
+            returncode = await _run_main(job_id, cmd + ["--prepare-only"], env)
+            source = jobs[job_id].get('remote_source')
+            if returncode != 0 or not source or parsed is None:
+                _finish_job(job_id, returncode or 1, output_dir)
+                return
+        else:
+            print(f"🛰️ Job {job_id}: the worker fetches the source itself.")
+        options = remote_worker.job_options(job_data['env'], os.environ,
+                                            link=link is not None)
         # The worker encodes the hooked-only picture itself: the lazy path
         # leaves an encode recipe next to the clip, and a recipe is something
         # this host runs later, so it never comes from another machine.
@@ -5339,7 +5367,10 @@ async def _run_job_remote(job_id, job_data):
             # the worker can send anything, so /videos refuses the clean
             # deliverables from the first file on.
             watermarked.mark_job(output_dir)
-        if not remote_worker.set_ready(output_dir, source, parsed[1], options):
+        ready = (remote_worker.set_ready_link(output_dir, link, parsed[1], options)
+                 if link is not None
+                 else remote_worker.set_ready(output_dir, source, parsed[1], options))
+        if not ready:
             jobs[job_id]['status'] = 'failed'
             jobs[job_id]['logs'].append(REMOTE_LOST_LOG)
             return
@@ -5378,7 +5409,7 @@ async def _run_job_remote(job_id, job_data):
             # for it have no reader left (a failed run keeps them for the retry
             # here).
             remote_worker.drop_transcript(output_dir)
-        if (returncode == 0 and remote_worker.source_is_url(cmd)
+        if (returncode == 0 and source and remote_worker.source_is_url(cmd)
                 and "--keep-original" not in cmd):
             with suppress(OSError):
                 os.remove(source)
@@ -5491,7 +5522,8 @@ async def worker_claim(request: Request):
     _worker_auth(request)
     body = await _worker_body(request)
     claimed = _claim_remote_job(str(body.get("worker") or "worker"),
-                                source_only=body.get("source_only") is True)
+                                source_only=body.get("source_only") is True,
+                                downloads=body.get("downloads") is True)
     if claimed is None:
         return JSONResponse({"job_id": None})
     return {"job_id": claimed[0], "claim": claimed[1]}
@@ -5503,11 +5535,14 @@ async def worker_job(job_id: str, request: Request):
     remote_worker.touch_seen(job_dir)
     if data.get("state") != remote_worker.READY:
         return {"state": remote_worker.PREPARING}
-    return {"state": remote_worker.READY, "source": data.get("source"),
+    info = {"state": remote_worker.READY, "source": data.get("source"),
             "source_size": data.get("source_size"), "args": data.get("args") or [],
             "env": data.get("env") or {},
             "transcript_size": int(data.get("transcript_size") or 0),
             "scenes_size": int(data.get("scenes_size") or 0)}
+    if data.get("link"):
+        info["link"] = data["link"]      # the worker fetches the source itself
+    return info
 
 
 @app.get("/internal/worker/jobs/{job_id}/transcript")
@@ -5667,13 +5702,16 @@ async def worker_done(job_id: str, request: Request):
             raise HTTPException(status_code=409, detail="The job is not rendering yet.")
         raise HTTPException(status_code=400, detail="returncode required")
     stopping = returncode != 0 and body.get("stopping") is True
+    # The worker could not fetch the link it was given: the job runs here,
+    # with this host's routes, and says nothing about the worker.
+    no_source = returncode != 0 and ready and body.get("no_source") is True
     if not ready and not stopping:
         raise HTTPException(status_code=409, detail="The job is not rendering yet.")
     # A worker that is being restarted hands back every job it holds, also
     # the ones whose source this host is still preparing: refused, those
     # stayed claimed by nobody until the lease ran out and each counted as a
     # failure of the worker (a restart parked it for the breaker's 30 min).
-    remote_worker.mark_done(job_dir, returncode, stopping=stopping)
+    remote_worker.mark_done(job_dir, returncode, stopping=stopping, no_source=no_source)
     return {"ok": True}
 
 

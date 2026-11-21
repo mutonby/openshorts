@@ -66,25 +66,33 @@ _OPTION_NAMES = frozenset({
     "WATERMARK", "MAX_SOURCE_MINUTES", "SOURCE_CAP_MINUTES", "HOOK_LAZY",
     "CUT_MAX_FPS"})
 _OPTION_PREFIXES = ("AUTO_", "CLIP_")
+# Only for a worker that fetches the link itself: where the user's stretch
+# starts. A worker that is sent the source gets it already cut, and cutting
+# it a second time at the same offset would cut into the stretch.
+_LINK_OPTION_NAMES = frozenset({"SOURCE_START_SECONDS"})
+# The sites such a worker is ever told to fetch from.
+_LINK_HOSTS = ("youtube.com", "youtu.be", "youtube-nocookie.com")
 _OPTION_VALUE = re.compile(r"^[A-Za-z0-9 _.,:+-]{0,120}$")
 _FORMATS = frozenset({"auto", "vertical", "horizontal", "square"})
 
 
-def allowed_option(name, value=""):
-    """Whether ``name=value`` is a job setting that may cross between hosts."""
+def allowed_option(name, value="", link=False):
+    """Whether ``name=value`` is a job setting that may cross between hosts.
+    ``link``: the worker fetches the source itself (``_LINK_OPTION_NAMES``)."""
     if not isinstance(name, str) or not re.match(r"^[A-Z][A-Z0-9_]{0,63}$", name):
         return False
-    if name not in _OPTION_NAMES and not name.startswith(_OPTION_PREFIXES):
+    if (name not in _OPTION_NAMES and not name.startswith(_OPTION_PREFIXES)
+            and not (link and name in _LINK_OPTION_NAMES)):
         return False
     return bool(_OPTION_VALUE.match(str(value)))
 
 
-def job_options(job_env, base_env):
+def job_options(job_env, base_env, link=False):
     """The per-job settings of ``job_env`` the worker needs: the allowed
     names whose value differs from this process's own environment."""
     out = {}
     for name, value in (job_env or {}).items():
-        if not allowed_option(name, value):
+        if not allowed_option(name, value, link=link):
             continue
         if (base_env or {}).get(name) == value:
             continue
@@ -132,6 +140,35 @@ def safe_args(args):
     if len(args) == 2 and args[0] == "--format" and args[1] in _FORMATS:
         return args
     return None
+
+
+def safe_link(url):
+    """``url`` if it is a link a worker may fetch on its own: a plain https
+    address of a video site on the closed list, else None. Checked by the
+    host that hands it out and again by the worker that receives it."""
+    if not isinstance(url, str) or not 0 < len(url) <= 2048:
+        return None
+    if any(c.isspace() or ord(c) < 0x21 or ord(c) == 0x7f for c in url):
+        return None
+    try:
+        from urllib.parse import urlsplit
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+    except ValueError:
+        return None
+    if parts.scheme != "https" or parts.username or parts.password or parts.port:
+        return None
+    if not any(host == h or host.endswith("." + h) for h in _LINK_HOSTS):
+        return None
+    return url
+
+
+def link_of(cmd):
+    """The link of a URL job when a worker may fetch it itself, else None."""
+    parsed = worker_args(cmd)
+    if parsed is None or not source_is_url(cmd):
+        return None
+    return safe_link(parsed[0])
 
 
 def source_is_url(cmd):
@@ -194,17 +231,25 @@ def _inside(job_dir, rel):
 
 # --- The claim --------------------------------------------------------------
 
-def begin(job_dir, worker, source_only=False):
+def begin(job_dir, worker, source_only=False, downloads=False):
     """Claim the job for ``worker``: a fresh claim id, state ``preparing``.
     ``source_only``: the worker asked for the source alone (it has a card of
-    its own), so this host prepares no transcript and no scenes for it."""
+    its own), so this host prepares no transcript and no scenes for it.
+    ``downloads``: the worker fetches a video link itself, with the accounts
+    its operator gave it, when this host has no copy to send."""
     clear(job_dir)
     claim = secrets.token_hex(16)
     write_json_atomic(os.path.join(job_dir, CLAIM_FILE), {
         "claim": claim, "worker": str(worker or "")[:64], "state": PREPARING,
-        "source_only": source_only is True, "claimed_at": time.time()})
+        "source_only": source_only is True, "downloads": downloads is True,
+        "claimed_at": time.time()})
     touch_seen(job_dir)
     return claim
+
+
+def downloads(job_dir):
+    """Whether the worker that holds the job fetches links itself."""
+    return (read(job_dir) or {}).get("downloads") is True
 
 
 def source_only(job_dir):
@@ -260,6 +305,18 @@ def set_ready(job_dir, source, rest, options):
     data.update(state=READY, source=source, source_size=size,
                 transcript_size=os.path.getsize(transcript) if transcript else 0,
                 scenes_size=os.path.getsize(scenes) if scenes else 0,
+                args=list(rest), env=dict(options), ready_at=time.time())
+    write_json_atomic(os.path.join(job_dir, CLAIM_FILE), data)
+    return True
+
+
+def set_ready_link(job_dir, link, rest, options):
+    """Nothing was fetched here: publish the link the worker fetches."""
+    data = read(job_dir)
+    if data is None or safe_link(link) is None:
+        return False
+    data.update(state=READY, link=link, source="", source_size=0,
+                transcript_size=0, scenes_size=0,
                 args=list(rest), env=dict(options), ready_at=time.time())
     write_json_atomic(os.path.join(job_dir, CLAIM_FILE), data)
     return True
@@ -366,19 +423,23 @@ def read_log(job_dir, offset):
     return [line for line in lines if line], offset + end + 1
 
 
-def mark_done(job_dir, returncode, stopping=False):
+def mark_done(job_dir, returncode, stopping=False, no_source=False):
     """``stopping``: the worker ended the job because it is being stopped or
-    restarted, not because the job failed. Such a job runs again and does not
-    count against the worker (``app._remote_outcome``)."""
+    restarted, not because the job failed. ``no_source``: it could not fetch
+    the link it was given. Either way the job runs again on this host and
+    does not count against the worker (``app._remote_outcome``)."""
     write_json_atomic(os.path.join(job_dir, DONE_FILE),
-                      {"returncode": int(returncode), "stopping": bool(stopping)})
+                      {"returncode": int(returncode), "stopping": bool(stopping),
+                       "no_source": bool(no_source)})
     touch_seen(job_dir)
 
 
 def read_stopping(job_dir) -> bool:
+    """The job came back without saying anything about the worker."""
     try:
         with open(os.path.join(job_dir, DONE_FILE)) as f:
-            return json.load(f).get("stopping") is True
+            data = json.load(f)
+        return data.get("stopping") is True or data.get("no_source") is True
     except (OSError, ValueError, AttributeError, TypeError):
         return False
 

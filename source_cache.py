@@ -187,6 +187,17 @@ def _link_or_copy(src, dst):
         shutil.copyfile(src, dst)
 
 
+def has(url) -> bool:
+    """Whether a whole copy of ``url`` is kept right now (no use is counted)."""
+    if not enabled():
+        return False
+    vid = video_id(url)
+    try:
+        return bool(vid) and _entry(vid) is not None
+    except Exception:
+        return False
+
+
 def fetch(url, output_dir):
     """(path in ``output_dir``, title) of a cached copy of ``url``, or None."""
     if not enabled():

@@ -13,7 +13,9 @@ unless the API has `REMOTE_WORKER_TOKEN` and `REMOTE_WORKER_SLOTS` > 0.
 2. The API fetches the source itself, `main.py <the job's command>
    --prepare-only`: download and the cut to the paid minutes, then
    `SOURCE_READY <path>`. The worker has no proxy and no cookie, and a
-   datacenter address that never downloaded before is bot-checked at once.
+   datacenter address that never downloaded before is bot-checked at once
+   (unless its operator gave it accounts: "A worker that fetches the link
+   itself" below).
 3. The worker polls `GET /internal/worker/jobs/{id}` until `ready`, fetches the
    source (`.../source`), and runs `main.py -i <source> -o output/<id>` with
    the job's options, at the same relative paths the API host uses.
@@ -45,6 +47,41 @@ waits for a slot), while its own card sat idle. A transcript the download
 cache already holds for the source still travels: it costs the API host
 nothing. The worker is no more trusted for it: it still holds no download
 credential and gets the source from the API host.
+
+## A worker that fetches the link itself
+
+With every source downloaded on the API host, that host's cores, its link and
+its video-site accounts carry every job, and a worker waits for the file
+longer than it takes to render it. A worker whose operator gave it accounts
+of its own (`YOUTUBE_COOKIES`, `YOUTUBE_COOKIES_2`.. in the worker's
+environment, used through `yt_account` exactly as on the API host, from the
+worker's own address) sets `WORKER_DOWNLOADS=1`:
+
+- Its claim says so (`downloads`, kept in the claim file). For a link of a
+  site on the closed list (`remote_worker.safe_link`, checked again by the
+  worker) the API host runs no `--prepare-only`: the claim goes straight to
+  `ready` with the link (`set_ready_link`, `app._worker_link`). A whole copy
+  already in the API host's download cache is still sent the usual way: it
+  costs nobody's account a request. A cut is never served from that cache,
+  so the worker fetches it.
+- The worker runs `main.py -u <link> -o output/<id> --keep-original`. Where
+  the user's stretch starts (`SOURCE_START_SECONDS`) travels only in this
+  mode: a worker that is sent the source gets it already cut.
+- No credential crosses: the accounts are the operator's, set on that
+  machine, and a name like `YOUTUBE_COOKIES` in a job's options is dropped
+  like any other name off the list.
+- The source it fetched goes back with the clips (an ordinary `.mp4` of the
+  job directory, within the per-file limit), because the editor on the API
+  host works from it. One over the limit is not sent: the job completes and
+  its editor has no source.
+- A link the worker cannot fetch (its accounts are limited, the video needs
+  another route) ends as `done` with `no_source`: the job runs again on the
+  API host with its own routes, and the breaker is not told. The worker
+  knows the source arrived by main.py's own `PROXY_ROUTE=` line.
+
+One account lives on one host: its pacing and its rest are files of that
+host, so an account configured on the worker is not also configured on the
+API host.
 
 ## Which jobs go
 
@@ -162,7 +199,8 @@ short of CPU.
 
 Worker: `WORKER_API_URL` (https), `WORKER_TOKEN`, `WORKER_SLOTS`,
 `GEMINI_API_KEY`, `WORKER_SOURCE_ONLY` (`1` on a worker with a GPU: the source
-alone, see above), plus the pipeline defaults the API host sets for itself
+alone, see above), `WORKER_DOWNLOADS` (`1` with `YOUTUBE_COOKIES`.. of its
+own: it fetches links itself), plus the pipeline defaults the API host sets for itself
 (`AUTO_LAYOUT`, `TRANSCRIBE_BACKEND`, `FFMPEG_THREADS`, `CLIP_WORKERS`...): only
 per-job options travel with a job.
 
