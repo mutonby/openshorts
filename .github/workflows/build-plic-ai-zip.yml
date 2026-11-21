@@ -1,0 +1,41 @@
+name: Build plic.ai ZIP
+
+on:
+  push:
+    branches:
+      - plic-ai-rebuild
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Plic AI
+        uses: actions/checkout@v4
+
+      - name: Build clean source archive
+        shell: bash
+        run: |
+          mkdir -p dist
+          zip -r dist/plic-ai-source.zip . \
+            -x ".git/*" ".github/*" \
+               ".env" ".env.local" ".env.production" \
+               "cloud/*" "cloud/" \
+               "data/*" "output/*" "uploads/*" "logs/*" \
+               "node_modules/*" "*/node_modules/*" \
+               "__pycache__/*" "*/__pycache__/*" \
+               ".venv/*" "venv/*" ".pytest_cache/*" \
+               "*.mp4" "*.mov" "*.mkv" "*.wav" "*.m4a" "*.mp3" \
+               "*.db" "*.sqlite" "*.sqlite3" "*.log" \
+               "dist/*"
+
+      - name: Upload plic.ai ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: plic-ai-source
+          path: dist/plic-ai-source.zip
+          if-no-files-found: error
+          retention-days: 14
