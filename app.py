@@ -9405,7 +9405,7 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
         # The upload is a blocking multipart POST of the whole clip (tens of
         # seconds for TikTok+YouTube). Run inline, it froze the event loop:
         # 23-sep-2026 19:47:48 UTC one post stalled every request, /health
-        # included, for 42 s and the uptime monitor paged "openshorts-api
+        # included, for 42 s and the uptime monitor paged "plic-ai-api
         # down". It runs in a worker thread so the API keeps answering.
         print(f"📡 Sending to Upload-Post for platforms: {req.platforms}")
         response = await asyncio.to_thread(
@@ -10931,7 +10931,7 @@ async def saasshorts_post_to_socials(req: SaaSPostRequest, request: Request):
 # The gallery and the per-video pages are rendered by this API service, but the
 # app they advertise lives on www. A relative href on `api.` host resolves
 # against `api.`, where `/` is not the app (it is a 404), so every link that
-# crosses hosts is written absolute. `www.openshorts.app/gallery` and
+# crosses hosts is written absolute. `plic.ai/gallery` and
 # `/video/...` 301 to the api host (dashboard/nginx.conf), so the api host is
 # the final domain for those two and the app host is final for everything else.
 APP_HOST = os.environ.get("PLIC_PUBLIC_URL", "http://localhost:5175").rstrip("/")
