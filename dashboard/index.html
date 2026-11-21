@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="UTF-8" />
-  <link rel="icon" type="image/png" href="/logo-openshorts.png" />
+  <link rel="icon" type="image/png" href="/plic-logo.svg" />
   <!-- viewport-fit=cover so the bottom tab bar can pad itself past the iOS home
        indicator with env(safe-area-inset-bottom); without it that inset reads 0. -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -21,62 +21,62 @@
   <!-- Title and description are kept under 60 and 160 characters (measured, not
        eyeballed): Google truncates past roughly that width, and a truncated
        description is a worse answer than a shorter deliberate one. -->
-  <title>OpenShorts: Free AI Clip Maker &amp; Clipping Tool, Open Source</title>
+  <title>Plic AI: Free AI Clip Maker &amp; Clipping Tool, Open Source</title>
   <meta name="description" content="Paste a YouTube link and get 9:16 clips with captions in minutes. Free plan, paid from $12/mo, or self-host free under MIT. Open source, no lock-in." />
-  <meta name="author" content="OpenShorts" />
+  <meta name="author" content="Plic AI" />
   <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
   <!-- Canonical must match the host actually served. The apex redirects to www,
        so pointing this at the apex named a URL that only ever redirects. -->
-  <link rel="canonical" href="https://www.openshorts.app/" />
+  <link rel="canonical" href="https://www.plic.ai/" />
 
   <!-- Open Graph / Facebook -->
   <meta property="og:type" content="website" />
-  <meta property="og:url" content="https://www.openshorts.app/" />
+  <meta property="og:url" content="https://www.plic.ai/" />
   <meta property="og:title"
-    content="OpenShorts: Free AI Clip Maker &amp; Clipping Tool, Open Source" />
+    content="Plic AI: Free AI Clip Maker &amp; Clipping Tool, Open Source" />
   <meta property="og:description"
     content="Turn long videos into viral 9:16 shorts, or generate UGC videos with AI actors. Self-host free under MIT, or use the cloud from $12/month with 20 free minutes." />
-  <meta property="og:image" content="https://www.openshorts.app/og-image.png" />
+  <meta property="og:image" content="https://www.plic.ai/og-image.png" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
-  <meta property="og:site_name" content="OpenShorts" />
+  <meta property="og:site_name" content="Plic AI" />
   <meta property="og:locale" content="en_US" />
 
   <!-- Twitter Cards -->
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:url" content="https://www.openshorts.app/" />
+  <meta name="twitter:url" content="https://www.plic.ai/" />
   <meta name="twitter:title"
-    content="OpenShorts: Free AI Clip Maker &amp; Clipping Tool, Open Source" />
+    content="Plic AI: Free AI Clip Maker &amp; Clipping Tool, Open Source" />
   <meta name="twitter:description"
-    content="Self-host free under MIT with no watermark and no cap, or use OpenShorts Cloud from $12/month." />
-  <meta name="twitter:image" content="https://www.openshorts.app/og-image.png" />
+    content="Self-host free under MIT with no watermark and no cap, or use Plic AI Cloud from $12/month." />
+  <meta name="twitter:image" content="https://www.plic.ai/og-image.png" />
 
   <!-- JSON-LD Structured Data
        Two products, described separately and on purpose. The previous graph
        declared a single SoftwareApplication priced at 0, which is true of the
        self-hosted edition and false of the hosted one, so engines summarised the
        whole product as free. SoftwareApplication below is the MIT project;
-       Service is OpenShorts Cloud, with the real price range on it. -->
+       Service is Plic AI Cloud, with the real price range on it. -->
   <script type="application/ld+json">
     {
       "@context": "https://schema.org",
       "@graph": [
         {
           "@type": "WebSite",
-          "@id": "https://www.openshorts.app/#website",
-          "url": "https://www.openshorts.app/",
-          "name": "OpenShorts",
-          "publisher": { "@id": "https://www.openshorts.app/#organization" },
+          "@id": "https://www.plic.ai/#website",
+          "url": "https://www.plic.ai/",
+          "name": "Plic AI",
+          "publisher": { "@id": "https://www.plic.ai/#organization" },
           "inLanguage": "en-US"
         },
         {
           "@type": "WebPage",
-          "@id": "https://www.openshorts.app/#webpage",
-          "name": "OpenShorts: Free AI Clip Maker & Clipping Tool, Open Source",
+          "@id": "https://www.plic.ai/#webpage",
+          "name": "Plic AI: Free AI Clip Maker & Clipping Tool, Open Source",
           "description": "Open source AI clip generator that turns long videos into viral 9:16 clips for TikTok, Instagram Reels and YouTube Shorts. Free and self-hostable under MIT, or hosted from $12/month.",
-          "url": "https://www.openshorts.app/",
-          "isPartOf": { "@id": "https://www.openshorts.app/#website" },
-          "about": { "@id": "https://www.openshorts.app/#software" },
+          "url": "https://www.plic.ai/",
+          "isPartOf": { "@id": "https://www.plic.ai/#website" },
+          "about": { "@id": "https://www.plic.ai/#software" },
           "datePublished": "2024-06-01",
           "dateModified": "2026-10-28",
           "inLanguage": "en-US",
@@ -87,19 +87,19 @@
         },
         {
           "@type": "SoftwareApplication",
-          "@id": "https://www.openshorts.app/#software",
-          "name": "OpenShorts",
-          "alternateName": "OpenShorts self-hosted",
+          "@id": "https://www.plic.ai/#software",
+          "name": "Plic AI",
+          "alternateName": "Plic AI self-hosted",
           "description": "Open source AI clip generator, MIT licensed and self-hosted with Docker. Turns long-form videos into viral-ready 9:16 clips for TikTok, Instagram Reels and YouTube Shorts using Google Gemini 3.1 Flash-Lite for moment detection, faster-whisper for word-level subtitles and MediaPipe for face-tracked reframing. This edition is free with no watermark and no usage cap; you supply your own API keys. The hosted service is priced separately.",
           "applicationCategory": "MultimediaApplication",
           "operatingSystem": "Cross-platform (Docker)",
-          "url": "https://www.openshorts.app/",
-          "downloadUrl": "https://github.com/mutonby/openshorts",
-          "codeRepository": "https://github.com/mutonby/openshorts",
+          "url": "https://www.plic.ai/",
+          "downloadUrl": "https://plic.ai",
+          "codeRepository": "https://plic.ai",
           "license": "https://opensource.org/licenses/MIT",
           "isAccessibleForFree": true,
           "softwareVersion": "2.0",
-          "screenshot": "https://www.openshorts.app/og-image.png",
+          "screenshot": "https://www.plic.ai/og-image.png",
           "featureList": [
             "AI viral moment detection with Google Gemini 3.1 Flash-Lite",
             "Smart 9:16 vertical cropping with MediaPipe face tracking and YOLOv8 fallback",
@@ -123,16 +123,16 @@
             "availability": "https://schema.org/InStock",
             "description": "Self-hosted edition. Free and open source under MIT, no watermark, no usage cap. Requires Docker and your own API keys."
           },
-          "author": { "@id": "https://www.openshorts.app/#organization" }
+          "author": { "@id": "https://www.plic.ai/#organization" }
         },
         {
           "@type": "Service",
-          "@id": "https://www.openshorts.app/#cloud",
-          "name": "OpenShorts Cloud",
+          "@id": "https://www.plic.ai/#cloud",
+          "name": "Plic AI Cloud",
           "serviceType": "Hosted AI video clipping service",
-          "description": "The hosted edition of OpenShorts. Runs the same pipeline on an NVIDIA GPU with the API keys included, so there is nothing to install or configure. The free tier is 20 minutes per month with a watermark and no credit card. Paid plans remove the watermark and start at $12/month for 100 minutes.",
-          "url": "https://www.openshorts.app/",
-          "provider": { "@id": "https://www.openshorts.app/#organization" },
+          "description": "The hosted edition of Plic AI. Runs the same pipeline on an NVIDIA GPU with the API keys included, so there is nothing to install or configure. The free tier is 20 minutes per month with a watermark and no credit card. Paid plans remove the watermark and start at $12/month for 100 minutes.",
+          "url": "https://www.plic.ai/",
+          "provider": { "@id": "https://www.plic.ai/#organization" },
           "areaServed": "Worldwide",
           "offers": {
             "@type": "AggregateOffer",
@@ -169,22 +169,22 @@
         },
         {
           "@type": "FAQPage",
-          "@id": "https://www.openshorts.app/#faq",
+          "@id": "https://www.plic.ai/#faq",
           "mainEntity": [
             {
               "@type": "Question",
-              "name": "What is OpenShorts?",
+              "name": "What is Plic AI?",
               "acceptedAnswer": {
                 "@type": "Answer",
-                "text": "OpenShorts is an open source AI clip generator that turns long videos (podcasts, webinars, livestreams, vlogs, interviews) into viral-ready 9:16 vertical clips for TikTok, Instagram Reels and YouTube Shorts. faster-whisper transcribes the audio with word-level timestamps, PySceneDetect finds the scene boundaries, and Google Gemini 3.1 Flash-Lite scores the transcript to pick the 3 to 15 strongest moments. Each clip is then reframed to vertical with MediaPipe face tracking and subtitled automatically. It comes in two editions: self-hosted, which is free and open source under MIT, and OpenShorts Cloud, which is the hosted service with a free 20 minute per month tier and paid plans from $12 per month."
+                "text": "Plic AI is an open source AI clip generator that turns long videos (podcasts, webinars, livestreams, vlogs, interviews) into viral-ready 9:16 vertical clips for TikTok, Instagram Reels and YouTube Shorts. faster-whisper transcribes the audio with word-level timestamps, PySceneDetect finds the scene boundaries, and Google Gemini 3.1 Flash-Lite scores the transcript to pick the 3 to 15 strongest moments. Each clip is then reframed to vertical with MediaPipe face tracking and subtitled automatically. It comes in two editions: self-hosted, which is free and open source under MIT, and Plic AI Cloud, which is the hosted service with a free 20 minute per month tier and paid plans from $12 per month."
               }
             },
             {
               "@type": "Question",
-              "name": "Is OpenShorts really free?",
+              "name": "Is Plic AI really free?",
               "acceptedAnswer": {
                 "@type": "Answer",
-                "text": "Self-hosting is free under the MIT licence, with no watermark and no cap; OpenShorts Cloud has a free plan (your first video up to 60 minutes, then 20 minutes a month, watermarked) and paid plans from $12/month. Both are true of different editions, so the distinction matters. OpenShorts self-hosted is free and open source under the MIT licence: you run it with Docker on your own machine, bring your own API keys, and there is no watermark, no usage cap and no subscription. What it costs you is hardware and time, because on a typical CPU an 8-minute video takes 5 to 8 minutes to process, and you need your own Google Gemini API key, whose free tier covers 1,500 requests per day. OpenShorts Cloud is the hosted service: an NVIDIA GPU clips that same 8-minute video in about 50 seconds, the API keys are included, and auto-posting to TikTok, Instagram and YouTube is already wired up. Cloud has a free plan of 20 minutes per month with a watermark and no credit card, and paid plans from $12 per month for 100 minutes with no watermark, up to $59 per month. So it is free if you run it yourself, and paid above 20 minutes a month if you want it hosted."
+                "text": "Self-hosting is free under the MIT licence, with no watermark and no cap; Plic AI Cloud has a free plan (your first video up to 60 minutes, then 20 minutes a month, watermarked) and paid plans from $12/month. Both are true of different editions, so the distinction matters. Plic AI self-hosted is free and open source under the MIT licence: you run it with Docker on your own machine, bring your own API keys, and there is no watermark, no usage cap and no subscription. What it costs you is hardware and time, because on a typical CPU an 8-minute video takes 5 to 8 minutes to process, and you need your own Google Gemini API key, whose free tier covers 1,500 requests per day. Plic AI Cloud is the hosted service: an NVIDIA GPU clips that same 8-minute video in about 50 seconds, the API keys are included, and auto-posting to TikTok, Instagram and YouTube is already wired up. Cloud has a free plan of 20 minutes per month with a watermark and no credit card, and paid plans from $12 per month for 100 minutes with no watermark, up to $59 per month. So it is free if you run it yourself, and paid above 20 minutes a month if you want it hosted."
               }
             },
             {
@@ -192,7 +192,7 @@
               "name": "Do the clips have a watermark?",
               "acceptedAnswer": {
                 "@type": "Answer",
-                "text": "Only on the free Cloud plan. Clips made on the free plan of OpenShorts Cloud carry a small watermark; every paid plan, from $12/month, has none, and upgrading removes the mark from the clips you already made. The self-hosted edition, free under MIT, never adds one."
+                "text": "Only on the free Cloud plan. Clips made on the free plan of Plic AI Cloud carry a small watermark; every paid plan, from $12/month, has none, and upgrading removes the mark from the clips you already made. The self-hosted edition, free under MIT, never adds one."
               }
             },
             {
@@ -200,7 +200,7 @@
               "name": "Do I need a credit card to start?",
               "acceptedAnswer": {
                 "@type": "Answer",
-                "text": "No. The free plan of OpenShorts Cloud needs no credit card: your first video is clipped free up to 60 minutes, then you get 20 free minutes every month, with a watermark. You only add a card if you choose a paid plan, from $12/month."
+                "text": "No. The free plan of Plic AI Cloud needs no credit card: your first video is clipped free up to 60 minutes, then you get 20 free minutes every month, with a watermark. You only add a card if you choose a paid plan, from $12/month."
               }
             },
             {
@@ -216,20 +216,20 @@
               "name": "Can I clip someone else's YouTube video?",
               "acceptedAnswer": {
                 "@type": "Answer",
-                "text": "Only if you own it or have the rights or permission to use it. Before a video is processed, OpenShorts asks you to confirm you own the content or have the rights to it, and you are responsible for what you submit. Fair use depends on the country and on how the clip is used, so it is never guaranteed; reuploading someone else's video without permission is copyright infringement, and platforms remove it and strike the account. Clip your own videos, channels you manage, or footage you have licensed."
+                "text": "Only if you own it or have the rights or permission to use it. Before a video is processed, Plic AI asks you to confirm you own the content or have the rights to it, and you are responsible for what you submit. Fair use depends on the country and on how the clip is used, so it is never guaranteed; reuploading someone else's video without permission is copyright infringement, and platforms remove it and strike the account. Clip your own videos, channels you manage, or footage you have licensed."
               }
             },
             {
               "@type": "Question",
-              "name": "How much does OpenShorts Cloud cost?",
+              "name": "How much does Plic AI Cloud cost?",
               "acceptedAnswer": {
                 "@type": "Answer",
-                "text": "OpenShorts Cloud has a permanently free tier of 20 minutes of video per month, watermarked, with no credit card required. Paid plans remove the watermark and start at $12 per month for 100 minutes, rising to $59 per month at the top tier. This is separate from the self-hosted edition, which is free under MIT and has no cap because there is no metering in it."
+                "text": "Plic AI Cloud has a permanently free tier of 20 minutes of video per month, watermarked, with no credit card required. Paid plans remove the watermark and start at $12 per month for 100 minutes, rising to $59 per month at the top tier. This is separate from the self-hosted edition, which is free under MIT and has no cap because there is no metering in it."
               }
             },
             {
               "@type": "Question",
-              "name": "How does OpenShorts detect viral moments in videos?",
+              "name": "How does Plic AI detect viral moments in videos?",
               "acceptedAnswer": {
                 "@type": "Answer",
                 "text": "It uses a multi-step pipeline. faster-whisper transcribes the video with word-level timestamps. PySceneDetect identifies the scene boundaries. Google Gemini 3.1 Flash-Lite then receives the timestamped transcript and the scene data together, and returns the 3 to 15 strongest segments of 15 to 60 seconds each, scored on hook strength, emotional payload and whether the segment stands alone without its surrounding context. Passing the transcript and the scene boundaries together is what stops a clip from starting mid-shot."
@@ -248,20 +248,20 @@
               "name": "Is there a free alternative to Opus Clip?",
               "acceptedAnswer": {
                 "@type": "Answer",
-                "text": "Yes. OpenShorts self-hosted is a free and open source alternative to Opus Clip, MIT licensed, with no watermark and no usage cap, running on your own machine via Docker. As of July 2026 Opus Clip costs $15 per month for the Starter plan with 150 minutes, and $29 per month for Pro with 300 minutes, on top of a watermarked free tier of 60 minutes. Opus Clip bills one credit per minute of source video imported rather than per clip exported. OpenShorts offers comparable AI moment detection using Google Gemini, face-tracked vertical cropping and automatic subtitles, and adds AI voice dubbing into 30+ languages, which Opus Clip does not have. Opus Clip ships a larger caption-style library and needs no setup."
+                "text": "Yes. Plic AI self-hosted is a free and open source alternative to Opus Clip, MIT licensed, with no watermark and no usage cap, running on your own machine via Docker. As of July 2026 Opus Clip costs $15 per month for the Starter plan with 150 minutes, and $29 per month for Pro with 300 minutes, on top of a watermarked free tier of 60 minutes. Opus Clip bills one credit per minute of source video imported rather than per clip exported. Plic AI offers comparable AI moment detection using Google Gemini, face-tracked vertical cropping and automatic subtitles, and adds AI voice dubbing into 30+ languages, which Opus Clip does not have. Opus Clip ships a larger caption-style library and needs no setup."
               }
             },
             {
               "@type": "Question",
-              "name": "How does OpenShorts compare to Opus Clip?",
+              "name": "How does Plic AI compare to Opus Clip?",
               "acceptedAnswer": {
                 "@type": "Answer",
-                "text": "Both do AI viral moment detection and smart vertical cropping. OpenShorts is MIT-licensed and can be self-hosted, so the source video never leaves your machine, and it adds voice dubbing into 30+ languages (with your own ElevenLabs key) plus an AI UGC generator with lip-synced actors. Opus Clip is closed source and cloud only, starting at $15/month as of October 2026, and it ships a larger caption-style library. OpenShorts Cloud starts at $12/month, and self-hosting is free. Full comparison at /alternatives/opus-clip."
+                "text": "Both do AI viral moment detection and smart vertical cropping. Plic AI is MIT-licensed and can be self-hosted, so the source video never leaves your machine, and it adds voice dubbing into 30+ languages (with your own ElevenLabs key) plus an AI UGC generator with lip-synced actors. Opus Clip is closed source and cloud only, starting at $15/month as of October 2026, and it ships a larger caption-style library. Plic AI Cloud starts at $12/month, and self-hosting is free. Full comparison at /alternatives/opus-clip."
               }
             },
             {
               "@type": "Question",
-              "name": "Can OpenShorts add subtitles and translate videos?",
+              "name": "Can Plic AI add subtitles and translate videos?",
               "acceptedAnswer": {
                 "@type": "Answer",
                 "text": "Yes. Subtitles are generated with faster-whisper at word-level timestamps and burned into the video with FFmpeg. For translation, ElevenLabs AI dubbing (with your own ElevenLabs API key) translates the audio into more than 30 languages while preserving the original speaker's voice characteristics, and the dubbed audio is then automatically re-transcribed so the burned-in subtitles are in the target language rather than the original."
@@ -272,23 +272,23 @@
               "name": "Is there an open source clip generator?",
               "acceptedAnswer": {
                 "@type": "Answer",
-                "text": "OpenShorts is the open source option in this category, MIT licensed with full source at github.com/mutonby/openshorts, self-hosted with Docker Compose. Opus Clip, Klap, Vizard and Submagic are all closed-source cloud products; as of July 2026 their entry prices are $15, $29, $19.99 and around $14 per month respectively. Self-hosting means the source video never leaves your machine and you can change how the pipeline behaves rather than filing a feature request."
+                "text": "Plic AI is the open source option in this category, MIT licensed with full source at plic.ai, self-hosted with Docker Compose. Opus Clip, Klap, Vizard and Submagic are all closed-source cloud products; as of July 2026 their entry prices are $15, $29, $19.99 and around $14 per month respectively. Self-hosting means the source video never leaves your machine and you can change how the pipeline behaves rather than filing a feature request."
               }
             }
           ]
         },
         {
           "@type": "Organization",
-          "@id": "https://www.openshorts.app/#organization",
-          "name": "OpenShorts",
-          "url": "https://www.openshorts.app/",
+          "@id": "https://www.plic.ai/#organization",
+          "name": "Plic AI",
+          "url": "https://www.plic.ai/",
           "logo": {
             "@type": "ImageObject",
-            "url": "https://www.openshorts.app/logo-openshorts.png"
+            "url": "https://www.plic.ai/plic-logo.svg"
           },
-          "description": "OpenShorts builds an open source AI clip generator that turns long-form video into vertical short-form clips, available both as MIT-licensed self-hosted software and as a hosted service.",
+          "description": "Plic AI builds an open source AI clip generator that turns long-form video into vertical short-form clips, available both as MIT-licensed self-hosted software and as a hosted service.",
           "sameAs": [
-            "https://github.com/mutonby/openshorts",
+            "https://plic.ai",
             "https://www.aitoolnet.com/openshorts",
             "https://creatorstoolbox.com/tools/openshorts"
           ]
