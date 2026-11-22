@@ -190,7 +190,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                 setRenderedSegments(data.segments.map((s) => ({ ...s })));
                 setFraming(data.framing || 'auto');
                 setRenderedFraming(data.framing || 'auto');
-                setReapplyCaptions(true);
+                setReapplyCaptions(!!data.has_captions);
                 setPreviewUrl(getApiUrl(`/videos/${jobId}/${data.current_file}`));
             } catch (e) {
                 if (!cancelled) setLoadError(e.detail || e.message || 'could not load the clip recipe');

@@ -113,6 +113,8 @@ class TestReframeValidation:
 
 class TestReframeRender:
     def test_renders_from_source_with_overrides_and_captions(self, job, fake_recut):
+        app_module.jobs[JOB_ID]["result"]["clips"] = [
+            {"video_url": f"/videos/{JOB_ID}/subtitled_1_mytitle_clip_1.mp4"}]
         resp = _request("POST", "/api/clip/reframe", {
             "job_id": JOB_ID, "clip_index": 0,
             "crop_overrides": {"0": 0.2, "1": {"top": 0.6, "bottom": {"x": 0.3, "y": 0.4}}}})

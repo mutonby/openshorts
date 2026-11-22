@@ -301,7 +301,7 @@ TOOLS = [
                 },
                 "reapply_captions": {
                     "type": "boolean",
-                    "description": "Burn default captions back on after the recut (default true).",
+                    "description": "Burn captions back on after the recut (default: only if the clip has them now).",
                 },
                 "framing": {
                     "type": "string", "enum": ["auto", "full", "track"],
