@@ -6143,6 +6143,7 @@ async def process_endpoint(
     target_clips: Optional[str] = Form(None),
     clip_min_seconds: Optional[str] = Form(None),
     clip_max_seconds: Optional[str] = Form(None),
+    audience: Optional[str] = Form(None),
     auto_hook: Optional[str] = Form(None),
     auto_hook_style: Optional[str] = Form(None),
     thumbnail_session_id: Optional[str] = Form(None),
@@ -6177,6 +6178,7 @@ async def process_endpoint(
         target_clips = body.get("target_clips")
         clip_min_seconds = body.get("clip_min_seconds")
         clip_max_seconds = body.get("clip_max_seconds")
+        audience = body.get("audience")
         auto_hook = body.get("auto_hook")
         auto_hook_style = body.get("auto_hook_style")
         thumbnail_session_id = body.get("thumbnail_session_id")
@@ -6328,6 +6330,13 @@ async def process_endpoint(
         env["CLIP_MAX_SECONDS"] = str(max_secs)
     if n_clips is not None or min_secs is not None or max_secs is not None:
         print(f"[gen-controls] job={job_id} clips={n_clips} band={min_secs}-{max_secs}")
+
+    audience_mode = str(audience or "").strip().lower()
+    if audience_mode and audience_mode not in ("kids", "general"):
+        raise HTTPException(status_code=400, detail="audience must be kids or general")
+    if audience_mode == "kids":
+        env["AUDIENCE_MODE"] = "kids"
+        print(f"[audience] job={job_id} mode=kids")
 
     # captions=false: the source already carries burned-in subtitles (or the
     # caller adds its own later), so skip the free auto-caption pass instead

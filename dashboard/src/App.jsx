@@ -1283,6 +1283,7 @@ function App() {
         target_clips: data.targetClips || null,
         clip_min_seconds: data.clipMinSeconds || null,
         clip_max_seconds: data.clipMaxSeconds || null,
+        audience: data.audience && data.audience !== 'general' ? data.audience : null,
         // Sent explicitly both ways: absent means off for raw API callers,
         // but the dashboard always states the user's choice.
         auto_hook: data.autoHook ? '1' : '0',

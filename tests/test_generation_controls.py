@@ -49,7 +49,7 @@ def _templates():
     """The prompt template constants, read without importing gemini_worker
     (which pulls google-genai — absent in the thin CI env)."""
     mod = ast.parse(open(os.path.join(os.path.dirname(__file__), "..",
-                                      "gemini_worker.py")).read())
+                                      "gemini_worker.py"), encoding="utf-8").read())
     return {
         node.targets[0].id: node.value.value
         for node in mod.body
