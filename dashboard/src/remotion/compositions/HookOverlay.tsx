@@ -33,6 +33,8 @@ const POSITION_STYLE: Record<string, React.CSSProperties> = {
   bottom: { top: "70%", bottom: "auto" },
 };
 
+const RTL_CHARS = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
+
 // Must mirror hooks.py HOOK_STYLES (the server-side FFmpeg fallback).
 interface HookLook {
   box: string | null;
@@ -153,6 +155,7 @@ const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames }) => {
             transform: `scale(${animScale}) translateY(${animTranslateY}px)`,
             maxWidth: "90%",
             textAlign: "center",
+            direction: RTL_CHARS.test(config.text) ? "rtl" : "ltr",
             lineHeight: 1.62,
           }}
         >
@@ -198,6 +201,7 @@ const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames }) => {
           padding: look.box ? `${25 * scale}px ${30 * scale}px` : 0,
           boxShadow: look.shadow ? "5px 5px 15px rgba(0, 0, 0, 0.25)" : "none",
           textAlign: "center",
+          direction: RTL_CHARS.test(config.text) ? "rtl" : "ltr",
         }}
       >
         <span

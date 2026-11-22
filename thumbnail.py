@@ -8,6 +8,8 @@ from google import genai
 from google.genai import types
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
+import rtl_text
+
 # Text/analysis model (titles, concepts, description). Deliberately NOT tied to
 # GEMINI_MODEL: the pipeline runs flash-lite for a closed-choice layout pick,
 # but titles are the one place where the creative gap between lite and flash
@@ -441,12 +443,12 @@ def normalise_concepts(concepts, count, title, thumbnail_text_hint=""):
     return cleaned[:count]
 
 
-def _wrap_lines(draw, text, font, max_width):
+def _wrap_lines(draw, text, font, max_width, **opts):
     words = text.split()
     lines, cur = [], []
     for w in words:
         test = " ".join(cur + [w])
-        if draw.textlength(test, font=font) <= max_width or not cur:
+        if draw.textlength(test, font=font, **opts) <= max_width or not cur:
             cur.append(w)
         else:
             lines.append(" ".join(cur))
@@ -475,12 +477,14 @@ def burn_thumbnail_text(img, text, position="left", color="white"):
     draw = ImageDraw.Draw(img)
     size = int(H * 0.30)
     while True:
-        font = ImageFont.truetype(THUMB_FONT, size)
-        lines = _wrap_lines(draw, text, font, box_w)
+        arabic = rtl_text.is_arabic(text)
+        opts = rtl_text.layout_opts() if arabic else {}
+        font = ImageFont.truetype(rtl_text.ARABIC_FONT_PATH if arabic else THUMB_FONT, size)
+        lines = _wrap_lines(draw, text, font, box_w, **opts)
         # Anton's accents sit above the cap height: 1.15 keeps a tilde on
         # line 2 off the baseline of line 1.
-        line_h = int(size * 1.15)
-        widest = max(draw.textlength(l, font=font) for l in lines)
+        line_h = int(size * (1.5 if arabic else 1.15))
+        widest = max(draw.textlength(l, font=font, **opts) for l in lines)
         if (len(lines) <= 3 and widest <= box_w and line_h * len(lines) <= box_h) or size <= 24:
             break
         size = int(size * 0.92)
@@ -488,7 +492,7 @@ def burn_thumbnail_text(img, text, position="left", color="white"):
     total_h = line_h * len(lines)
     # PIL draws from the ascender line; shift so the block is measured from the
     # tallest glyph actually present (caps sit lower than accents).
-    top_pad = min(font.getbbox(l)[1] for l in lines)
+    top_pad = min(font.getbbox(l, **opts)[1] for l in lines)
 
     if position == "left":
         x0, y0 = int(W * 0.05), (H - total_h) // 2 - top_pad
@@ -500,19 +504,21 @@ def burn_thumbnail_text(img, text, position="left", color="white"):
         x0, y0 = int(W * 0.04), H - total_h - int(H * 0.06) - top_pad
 
     def line_x(line):
-        return x0 if horizontal else (W - draw.textlength(line, font=font)) // 2
+        if arabic and horizontal:  # RTL lines share their right edge
+            return x0 + widest - draw.textlength(line, font=font, **opts)
+        return x0 if horizontal else (W - draw.textlength(line, font=font, **opts)) // 2
 
     shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
     sdraw = ImageDraw.Draw(shadow)
     for i, line in enumerate(lines):
         sdraw.text((line_x(line) + stroke, y0 + i * line_h + stroke * 1.5), line, font=font,
-                   fill=(0, 0, 0, 170), stroke_width=stroke, stroke_fill=(0, 0, 0, 170))
+                   fill=(0, 0, 0, 170), stroke_width=stroke, stroke_fill=(0, 0, 0, 170), **opts)
     shadow = shadow.filter(ImageFilter.GaussianBlur(stroke))
     img = Image.alpha_composite(img, shadow)
     draw = ImageDraw.Draw(img)
     for i, line in enumerate(lines):
         draw.text((line_x(line), y0 + i * line_h), line, font=font, fill=fill,
-                  stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
+                  stroke_width=stroke, stroke_fill=(0, 0, 0, 255), **opts)
     return img
 
 

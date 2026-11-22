@@ -1104,6 +1104,9 @@ def transcribe_audio_for_subs(audio_path: str) -> list:
     return words
 
 
+import rtl_text
+
+
 def generate_tiktok_subs(audio_path: str, output_path: str, max_words: int = 3) -> str:
     """
     Generate TikTok-style ASS subtitles from audio using Whisper transcription.
@@ -1146,7 +1149,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     for chunk in chunks:
         start = _format_ass_time(chunk["start"])
         end = _format_ass_time(chunk["end"])
-        text = chunk["text"].replace("\n", "\\N")
+        text = rtl_text.embed(chunk["text"]).replace("\n", "\\N")
+        if rtl_text.is_arabic(text):
+            text = f"{{\\fn{rtl_text.ARABIC_FONT_NAME}}}{text}"
         ass_content += f"Dialogue: 0,{start},{end},TikTok,,0,0,0,,{text}\n"
 
     with open(output_path, "w", encoding="utf-8") as f:
@@ -1176,7 +1181,7 @@ def generate_srt_from_script(segments: list, output_path: str) -> str:
             ce = min(start_time + (i + 1) * chunk_dur, end_time)
             h, m, s, ms = int(cs//3600), int((cs%3600)//60), int(cs%60), int((cs-int(cs))*1000)
             h2, m2, s2, ms2 = int(ce//3600), int((ce%3600)//60), int(ce%60), int((ce-int(ce))*1000)
-            srt_content += f"{index}\n{h:02d}:{m:02d}:{s:02d},{ms:03d} --> {h2:02d}:{m2:02d}:{s2:02d},{ms2:03d}\n{' '.join(chunk).upper()}\n\n"
+            srt_content += f"{index}\n{h:02d}:{m:02d}:{s:02d},{ms:03d} --> {h2:02d}:{m2:02d}:{s2:02d},{ms2:03d}\n{rtl_text.embed(' '.join(chunk).upper())}\n\n"
             index += 1
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(srt_content)
@@ -1201,14 +1206,19 @@ def composite_video(
     safe_sub = srt_path.replace("\\", "/").replace(":", "\\:")
     if srt_path.endswith(".ass"):
         # ASS has styles embedded — use ass filter directly
-        sub_filter = f"ass='{safe_sub}'"
+        fonts_dir = os.path.dirname(rtl_text.ARABIC_FONT_PATH)
+        sub_filter = f"ass='{safe_sub}':fontsdir='{fonts_dir}'"
     else:
         # SRT fallback with TikTok-ish styling
         sub_style = (
             "Alignment=2,Fontname=Arial Black,Fontsize=24,PrimaryColour=&H00FFFFFF,"
             "OutlineColour=&H00000000,BorderStyle=1,Outline=4,Shadow=0,MarginV=120,Bold=-1"
         )
-        sub_filter = f"subtitles='{safe_sub}':force_style='{sub_style}'"
+        with open(srt_path, encoding="utf-8") as f:
+            if rtl_text.is_arabic(f.read()):
+                sub_style = sub_style.replace("Arial Black", rtl_text.ARABIC_FONT_NAME)
+        fonts_dir = os.path.dirname(rtl_text.ARABIC_FONT_PATH)
+        sub_filter = f"subtitles='{safe_sub}':fontsdir='{fonts_dir}':force_style='{sub_style}'"
 
     if not broll_clips:
         # Simple: talking head + subtitles only
