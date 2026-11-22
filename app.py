@@ -9252,6 +9252,7 @@ class SocialPostRequest(BaseModel):
     timezone: Optional[str] = "UTC"
 
 import httpx
+import youtube_direct
 
 
 def _post_video_blocking(url, headers, data, file_path, filename, timeout):
@@ -9374,10 +9375,16 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
 
     # Resolve the Upload-Post key + profile. For managed users the server key is
     # used and their own profile is forced (body api_key / user_id are ignored).
+    # Self-host: YouTube goes straight to the YouTube API once connected
+    # (youtube_direct.py); Upload-Post only gets the other platforms.
+    direct_youtube = (not BILLING_ENABLED and "youtube" in req.platforms
+                      and youtube_direct.is_connected())
+    other_platforms = [p for p in req.platforms if not (direct_youtube and p == "youtube")]
+
     upload_key, forced_profile = await resolve_upload_post(request, req.api_key)
-    if not upload_key:
+    if not upload_key and other_platforms:
         raise HTTPException(status_code=400, detail="Missing Upload-Post API key")
-    post_user = resolve_post_profile(forced_profile, req.user_id)
+    post_user = resolve_post_profile(forced_profile, req.user_id) if other_platforms else None
 
     # The awaits above can let cleanup or an account delete drop the job.
     job = jobs.get(req.job_id)
@@ -9429,6 +9436,20 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
         final_title = req.title or clip.get('title', 'Viral Short')
         final_description = req.description or clip.get('video_description_for_instagram') or clip.get('video_description_for_tiktok') or "Check this out!"
         
+        direct_result = None
+        if direct_youtube:
+            yt_title = req.title or clip.get('video_title_for_youtube_short', final_title)
+            print("📡 Uploading directly to YouTube")
+            try:
+                direct_result = await asyncio.to_thread(
+                    youtube_direct.upload, file_path, youtube_title(yt_title),
+                    final_description, req.scheduled_date, req.timezone)
+            except youtube_direct.YouTubeDirectError as e:
+                raise HTTPException(status_code=502, detail=f"YouTube: {e}")
+            if not other_platforms:
+                return {"success": True, "results": [direct_result]}
+            req.platforms = other_platforms
+
         # Prepare form data
         url = "https://api.upload-post.com/api/upload"
         headers = {
@@ -9466,9 +9487,13 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
 
         if response.status_code not in [200, 201, 202]: # Added 201
              print(f"❌ Upload-Post Error: {response.text}")
-             raise HTTPException(status_code=response.status_code, detail=f"Vendor API Error: {response.text}")
+             done = (f"YouTube already uploaded ({direct_result['url']}); do not resend it. "
+                     if direct_result else "")
+             raise HTTPException(status_code=response.status_code, detail=f"{done}Vendor API Error: {response.text}")
 
         out = response.json()
+        if direct_result and isinstance(out, dict):
+            out["youtube_direct"] = direct_result
         if isinstance(out, dict) and out.get("request_id"):
             _post_request_owners[str(out["request_id"])] = await _owner_id(request)
         if isinstance(out, dict) and free_left is not None:
@@ -9478,6 +9503,8 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
     except Exception as e:
         await _give_back_free_post(free_claim)
         print(f"❌ Social Post Exception: {e}")
+        if not BILLING_ENABLED and isinstance(e, HTTPException):
+            raise  # keep the status and message (YouTube's, the vendor's)
         raise HTTPException(status_code=500, detail=str(e))
 
 
