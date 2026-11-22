@@ -10714,6 +10714,7 @@ async def thumbnail_publish_status(publish_id: str, request: Request):
 from saasshorts import (
     scrape_website,
     research_saas_online,
+    research_brainrot_trends,
     analyze_saas,
     generate_scripts,
     generate_full_video,
@@ -10729,6 +10730,7 @@ saas_jobs: Dict[str, Dict] = {}
 class SaaSAnalyzeRequest(BaseModel):
     url: Optional[str] = None
     description: Optional[str] = None  # Manual product/business description
+    brainrot_mode: bool = False
     num_scripts: int = 3
     style: str = "ugc"
     language: str = "en"
@@ -10745,7 +10747,7 @@ async def saasshorts_analyze(
     if not gemini_key:
         raise gemini_missing_error()
 
-    if not req.url and not req.description:
+    if not req.url and not req.description and not req.brainrot_mode:
         raise HTTPException(status_code=400, detail="Provide a URL or a product description")
     max_scripts = _cloud_cfg().SAAS_MAX_SCRIPTS
     if not 1 <= int(req.num_scripts) <= max_scripts:
@@ -10763,7 +10765,22 @@ async def saasshorts_analyze(
         def run_analysis():
             web_research = None
 
-            if req.url and req.url.strip():
+            if req.brainrot_mode:
+                web_research = research_brainrot_trends(gemini_key, req.description or "")
+                web_research["creator_context"] = req.description or ""
+                analysis = {
+                    "product_name": "Kids Brainrot Shorts",
+                    "one_liner": "Fresh trend research turned into original, child-friendly mascot stories.",
+                    "industry": "kids entertainment",
+                    "target_audience": ["children and families"],
+                    "pain_points": [],
+                    "emotional_hooks": [
+                        "A new silly mascot in every story",
+                        "Playful, kind endings with a tiny surprise",
+                    ],
+                    "key_features": ["current trend research", "original mascot concepts", "kid-safe short scripts"],
+                }
+            elif req.url and req.url.strip():
                 # URL provided: full scrape + research pipeline
                 scraped = scrape_website(req.url)
                 web_research = research_saas_online(req.url, gemini_key)
@@ -10780,7 +10797,10 @@ async def saasshorts_analyze(
                     "tone": "casual and authentic",
                 }
 
-            scripts = generate_scripts(analysis, gemini_key, req.num_scripts, req.style, req.language, req.actor_gender)
+            scripts = generate_scripts(
+                analysis, gemini_key, req.num_scripts, req.style, req.language,
+                req.actor_gender, brainrot_mode=req.brainrot_mode,
+                trend_research=web_research if req.brainrot_mode else None)
             return {
                 "analysis": analysis,
                 "scripts": scripts,
