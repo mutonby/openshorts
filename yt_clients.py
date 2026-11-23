@@ -30,6 +30,32 @@ class NotASingleVideo(ValueError):
     download alike."""
 
 
+class LiveStreamOnAir(NotASingleVideo):
+    """The URL is a live stream still on air (or upcoming, or one YouTube is
+    still turning into a video). Its metadata reports the time elapsed so far
+    as the duration, but a download only gets the last seconds at the live
+    edge: billing the reported length would charge for a video that is not
+    there yet."""
+
+    MESSAGE = ("This video is a live stream that is still on air. Paste the link "
+               "again once the stream has ended and YouTube has finished processing it.")
+
+    def __init__(self, message=None):
+        super().__init__(message or self.MESSAGE)
+
+
+# yt-dlp's ``live_status`` values whose download is not the whole video.
+LIVE_NOT_READY = ("is_live", "is_upcoming", "post_live")
+
+
+def live_not_ready(info) -> bool:
+    """True when yt-dlp's metadata describes a stream that can't be fetched
+    whole yet (see LiveStreamOnAir)."""
+    if not isinstance(info, dict):
+        return False
+    return bool(info.get("is_live")) or info.get("live_status") in LIVE_NOT_READY
+
+
 # Paths that carry one video id. Anything on youtube.com that is not one of
 # these is refused: the list of pages that fan out is open-ended (channels,
 # hashtags, the legacy /<vanity> channel URL) and each one costs a paginated

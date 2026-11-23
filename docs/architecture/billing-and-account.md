@@ -14,6 +14,19 @@ per user are free and each later one costs `MANAGED_ANALYSIS_MINUTES` again
 (`app._ai_edit_minutes`, in memory per UTC day). Thumbnail image generation,
 thumbnail transcription/analysis and SaaS-shorts analysis keep their fixed cost.
 
+The probe bills the length yt-dlp reports, so two guards keep a charge to what
+was really fetched:
+- A live stream still on air, upcoming or still being processed by YouTube
+  (`yt_clients.live_not_ready`: `is_live`, `is_upcoming`, `post_live`) is refused
+  at the probe with `LiveStreamOnAir` (400, no route retried, nothing reserved):
+  its reported duration is the time elapsed, but the download only gets the
+  last seconds at the live edge.
+- When a job completes, `app._trim_to_downloaded_source` reads the source on
+  disk (ffprobe); if it is more than `SOURCE_SHORTFALL_MINUTES` (1) shorter than
+  the reservation, `metering.trim_reservation` lowers the row to the source's
+  billable minutes before the commit (bought minutes back first, then the
+  plan's). It only ever lowers, and does nothing when no source is on disk.
+
 ## Cost line and picked stretch (`/api/process/estimate`, `SourceCost.jsx`)
 
 Under the source input the dashboard says what the video will cost before it

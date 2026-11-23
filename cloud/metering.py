@@ -289,12 +289,13 @@ _probe_pool = None
 
 def _probe_in_child(url, allow_paid):
     """Runs in a pool process: the probe and what it left in this module."""
-    from yt_clients import NotASingleVideo
-    out = {"minutes": None, "error": None, "single": False}
+    from yt_clients import LiveStreamOnAir, NotASingleVideo
+    out = {"minutes": None, "error": None, "single": False, "live": False}
     try:
         out["minutes"] = probe_url_minutes(url, allow_paid=allow_paid)
     except NotASingleVideo as e:
         out["error"], out["single"] = str(e), True
+        out["live"] = isinstance(e, LiveStreamOnAir)
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {e}"[:500]
     out["facts"] = _probe_facts.get(url)
@@ -313,6 +314,9 @@ def _merge_child_probe(url, out):
         _static_bot_verdicts.add(url)
     _paid_probe_events.extend(out.get("events") or [])
     if out.get("error") is not None:
+        if out.get("live"):
+            from yt_clients import LiveStreamOnAir
+            raise LiveStreamOnAir(out["error"])
         if out.get("single"):
             from yt_clients import NotASingleVideo
             raise NotASingleVideo(out["error"])
@@ -486,6 +490,10 @@ def _probe_with_proxies(url, proxies, strategies, static_errors, paid, ck_path):
                         info = ydl.extract_info(url, download=False)
                 if authed:
                     session.ok()
+                from yt_clients import LiveStreamOnAir, live_not_ready
+                if live_not_ready(info):
+                    # Same answer on every route: stop here, bill nothing.
+                    raise LiveStreamOnAir()
                 duration = info.get("duration")
                 if duration:
                     _remember_probe(url, info)
@@ -505,6 +513,9 @@ def _probe_with_proxies(url, proxies, strategies, static_errors, paid, ck_path):
                     # container header over HTTP instead.
                     break
             except Exception as e:
+                from yt_clients import LiveStreamOnAir
+                if isinstance(e, LiveStreamOnAir):
+                    raise
                 last_err = e
                 route_errors.append(str(e)[:300])
                 if authed and yt_account.is_rate_limit(str(e)):
@@ -951,6 +962,53 @@ async def commit_reservation(ledger_id: str):
             row = await session.get(UsageLedger, ledger_id)
             if row and row.status == "reserved":
                 row.status = "committed"
+
+
+async def reservation_minutes(ledger_id: str):
+    """Minutes held by a still-``reserved`` row, or None."""
+    async with database.session() as session:
+        row = await session.get(UsageLedger, ledger_id)
+        if not row or row.status != "reserved":
+            return None
+        return float(row.minutes)
+
+
+async def trim_reservation(ledger_id: str, minutes) -> float:
+    """Lower a still-``reserved`` row to ``minutes`` and give the rest back.
+
+    For a job whose source turned out shorter than what was reserved for it
+    (a download that got less than the probe announced). Only ever lowers.
+    The bought minutes go back first, then the plan's. Returns the minutes
+    given back (0 when nothing changed).
+    """
+    new = _D(minutes)
+    async with database.session() as session:
+        async with session.begin():
+            row = await session.get(UsageLedger, ledger_id)
+            if not row or row.status != "reserved" or new < 0 or new >= _D(row.minutes):
+                return 0.0
+            await session.execute(
+                select(User.id).where(User.id == row.user_id).with_for_update()
+            )
+            refund = _D(row.minutes) - new
+            from_topup = min(refund, _D(row.minutes_from_topup))
+            need = from_topup
+            allocations = [dict(a) for a in (row.topup_allocations or [])]
+            # Newest allocation first: the reverse of the FIFO reserve.
+            for alloc in reversed(allocations):
+                if need <= 0:
+                    break
+                give = min(_D(alloc["minutes"]), need)
+                t = await session.get(CreditTopup, alloc["topup_id"])
+                if t is not None:
+                    t.minutes_consumed = max(_D(0), _D(t.minutes_consumed) - give)
+                alloc["minutes"] = float(_D(alloc["minutes"]) - give)
+                need -= give
+            row.topup_allocations = [a for a in allocations if a["minutes"] > 0] or None
+            row.minutes_from_topup = _D(row.minutes_from_topup) - from_topup
+            row.minutes_from_plan = _D(row.minutes_from_plan) - (refund - from_topup)
+            row.minutes = new
+            return float(refund)
 
 
 async def release_reservation(ledger_id: str):

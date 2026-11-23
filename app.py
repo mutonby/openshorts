@@ -711,7 +711,9 @@ async def _reserve_after_job_limit(request, user, url, input_path, job_id, max_m
         else:
             minutes = await loop.run_in_executor(None, _metering.probe_file_minutes, input_path)
     except Exception as e:
-        from yt_clients import NotASingleVideo
+        from yt_clients import LiveStreamOnAir, NotASingleVideo
+        if isinstance(e, LiveStreamOnAir):
+            raise HTTPException(status_code=400, detail=str(e))
         if isinstance(e, NotASingleVideo):
             raise HTTPException(status_code=400, detail=(
                 f"{e} Paste the link of one video (youtube.com/watch?v=... "
@@ -4094,6 +4096,47 @@ async def _notify_job_webhook(job_id):
     asyncio.create_task(_deliver_webhook(url, body, job.get('webhook_secret')))
 
 
+# How much shorter than its reservation a downloaded source must be before the
+# difference goes back: one whole minute, so the rounding of the probe and of
+# the container's own duration never moves a charge.
+SOURCE_SHORTFALL_MINUTES = 1.0
+
+
+def _billable_for_downloaded_source(job_id, reserved):
+    """The minutes a completed job should cost when its source on disk is
+    clearly shorter than ``reserved`` (a live stream's last seconds, a
+    download cut short), else None. Blocking: run it in an executor."""
+    path = _locate_source(job_id)
+    if not path:
+        return None
+    try:
+        actual = cloud.metering.probe_file_minutes(path)
+    except Exception:
+        return None
+    if actual <= 0 or actual + SOURCE_SHORTFALL_MINUTES > float(reserved):
+        return None
+    return _cloud_config.billable_minutes(actual)
+
+
+async def _trim_to_downloaded_source(job_id, reservation_id):
+    """Charge a finished job for the source it really got, never for more."""
+    try:
+        row = await cloud.metering.reservation_minutes(reservation_id)
+        if not row:
+            return
+        loop = asyncio.get_running_loop()
+        charge = await loop.run_in_executor(
+            None, _billable_for_downloaded_source, job_id, row)
+        if charge is None:
+            return
+        given = await cloud.metering.trim_reservation(reservation_id, charge)
+        if given:
+            print(f"↩️  {job_id}: source shorter than reserved, "
+                  f"{given:g} min back ({charge:g} charged).")
+    except Exception as e:
+        print(f"⚠️  Source-length check failed for {job_id}: {e}")
+
+
 async def _settle_reservation(job_id, job=None):
     if not BILLING_ENABLED:
         return
@@ -4103,6 +4146,7 @@ async def _settle_reservation(job_id, job=None):
         return
     try:
         if job.get('status') == 'completed':
+            await _trim_to_downloaded_source(job_id, reservation_id)
             await cloud.metering.commit_reservation(reservation_id)
         else:
             await cloud.metering.release_reservation(reservation_id)
