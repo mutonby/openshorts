@@ -68,11 +68,29 @@ def _looks_like_proxy_error(err: str) -> bool:
     return any(k in e for k in _PROXY_HINTS)
 
 
+# The AI provider refusing the ACCOUNT, not the video: its prepaid credit is
+# used up or the project reached its spending cap. Every job fails from then
+# on, and each ends on "did not return usable clips", which reads as the
+# user's video and was held for the digest while nothing came out for hours.
+_AI_ACCOUNT_HINTS = (
+    "prepayment credits",
+    "credits are depleted",
+    "spending cap",
+)
+
+
+def _looks_like_ai_account_error(err: str) -> bool:
+    e = (err or "").lower()
+    return any(k in e for k in _AI_ACCOUNT_HINTS)
+
+
 def _classify_failure(err: str) -> str:
     """One-word category for the last error, so the alert points the right way."""
     e = (err or "").lower()
     if _looks_like_proxy_error(e):
         return "proxy"
+    if _looks_like_ai_account_error(e):
+        return "ai provider account"
     if "no_audio" in e or "no audio" in e:
         return "no audio"
     if "sign in to confirm" in e or "not a bot" in e or "http error 403" in e \
@@ -327,6 +345,21 @@ async def record_job_outcome(ok: bool, error_text: str = ""):
                 "A managed job failed with a proxy-related error. Check your proxy "
                 "balance — downloads will keep failing until it's topped up.\n"
                 "This repeats every 2 h until the proxy answers again.\n\n"
+                f"Error:\n{error_text[:1200]}",
+                urgent=True,
+            )
+        return
+
+    # 1b) The AI provider is out of credit or at its spending cap: one job is
+    # enough to know, every other one fails the same way until someone pays or
+    # raises the cap. Repeats hourly while jobs keep failing on it.
+    if _looks_like_ai_account_error(error_text):
+        if _cooldown_ok("ai_account"):
+            await send_admin_alert(
+                "🔴 AI provider refuses the account — out of credit or at its spending cap",
+                "A managed job failed because the AI provider turned the account "
+                "down. Every job fails until its credit is topped up or its cap "
+                "raised.\nThis repeats every hour while jobs keep failing on it.\n\n"
                 f"Error:\n{error_text[:1200]}",
                 urgent=True,
             )

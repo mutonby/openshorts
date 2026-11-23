@@ -78,3 +78,26 @@ def test_terminal_download_failure_still_classifies_as_download():
     ]
     err = app_module._job_error_text(logs)
     assert _classify_failure(err) == "youtube download"
+
+
+# --- the AI provider turning the account down is an outage, whatever the last line says ---
+
+DEPLETED = ("❌ Gemini Error: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': "
+            "'Your prepayment credits are depleted. Please go to AI Studio to manage your "
+            "project and billing.', 'status': 'RESOURCE_EXHAUSTED'}}")
+
+
+def test_a_depleted_ai_account_is_not_the_users_video():
+    import pytest
+    app_module = pytest.importorskip("app")
+    logs = [
+        "✅ Download succeeded (HD-static1).",
+        "⚠️ Gemini transient error (attempt 3/3), retrying in 8s: 429 RESOURCE_EXHAUSTED.",
+        DEPLETED,
+        "Traceback (most recent call last):",
+        "RuntimeError: Clip detection failed — the AI model did not return usable clips for this video.",
+    ]
+    assert _classify_failure(app_module._job_error_text(logs)) == "ai provider account"
+    assert _classify_failure("Your project has exceeded its monthly spending cap.") == "ai provider account"
+    # A rate limit that passes is still Gemini's, and a video with nothing in it the user's.
+    assert _classify_failure("google.genai 429 RESOURCE_EXHAUSTED: quota exceeded for this minute") == "gemini"

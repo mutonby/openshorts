@@ -294,6 +294,33 @@ def test_cut_uses_the_intermediate_tier(_cut):
     assert cmd[cmd.index("-preset") + 1] == "p1"
 
 
+
+# --- the cut's keyframes: the layout checks seek into it once per sample ---
+
+def test_the_cut_has_a_keyframe_a_second(_cut, monkeypatch):
+    _gpu_source(monkeypatch, "h264,yuv420p")
+    cmd = _cut([(0, 5_000_000, "")]).commands[0]
+    assert "-hwaccel" in cmd and cmd[cmd.index("-g") + 1] == "30"
+    assert cmd.index("-g") < cmd.index("-c:a")              # an option of the video encode
+    _gpu_source(monkeypatch, "hevc,yuv420p10le")            # the CPU decode cuts the same way
+    cmd = _cut([(0, 5_000_000, "")]).commands[0]
+    assert "-hwaccel" not in cmd and cmd[cmd.index("-g") + 1] == "30"
+
+
+def test_the_cut_spacing_is_a_setting(_cut, monkeypatch):
+    monkeypatch.setenv("CUT_GOP", "60")
+    assert ffmpeg_utils.cut_gop_args() == ["-g", "60"]
+    monkeypatch.setenv("CUT_GOP", "0")                      # the encoder's own spacing
+    assert "-g" not in _cut([(0, 5_000_000, "")]).commands[0]
+    monkeypatch.setenv("CUT_GOP", "soon")
+    assert ffmpeg_utils.cut_gop() == 30
+
+
+def test_only_the_cut_is_spaced_that_way():
+    for tier in (QUALITY, QUALITY_FAST, DELIVERY, INTERMEDIATE):
+        assert "-g" not in video_encode_args(tier)          # what is delivered keeps the encoder's
+
+
 # --- bin/ffmpeg: the thread cap every ffmpeg of the image goes through ---
 
 WRAPPER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

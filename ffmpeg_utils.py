@@ -312,6 +312,28 @@ def _intermediate_nvenc_args():
             "-b:v", "0", "-pix_fmt", "yuv420p"]
 
 
+def cut_gop():
+    """Keyframe spacing of the cut, in frames (``CUT_GOP``, 0 = the encoder's).
+
+    The layout checks read a few frames per scene from the cut by seeking, and
+    a seek decodes again from the keyframe before the frame asked. At the
+    encoders' default of 250 frames a 60 s 1080p cut's ~100 samples cost 155
+    CPU-s; one keyframe a second brings that to 55, for a file under 1% larger
+    on NVENC (benched 23-nov-2026). The cut is never delivered, so the spacing
+    of the clips that are stays the encoder's.
+    """
+    try:
+        n = int(os.environ.get("CUT_GOP", "30").strip() or 0)
+    except ValueError:
+        n = 30
+    return max(0, n)
+
+
+def cut_gop_args():
+    n = cut_gop()
+    return ["-g", str(n)] if n else []
+
+
 def finished_before_crash(result, outputs):
     """True when ffmpeg died on a signal AFTER finishing every output.
 
@@ -497,6 +519,7 @@ def cut_clip(input_video, clip_temp_path, start, end, clip_number):
         '-i', input_video,
         *rate,
         *encode_args,
+        *cut_gop_args(),
         *audio_encode_args(),
         clip_temp_path
     ]
@@ -510,7 +533,8 @@ def cut_clip(input_video, clip_temp_path, start, end, clip_number):
             del gpu_args[i:i + 2]
         gpu_command = ['ffmpeg', '-y', '-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda',
                        '-ss', str(start), '-to', str(end), '-i', input_video,
-                       *rate, *gpu_args, *audio_encode_args(), clip_temp_path]
+                       *rate, *gpu_args, *cut_gop_args(), *audio_encode_args(),
+                       clip_temp_path]
 
     def _run_one(cmd):
         result = subprocess.run(cmd, stdout=subprocess.DEVNULL,

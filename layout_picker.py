@@ -43,6 +43,7 @@ by hand wins: this only ever ADDS, so an explicit choice is never overridden.
 """
 import json
 import os
+import threading
 
 # AUTO_LAYOUT=1 decides and applies. AUTO_LAYOUT=shadow decides, logs, and
 # applies NOTHING: the render is byte-for-byte what it would have been.
@@ -165,12 +166,41 @@ def _ffmpeg_frames(video_path, n):
     return frames
 
 
+_sampled = {"key": None, "frames": None}
+_sampled_lock = threading.Lock()
+
+
+def _sample_key(video_path, n, width):
+    try:
+        st = os.stat(video_path)
+    except OSError:
+        return None
+    return (os.path.realpath(video_path), st.st_size, st.st_mtime_ns, n, width)
+
+
 def sample_frames(video_path, n=None, width=None):
-    """JPEG bytes for ``n`` frames spread evenly across the video."""
+    """JPEG bytes for ``n`` frames spread evenly across the video.
+
+    The last answer is kept: the layout choice and the burned-subtitle check
+    ask for the same frames of the same source one after the other, and each
+    is a seek into a long-GOP file (12 samples of a 1080p60 source: 15 CPU-s).
+    """
     import cv2
 
     n = n or SAMPLE_FRAMES
     width = width or SAMPLE_WIDTH
+    key = _sample_key(video_path, n, width)
+    with _sampled_lock:
+        if key is not None and _sampled["key"] == key:
+            return list(_sampled["frames"])
+    out = _sample_frames(video_path, n, width, cv2)
+    if key is not None and out:
+        with _sampled_lock:
+            _sampled["key"], _sampled["frames"] = key, list(out)
+    return out
+
+
+def _sample_frames(video_path, n, width, cv2):
     cap = cv2.VideoCapture(video_path)
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     out = []

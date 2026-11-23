@@ -92,6 +92,21 @@ Speed at equal quality:
 - **Cheap cut** (`ffmpeg_utils.INTERMEDIATE`): the cut is decoded again by the
   reframe at once, so on NVENC it uses p1 at a lower `-cq` (`CUT_NVENC_PRESET`,
   `CUT_NVENC_CQ`) instead of p4 + hq + AQ. libx264 keeps its old settings.
+- **Cheap samples** (`CUT_GOP`, default 30; `OPENCV_FFMPEG_THREADS`, default 4,
+  set by `main.py` before it imports cv2): the layout checks that are not on
+  `frame_sampler` yet read a few frames per scene from the cut with a seek +
+  read, and OpenCV decodes on the CPU from the keyframe before each one, on a
+  pool the size of the machine. At the encoders' 250-frame spacing that was the
+  largest share of a job's CPU on a host whose render is on the card: ~100
+  samples of a 60 s 1080p cut cost 155 CPU-s, 25 with a keyframe a second and
+  four threads (and less time on the clock), for a cut 1-7% larger. Only the
+  cut is spaced that way; `CUT_GOP=0` gives the encoder's own back. The same
+  samples in one forward pass on the card (`frame_sampler.read_at_path`) cost
+  4 CPU-s: a check moved there must ask for all its frames at once, not once
+  per scene, or every call decodes the clip from its first frame.
+- **One sampling of the source** (`layout_picker.sample_frames` keeps its last
+  answer): the layout choice and the burned-subtitle check ask for the same 12
+  frames of the same file.
 - **Thread cap** (`bin/ffmpeg`, first on the image's `PATH`): every ffmpeg gets
   `-threads FFMPEG_THREADS` per input and the same for its filter graphs.
   Uncapped, each one sized its pools to the whole machine, so a few jobs kept

@@ -14,11 +14,14 @@ import tempfile
 import cv2
 import numpy as np
 
+import ffmpeg_utils
 import gpu_decode
 
 # Past this many frames ahead, one seek is cheaper than decoding forward to
-# the target (an NVENC cut's GOP is ~250 frames).
-MAX_FORWARD = 300
+# the target: OpenCV seeks 16 frames short of it and decodes from the keyframe
+# before that, so about a GOP (ffmpeg_utils.cut_gop; 250 at the encoders'
+# default spacing).
+MAX_FORWARD = (ffmpeg_utils.cut_gop() + 16) if ffmpeg_utils.cut_gop() else 300
 
 
 def read_at(cap, indices, max_forward=MAX_FORWARD):

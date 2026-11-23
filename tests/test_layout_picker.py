@@ -173,3 +173,28 @@ def test_sample_frames_falls_back_to_ffmpeg_when_opencv_reads_nothing(tmp_path, 
 
     assert len(out) == 3
     assert all(j[:2] == b"\xff\xd8" for j in out)  # JPEG
+
+
+def test_the_same_frames_of_a_source_are_sampled_once(tmp_path, monkeypatch):
+    """The layout choice and the burned-subtitle check ask one after the other."""
+    import numpy as np
+
+    src = tmp_path / "source.mp4"
+    src.write_bytes(b"not a video OpenCV can open")
+    reads = []
+
+    def frames(path, n):
+        reads.append(path)
+        return [np.full((360, 640, 3), 120, dtype=np.uint8)] * n
+
+    monkeypatch.setattr(layout_picker, "_ffmpeg_frames", frames)
+    monkeypatch.setattr(layout_picker, "_sampled", {"key": None, "frames": None})
+    first = layout_picker.sample_frames(str(src))
+    again = layout_picker.sample_frames(str(src))
+    assert len(reads) == 1 and again == first and again is not first
+    layout_picker.sample_frames(str(src), n=3)              # other frames: read again
+    assert len(reads) == 2
+    src.write_bytes(b"another file under the same name")    # the file changed: read again
+    layout_picker.sample_frames(str(src), n=3)
+    assert len(reads) == 3
+    assert layout_picker.sample_frames(str(tmp_path / "gone.mp4")) == []

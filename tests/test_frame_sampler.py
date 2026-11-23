@@ -76,3 +76,17 @@ def test_long_jumps_and_steps_back_seek_instead(video):
 
 def test_empty_request_reads_nothing(video):
     assert _forward(video, []) == []
+
+
+def test_it_seeks_once_the_target_is_a_gop_away(monkeypatch):
+    """Decoding forward only pays up to about the cut's keyframe spacing."""
+    import importlib
+
+    import ffmpeg_utils
+    assert frame_sampler.MAX_FORWARD == ffmpeg_utils.cut_gop() + 16
+    monkeypatch.setenv("CUT_GOP", "0")                      # the encoder's ~250 frames
+    try:
+        assert importlib.reload(frame_sampler).MAX_FORWARD == 300
+    finally:
+        monkeypatch.undo()
+        importlib.reload(frame_sampler)

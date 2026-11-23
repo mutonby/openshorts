@@ -96,6 +96,28 @@ def test_failure_rate_pages_for_an_outage_not_for_user_videos(chat, monkeypatch)
     assert calls == [("⚠️ High job failure rate (ffmpeg/render)", True)]
 
 
+def test_a_depleted_ai_account_pages_on_the_first_job(chat, monkeypatch):
+    calls = []
+
+    async def fake_admin(subject, body, *, urgent=False):
+        calls.append((subject, urgent))
+    monkeypatch.setattr(alerts, "send_admin_alert", fake_admin)
+    alerts._recent.clear()
+    alerts._last_alert.clear()
+    err = ("Gemini Error: 429 RESOURCE_EXHAUSTED. Your prepayment credits are depleted. "
+           "RuntimeError: Clip detection failed — the AI model did not return usable clips")
+    asyncio.run(alerts.record_job_outcome(False, err))
+    assert len(calls) == 1 and calls[0][1] is True and "AI provider" in calls[0][0]
+    for _ in range(8):                                   # one page an hour, not one per job
+        asyncio.run(alerts.record_job_outcome(False, err))
+    assert len(calls) == 1
+    alerts._last_alert["ai_account"] -= 3601
+    asyncio.run(alerts.record_job_outcome(False, err))
+    assert len(calls) == 2
+    alerts._recent.clear()
+    alerts._last_alert.clear()
+
+
 def test_proxy_watch_pages_only_what_matters(monkeypatch):
     calls = []
 

@@ -1,3 +1,10 @@
+import os
+# OpenCV sizes its video decoder to every core, and a seek + read then decodes
+# as many frames past the one asked as it has threads, on top of the pool's own
+# overhead: the layout checks' samples cost twice the CPU for the same frames
+# (benched 23-nov-2026: 55 CPU-s against 27 at four threads, 7 s against 8 on
+# the clock). Read when cv2 opens a file, so it is set before the import.
+os.environ.setdefault("OPENCV_FFMPEG_THREADS", "4")
 import time
 import cv2
 import subprocess
