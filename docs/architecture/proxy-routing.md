@@ -189,23 +189,6 @@ outright.
   of its own. The user sees "YouTube is limiting downloads right now".
 
 
-## Ranged downloads cut short (`main.RANGED_FFMPEG_INPUT_ARGS`)
-
-A ranged fetch (source far longer than the paid minutes) is ffmpeg reading
-each stream in one long HTTP request. A connection dropped mid-stream used to
-end the input ("Error during demuxing: Input/output error") while ffmpeg still
-exited 0, so the attempt "succeeded" with the first minutes only.
-- ffmpeg gets `-reconnect`, `-reconnect_on_network_error`, `-reconnect_streamed`
-  and `-reconnect_delay_max 10` on every input of a ranged fetch (yt-dlp's
-  `external_downloader_args.ffmpeg_i`); whole downloads are untouched.
-- With the source's duration known, the file is checked against the range
-  (`ranged_cut_short`, more than `RANGED_SHORTFALL_SECONDS` short):
-  `RangedDownloadCutShort` retries once on the same route; cut short twice (a
-  reused extraction counts as the first), the part that came in is kept and
-  no other route, nor the per-GB proxy, is tried. The job is then billed for
-  that part (`app._trim_to_downloaded_source`).
-
-
 ## Download cache (`source_cache.py`)
 
 Many users clip the same popular YouTube videos within hours of each other,

@@ -702,44 +702,6 @@ def is_youtube_url(url):
     return host.endswith(("youtube.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com"))
 
 
-# ffmpeg input options for a ranged download (yt-dlp hands the range to
-# ffmpeg, one long HTTP read per stream). Without them a connection dropped
-# mid-stream ends the input with "Error during demuxing: Input/output error",
-# ffmpeg still exits 0 and the attempt "succeeds" with the first minutes only.
-RANGED_FFMPEG_INPUT_ARGS = [
-    "-reconnect", "1", "-reconnect_on_network_error", "1",
-    "-reconnect_streamed", "1", "-reconnect_delay_max", "10",
-]
-# A ranged file this much shorter than the range it asked for was cut short.
-RANGED_SHORTFALL_SECONDS = 90.0
-
-
-class RangedDownloadCutShort(RuntimeError):
-    """A ranged download ended well before its range: the stream dropped."""
-
-
-def ranged_cut_short(got_seconds, want_seconds) -> bool:
-    """True when a ranged download of ``want_seconds`` produced clearly less.
-    Unknown lengths (None/0) are never called short."""
-    try:
-        got, want = float(got_seconds or 0), float(want_seconds or 0)
-    except (TypeError, ValueError):
-        return False
-    return got > 0 and want > 0 and got + RANGED_SHORTFALL_SECONDS < want
-
-
-def _media_seconds(path):
-    """The container's duration in seconds via ffprobe, or None."""
-    try:
-        out = subprocess.check_output(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", path],
-            stderr=subprocess.DEVNULL, timeout=60)
-        return float(out.decode().strip() or 0) or None
-    except Exception:
-        return None
-
-
 def exit_refused(err) -> bool:
     """A proxy answered the CONNECT itself with a refusal (a provider that does
     not carry that site, an ACL): the site was never reached, so the failure
@@ -1256,13 +1218,9 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             'progress_hooks': [_progress_hook],
         }
         _dl_bytes["ranged"] = ranged
-        # What a ranged fetch must bring back: the whole range when the source
-        # is known to be longer (always, when ranged with a duration).
-        _dl_bytes["want_seconds"] = (_range_cap if ranged and info.get('duration') else 0)
         if ranged:
             from yt_dlp.utils import download_range_func
             dl_opts['download_ranges'] = download_range_func(None, [(0, _range_cap)])
-            dl_opts['external_downloader_args'] = {'ffmpeg_i': list(RANGED_FFMPEG_INPUT_ARGS)}
             print(f"✂️ Source is {'of unknown length' if not info.get('duration') else 'longer than the paid minutes'}"
                   f": downloading only the first {_range_cap / 60:.0f} min.")
         with yt_dlp.YoutubeDL(dl_opts) as ydl:
@@ -1270,14 +1228,6 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                 ydl.process_ie_result(info, download=True)
             else:
                 ydl.download([url])
-        want = _dl_bytes.get("want_seconds") or 0
-        if want:
-            got = _media_seconds(os.path.join(output_dir, f'{sanitized}.mp4'))
-            if ranged_cut_short(got, want):
-                err = RangedDownloadCutShort(
-                    f"Ranged download cut short: {got:.0f}s of {want:.0f}s")
-                err.sanitized = sanitized
-                raise err
         return sanitized
 
     # DIRECT_FIRST=1: try the server's own IP before spending proxy bandwidth.
@@ -1325,7 +1275,6 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     # request of a YouTube account. Only on the route that asked (media links
     # are bound to its address) and with the same client list; when it does
     # not work the attempts below run as if it had never been there.
-    short_before = False
     stored = _stored_extraction(url, attempts, _proxy, need_seconds=_range_cap or 0)
     if stored is not None:
         label, ea, fmt, proxy, cookies, info = stored
@@ -1336,9 +1285,6 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                                 "bytes": _dl_bytes["total"] + _dl_bytes["partial"]})
             print(f"✅ Download succeeded ({label}).")
         except Exception as e:
-            # A cut-short range counts as this route's first try: the next
-            # attempt keeps what it gets (at most two long ranged fetches).
-            short_before = isinstance(e, RangedDownloadCutShort)
             _forget_extraction(url)
             attempt_log.append({"label": label, "ok": False, "paid": False, "reused": True,
                                 "bytes": _dl_bytes["total"] + _dl_bytes["partial"],
@@ -1386,17 +1332,6 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                 print(f"✅ Download succeeded ({label}).")
                 break
             except Exception as e:
-                if isinstance(e, RangedDownloadCutShort) and (retry == 1 or short_before):
-                    # Cut short twice on this route: keep what came in rather
-                    # than walk the other routes (and the per-GB proxy) for a
-                    # range. The job is billed for the source it got (app.py).
-                    sanitized_title = e.sanitized
-                    used_proxy = proxy is not None and proxy == _proxy
-                    attempt_log.append({"label": label, "ok": True, "short": True,
-                                        "bytes": _dl_bytes["total"] + _dl_bytes["partial"],
-                                        "paid": used_proxy})
-                    print(f"⚠️  {e} again: keeping the part that came in ({label}).")
-                    break
                 last_err = e
                 attempt_log.append({"label": label, "ok": False,
                                     "bytes": _dl_bytes["total"] + _dl_bytes["partial"],
@@ -1425,8 +1360,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                 # came up on a site without a paid route is worth one more go.
                 retryable = (('403' in str(e) or 'Forbidden' in str(e))
                              and not exit_refused(e)) or (
-                                 not youtube and transient_connection(e)) or (
-                                 isinstance(e, RangedDownloadCutShort))
+                                 not youtube and transient_connection(e))
                 if not retryable or retry == 1:
                     break
                 time.sleep(3)
