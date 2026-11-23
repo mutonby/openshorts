@@ -1586,6 +1586,15 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                     else:
                         age_refused = True
                     break
+                if cookies and cookies_path and yt_account.is_drm(str(e)):
+                    # Protected formats only: that is what YouTube serves
+                    # some accounts for every video. Another account gets
+                    # this one on the next route; with none left the video
+                    # is protected for everybody and the attempts go on.
+                    if yt_session.drm_refused():
+                        print(f"🔁 YouTube serves this account protected formats: moving "
+                              f"the video to YouTube account {yt_session.account + 1}.")
+                        break
                 # An exit that refuses the tunnel answers the same a second
                 # time: the next route is the retry. A connection that never
                 # came up on a site without a paid route is worth one more go.

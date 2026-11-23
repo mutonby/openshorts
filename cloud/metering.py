@@ -522,6 +522,8 @@ def _probe_with_proxies(url, proxies, strategies, static_errors, paid, ck_path):
                     session.limited()   # moves to another account if one is awake
                 elif authed and yt_account.is_age_gate(str(e)):
                     session.age_gated()  # an age-verified account may open it
+                elif authed and yt_account.is_drm(str(e)):
+                    session.drm_refused()  # an account served protected formats only
         else:
             if not is_paid:
                 static_errors[_route_name(proxy, proxies)] = (

@@ -217,3 +217,61 @@ def test_a_limited_video_goes_back_in_line_for_when_an_account_wakes(monkeypatch
                                if t is not asyncio.current_task()], return_exceptions=True)
     asyncio.run(run())
     assert 880 <= waits[0] <= 900 + 150                      # not half a minute later
+
+
+# --- an account that is served protected formats only ---------------------------
+
+DRM = "ERROR: [youtube] tJbzMqJGH4k: This video is DRM protected"
+
+
+def test_a_protected_answer_moves_the_video_and_counts_against_the_account(monkeypatch):
+    assert yt_account.is_drm(DRM) and not yt_account.is_drm("Sign in to confirm you are not a bot")
+    monkeypatch.setattr(yt_account, "REST_STRIKES", 2)
+    session = yt_account.Session()
+    first = session.account
+    assert session.drm_refused() and session.account != first      # another account has it
+    assert yt_account.resting(first) == 0                          # once is not enough to rest
+    again = yt_account.Session()
+    while again.account != first:                                  # the turn comes back to it
+        again = yt_account.Session()
+    assert again.drm_refused()
+    assert yt_account.resting(first) > 0                           # twice in a row: it rests
+    # A video protected for everybody: once every account said so, nobody is left.
+    last = yt_account.Session()
+    moves = 0
+    while last.drm_refused():
+        moves += 1
+    assert moves == 4
+
+
+def test_a_request_that_works_clears_the_protected_answers(monkeypatch):
+    monkeypatch.setattr(yt_account, "REST_STRIKES", 2)
+    session = yt_account.Session()
+    first = session.account
+    session.drm_refused()
+    yt_account.note_account_ok(first)                              # a film, not the account
+    yt_account.note_account_limited(first)
+    assert yt_account.resting(first) == 0
+
+
+def test_the_download_takes_a_protected_video_to_another_account(monkeypatch, tmp_path):
+    main, seen = _download(monkeypatch)
+    real = main.yt_dlp.YoutubeDL
+    broken = {}
+
+    class _YDL(real):
+        def extract_info(self, url, download=False, process=True):
+            account = _which_account(self.opts)
+            broken.setdefault("account", account)                  # the first one asked is the broken one
+            if account == broken["account"]:
+                seen.append((account, self.opts.get("proxy")))
+                raise RuntimeError(DRM)
+            return super().extract_info(url, download=download, process=process)
+
+    monkeypatch.setattr(main.yt_dlp, "YoutubeDL", _YDL)
+    route = {}
+    path, _ = main._download_youtube_video(URL, str(tmp_path), route_out=route)
+    assert os.path.exists(path)
+    assert [a for a, _ in seen][0] == broken["account"]
+    assert len({a for a, _ in seen}) == 2                          # asked once, then another account
+    assert len(seen) == 2 and route["winner"]

@@ -120,6 +120,18 @@ def is_age_gate(text) -> bool:
     return any(m in t for m in _AGE_MARKERS)
 
 
+# "This video is DRM protected", said to a signed-in account. YouTube serves
+# some accounts protected formats only, for every video: the answer is then
+# about the account, and another one gets the video.
+_DRM_MARKERS = ("drm protected",)
+
+
+def is_drm(text) -> bool:
+    """Whether an error text is YouTube offering protected formats only."""
+    t = str(text or "").lower()
+    return any(m in t for m in _DRM_MARKERS)
+
+
 def state_dir():
     """Where the shared state lives: the output directory every process of
     the host sees, or the temp dir when there is none (a one-off script)."""
@@ -543,6 +555,20 @@ class Session:
         account is not age-verified). True when the video moved to an account
         it has not tried yet, preferring one that is not resting. Not a strike
         against the account: it is fine for every other video."""
+        n = len(self._texts)
+        nxt = pick(exclude=self._tried, awake_only=True, count=n)
+        if nxt is None:
+            nxt = pick(exclude=self._tried, awake_only=False, count=n)
+        return self._use(nxt)
+
+    def drm_refused(self) -> bool:
+        """YouTube told this account the video is DRM protected. An account
+        that is served protected formats only says so of every video, so the
+        answer counts against the account like a limit (enough of them in a
+        row and it rests, a request that works clears them) and the video
+        moves to an account it has not tried, one that is awake first. True
+        when it moved; with none left the video is protected for everybody."""
+        note_account_limited(self.account)
         n = len(self._texts)
         nxt = pick(exclude=self._tried, awake_only=True, count=n)
         if nxt is None:

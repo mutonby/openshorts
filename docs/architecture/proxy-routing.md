@@ -158,6 +158,15 @@ outright.
   per-GB proxy, and prints `main.AGE_RESTRICTED_MESSAGE` (download it and
   upload the file); unless an account was only rate-limited, in which case
   the job waits for the cooldown like any limited download.
+- **An account served protected formats only.** YouTube answers some
+  signed-in accounts "This video is DRM protected" for every video, for hours.
+  Every job that drew that account then failed on each route, and the
+  anonymous fallback only met the bot check. `yt_account.is_drm` +
+  `Session.drm_refused()` move the video to an account it has not tried
+  (awake first) and count the answer against the one that gave it, like a
+  limit: enough of them in a row rest it, a request that works clears them.
+  A video protected for everybody ends once every account said so. The probe
+  and the download both do it.
 - **One probe per submission.** The quality gate reuses what the metering
   probe just learned (`metering.probe_facts`) instead of asking again.
 - **The download starts from the probe's answer.** The probe and the
