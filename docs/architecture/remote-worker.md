@@ -84,7 +84,9 @@ worker's own address) sets `WORKER_DOWNLOADS=1`:
   reaches the API host minutes late. A claim made while that many of its
   jobs are still fetching does not say `downloads`, so that job is sent its
   source the usual way: the offer is made per claim (`worker.claim_body`),
-  and the number can grow while the hand-backs stay rare.
+  and the number can grow while the hand-backs stay rare. A job that
+  offered and is not ready within seconds was not given as a link (the API
+  host had a copy): it stops counting as a fetch while it waits.
 - It stops offering for `WORKER_DOWNLOAD_PAUSE_SECONDS` (900) once
   `WORKER_DOWNLOAD_STRIKES` (4) of its last eight fetches could not get the
   source, and while every account of its own rests (`yt_account.all_resting`,

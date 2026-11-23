@@ -56,6 +56,10 @@ DOWNLOAD_SLOTS = max(1, int(os.environ.get("WORKER_DOWNLOAD_SLOTS", "2") or 2))
 # fetches (twice as many are remembered) could not get the source.
 DOWNLOAD_STRIKES = max(1, int(os.environ.get("WORKER_DOWNLOAD_STRIKES", "4") or 4))
 DOWNLOAD_PAUSE = max(0.0, float(os.environ.get("WORKER_DOWNLOAD_PAUSE_SECONDS", "900") or 900))
+# A job given as a link is ready at once. One still not ready after this long
+# is being prepared on the API host (it had the source, or a copy in its
+# cache) and holds none of the fetches while it waits.
+LINK_GRACE = 15.0
 
 _stop = threading.Event()
 
@@ -338,12 +342,15 @@ def run_job(job_id, claim):
     source = None
     proc = None
     try:
-        deadline = time.time() + READY_TIMEOUT
+        claimed = time.time()
+        deadline = claimed + READY_TIMEOUT
         while True:
             r = _call("GET", f"/internal/worker/jobs/{job_id}", claim)
             info = r.json() if r.status_code == 200 else {}
             if info.get("state") == "ready":
                 break
+            if time.time() - claimed >= LINK_GRACE:
+                link_settled(job_id)     # the API host prepares it: no fetch here
             if _stop.is_set():
                 raise Stopping("worker stopping")
             if time.time() > deadline:
@@ -362,6 +369,7 @@ def run_job(job_id, claim):
             link = remote_worker.safe_link(info.get("link")) if DOWNLOADS else None
             if link is None:
                 raise RuntimeError("link refused")
+            link_claimed(job_id)     # it fetches, however late the link came
             os.makedirs(out_dir, exist_ok=True)
             # The source stays next to the clips and is sent back with them.
             cmd = [sys.executable, "-u", "main.py", "-u", link, "-o", out_dir,

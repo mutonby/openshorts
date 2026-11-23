@@ -1212,6 +1212,36 @@ def test_the_worker_fetches_only_so_many_links_at_once(links):
     assert worker._fetching == set() and list(worker._links["recent"]) == [True, True]
 
 
+def test_a_job_the_api_host_prepares_holds_no_fetch(links, monkeypatch):
+    """The worker offered to fetch, but the API host sends the source after
+    all (it had a copy): the offer is free again while that job waits."""
+    worker = links
+    job_id = "0b0e6d4c-4f6e-4d51-9a55-0d3a2f6b7c11"
+    monkeypatch.setattr(worker, "LINK_GRACE", 0.0)
+    monkeypatch.setattr(worker.time, "sleep", lambda s: None)
+    seen = []
+
+    class _Reply:
+        status_code = 200
+
+        def json(self):
+            return {"state": "preparing"}
+
+    def call(method, path, claim=None, **kw):
+        seen.append(job_id in worker._fetching)
+        if len(seen) == 3:
+            raise worker.Gone()
+        return _Reply()
+    monkeypatch.setattr(worker, "_call", call)
+    worker.link_claimed(job_id)
+    worker.link_claimed("another")
+    assert "downloads" not in worker.claim_body()
+    worker.run_job(job_id, "claim")
+    assert seen == [True, False, False]         # free after the first answer that is not "ready"
+    assert "downloads" in worker.claim_body()
+    assert list(worker._links["recent"]) == []  # and it says nothing about its links
+
+
 def test_links_that_keep_failing_pause_the_asking(links):
     worker = links
     asks = lambda now: worker.asks_for_a_link(now=now)
