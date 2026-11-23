@@ -68,7 +68,12 @@ BODY_HEADROOM = 0.10
 # width. Used for overlays that float mid-screen, where inset_box's corner
 # anchoring does not apply and pushed the crop up onto the ceiling, and to grow
 # a face detection to the inset in a corner.
-OVERLAY_FACE_WIDTHS = 3.0
+#
+# This is how far the crop is grown out from a detected face, so it is also the
+# zoom lever for a streamer's facecam: raise OVERLAY_FACE_WIDTHS to show more
+# around the face (less zoomed in), lower it for a tighter head shot. 3.0 ~ the
+# face filling a third of the webcam width, the default this was tuned at.
+OVERLAY_FACE_WIDTHS = float(os.environ.get("OVERLAY_FACE_WIDTHS", "3.0"))
 
 
 def nearest_corner(box, frame_w, frame_h):
