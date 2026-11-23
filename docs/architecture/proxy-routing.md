@@ -207,6 +207,16 @@ exits 0, so the attempt used to "succeed" with the first minutes only.
   then lasts the best part of an hour, and every such job holds its
   preparation here and the slot of the worker waiting for its source. A
   dropped stream ends the fetch and the check above deals with it.
+- A ranged fetch has a time and a speed limit (`main.RangedFetchGuard`):
+  past `RANGED_FETCH_MAX_SECONDS` (300), or once it brings in less than
+  `RANGED_FETCH_MIN_KBPS` (100) over a minute, ffmpeg is interrupted (SIGINT,
+  so it closes the file it was writing) and the part that came in is kept at
+  once, as `short` and `slow` in the route line. It is not fetched again: a
+  slow route is slow again. Some exits pace those long reads far below
+  playback speed for stretches of the day; without the limit the slow fetches
+  pile up, every slot waits on one, and paid jobs queue behind them. `0`
+  turns a limit off. An ffmpeg that ignores the interrupt is killed and the
+  attempt fails like any other.
 
 
 ## Download cache (`source_cache.py`)

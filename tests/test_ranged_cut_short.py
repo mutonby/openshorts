@@ -120,3 +120,76 @@ def test_short_twice_keeps_what_came_and_never_reaches_the_paid_proxy(monkeypatc
     assert [d["proxy"] for d in downloaded] == [STATICS[0], STATICS[0]]
     assert route["attempts"][-1]["ok"] and route["attempts"][-1]["short"]
     assert route["paid_bytes"] == 0 and "http://paid" not in [d["proxy"] for d in downloaded]
+
+
+# --- a ranged fetch that is too slow is ended -----------------------------------
+
+def test_the_guard_ends_a_fetch_that_lasts_too_long_or_crawls():
+    main = pytest.importorskip("main")
+    guard = main.RangedFetchGuard("output/x", max_seconds=300, min_kbps=100)
+    MB = 1024 * 1024
+    assert guard.verdict(5, 0) is None                    # nothing on disk yet: too early to say
+    assert guard.verdict(60, 200 * MB) is None
+    assert guard.verdict(120, 400 * MB) is None           # coming in fast
+    assert "KB/s" in guard.verdict(180, 401 * MB)         # ...then a trickle for a minute
+    fast = main.RangedFetchGuard("output/x", max_seconds=300, min_kbps=100)
+    for t in range(0, 300, 5):
+        assert fast.verdict(t, t * 4 * MB) is None
+    assert "still fetching" in fast.verdict(300, 1200 * MB)   # fast, but for too long
+    off = main.RangedFetchGuard("output/x", max_seconds=0, min_kbps=0)
+    assert off.verdict(5000, 0) is None                   # both limits off
+
+
+def _slow_fetch(monkeypatch, tmp_path, lengths, raises=True):
+    """A ranged fetch the guard ends: yt-dlp fails, the file is under its
+    working name, as ffmpeg leaves it when it is interrupted."""
+    main, downloaded = _download(monkeypatch, lengths)
+
+    class _Guard:
+        fired = "coming in at 40 KB/s"
+
+        def __init__(self, directory):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    real = main.yt_dlp.YoutubeDL
+
+    class _YDL(real):
+        def process_ie_result(self, info, download=True):
+            downloaded.append({"proxy": self.opts.get("proxy")})
+            with open(self.opts["outtmpl"].replace("%(ext)s", "mp4.part"), "wb") as f:
+                f.write(b"part")
+            if raises:
+                raise RuntimeError("ERROR: ffmpeg exited with code 255")
+            return info
+
+    monkeypatch.setattr(main, "RangedFetchGuard", _Guard)
+    monkeypatch.setattr(main.yt_dlp, "YoutubeDL", _YDL)
+    return main, downloaded
+
+
+def test_a_fetch_ended_for_being_slow_keeps_its_part_at_once(monkeypatch, tmp_path):
+    main, downloaded = _slow_fetch(monkeypatch, tmp_path, [240])
+    route = {}
+    path, _ = main._download_youtube_video(URL, str(tmp_path), cap_minutes=20, route_out=route)
+    assert open(path, "rb").read() == b"part"            # what ffmpeg closed, under its final name
+    assert len(downloaded) == 1                           # not fetched again: it would be slow again
+    last = route["attempts"][-1]
+    assert last["ok"] and last["short"] and last["slow"]
+    assert route["paid_bytes"] == 0
+
+
+def test_a_fetch_ended_with_nothing_usable_fails_like_any_other(monkeypatch, tmp_path):
+    main, downloaded = _slow_fetch(monkeypatch, tmp_path, [None] * 20)
+    route = {}
+    try:
+        main._download_youtube_video(URL, str(tmp_path), cap_minutes=20, route_out=route)
+    except BaseException:
+        pass
+    assert len(downloaded) > 1                            # the other routes were tried
+    assert not any(a.get("short") for a in route.get("attempts", []))

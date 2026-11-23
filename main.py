@@ -1,6 +1,7 @@
 import time
 import cv2
 import subprocess
+import signal
 import shutil
 import argparse
 import re
@@ -741,6 +742,138 @@ def _media_seconds(path):
         return None
 
 
+# How long a ranged fetch may last, and how slowly it may come in, before it
+# is ended and the part that came in is kept. The site paces some of those
+# long reads to a fraction of playback speed: a 20-minute range then takes
+# the best part of an hour, and each such fetch holds a slot here and the
+# worker waiting for its source, so the slow ones pile up until nothing else
+# is prepared. 0 turns a limit off.
+def _seconds_env(name, default):
+    try:
+        return max(0.0, float(os.environ.get(name, "").strip() or default))
+    except ValueError:
+        return float(default)
+
+
+RANGED_FETCH_MAX_SECONDS = _seconds_env("RANGED_FETCH_MAX_SECONDS", 300.0)
+RANGED_FETCH_MIN_KBPS = _seconds_env("RANGED_FETCH_MIN_KBPS", 100.0)
+RANGED_FETCH_WINDOW_SECONDS = 60.0
+RANGED_FETCH_GRACE_SECONDS = 90.0
+
+
+def _own_ffmpeg(marker):
+    """Pids of this process's ffmpeg children whose command line holds
+    ``marker`` (the job's directory). Linux only: [] anywhere else."""
+    found = []
+    me = os.getpid()
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return found
+    for name in entries:
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat", "rb") as f:
+                stat = f.read().decode("utf-8", "replace")
+            # "pid (comm) state ppid ...": comm may hold spaces and brackets.
+            if int(stat.rsplit(")", 1)[1].split()[1]) != me:
+                continue
+            with open(f"/proc/{name}/cmdline", "rb") as f:
+                argv = f.read().split(b"\0")
+        except (OSError, ValueError, IndexError):
+            continue
+        if (argv and os.path.basename(argv[0]).startswith(b"ffmpeg")
+                and any(marker.encode() in a for a in argv)):
+            found.append(int(name))
+    return found
+
+
+class RangedFetchGuard:
+    """Ends a ranged fetch that lasts too long or comes in too slowly.
+
+    ffmpeg is interrupted, not killed: it closes the file it was writing, so
+    the part that came in is a whole video, checked like one whose stream
+    dropped. Fail-open: with nothing to measure or nobody to stop, the fetch
+    runs as it always did."""
+
+    def __init__(self, directory, max_seconds=None, min_kbps=None, clock=time.monotonic):
+        self.directory = directory
+        self.max_seconds = RANGED_FETCH_MAX_SECONDS if max_seconds is None else max_seconds
+        self.min_kbps = RANGED_FETCH_MIN_KBPS if min_kbps is None else min_kbps
+        self.clock = clock
+        self.fired = None                # why it ended the fetch, once it did
+        self._samples = []               # (seconds since the start, bytes on disk)
+        self._done = threading.Event()
+        self._thread = None
+
+    def _size(self):
+        total = 0
+        try:
+            for name in os.listdir(self.directory):
+                if name.endswith(".part"):
+                    total += os.path.getsize(os.path.join(self.directory, name))
+        except OSError:
+            pass
+        return total
+
+    def verdict(self, elapsed, size):
+        """Why the fetch must end now, or None. ``size``: bytes on disk."""
+        self._samples.append((elapsed, size))
+        if self.max_seconds and elapsed >= self.max_seconds:
+            return f"still fetching after {elapsed:.0f}s"
+        if not self.min_kbps or elapsed < RANGED_FETCH_GRACE_SECONDS:
+            return None
+        # The oldest sample inside the window, against now.
+        then = [x for x in self._samples if elapsed - x[0] <= RANGED_FETCH_WINDOW_SECONDS][0]
+        span = elapsed - then[0]
+        if span < RANGED_FETCH_WINDOW_SECONDS * 0.75:
+            return None
+        rate = (size - then[1]) / 1024.0 / span
+        if rate < self.min_kbps:
+            return f"coming in at {rate:.0f} KB/s"
+        return None
+
+    def _stop_ffmpeg(self):
+        pids = _own_ffmpeg(self.directory)
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGINT)
+            except OSError:
+                pass
+        return pids
+
+    def _run(self):
+        start = self.clock()
+        while not self._done.wait(5.0):
+            why = self.verdict(self.clock() - start, self._size())
+            if why is None:
+                continue
+            if not self._stop_ffmpeg():
+                continue                 # nobody to stop (yet): look again
+            self.fired = why
+            print(f"⏱️ Ranged fetch {why}: ending it and keeping what came in.", flush=True)
+            # One that ignores the interrupt is killed: the attempt then fails
+            # like any other and the next route is tried.
+            if not self._done.wait(30.0):
+                for pid in _own_ffmpeg(self.directory):
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+            return
+
+    def __enter__(self):
+        if self.max_seconds or self.min_kbps:
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._done.set()
+        return False
+
+
 def exit_refused(err) -> bool:
     """A proxy answered the CONNECT itself with a refusal (a provider that does
     not carry that site, an ACL): the site was never reached, so the failure
@@ -1265,18 +1398,38 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             dl_opts['download_ranges'] = download_range_func(None, [(0, _range_cap)])
             print(f"✂️ Source is {'of unknown length' if not info.get('duration') else 'longer than the paid minutes'}"
                   f": downloading only the first {_range_cap / 60:.0f} min.")
-        with yt_dlp.YoutubeDL(dl_opts) as ydl:
-            if info.get('_type', 'video') == 'video' and info.get('formats'):
-                ydl.process_ie_result(info, download=True)
-            else:
-                ydl.download([url])
+        guard = RangedFetchGuard(output_dir) if ranged else None
+        final = os.path.join(output_dir, f'{sanitized}.mp4')
+        try:
+            with (guard or contextlib.nullcontext()), yt_dlp.YoutubeDL(dl_opts) as ydl:
+                if info.get('_type', 'video') == 'video' and info.get('formats'):
+                    ydl.process_ie_result(info, download=True)
+                else:
+                    ydl.download([url])
+        except Exception:
+            if not (guard and guard.fired):
+                raise
+            # Ended by the guard: ffmpeg closed the file under its working
+            # name, and to yt-dlp that is a failed download.
+            if not os.path.exists(final) and os.path.exists(final + ".part"):
+                os.replace(final + ".part", final)
+            # yt-dlp counted nothing for a download it calls failed: what is
+            # on disk came through this route (the per-GB ledger reads it).
+            if os.path.exists(final) and not (_dl_bytes["total"] + _dl_bytes["partial"]):
+                _dl_bytes["total"] = os.path.getsize(final)
+        slow = bool(guard and guard.fired)
         want = _dl_bytes.get("want_seconds") or 0
-        if want:
-            got = _media_seconds(os.path.join(output_dir, f'{sanitized}.mp4'))
-            if ranged_cut_short(got, want):
+        if want or slow:
+            got = _media_seconds(final)
+            if slow and not got:
+                raise RuntimeError(f"Ranged fetch ended ({guard.fired}) with nothing usable")
+            if slow or ranged_cut_short(got, want):
                 err = RangedDownloadCutShort(
-                    f"Ranged download cut short: {got:.0f}s of {want:.0f}s")
+                    f"Ranged download cut short: {got:.0f}s of {want:.0f}s"
+                    + (f" ({guard.fired})" if slow else ""))
                 err.sanitized = sanitized
+                # Fetched again, a slow one is slow again: it is kept at once.
+                err.slow = slow
                 raise err
         return sanitized
 
@@ -1340,11 +1493,19 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             # attempt keeps what it gets (at most two long ranged fetches).
             short_before = isinstance(e, RangedDownloadCutShort)
             _forget_extraction(url)
-            attempt_log.append({"label": label, "ok": False, "paid": False, "reused": True,
-                                "bytes": _dl_bytes["total"] + _dl_bytes["partial"],
-                                "error": str(e)[:300]})
-            print(f"⚠️  The reused extraction did not download ({str(e)[:160]}): asking YouTube again.")
-            sanitized_title = None
+            if getattr(e, "slow", False):
+                # Ended for being slow: the part that came in is kept.
+                sanitized_title = e.sanitized
+                attempt_log.append({"label": label, "ok": True, "short": True, "slow": True,
+                                    "paid": False, "reused": True,
+                                    "bytes": _dl_bytes["total"] + _dl_bytes["partial"]})
+                print(f"⚠️  {e}: keeping the part that came in ({label}).")
+            else:
+                attempt_log.append({"label": label, "ok": False, "paid": False, "reused": True,
+                                    "bytes": _dl_bytes["total"] + _dl_bytes["partial"],
+                                    "error": str(e)[:300]})
+                print(f"⚠️  The reused extraction did not download ({str(e)[:160]}): asking YouTube again.")
+                sanitized_title = None
     account_limited = False
     # Age-restricted: every account tried said no (or nobody is signed in).
     age_refused = False
@@ -1386,16 +1547,21 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                 print(f"✅ Download succeeded ({label}).")
                 break
             except Exception as e:
-                if isinstance(e, RangedDownloadCutShort) and (retry == 1 or short_before):
-                    # Cut short twice on this route: keep what came in rather
-                    # than walk the other routes (and the per-GB proxy) for a
-                    # range. The job is billed for the source it got (app.py).
+                slow = getattr(e, "slow", False)
+                if isinstance(e, RangedDownloadCutShort) and (retry == 1 or short_before or slow):
+                    # Cut short twice on this route, or ended for being slow:
+                    # keep what came in rather than walk the other routes (and
+                    # the per-GB proxy) for a range. The job is billed for the
+                    # source it got (app.py).
                     sanitized_title = e.sanitized
                     used_proxy = proxy is not None and proxy == _proxy
-                    attempt_log.append({"label": label, "ok": True, "short": True,
-                                        "bytes": _dl_bytes["total"] + _dl_bytes["partial"],
-                                        "paid": used_proxy})
-                    print(f"⚠️  {e} again: keeping the part that came in ({label}).")
+                    entry = {"label": label, "ok": True, "short": True,
+                             "bytes": _dl_bytes["total"] + _dl_bytes["partial"],
+                             "paid": used_proxy}
+                    if slow:
+                        entry["slow"] = True
+                    attempt_log.append(entry)
+                    print(f"⚠️  {e}{'' if slow else ' again'}: keeping the part that came in ({label}).")
                     break
                 last_err = e
                 attempt_log.append({"label": label, "ok": False,
