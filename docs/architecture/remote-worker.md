@@ -78,6 +78,21 @@ worker's own address) sets `WORKER_DOWNLOADS=1`:
   another route) ends as `done` with `no_source`: the job runs again on the
   API host with its own routes, and the breaker is not told. The worker
   knows the source arrived by main.py's own `PROXY_ROUTE=` line.
+- It fetches at most `WORKER_DOWNLOAD_SLOTS` (2) links at the same moment.
+  A fetch per slot from one address, on a few accounts, had the media
+  refused for a large share of them, and each refused link is a job that
+  reaches the API host minutes late. A claim made while that many of its
+  jobs are still fetching does not say `downloads`, so that job is sent its
+  source the usual way: the offer is made per claim (`worker.claim_body`),
+  and the number can grow while the hand-backs stay rare.
+- It stops offering for `WORKER_DOWNLOAD_PAUSE_SECONDS` (900) once
+  `WORKER_DOWNLOAD_STRIKES` (4) of its last eight fetches could not get the
+  source, and while every account of its own rests (`yt_account.all_resting`,
+  the worker's own state files). Meanwhile it works as a worker that never
+  downloads.
+- A job whose video is already in its directory on the API host (a job
+  resumed after a deploy) is not given as a link: the worker never replaces a
+  file that was there before it, so its own copy could not come back.
 
 One account lives on one host: its pacing and its rest are files of that
 host, so an account configured on the worker is not also configured on the
@@ -201,7 +216,7 @@ short of CPU.
 Worker: `WORKER_API_URL` (https), `WORKER_TOKEN`, `WORKER_SLOTS`,
 `GEMINI_API_KEY`, `WORKER_SOURCE_ONLY` (`1` on a worker with a GPU: the source
 alone, see above), `WORKER_DOWNLOADS` (`1` with `YOUTUBE_COOKIES`.. of its
-own: it fetches links itself), plus the pipeline defaults the API host sets for itself
+own: it fetches links itself, `WORKER_DOWNLOAD_SLOTS` at a time), plus the pipeline defaults the API host sets for itself
 (`AUTO_LAYOUT`, `TRANSCRIBE_BACKEND`, `FFMPEG_THREADS`, `CLIP_WORKERS`...): only
 per-job options travel with a job.
 

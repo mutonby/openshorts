@@ -28,6 +28,10 @@ services:
       # set by its operator and never sent by the API): it fetches a job's
       # link itself instead of waiting for the API host to send the source.
       WORKER_DOWNLOADS: ${WORKER_DOWNLOADS:-0}
+      # How many of its jobs fetch a link at once (the rest are sent their
+      # source), and how long it stops asking after a run of failed fetches.
+      WORKER_DOWNLOAD_SLOTS: ${WORKER_DOWNLOAD_SLOTS:-2}
+      WORKER_DOWNLOAD_PAUSE_SECONDS: ${WORKER_DOWNLOAD_PAUSE_SECONDS:-900}
       YOUTUBE_COOKIES: ${YOUTUBE_COOKIES:-}
       YOUTUBE_COOKIES_2: ${YOUTUBE_COOKIES_2:-}
       YOUTUBE_COOKIES_3: ${YOUTUBE_COOKIES_3:-}

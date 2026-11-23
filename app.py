@@ -5359,16 +5359,29 @@ def _claim_remote_job(worker, source_only=False, downloads=False):
     return None
 
 
+_SOURCE_SUFFIXES = (".mp4", ".mkv", ".webm", ".mov", ".m4v")
+
+
 def _worker_link(output_dir, cmd, env):
     """The link the worker that claimed the job fetches on its own, or None
     when this host prepares the source as usual: the worker did not ask to
-    download, the job is not a link of a site on the closed list, or a whole
+    download, the job is not a link of a site on the closed list, a whole
     copy is already in the download cache here (sending that costs no
-    request of anybody's account)."""
+    request of anybody's account), or an earlier run on this host left the
+    job's video in its directory (a job resumed after a deploy): fetched
+    again, it could not come back, since a worker never replaces a file that
+    was there before it."""
     if not remote_worker.downloads(output_dir):
         return None
     link = remote_worker.link_of(cmd)
     if link is None:
+        return None
+    try:
+        left = os.listdir(output_dir)
+    except OSError:
+        left = []
+    if any(not name.startswith(".") and os.path.splitext(name)[1].lower() in _SOURCE_SUFFIXES
+           for name in left):
         return None
     capped = any(str(env.get(name) or "").strip() not in ("", "0")
                  for name in ("MAX_SOURCE_MINUTES", "SOURCE_CAP_MINUTES"))

@@ -1172,6 +1172,79 @@ def test_the_worker_says_it_downloads_only_when_told_to(monkeypatch):
     assert worker.claim_body() == {"worker": "w1", "source_only": True, "downloads": True}
 
 
+@pytest.fixture
+def links(monkeypatch, tmp_path):
+    """A worker told to fetch links, with its counters empty."""
+    from collections import deque
+    worker = pytest.importorskip("worker")
+    monkeypatch.setenv("YT_ACCOUNT_STATE_DIR", str(tmp_path))
+    for name in ["YOUTUBE_COOKIES"] + [f"YOUTUBE_COOKIES_{n}" for n in range(2, 10)]:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(worker, "NAME", "w1")
+    monkeypatch.setattr(worker, "SOURCE_ONLY", False)
+    monkeypatch.setattr(worker, "DOWNLOADS", True)
+    monkeypatch.setattr(worker, "DOWNLOAD_SLOTS", 2)
+    monkeypatch.setattr(worker, "DOWNLOAD_STRIKES", 2)
+    monkeypatch.setattr(worker, "DOWNLOAD_PAUSE", 900.0)
+    monkeypatch.setattr(worker, "_fetching", set())
+    monkeypatch.setattr(worker, "_links", {"recent": deque(maxlen=4), "until": 0.0})
+    monkeypatch.setattr(worker, "log", lambda msg: None)
+    return worker
+
+
+def test_the_worker_fetches_only_so_many_links_at_once(links):
+    worker = links
+    asks = lambda: "downloads" in worker.claim_body()
+    assert asks()
+    worker.link_claimed("a")
+    assert asks()
+    worker.link_claimed("b")
+    assert not asks()                           # two fetching: the next job is sent its source
+    worker.link_settled("a", True)              # a's source is on disk, it renders now
+    assert asks()
+    worker.link_claimed("c")
+    assert not asks()
+    worker.link_settled("b")                    # never a link: the API host had the source
+    assert asks()
+    worker.link_settled("b")                    # settling twice changes nothing
+    worker.link_settled("c", True)
+    worker.link_settled("c")
+    assert worker._fetching == set() and list(worker._links["recent"]) == [True, True]
+
+
+def test_links_that_keep_failing_pause_the_asking(links):
+    worker = links
+    asks = lambda now: worker.asks_for_a_link(now=now)
+    worker.link_settled("a", False, now=1000.0)
+    worker.link_settled("b", True, now=1000.0)
+    worker.link_settled("c", True, now=1000.0)
+    assert asks(1000.0)                         # one in three: carries on
+    worker.link_settled("d", False, now=1000.0)
+    assert not asks(1000.0) and not asks(1899.0)    # two of the last four: it stops asking
+    assert asks(1900.0)                         # and starts again with a clean count
+    assert list(worker._links["recent"]) == []
+    worker.link_settled("e", False, now=2000.0)
+    worker.link_settled("f", None, now=2000.0)  # a job that was sent its source says nothing
+    assert asks(2000.0)
+
+
+def test_no_link_is_asked_for_while_every_account_rests(links, monkeypatch):
+    import yt_account
+    worker = links
+    monkeypatch.setenv("YOUTUBE_COOKIES", "one")
+    monkeypatch.setenv("YOUTUBE_COOKIES_2", "two")
+    monkeypatch.setattr(yt_account, "REST_STRIKES", 1)
+    monkeypatch.setattr(yt_account, "REST_SECONDS", 900.0)
+    assert worker.asks_for_a_link()
+    yt_account.note_account_limited(0)
+    assert worker.asks_for_a_link()             # the other one is awake
+    yt_account.note_account_limited(1)
+    assert not worker.asks_for_a_link()
+    # A state it cannot read never stops the worker.
+    monkeypatch.setattr(yt_account, "all_resting", lambda: 1 / 0)
+    assert worker.asks_for_a_link()
+
+
 def test_the_workers_own_accounts_stay_its_own(monkeypatch):
     """The cookies main.py uses on the worker are the operator's: nothing the
     API sends can set or replace them."""
@@ -1214,6 +1287,14 @@ def test_when_the_worker_is_given_the_link(api, monkeypatch):
     assert m._worker_link(d, cmd, dict(env, MAX_SOURCE_MINUTES="20")) == LINK
     upload = ["python", "-u", "main.py", "-i", "uploads/v.mp4", "-o", "output/x"]
     assert m._worker_link(d, upload, env) is None
+    # A job that already ran here (resumed after a deploy) keeps its video: the
+    # worker could not send its own copy back over it, so it is sent this one.
+    monkeypatch.setattr(m.source_cache, "has", lambda url: False)
+    open(os.path.join(d, ".notes.mp4"), "wb").write(b"x")
+    open(os.path.join(d, "V_metadata.json"), "w").write("{}")
+    assert m._worker_link(d, cmd, env) == LINK                # neither is a video of the job
+    open(os.path.join(d, "V.MP4"), "wb").write(b"x")
+    assert m._worker_link(d, cmd, env) is None
 
 
 def _run_link_job(m, monkeypatch, job_id, d, worker_does):

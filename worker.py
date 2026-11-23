@@ -21,10 +21,12 @@ import sys
 import threading
 import time
 import uuid
+from collections import deque
 
 import requests
 
 import remote_worker
+import yt_account
 
 API = os.environ.get("WORKER_API_URL", "").rstrip("/")
 TOKEN = os.environ.get("WORKER_TOKEN", "").strip()
@@ -44,6 +46,16 @@ SOURCE_ONLY = os.environ.get("WORKER_SOURCE_ONLY", "").strip() == "1"
 # API host then neither downloads the source nor sends it over. What it
 # fetches goes back with the clips, for the editor on that host.
 DOWNLOADS = os.environ.get("WORKER_DOWNLOADS", "").strip() == "1"
+# How many of its jobs fetch a link at the same moment. A signed-in session
+# that opens a download per slot from one address is refused the media, and
+# every refused link is a job handed back late. Past this number the worker
+# asks for the source the usual way, so its other slots never wait on its
+# accounts.
+DOWNLOAD_SLOTS = max(1, int(os.environ.get("WORKER_DOWNLOAD_SLOTS", "2") or 2))
+# ...and it stops asking for links for a while once this many of its last
+# fetches (twice as many are remembered) could not get the source.
+DOWNLOAD_STRIKES = max(1, int(os.environ.get("WORKER_DOWNLOAD_STRIKES", "4") or 4))
+DOWNLOAD_PAUSE = max(0.0, float(os.environ.get("WORKER_DOWNLOAD_PAUSE_SECONDS", "900") or 900))
 
 _stop = threading.Event()
 
@@ -112,12 +124,59 @@ def safe_job_path(job_id, path):
     return None
 
 
+_links_lock = threading.Lock()
+_fetching = set()                # jobs claimed as a link whose source is not here yet
+_links = {"recent": deque(maxlen=2 * DOWNLOAD_STRIKES), "until": 0.0}
+
+
+def asks_for_a_link(now=None):
+    """Whether the next claim offers to fetch the link itself: told to, with
+    a fetch to spare, not after a run of links it could not fetch, and not
+    while every account of its own rests."""
+    if not DOWNLOADS:
+        return False
+    now = time.time() if now is None else now
+    with _links_lock:
+        if len(_fetching) >= DOWNLOAD_SLOTS or now < _links["until"]:
+            return False
+    try:
+        return yt_account.all_resting() <= 0
+    except Exception:
+        return True
+
+
+def link_claimed(job_id):
+    """A job was claimed while offering to fetch: it holds one of the fetches
+    until ``link_settled``."""
+    with _links_lock:
+        _fetching.add(job_id)
+
+
+def link_settled(job_id, fetched=None, now=None):
+    """``job_id`` no longer fetches. ``fetched``: True when its source is on
+    disk, False when it could not be fetched, None when it was never a link
+    (the API host sent the source) or the job ended some other way."""
+    paused = False
+    with _links_lock:
+        _fetching.discard(job_id)
+        if fetched is None:
+            return
+        recent = _links["recent"]
+        recent.append(bool(fetched))
+        if not fetched and DOWNLOAD_PAUSE and list(recent).count(False) >= DOWNLOAD_STRIKES:
+            recent.clear()
+            _links["until"] = (time.time() if now is None else now) + DOWNLOAD_PAUSE
+            paused = True
+    if paused:
+        log(f"links keep failing here: none asked for during {DOWNLOAD_PAUSE:.0f}s")
+
+
 def claim_body():
     """What this worker says of itself when it asks for a job."""
     body = {"worker": NAME}
     if SOURCE_ONLY:
         body["source_only"] = True
-    if DOWNLOADS:
+    if asks_for_a_link():
         body["downloads"] = True
     return body
 
@@ -295,6 +354,8 @@ def run_job(job_id, claim):
         if args is None:
             raise RuntimeError("arguments refused")
         link = None
+        if not info.get("link"):
+            link_settled(job_id)     # the API host had the source: no fetch here
         if info.get("link"):
             # Only a worker that asked to download is ever sent a link, and
             # only one of the closed list of sites.
@@ -333,8 +394,10 @@ def run_job(job_id, claim):
                 line = raw.decode("utf-8", "replace").rstrip()
                 if not line:
                     continue
-                if line.startswith("PROXY_ROUTE="):
+                if line.startswith("PROXY_ROUTE=") and not fetched.is_set():
                     fetched.set()        # printed once the download is over
+                    if link:
+                        link_settled(job_id, True)
                 if line.startswith("CLIP_READY "):
                     # The API serves a clip as soon as it hears this line: the
                     # file and the metadata that lists it go first.
@@ -379,6 +442,8 @@ def run_job(job_id, claim):
         # video needs another route) is no failure of the worker: the API
         # host is told so and runs the job with its own routes.
         no_source = bool(link) and proc.returncode != 0 and not fetched.is_set()
+        if no_source:
+            link_settled(job_id, False)
         if not no_source:
             uploader.send_all()
         flush()
@@ -403,6 +468,7 @@ def run_job(job_id, claim):
     finally:
         if proc is not None and proc.poll() is None:
             proc.kill()
+        link_settled(job_id)
         shutil.rmtree(out_dir, ignore_errors=True)
         if source and os.path.exists(source):
             try:
@@ -419,18 +485,22 @@ def main():
     signal.signal(signal.SIGTERM, lambda *_: _stop.set())
     signal.signal(signal.SIGINT, lambda *_: _stop.set())
     log(f"{NAME}: {SLOTS} slot(s){', source only' if SOURCE_ONLY else ''}"
-        f"{', fetches links itself' if DOWNLOADS else ''}, API {API}")
+        f"{f', fetches links itself ({DOWNLOAD_SLOTS} at a time)' if DOWNLOADS else ''}"
+        f", API {API}")
     running = []
     while not _stop.is_set():
         running = [t for t in running if t.is_alive()]
         claimed = False
         if len(running) < SLOTS:
             try:
-                r = _call("POST", "/internal/worker/claim", tries=1, json=claim_body())
+                asked = claim_body()
+                r = _call("POST", "/internal/worker/claim", tries=1, json=asked)
                 body = r.json() if r.status_code == 200 else {}
                 if body.get("job_id") and not valid_job_id(body["job_id"]):
                     log("claim: job id refused")
                 elif body.get("job_id") and body.get("claim"):
+                    if asked.get("downloads"):
+                        link_claimed(body["job_id"])
                     t = threading.Thread(target=run_job, args=(body["job_id"], body["claim"]),
                                          daemon=True)
                     t.start()
