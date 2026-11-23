@@ -3058,15 +3058,18 @@ def get_visual_clips(video_path, video_duration, language="en", viewer_clips=Non
 
     segments = vision_segments(video_duration, VISION_SEGMENT_SECONDS, VISION_MAX_SEGMENTS)
     try:
-        covered = segments[-1][1]
+        # Seconds the model actually watches: past VISION_MAX_SEGMENTS the
+        # stretches are spread over the whole source with gaps between them,
+        # so the last stretch's end is no longer the footage covered.
+        covered = sum(end - start for start, end in segments)
         if len(segments) == 1:
             print(f"🎥  Model: {model_name} | watching a 360p/1 fps proxy of "
                   f"{os.path.basename(video_path)}")
         else:
             print(f"🎥  Model: {model_name} | {len(segments)} stretches of "
                   f"~{(segments[0][1] - segments[0][0]) / 60:.0f} min"
-                  + (f" (only the first {covered / 60:.0f} of "
-                     f"{video_duration / 60:.0f} min; VISION_MAX_SEGMENTS)"
+                  + (f" ({covered / 60:.0f} of {video_duration / 60:.0f} min, "
+                     f"spread across the source; VISION_MAX_SEGMENTS)"
                      if covered < float(video_duration) - 1 else ""))
         # A long silent source gives clips in proportion to its length too
         # (clip_selection.vision_targets); a short one keeps the classic band.

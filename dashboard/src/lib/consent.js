@@ -52,12 +52,12 @@ export function isEEAVisitor() {
 
 export function refineGeo() {
   if (typeof window === "undefined" || typeof window.fetch !== "function") return;
-  try { if (window.localStorage.getItem(GEO_KEY)) return; } catch (e) {}
+  try { if (window.localStorage.getItem(GEO_KEY)) return; } catch (e) { /* storage blocked: fetch again */ }
   fetch("/cdn-cgi/trace", { cache: "no-store" })
     .then((r) => (r.ok ? r.text() : ""))
     .then((t) => {
       const m = /^loc=([A-Z]{2})$/m.exec(t || "");
-      if (m) { try { window.localStorage.setItem(GEO_KEY, m[1]); } catch (e) {} }
+      if (m) { try { window.localStorage.setItem(GEO_KEY, m[1]); } catch (e) { /* storage blocked */ } }
     })
     .catch(() => {});
 }
@@ -111,7 +111,6 @@ export function onConsentChange(fn) {
  * document that never loads it.
  */
 export function setConsent(choice) {
-  const before = getConsent();
   const next = {
     v: VERSION,
     ts: new Date().toISOString(),

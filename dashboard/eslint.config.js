@@ -5,7 +5,8 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  // public/ holds vendored, minified third-party scripts (OpenPanel's op1.js).
+  globalIgnores(['dist', 'public']),
   {
     files: ['**/*.{js,jsx}'],
     extends: [
@@ -26,7 +27,9 @@ export default defineConfig([
       // `catch (e)` / `catch (_)` with the error deliberately ignored is the
       // house style for best-effort localStorage and fetch calls.
       'no-unused-vars': ['error', {
-        varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^_', caughtErrors: 'none',
+        // A capitalised destructured arg (`{ icon: Icon }`) is a component used
+        // as JSX, which this config's core rule does not see.
+        varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^(_|[A-Z])', caughtErrors: 'none',
       }],
       // Contexts and modals export a hook or a constant next to the component.
       'react-refresh/only-export-components': ['error', { allowConstantExport: true }],
