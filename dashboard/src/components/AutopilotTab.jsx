@@ -58,7 +58,7 @@ const browserTimezone = () => {
 
 function Switch({ checked, onChange, disabled, label }) {
   return (
-    <span className="relative inline-flex items-center shrink-0">
+    <label className="relative inline-flex items-center shrink-0 cursor-pointer">
       <input
         type="checkbox"
         role="switch"
@@ -69,7 +69,7 @@ function Switch({ checked, onChange, disabled, label }) {
         className="sr-only peer"
       />
       <span className="w-11 h-6 rounded-full bg-paper3 border border-rule2 peer-checked:bg-brass peer-disabled:opacity-40 transition-colors after:content-[''] after:absolute after:left-1 after:top-1 after:w-4 after:h-4 after:rounded-full after:bg-ink after:transition-transform peer-checked:after:translate-x-5" />
-    </span>
+    </label>
   );
 }
 
