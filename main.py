@@ -3196,6 +3196,7 @@ if __name__ == '__main__':
             parser.error("--source-audio-language needs a valid language code and a YouTube video URL")
     output_format = args.format
     force_strategy = "SPORTS" if args.framing_method == "sports" and output_format != "horizontal" else None
+    framing_options = {"force_strategy": force_strategy} if force_strategy else {}
 
     script_start_time = time.time()
 
@@ -3432,7 +3433,7 @@ if __name__ == '__main__':
         output_file = args.output
         if not output_file or _is_output_dir(output_file):
             output_file = os.path.join(output_dir, f"{video_title}_vertical.mp4")
-        render_clip(input_video, output_file, output_format, force_strategy=force_strategy)
+        render_clip(input_video, output_file, output_format, **framing_options)
     else:
         # Get duration (needed by both the transcript and the vision path).
         cap = cv2.VideoCapture(input_video)
@@ -3581,8 +3582,7 @@ if __name__ == '__main__':
                     # made. Each worker writes only its own clip dict, so the
                     # re-dump after the pool is race-free.
                     success = render_clip(clip_temp_path, clip_final_path, output_format,
-                                          force_strategy=force_strategy,
-                                          subtitle_band=source_subtitle_band)
+                                          subtitle_band=source_subtitle_band, **framing_options)
                     if success:
                         print(f"   🎞️ Clip {i+1} framed")
                     deliver_path = clip_final_path
