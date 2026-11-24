@@ -43,6 +43,13 @@ Guards that keep the card from filling:
   wait behind long ones only. Whisper keeps the slot when it falls to the
   CPU: the process holds its CUDA context until it exits, and handing the
   slot back let the next process in to hit the same OOM.
+- **A full card is waited for.** A transcription that gets "out of memory"
+  from the card drops its model, waits for room (`ASR_CARD_WAIT`, 120 s;
+  `WHISPER_CARD_MB`, `PARAKEET_CARD_MB`) and tries the card once more, Parakeet
+  and whisper alike; only then does whisper go to the CPU. Without the wait a
+  card filled for a few seconds by the other slots sent a whole long source
+  to CPU whisper, on several cores for as long as the video lasts. A
+  `require_gpu` process (prepare-only) never waits: its worker transcribes.
 - **Parakeet leaves the card before the whisper fallback**
   (`transcribe_backends._drop_parakeet`): its arena (~7 GB on a long video)
   made whisper hit CUDA OOM and the whole transcription ran on the CPU. A

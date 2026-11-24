@@ -688,6 +688,7 @@ class TestRequireGpu:
             calls.append(path)
             raise RuntimeError("CUDA failed with error out of memory")
         monkeypatch.setattr(tb, "_run_whisper_once", once)
+        monkeypatch.setattr(tb, "_card_free_mb", lambda: pytest.fail("it does not wait"))
         with pytest.raises(tb.GpuUnavailable):
             tb.run_whisper_transcription("x.mp4")
         assert calls == ["x.mp4"]                # no second, CPU attempt
@@ -713,6 +714,7 @@ class TestRequireGpu:
 def test_without_require_gpu_a_cuda_failure_still_retries_on_the_cpu(monkeypatch):
     monkeypatch.setattr(tb, "_gpu_only", False)
     monkeypatch.setattr(tb, "_whisper_force_cpu", False)
+    monkeypatch.setattr(tb, "_card_free_mb", lambda: None)      # no card to read
     calls = []
 
     def once(path, **params):
@@ -723,3 +725,120 @@ def test_without_require_gpu_a_cuda_failure_still_retries_on_the_cpu(monkeypatch
     monkeypatch.setattr(tb, "_run_whisper_once", once)
     assert tb.run_whisper_transcription("x.mp4")[0] == []
     assert calls == [False, True]
+
+
+# --- a full card is waited for, not left for the CPU ---------------------------
+
+OOM = "CUDA failed with error out of memory"
+ARENA = ("[ONNXRuntimeError] : 1 : FAIL : bfc_arena.cc:360 Failed to allocate "
+         "memory for requested buffer of size 4194304")
+
+
+def _card(monkeypatch, readings):
+    """The card's free MB, one reading per look; the last one stays."""
+    left = list(readings)
+    monkeypatch.setattr(tb, "_card_free_mb",
+                        lambda: left.pop(0) if len(left) > 1 else left[0])
+
+
+def test_the_wait_ends_when_the_card_has_room(monkeypatch, capsys):
+    _card(monkeypatch, [500, 900, 4000])
+    slept = []
+    assert tb.wait_for_card(3500, seconds=120, sleep=slept.append) is True
+    assert slept == [3.0, 3.0]
+    assert capsys.readouterr().out.count("waiting for room") == 1     # said once
+
+
+def test_the_wait_gives_up_and_never_starts_without_a_card(monkeypatch):
+    _card(monkeypatch, [500])
+    slept = []
+    assert tb.wait_for_card(3500, seconds=7, sleep=slept.append) is False
+    assert slept == [3.0, 3.0, 1.0]                                   # no longer than asked
+    assert tb.wait_for_card(3500, seconds=0, sleep=lambda s: pytest.fail("waited")) is False
+    _card(monkeypatch, [None])
+    assert tb.wait_for_card(3500, seconds=120, sleep=lambda s: pytest.fail("waited")) is False
+
+
+def _whisper_that_fails(monkeypatch, times):
+    monkeypatch.setattr(tb, "_gpu_only", False)
+    monkeypatch.setattr(tb, "_whisper_force_cpu", False)
+    monkeypatch.setattr(tb, "_whisper_model", None)
+    calls = []
+
+    def once(path, **params):
+        calls.append(tb._whisper_force_cpu)
+        if len(calls) <= times and not tb._whisper_force_cpu:
+            raise RuntimeError(OOM)
+        return [], SimpleNamespace(duration=0, language="id")
+    monkeypatch.setattr(tb, "_run_whisper_once", once)
+    return calls
+
+
+def test_whisper_tries_the_card_again_once_there_is_room(monkeypatch):
+    calls = _whisper_that_fails(monkeypatch, times=1)
+    _card(monkeypatch, [800, 5000])
+    monkeypatch.setattr(tb.time, "sleep", lambda s: None)
+    assert tb.run_whisper_transcription("x.mp4")[0] == []
+    assert calls == [False, False]                    # both on the card
+    assert tb._whisper_force_cpu is False
+
+
+def test_whisper_goes_to_the_cpu_when_the_room_never_comes(monkeypatch):
+    calls = _whisper_that_fails(monkeypatch, times=9)
+    _card(monkeypatch, [800])
+    monkeypatch.setattr(tb, "ASR_CARD_WAIT", 6.0)
+    monkeypatch.setattr(tb.time, "sleep", lambda s: None)
+    assert tb.run_whisper_transcription("x.mp4")[0] == []
+    assert calls == [False, True]                     # no second try on a full card
+
+
+def test_whisper_goes_to_the_cpu_when_the_second_try_fails_too(monkeypatch):
+    calls = _whisper_that_fails(monkeypatch, times=2)
+    _card(monkeypatch, [5000])
+    assert tb.run_whisper_transcription("x.mp4")[0] == []
+    assert calls == [False, False, True]
+    assert tb._whisper_force_cpu is True
+    monkeypatch.setattr(tb, "_whisper_force_cpu", False)
+
+
+def _parakeet_that_fails(monkeypatch, errors):
+    monkeypatch.setenv("TRANSCRIBE_BACKEND", "parakeet")
+    monkeypatch.setattr(tb, "_gpu_only", False)
+    monkeypatch.setattr(tb, "_has_audio_stream", lambda p: True)
+    left, seen = list(errors), []
+    good = {"text": "hola", "language": "es", "segments": [
+        {"start": 0.0, "end": 1.0, "text": "hola",
+         "words": [{"word": "hola", "start": 0.0, "end": 1.0}]}]}
+
+    def parakeet(path):
+        seen.append("parakeet")
+        if left:
+            raise RuntimeError(left.pop(0))
+        return good
+    monkeypatch.setattr(tb, "_transcribe_with_parakeet", parakeet)
+    monkeypatch.setattr(tb, "_parakeet_fallback_reason", lambda t, duration_hint=None: None)
+    monkeypatch.setattr(tb, "_drop_parakeet", lambda: seen.append("drop"))
+    monkeypatch.setattr(tb, "_transcribe_with_whisper",
+                        lambda p: seen.append("whisper") or {"language": "es"})
+    return seen, good
+
+
+def test_parakeet_tries_the_card_again_once_there_is_room(monkeypatch):
+    seen, good = _parakeet_that_fails(monkeypatch, [ARENA])
+    _card(monkeypatch, [6000])
+    assert tb.transcribe_media("x.mp4") is good
+    assert seen == ["parakeet", "drop", "parakeet"]   # its arena dropped before the look
+
+
+def test_parakeet_is_tried_twice_at_most(monkeypatch):
+    seen, _ = _parakeet_that_fails(monkeypatch, [ARENA, ARENA])
+    _card(monkeypatch, [6000])
+    assert tb.transcribe_media("x.mp4") == {"language": "es"}
+    assert seen == ["parakeet", "drop", "parakeet", "drop", "whisper"]
+
+
+def test_another_parakeet_failure_goes_straight_to_whisper(monkeypatch):
+    seen, _ = _parakeet_that_fails(monkeypatch, ["bad wav header"])
+    monkeypatch.setattr(tb, "_card_free_mb", lambda: pytest.fail("it does not wait"))
+    assert tb.transcribe_media("x.mp4") == {"language": "es"}
+    assert seen == ["parakeet", "drop", "whisper"]

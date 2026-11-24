@@ -211,6 +211,57 @@ _whisper_key = None
 _whisper_lock = threading.Lock()
 # Set after a CUDA failure (e.g. VRAM exhausted by other models on the GPU)
 # so every later transcription goes straight to CPU instead of re-failing.
+# A transcription that finds the card full waits for room and tries the card
+# again before it gives up on it. Each host slot may hold a Parakeet of
+# several GB next to the other jobs' own contexts, so the card fills for the
+# seconds those take; the next one in then got "out of memory" and decoded its
+# whole source with whisper on the CPU, on several cores for as long as the
+# video lasts. ``ASR_CARD_WAIT`` is how long it waits (seconds, 0 = never).
+ASR_CARD_WAIT = float(os.environ.get("ASR_CARD_WAIT", "120") or 0)
+PARAKEET_CARD_MB = int(os.environ.get("PARAKEET_CARD_MB", "5500") or 0)
+WHISPER_CARD_MB = int(os.environ.get("WHISPER_CARD_MB", "3500") or 0)
+_CARD_FULL_HINTS = ("out of memory", "failed to allocate memory")
+
+
+def _card_free_mb():
+    """Free memory on the card in MB (None: no card, or it cannot be read)."""
+    try:
+        import gpu_decode
+        return gpu_decode._free_mb()
+    except Exception:
+        return None
+
+
+def _card_full(error):
+    text = str(error).lower()
+    return any(hint in text for hint in _CARD_FULL_HINTS)
+
+
+def wait_for_card(need_mb, seconds=None, sleep=time.sleep, poll=3.0):
+    """True once the card has ``need_mb`` free, waiting up to ``seconds``.
+
+    False when the wait is off, the time is up or the card cannot be read:
+    the caller then does what it did before there was a wait."""
+    seconds = ASR_CARD_WAIT if seconds is None else seconds
+    if seconds <= 0 or need_mb <= 0:
+        return False
+    waited = 0.0
+    while True:
+        free = _card_free_mb()
+        if free is None:
+            return False
+        if free >= need_mb:
+            return True
+        if waited >= seconds:
+            return False
+        if not waited:
+            print(f"⏳ [ASR] the card is full ({free} MB free, {need_mb} needed) "
+                  f"— waiting for room", flush=True)
+        step = min(poll, seconds - waited)
+        sleep(step)
+        waited += step
+
+
 _whisper_force_cpu = False
 
 
@@ -299,6 +350,25 @@ def run_whisper_transcription(media_path, **params):
             with _whisper_lock:
                 _whisper_model = None
             raise GpuUnavailable(f"whisper GPU failed ({e})") from e
+        if _card_full(e):
+            with _whisper_lock:
+                failed, _whisper_model = _whisper_model, None
+            try:
+                # Unloaded, not only dropped: its weights would stay on the
+                # card through the wait (see release_models).
+                failed.model.unload_model()
+            except Exception:
+                pass
+            del failed
+            if wait_for_card(WHISPER_CARD_MB):
+                print("🎙️ [ASR] room on the card again — whisper tries it once more",
+                      flush=True)
+                try:
+                    return _run_whisper_once(media_path, **params)
+                except RuntimeError as again:
+                    if "cuda" not in str(again).lower():
+                        raise
+                    e = again
         print(f"⚠️ [ASR] whisper GPU failed ({e}) — retrying on CPU", flush=True)
         _whisper_force_cpu = True
         with _whisper_lock:
@@ -845,6 +915,18 @@ def media_seconds(media_path):
         return None
 
 
+def _parakeet_gets_another_try(error):
+    """True when Parakeet failed for lack of room on the card and the room
+    came back: its arena is dropped first, so the wait sees what is left."""
+    if _gpu_only or not _card_full(error) or ASR_CARD_WAIT <= 0:
+        return False
+    try:
+        _drop_parakeet()
+    except Exception:
+        return False
+    return wait_for_card(PARAKEET_CARD_MB)
+
+
 def transcribe_media(media_path):
     """Transcribe with the configured backend, falling back to whisper."""
     # Silent videos (AI-generated clips, muted screen recordings) have no audio
@@ -859,18 +941,24 @@ def transcribe_media(media_path):
     backend = os.environ.get("TRANSCRIBE_BACKEND", "whisper").strip().lower()
 
     if backend == "parakeet":
-        try:
-            transcript = _transcribe_with_parakeet(media_path)
-            reason = _parakeet_fallback_reason(transcript)
-            if reason is None:
-                print(f"🎙️ [ASR] parakeet ok: lang={transcript['language']} "
-                      f"segments={len(transcript['segments'])}")
-                return transcript
-            print(f"⚠️ [ASR] parakeet result rejected ({reason}) — "
-                  f"falling back to whisper")
-        except Exception as e:
-            print(f"⚠️ [ASR] parakeet failed ({type(e).__name__}: {e}) — "
-                  f"falling back to whisper")
+        for attempt in (1, 2):
+            try:
+                transcript = _transcribe_with_parakeet(media_path)
+                reason = _parakeet_fallback_reason(transcript)
+                if reason is None:
+                    print(f"🎙️ [ASR] parakeet ok: lang={transcript['language']} "
+                          f"segments={len(transcript['segments'])}")
+                    return transcript
+                print(f"⚠️ [ASR] parakeet result rejected ({reason}) — "
+                      f"falling back to whisper")
+            except Exception as e:
+                if attempt == 1 and _parakeet_gets_another_try(e):
+                    print("🎙️ [ASR] room on the card again — parakeet tries it "
+                          "once more", flush=True)
+                    continue
+                print(f"⚠️ [ASR] parakeet failed ({type(e).__name__}: {e}) — "
+                      f"falling back to whisper")
+            break
         # Whisper needs the card's memory that Parakeet's arena still holds.
         try:
             _drop_parakeet()
