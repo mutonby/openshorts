@@ -312,6 +312,13 @@ AUTO_CAPTION_STYLE = {
     "max_duration": 1.4,
 }
 
+# Cyrillic glyphs can fall back to a wider face in libass (fontconfig picks the
+# next family), and the measured Anton/Montserrat line is then too optimistic.
+# A shorter line is the safe upper bound for those languages; the active-word
+# pop still handles a lone long word by narrowing it.
+_CYRILLIC_LANGUAGES = {"ru", "uk", "be", "bg", "sr", "mk", "kk"}
+_CYRILLIC_MAX_CHARS = 10
+
 
 # Named looks for /api/subtitle `preset` (and the MCP add_subtitles tool), in
 # request-field names. Mirrors the dashboard's CAPTION_PRESETS in
@@ -523,6 +530,9 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     max_chars=1 puts one word on screen at a time.
     """
     # Match the SRT burn path: PlayResY 288 keeps font sizes consistent.
+    lang = str((transcript or {}).get("language") or "").split("-")[0].lower()
+    if lang in _CYRILLIC_LANGUAGES and max_chars > _CYRILLIC_MAX_CHARS:
+        max_chars = _CYRILLIC_MAX_CHARS
     final_fontsize = int(_clamp_number(fontsize, 10, 200, 16) * 0.85)
     if final_fontsize < 10:
         final_fontsize = 10
