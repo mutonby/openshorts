@@ -120,6 +120,11 @@ def worker_args(cmd):
             i += 2
         elif a == "--keep-original":
             i += 1
+        elif a == "--source-audio-language" and i + 1 < len(cmd):
+            from youtube_io import normalize_audio_language
+            if not normalize_audio_language(cmd[i + 1]):
+                return None
+            i += 2                 # the API host prepares the selected track
         elif a == "--format" and i + 1 < len(cmd) and cmd[i + 1] in _FORMATS:
             rest += [a, cmd[i + 1]]
             i += 2
@@ -165,6 +170,8 @@ def safe_link(url):
 
 def link_of(cmd):
     """The link of a URL job when a worker may fetch it itself, else None."""
+    if "--source-audio-language" in (cmd or []):
+        return None                # older workers may fetch the default audio
     parsed = worker_args(cmd)
     if parsed is None or not source_is_url(cmd):
         return None

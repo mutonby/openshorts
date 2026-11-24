@@ -1,5 +1,24 @@
 # Layout selection and vertical reframing
 
+## Sports action framing
+
+Choose **Sports action** under the dashboard's vertical layout options or as
+the framing of an existing clip with its source available. Use
+`framing_method: "sports"` in the process API or MCP request, or
+`openshorts process URL --framing sports` in the CLI. The direct pipeline
+accepts `--framing-method sports`. The existing editor reframe request uses
+`framing: "sports"`.
+
+The reframer samples around four frames per second and the start of each
+shot. It looks for agreeing observations of a sports ball using the host's
+local `YOLO_MODEL_PATH` weights, which default to the Docker image's
+`yolov8n.pt`. A supported track drives a speed-limited crop. Missing weights,
+weak tracks, and inference errors still allow concentrated-motion framing.
+Shots without useful motion retain the full picture. Per-scene user overrides
+apply after the automatic camera. The same scene encoder handles sports and
+other layouts. Sports jobs stay on the main host under the remote worker's
+command whitelist.
+
 ## Choosing the layout (`layout_picker.py`, `app.py:layout_env`)
 
 `POST /api/process` accepts `layouts`: a JSON list or comma-separated string of

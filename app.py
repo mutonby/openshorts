@@ -21,7 +21,7 @@ import signal
 import socket
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, Literal
 from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Header, BackgroundTasks, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,7 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import (HTMLResponse, FileResponse, JSONResponse, StreamingResponse,
                                RedirectResponse, Response)
 from starlette.background import BackgroundTask
-from pydantic import BaseModel
+from pydantic import AwareDatetime, BaseModel, Field
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 import recut
 import layout_ranges
@@ -5801,7 +5801,7 @@ async def get_config(response: Response):
         "localLlm": None if BILLING_ENABLED else llm_backend.describe(),
     }
 
-async def _probe_youtube_quality(url: str) -> dict:
+async def _probe_youtube_quality(url: str, *, include_audio=False) -> dict:
     """What the source offers ({max_height, duration, ...}); {} on any failure
     (fail-open). The metering probe a moment ago already asked YouTube for
     this very video: its answer is reused, so a submission costs the account
@@ -5811,7 +5811,13 @@ async def _probe_youtube_quality(url: str) -> dict:
         facts = _metering.probe_facts(url) if BILLING_ENABLED else None
     except Exception:
         facts = None
-    if facts:
+    if include_audio and BILLING_ENABLED and not facts:
+        try:
+            await asyncio.wait_for(_metering.run_probe(url, allow_paid=False), ESTIMATE_PROBE_TIMEOUT)
+            facts = _metering.probe_facts(url)
+        except Exception:
+            pass
+    if facts and (not include_audio or "audio_languages" in facts):
         return facts
 
     def _run():
@@ -6123,6 +6129,32 @@ class EstimateRequest(BaseModel):
 
 
 
+class AudioTracksRequest(BaseModel):
+    url: str
+
+
+@app.post("/api/process/audio-tracks")
+async def process_audio_tracks(req: AudioTracksRequest, request: Request):
+    """List language codes a YouTube video offers without downloading media."""
+    if DISABLE_YOUTUBE_URL:
+        raise HTTPException(status_code=403, detail="YouTube URL ingest is disabled on this deployment.")
+    user = await _user_from_request(request) if BILLING_ENABLED else None
+    if BILLING_ENABLED and not managed_keys.has_active_entitlement(user):
+        raise gemini_missing_error()
+    url = req.url.strip()
+    if not source_cache.video_id(url):
+        raise HTTPException(status_code=400, detail="Audio track selection requires a YouTube video URL.")
+    actor = user.id if user else (request.client.host if request.client else "local")
+    _check_probe_rate(f"audio-tracks:{actor}")
+    await _validate_source_url(url)
+    facts = await _probe_youtube_quality(url, include_audio=True)
+    languages = facts.get("audio_languages") or []
+    if not (languages or facts.get("duration") or facts.get("max_height")):
+        raise HTTPException(status_code=502, detail="Could not check the video's audio tracks. Try again or use default audio.")
+    return {"audio_languages": languages}
+
+
+
 # The cost line under the link box waits at most this long for the probe.
 ESTIMATE_PROBE_TIMEOUT = _int_env("ESTIMATE_PROBE_TIMEOUT", 20)
 
@@ -6193,6 +6225,7 @@ async def process_endpoint(
     url: Optional[str] = Form(None),
     acknowledged: Optional[str] = Form(None),
     output_format: Optional[str] = Form(None),
+    framing_method: Optional[str] = Form(None),
     layouts: Optional[str] = Form(None),
     force_low_quality: Optional[str] = Form(None),
     webhook_url: Optional[str] = Form(None),
@@ -6202,6 +6235,7 @@ async def process_endpoint(
     clip_max_seconds: Optional[str] = Form(None),
     auto_hook: Optional[str] = Form(None),
     auto_hook_style: Optional[str] = Form(None),
+    source_audio_language: Optional[str] = Form(None),
     thumbnail_session_id: Optional[str] = Form(None),
     captions: Optional[str] = Form(None),
     upload_id: Optional[str] = Form(None),
@@ -6228,6 +6262,7 @@ async def process_endpoint(
         ack_flag = bool(body.get("acknowledged"))
         force_low = bool(body.get("force_low_quality"))
         output_format = body.get("output_format")
+        framing_method = body.get("framing_method")
         layouts = body.get("layouts")
         webhook_url = body.get("webhook_url")
         webhook_secret = body.get("webhook_secret")
@@ -6236,6 +6271,7 @@ async def process_endpoint(
         clip_max_seconds = body.get("clip_max_seconds")
         auto_hook = body.get("auto_hook")
         auto_hook_style = body.get("auto_hook_style")
+        source_audio_language = body.get("source_audio_language")
         thumbnail_session_id = body.get("thumbnail_session_id")
         captions = body.get("captions")
         upload_id = body.get("upload_id")
@@ -6246,12 +6282,22 @@ async def process_endpoint(
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square"):
         output_format = "auto"
+    if framing_method not in (None, "sports"):
+        raise HTTPException(status_code=400, detail="framing_method must be sports when supplied")
 
     # Accepts a JSON list or a comma-separated form field.
     if isinstance(layouts, str):
         layouts = [p for p in layouts.split(",") if p.strip()]
     elif not isinstance(layouts, list):
         layouts = []
+
+    if source_audio_language is not None:
+        from youtube_io import normalize_audio_language
+        source_audio_language = normalize_audio_language(source_audio_language)
+        if not source_audio_language:
+            raise HTTPException(status_code=400, detail="source_audio_language must be a language code such as en or pt-BR.")
+        if not source_cache.video_id(url):
+            raise HTTPException(status_code=400, detail="Audio track selection requires a YouTube video URL.")
 
     # Module handover (issue #68): reuse the Thumbnail Studio source video and
     # its transcript so publishing to YouTube can flow straight into clip
@@ -6399,6 +6445,8 @@ async def process_endpoint(
         # re-render path cuts new segments from it, and it ages out with the
         # rest of the job (retention window + OUTPUT_MAX_GB cap) either way.
         cmd.extend(["-u", url, "--keep-original"])
+        if source_audio_language:
+            cmd.extend(["--source-audio-language", source_audio_language])
     elif thumb_session:
         # Hardlink (or copy) the session's video under the job's name so source
         # lookup, the clip editor and the preview treat it exactly like a normal
@@ -6460,6 +6508,8 @@ async def process_endpoint(
         cmd.extend(["-i", input_path])
 
     cmd.extend(["-o", job_output_dir])
+    if framing_method == "sports" and output_format != "horizontal":
+        cmd.extend(["--framing-method", "sports"])
     if output_format and output_format != "auto":
         cmd.extend(["--format", output_format])
 
@@ -7315,7 +7365,7 @@ async def _ensure_job_files(job_id: str, request: Request) -> bool:
 
 from editor import VideoEditor
 from subtitles import generate_srt, generate_ass, burn_subtitles, generate_srt_from_video, CAPTION_PRESETS
-from hooks import add_hook_to_video
+from hooks import add_hook_and_cta_to_video, add_hook_to_video, HOOK_SIZE_SCALE
 from translate import translate_video, get_supported_languages
 from thumbnail import (analyze_video_for_titles, refine_titles, generate_thumbnail,
                        generate_youtube_description, extract_face_frames)
@@ -7752,14 +7802,14 @@ class RerenderRequest(BaseModel):
     snap_to_words: bool = False
     reapply_captions: bool = True
     # None = inherit the recipe's framing (so plain trims keep the look);
-    # 'auto' resets to the classifier; 'full'/'track' force a layout.
+    # 'auto' resets to the classifier; the other choices force a layout.
     framing: Optional[str] = None
 
 
 # Manual framing -> reframe-engine strategy. 'full' shows the whole source
 # frame (WIDE: no side-cropping, blurred filler bands); 'track' forces the
 # subject-tracking crop. Anything non-auto needs the retained source video.
-_FRAMING_STRATEGIES = {"auto": None, "full": "WIDE", "track": "TRACK"}
+_FRAMING_STRATEGIES = {"auto": None, "full": "WIDE", "track": "TRACK", "sports": "SPORTS"}
 
 
 # One lock per job (same pattern as _restore_locks): rerenders on the same job
@@ -7830,7 +7880,9 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
     framing = req.framing or (clip.get('recipe') or {}).get('framing') or 'auto'
     if framing not in _FRAMING_STRATEGIES:
         raise HTTPException(status_code=400,
-                            detail="framing must be one of: auto, full, track")
+                            detail="framing must be one of: auto, full, track, sports")
+    if framing == 'sports' and data.get('output_format') == 'horizontal':
+        raise HTTPException(status_code=400, detail="Sports framing needs vertical or square output.")
     force_strategy = _FRAMING_STRATEGIES[framing]
 
     try:
@@ -7856,9 +7908,9 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
     except recut.RecutError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # A framing override always re-reframes from the source: the canonical file
-    # has the old layout baked into its pixels.
-    fast = (force_strategy is None
+    # The canonical file can be reused only when its baked framing matches.
+    canonical_framing = data.get('framing_method') or 'auto'
+    fast = (framing == canonical_framing
             and os.path.exists(canonical_path)
             and recut.within_range(segments, canonical_range['start'],
                                    canonical_range['end']))
@@ -7868,7 +7920,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
         raise HTTPException(
             status_code=409,
             detail=("The source video is no longer on the server; changing the "
-                    "framing needs it." if force_strategy is not None else
+                    "framing needs it." if framing != canonical_framing else
                     "The source video is no longer on the server, so segments "
                     "must stay within the original clip range."))
 
@@ -7879,6 +7931,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
 
     v_transcript = (recut.virtual_transcript(transcript, segments)
                     if req.reapply_captions else None)
+    text_overlay = _recut_text_overlay(clip)
 
     def run_recut():
         if fast:
@@ -7888,7 +7941,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
                     segments, canonical_range['start'], canonical_range['end']),
                 output_dir=output_dir, clean_name=clean_name,
                 reframe=False, captions_transcript=v_transcript,
-                captioner=_recut_captioner(clip))
+                captioner=_recut_captioner(clip), text_overlay=text_overlay)
         return recut.perform_recut(
             input_path=source_path, segments=segments,
             output_dir=output_dir, clean_name=clean_name,
@@ -7896,6 +7949,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
             force_strategy=force_strategy,
             captions_transcript=v_transcript,
             captioner=_recut_captioner(clip),
+            text_overlay=text_overlay,
             # Trim the source's own subtitles only when ours go back on.
             subtitle_band=(data.get('source_subtitle_band')
                            if v_transcript else None))
@@ -7953,6 +8007,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
             "duration": total,
             "render_path": "fast" if fast else "source",
             "mode": "normal",
+            "burned_hook": clip.get('auto_hook'),
         }
     except Exception as e:
         if reservation_id:
@@ -8071,7 +8126,8 @@ async def _set_clip_mode_locked(req: ClipModeRequest, request: Request, job):
     def answer(**extra):
         return {"success": True, "mode": clip.get('mode') or 'normal',
                 "new_video_url": clip.get('video_url') or f"/videos/{req.job_id}/{served}",
-                "start": clip.get('start'), "end": clip.get('end'), **extra}
+                "start": clip.get('start'), "end": clip.get('end'),
+                "burned_hook": clip.get('auto_hook'), **extra}
 
     if (clip.get('mode') or 'normal') == req.mode:
         return answer(unchanged=True)
@@ -8082,12 +8138,15 @@ async def _set_clip_mode_locked(req: ClipModeRequest, request: Request, job):
         _strip_burned_captions, output_dir, served, False)
     had_captions = uncaptioned != _strip_watermark_copy(output_dir, served)
     base = _strip_burned_hook(output_dir, uncaptioned)
-    had_hook = base != uncaptioned and bool((clip.get('auto_hook') or {}).get('text'))
+    hook = clip.get('auto_hook') or {}
+    had_hook = base != uncaptioned and bool(hook.get('text') or hook.get('cta'))
     loop = asyncio.get_event_loop()
 
     reservation_id = None
     reuse = None
     if req.mode == "pro":
+        if (clip.get('recipe') or {}).get('framing') == 'sports':
+            raise HTTPException(status_code=400, detail="Pro mode is for talking-head framing.")
         base_path = os.path.join(output_dir, base)
         # A restored project may only have the served file: with captions or
         # a hook still burned in, the reframing would crop and scale them.
@@ -8104,9 +8163,14 @@ async def _set_clip_mode_locked(req: ClipModeRequest, request: Request, job):
         # for every other Gemini-backed action. None just means no titles.
         api_key = await resolve_gemini(request)
         hook_seconds = 0.0
-        if had_hook:
+        if had_hook and hook.get('text'):
             try:
-                hook_seconds = float((clip.get('auto_hook') or {}).get('duration_seconds') or 5.0)
+                segments, _ = _clip_recipe_parts(clip)
+                total = recut.total_duration(segments)
+                duration = hook.get('duration_seconds')
+                cta_duration = (hook.get('cta') or {}).get('duration_seconds', 0)
+                hook_seconds = min(float(duration) if duration is not None else total,
+                                   max(0.0, total - float(cta_duration)))
             except (TypeError, ValueError):
                 hook_seconds = 5.0
         try:
@@ -8156,18 +8220,12 @@ async def _set_clip_mode_locked(req: ClipModeRequest, request: Request, job):
         def layer():
             name = new_base
             if had_hook:
-                hook = clip['auto_hook']
-                hooked = f"hooked_{int(time.time())}_{new_base}"
                 try:
-                    add_hook_to_video(
-                        os.path.join(output_dir, name), hook['text'],
-                        os.path.join(output_dir, hooked),
-                        position=hook.get('position') or "auto",
-                        duration=hook.get('duration_seconds'),
-                        style=hook.get('style') or "pill", font=hook.get('font'),
-                        layout_ranges=clip.get('layout_ranges'),
-                        has_captions=had_captions)
-                    name = hooked
+                    burned_path = _burn_clip_text(
+                        os.path.join(output_dir, name), hook, ranges=clip.get('layout_ranges'),
+                        has_captions=had_captions,
+                        face_aware=True)
+                    name = os.path.basename(burned_path)
                 except Exception as e:
                     # The clip without its hook beats no clip.
                     print(f"⚠️ Could not put the hook back on {new_base}: {e}")
@@ -8496,6 +8554,7 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
     # and captioning and the path blew past the filesystem limit:
     # "Error opening output ...: File name too long".
     clean_name = f"{base_name}_clip_{req.clip_index + 1}.mp4"
+    text_overlay = _recut_text_overlay(clip)
 
     def run():
         return recut.perform_recut(
@@ -8506,6 +8565,7 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
             crop_overrides=overrides,
             captions_transcript=v_transcript,
             captioner=_recut_captioner(clip),
+            text_overlay=text_overlay,
             # Trim the source's own subtitles only when ours go back on.
             subtitle_band=(data.get('source_subtitle_band')
                            if v_transcript else None))
@@ -8548,6 +8608,7 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
             "end": max(s['end'] for s in segments),
             "framed_scenes": sorted(overrides),
             "mode": "normal",
+            "burned_hook": clip.get('auto_hook'),
         }
     except Exception as e:
         if reservation_id:
@@ -9054,6 +9115,13 @@ async def remove_subtitles(req: RemoveSubtitlesRequest, request: Request):
     return {"success": True, "new_video_url": new_url}
 
 
+class ClosingTextRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=180)
+    duration_seconds: float = Field(default=3, gt=0, le=15, allow_inf_nan=False)
+    position: Literal["auto", "top", "center", "bottom"] = "auto"
+    size: Literal["S", "M", "L"] = "M"
+
+
 class HookRequest(BaseModel):
     job_id: str
     clip_index: int
@@ -9063,10 +9131,49 @@ class HookRequest(BaseModel):
     # explicit top / center / bottom, which is drawn exactly there.
     position: Optional[str] = "auto"
     size: Optional[str] = "M" # S, M, L
-    duration_seconds: Optional[float] = None  # None = hook visible for the whole clip
+    duration_seconds: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
     style: Optional[str] = "pill"  # pill/classic/dark/yellow/red/outline/outline_yellow
     font: Optional[str] = None  # montserrat/anton/serif (hooks.HOOK_FONTS); None = the style's own
+    cta: Optional[ClosingTextRequest] = None
     remove: Optional[bool] = False  # strip the burned hook instead of adding one
+
+
+def _burn_clip_text(video_path, hook, *, ranges, has_captions, face_aware):
+    """Render the editor's text from the clean clip and return the new path."""
+    directory, filename = os.path.split(video_path)
+    output_path = os.path.join(directory, f"hooked_{time.time_ns()}_{filename}")
+    temp_path = os.path.join(directory, f"temp_hook_{uuid.uuid4().hex}.mp4")
+    cta = hook.get("cta")
+    options = dict(position=hook.get("position") or "auto",
+                   font_scale=HOOK_SIZE_SCALE.get(hook.get("size"), 1.0),
+                   duration=hook.get("duration_seconds"), style=hook.get("style") or "pill",
+                   font=hook.get("font"), layout_ranges=ranges,
+                   has_captions=has_captions, face_aware=face_aware)
+    try:
+        if cta:
+            add_hook_and_cta_to_video(video_path, hook.get("text") or "", temp_path,
+                                      cta=ClosingTextRequest.model_validate(cta).model_dump(),
+                                      **options)
+        else:
+            add_hook_to_video(video_path, hook["text"], temp_path, **options)
+        os.replace(temp_path, output_path)
+    finally:
+        with suppress(FileNotFoundError):
+            os.remove(temp_path)
+    with suppress(OSError):
+        shutil.copyfile(layout_ranges.sidecar_path(video_path),
+                        layout_ranges.sidecar_path(output_path))
+    return output_path
+
+
+def _recut_text_overlay(clip):
+    hook = clip.get('auto_hook') or {}
+    if not (hook.get('text') or hook.get('cta')):
+        return None
+    return functools.partial(
+        _burn_clip_text, hook=hook, ranges=None,
+        face_aware=True)
+
 
 @app.post("/api/hook")
 async def add_hook(req: HookRequest, request: Request):
@@ -9077,134 +9184,108 @@ async def add_hook(req: HookRequest, request: Request):
 
     job = jobs[req.job_id]
     await _assert_job_owner(request, job)
+    if req.remove:
+        _check_editor_rate(await _owner_id(request))
+    lock = _rerender_locks.setdefault(req.job_id, asyncio.Lock())
+    async with lock:
+        return await _save_clip_text(req, request, job)
+
+
+async def _save_clip_text(req: HookRequest, request: Request, job):
     output_dir = os.path.join(OUTPUT_DIR, req.job_id)
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
-    
     if not json_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
-        
     with open(json_files[0], 'r') as f:
         data = json.load(f)
-        
     clips = data.get('shorts', [])
-    if req.clip_index >= len(clips):
+    if not 0 <= req.clip_index < len(clips):
         raise HTTPException(status_code=404, detail="Clip not found")
-        
     clip_data = clips[req.clip_index]
-    
-    # Video Path
-    if req.input_filename:
-        filename = os.path.basename(req.input_filename)
-    else:
-        filename = clip_data.get('video_url', '').split('/')[-1]
-        if not filename:
-             base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
-             filename = f"{base_name}_clip_{req.clip_index+1}.mp4"
-         
-    input_path = os.path.join(output_dir, filename)
-    if not os.path.exists(input_path):
-        raise HTTPException(status_code=404, detail=f"Video file not found: {input_path}")
+    base_name = os.path.basename(json_files[0]).removesuffix('_metadata.json')
+    filename = _served_clip_file(job, output_dir, base_name, clip_data, req.clip_index,
+                                 req.input_filename)
+    if not os.path.isfile(os.path.join(output_dir, filename)):
+        raise HTTPException(status_code=404, detail="Video file not found")
 
-    if not req.remove and not (req.text or "").strip():
-        raise HTTPException(status_code=400, detail="Hook text is required")
+    text = (req.text or "").strip()
+    if not req.remove and not (text or req.cta):
+        raise HTTPException(status_code=400, detail="Enter an opening hook or a call to action.")
+    hook = None
+    if not req.remove:
+        hook = {"text": text, "style": req.style, "font": req.font,
+                "position": req.position, "size": req.size,
+                "duration_seconds": req.duration_seconds}
+        if req.cta:
+            if not req.cta.text.strip():
+                raise HTTPException(status_code=400, detail="Enter call-to-action text.")
+            hook["cta"] = {**req.cta.model_dump(), "text": req.cta.text.strip()}
 
-    # Same invariant as /api/edit: derive from the clip WITHOUT its burned
-    # captions, then put them back on top, so a later restyle never stacks a
-    # second caption layer (see _reapply_captions). The hook layer is stripped
-    # too: a new hook REPLACES the burned one (auto-hook or a previous manual
-    # one) instead of stacking on top of it.
-    clean_name = _strip_burned_captions(output_dir, filename, materialize=False)
-    had_captions = clean_name != filename
-    clean_name = _strip_burned_hook(output_dir, clean_name)
-    filename = clean_name
+    # Captions are the last layer. Start from the clean picture and put them
+    # back after replacing the opening and closing text.
+    uncaptioned = _strip_burned_captions(output_dir, filename, materialize=False)
+    had_captions = uncaptioned != _strip_watermark_copy(output_dir, filename)
+    clean_name = _strip_burned_hook(output_dir, uncaptioned)
     input_path = os.path.join(output_dir, clean_name)
+    if (not os.path.isfile(input_path) or watermarked.is_marked(clean_name)
+            or re.match(r'^(?:subtitled_\d+_|hooked_\d+_|hook_)', clean_name)):
+        raise HTTPException(status_code=409, detail="The clean render of this clip is unavailable.")
 
-    if req.remove:
-        # Nothing to burn: the hook-less file is the target; captions (if the
-        # clip had them) go back on below.
-        output_filename = filename
-        output_path = input_path
-        reservation_id = None
-    else:
-        output_filename = f"hooked_{int(time.time())}_{filename}"
-        output_path = os.path.join(output_dir, output_filename)
-
-        # Map Size to Scale
-        size_map = {"S": 0.8, "M": 1.0, "L": 1.3}
-        font_scale = size_map.get(req.size, 1.0)
-
-        # Meter the FFmpeg overlay re-encode (no-op for BYOK / self-host).
-        hook_minutes = _cloud_config.EDITOR_ACTION_MINUTES if BILLING_ENABLED else 0
+    reservation_id = None
+    if hook is not None:
+        minutes = _cloud_config.EDITOR_ACTION_MINUTES if BILLING_ENABLED else 0
         reservation_id = await reserve_managed_action(
-            request, hook_minutes, req.job_id, "hook")
-
-        try:
-            # Run in thread pool
-            def run_hook():
-                return add_hook_to_video(
-                    input_path, req.text, output_path, position=req.position or "auto",
-                    font_scale=font_scale, duration=req.duration_seconds, style=req.style,
-                    font=req.font, layout_ranges=clip_data.get('layout_ranges'),
-                    has_captions=had_captions)
-
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, run_hook)
-
-        except Exception as e:
-            print(f"❌ Hook Error: {e}")
-            if reservation_id:
-                await _metering.release_reservation(reservation_id)
-            raise HTTPException(status_code=500, detail=str(e))
-
-        if reservation_id:
-            await _metering.commit_reservation(reservation_id)
-
-    # Captions back on top (see /api/edit for the same invariant).
-    if had_captions:
-        recap = await asyncio.get_event_loop().run_in_executor(
-            None, _reapply_captions, req.job_id, req.clip_index, output_path)
-        if recap:
-            output_filename = os.path.basename(recap)
-
-    output_filename = await _deliver(request, req.job_id, output_filename)
-
-    # Record the burned hook so the editor knows what the clip carries (the
-    # auto-hook pipeline writes the same key).
-    if req.remove:
-        clip_data.pop('auto_hook', None)
-    else:
-        clip_data['auto_hook'] = {
-            "text": req.text, "style": req.style, "font": req.font, "position": req.position,
-            "duration_seconds": req.duration_seconds,
-        }
-
-    # Update Persistence (Same logic as subtitles)
-    # Update InMemory Jobs
-    if req.clip_index < len(job['result']['clips']):
-        mem_clip = job['result']['clips'][req.clip_index]
-        mem_clip['video_url'] = f"/videos/{req.job_id}/{output_filename}"
-        if req.remove:
-            mem_clip.pop('auto_hook', None)
-        else:
-            mem_clip['auto_hook'] = clip_data['auto_hook']
-
-    # Update Metadata on Disk
+            request, minutes, req.job_id, "hook")
+    edited_path = None
     try:
-        if req.clip_index < len(clips):
-            clips[req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
-            data['shorts'] = clips
-            write_json_atomic(json_files[0], data, indent=4)
-            print(f"✅ Metadata updated with hook video for clip {req.clip_index}")
+        output_path = input_path
+        if hook is not None:
+            output_path = await asyncio.to_thread(
+                _burn_clip_text, input_path, hook, ranges=clip_data.get('layout_ranges'),
+                has_captions=had_captions,
+                face_aware=True)
+            edited_path = output_path
+        if had_captions:
+            captioned = await asyncio.to_thread(
+                _reapply_captions, req.job_id, req.clip_index, output_path)
+            if not captioned:
+                raise HTTPException(status_code=409, detail="The clip's captions could not be reapplied.")
+            output_path = captioned
+
+        output_filename = await _deliver(request, req.job_id, os.path.basename(output_path))
+        new_url = f"/videos/{req.job_id}/{output_filename}"
+        clip_data['video_url'] = new_url
+        if hook is None:
+            clip_data.pop('auto_hook', None)
+        else:
+            clip_data['auto_hook'] = hook
+        write_json_atomic(json_files[0], data, indent=4)
     except Exception as e:
-        print(f"⚠️ Failed to update metadata.json: {e}")
+        if edited_path:
+            for path in {edited_path, layout_ranges.sidecar_path(edited_path), output_path}:
+                with suppress(OSError):
+                    os.remove(path)
+        if reservation_id:
+            await _metering.release_reservation(reservation_id)
+        if isinstance(e, HTTPException):
+            raise
+        print(f"❌ Hook error: {e}")
+        raise HTTPException(status_code=500, detail="Could not save the clip's text overlays.") from e
 
+    if reservation_id:
+        await _metering.commit_reservation(reservation_id)
+    if 'ready_files' in job:
+        job['ready_files'][req.clip_index] = output_filename
+    for index, mem_clip in enumerate((job.get('result') or {}).get('clips') or []):
+        if mem_clip.get('clip_index', index) == req.clip_index:
+            mem_clip['video_url'] = new_url
+            if hook is None:
+                mem_clip.pop('auto_hook', None)
+            else:
+                mem_clip['auto_hook'] = hook
+            break
     _archive_clip_edit_bg(req.job_id, req.clip_index, output_filename)
-
-    return {
-        "success": True,
-        "new_video_url": f"/videos/{req.job_id}/{output_filename}",
-        "burned_hook": None if req.remove else clip_data['auto_hook'],
-    }
+    return {"success": True, "new_video_url": new_url, "burned_hook": hook}
 
 class TranslateRequest(BaseModel):
     job_id: str
@@ -9941,17 +10022,22 @@ async def _refresh_post_metrics(api_key, profile, since):
 async def _scheduled_posts_for(api_key: str, profile: str) -> list:
     """The caller's pending scheduled posts.
 
-    Upload-Post's GET /uploadposts/schedule takes no profile filter and returns
-    everything the *account* has pending — with the managed key that is every
-    OpenShorts user's queue, so the filter below is what keeps one tenant from
-    seeing (or cancelling) another's. Same class of bug as the impressions
-    endpoint; do not "simplify" it away.
+    Ask Upload-Post to filter upstream and verify the profile on every returned
+    row. The managed key has access to every OpenShorts user's queue.
     """
     data = await _upload_post_get(
-        api_key, "https://api.upload-post.com/api/uploadposts/schedule", {})
+        api_key, "https://api.upload-post.com/api/uploadposts/schedule",
+        {"profile_username": profile},
+    )
     rows = data.get("scheduled_posts") or data.get("data") or []
     return [r for r in rows
             if isinstance(r, dict) and r.get("profile_username") == profile]
+
+
+async def _require_scheduled_post(api_key: str, profile: str, job_id: str):
+    rows = await _scheduled_posts_for(api_key, profile)
+    if not any(r.get("job_id") == job_id for r in rows):
+        raise HTTPException(status_code=404, detail="Scheduled post not found")
 
 
 @app.get("/api/social/scheduled")
@@ -9967,10 +10053,7 @@ async def social_scheduled(request: Request, user: Optional[str] = None):
 async def social_cancel_scheduled(job_id: str, request: Request, user: Optional[str] = None):
     """Cancel one pending scheduled post, if it belongs to the caller."""
     api_key, profile = await _social_analytics_auth(request, user)
-    rows = await _scheduled_posts_for(api_key, profile)
-    if not any(r.get("job_id") == job_id for r in rows):
-        # 404 rather than 403: never confirm that someone else's job exists.
-        raise HTTPException(status_code=404, detail="Scheduled post not found")
+    await _require_scheduled_post(api_key, profile, job_id)
     headers = {"Authorization": f"Apikey {api_key}"}
     async with social_platforms.upload_post_client(30.0) as client:
         resp = await client.delete(
@@ -9980,6 +10063,33 @@ async def social_cancel_scheduled(job_id: str, request: Request, user: Optional[
         raise HTTPException(status_code=resp.status_code,
                             detail=f"Vendor API Error: {resp.text}")
     return {"success": True, "job_id": job_id}
+
+
+class SocialRescheduleRequest(BaseModel):
+    scheduled_date: AwareDatetime
+
+
+@app.patch("/api/social/scheduled/{job_id}")
+async def social_reschedule(job_id: str, req: SocialRescheduleRequest, request: Request,
+                            user: Optional[str] = None):
+    """Move the publish time of the caller's pending post."""
+    api_key, profile = await _social_analytics_auth(request, user)
+    scheduled_date = req.scheduled_date.astimezone(timezone.utc)
+    if scheduled_date <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Choose a future publish time.")
+    await _require_scheduled_post(api_key, profile, job_id)
+    headers = {"Authorization": f"Apikey {api_key}"}
+    async with social_platforms.upload_post_client(30.0) as client:
+        resp = await client.patch(
+            f"https://api.upload-post.com/api/uploadposts/schedule/{job_id}",
+            headers=headers,
+            json={"scheduled_date": scheduled_date.isoformat()},
+        )
+    if resp.status_code == 409:
+        raise HTTPException(status_code=409, detail="This post is publishing or is too close to reschedule.")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail="The provider could not reschedule this post.")
+    return {"success": True, "job_id": job_id, "scheduled_date": scheduled_date.isoformat()}
 
 
 # --- Thumbnail Studio Endpoints ---

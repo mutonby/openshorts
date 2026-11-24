@@ -79,10 +79,12 @@ def test_put_then_process_with_upload_id_and_captions_off(dirs, monkeypatch):
     monkeypatch.setattr(app_module.job_queue, "put", fake_put)
 
     payload = _tool_payload(_mcp("process_video", {
-        "upload_id": slot["upload_id"], "confirm_rights": True, "captions": False}))
+        "upload_id": slot["upload_id"], "confirm_rights": True, "captions": False,
+        "framing_method": "sports"}))
     assert "job_id" in payload, payload
     job = app_module.jobs[payload["job_id"]]
     assert job["env"]["AUTO_CAPTIONS"] == "0"
+    assert job["cmd"][job["cmd"].index("--framing-method") + 1] == "sports"
     assert slot["upload_id"] not in app_module.pending_uploads
     input_path = job["cmd"][job["cmd"].index("-i") + 1]
     assert os.path.exists(input_path) and input_path.startswith(str(up_root))

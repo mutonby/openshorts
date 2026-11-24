@@ -1,5 +1,5 @@
 import { createElement } from 'react';
-import { Video, Instagram, Youtube, Facebook, Linkedin, AtSign, Cloud } from 'lucide-react';
+import { Video, Instagram, Youtube, Facebook, Linkedin, AtSign, Cloud, X } from 'lucide-react';
 
 // The networks a clip can be posted to, mirroring social_platforms.PLATFORMS on
 // the server. The first three are the ones picked by default when the
@@ -12,6 +12,7 @@ export const SOCIAL_PLATFORMS = [
   { value: 'linkedin', label: 'LinkedIn', Icon: Linkedin },
   { value: 'threads', label: 'Threads', Icon: AtSign },
   { value: 'bluesky', label: 'Bluesky', Icon: Cloud },
+  { value: 'x', label: 'X', Icon: X },
 ];
 
 export const PLATFORM_VALUES = SOCIAL_PLATFORMS.map((p) => p.value);
@@ -23,7 +24,7 @@ export const platformLabel = (value) =>
 export const platformOptions = ({ lower = false, size = 16 } = {}) =>
   SOCIAL_PLATFORMS.map(({ value, label, Icon }) => ({
     value,
-    label: lower ? label.toLowerCase() : label,
+    label: lower && value !== 'x' ? label.toLowerCase() : label,
     icon: createElement(Icon, { size }),
   }));
 

@@ -20,14 +20,11 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from scenedetect import open_video, SceneManager
 from scenedetect.detectors import ContentDetector
-from ultralytics import YOLO
-import torch
 import os
 import math
 import numpy as np
 from tqdm import tqdm
 import yt_dlp
-import mediapipe as mp
 # import whisper (replaced by faster_whisper inside function)
 from google import genai
 from google.genai import types as genai_types
@@ -100,15 +97,10 @@ OUTPUT — RETURN ONLY VALID JSON (no markdown, no comments). Order clips by pre
 }}
 """
 
-# Load the YOLO model once (Keep for backup or scene analysis if needed)
-# YOLO_MODEL_PATH lets deployments point at a pre-downloaded weights file so a
-# volume mounted over the workdir doesn't trigger a re-download at startup.
-model = YOLO(os.environ.get("YOLO_MODEL_PATH", "yolov8n.pt"))
-
-# --- MediaPipe Setup ---
-# Use standard Face Detection (BlazeFace) for speed
-mp_face_detection = mp.solutions.face_detection
-face_detection = mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
+# The legacy camera loads its detectors only when it needs them. Source
+# preparation and the sports camera can run without either detector.
+_person_detector = None
+_face_detector = None
 
 # Consecutive detections a large target move must survive before the camera
 # follows it (see SmoothedCameraman.update_target). Env-overridable so the
@@ -454,8 +446,13 @@ def detect_face_candidates(frame):
     height, width, _ = frame.shape
     small, _scale = _detection_frame(frame)
     rgb_frame = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+    global _face_detector
     with DETECT_LOCK:
-        results = face_detection.process(rgb_frame)
+        if _face_detector is None:
+            import mediapipe as mp
+            _face_detector = mp.solutions.face_detection.FaceDetection(
+                model_selection=1, min_detection_confidence=0.5)
+        results = _face_detector.process(rgb_frame)
     
     candidates = []
     
@@ -483,9 +480,12 @@ def detect_person_yolo(frame):
     ORIGINAL frame coordinates (inference runs on a downscaled copy).
     """
     small, scale = _detection_frame(frame)
-    # Use the globally loaded model
+    global _person_detector
     with DETECT_LOCK:
-        results = model(small, verbose=False, classes=[0]) # class 0 is person
+        if _person_detector is None:
+            from ultralytics import YOLO
+            _person_detector = YOLO(os.environ.get("YOLO_MODEL_PATH", "yolov8n.pt"))
+        results = _person_detector(small, verbose=False, classes=[0])
 
     if not results:
         return None
@@ -1072,12 +1072,18 @@ def _content_block(error_text):
 
 
 def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
-                           cap_minutes=None, route_out=None, use_cache=False):
+                           cap_minutes=None, route_out=None, use_cache=False, audio_language=None):
     """Download ``url`` with only public addresses resolvable (ssrf_guard): the
     checked URL is not the only one yt-dlp talks to (redirects, URLs read out
     of an extracted page, a DNS answer that changes after the check)."""
     import ssrf_guard
     import source_cache
+    if audio_language is not None:
+        from youtube_io import normalize_audio_language
+        audio_language = normalize_audio_language(audio_language)
+        if not audio_language or not source_cache.video_id(url):
+            raise ValueError("Choose a valid audio language for a YouTube video URL.")
+    track = {"audio_language": audio_language} if audio_language else {}
     # A YouTube video another job downloaded whole in the last hours is taken
     # from the download cache: no YouTube request, no account spent
     # (source_cache.py). Only for a job process (``use_cache``): a miss can
@@ -1090,20 +1096,20 @@ def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         with ssrf_guard.guarded():
             return _download_youtube_video(url, output_dir, on_audio=on_audio,
                                            allow_paid=allow_paid, cap_minutes=cap_minutes,
-                                           route_out=route_out, may_wait=use_cache)
-    hit = source_cache.fetch(url, output_dir)
+                                           route_out=route_out, may_wait=use_cache, **track)
+    hit = source_cache.fetch(url, output_dir, **track)
     if hit is None:
-        with source_cache.claim(url):
+        with source_cache.claim(url, **track):
             # The job we waited for may have just stored it.
-            hit = source_cache.fetch(url, output_dir)
+            hit = source_cache.fetch(url, output_dir, **track)
             if hit is None:
                 route = route_out if isinstance(route_out, dict) else {}
                 with ssrf_guard.guarded():
                     path, title = _download_youtube_video(
                         url, output_dir, on_audio=on_audio, allow_paid=allow_paid,
-                        cap_minutes=cap_minutes, route_out=route, may_wait=True)
+                        cap_minutes=cap_minutes, route_out=route, may_wait=True, **track)
                 if source_cache.is_whole_free_download(route):
-                    source_cache.store(url, path, title)
+                    source_cache.store(url, path, title, **track)
                 return path, title
     route = {"winner": "cache", "paid_bytes": 0, "attempts": []}
     if isinstance(route_out, dict):
@@ -1153,7 +1159,7 @@ def _forget_extraction(url):
 
 
 def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
-                            cap_minutes=None, route_out=None, may_wait=False):
+                            cap_minutes=None, route_out=None, may_wait=False, audio_language=None):
     """
     Downloads a YouTube video using yt-dlp.
     Returns the path to the downloaded video and the video title.
@@ -1300,6 +1306,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                                       or d.get('downloaded_bytes') or 0)
 
     _early = {"started": False}
+    audio_track_seen = False
 
     # A job only paid for so many minutes (MAX_SOURCE_MINUTES: the quota-wall
     # offer; SOURCE_CAP_MINUTES: every metered job, a safety cap). yt-dlp used
@@ -1350,6 +1357,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                   f"transcribing once the video is in.")
 
     def _attempt(extractor_args, fmt, proxy, cookies=True, info=None):
+        nonlocal audio_track_seen
         _dl_bytes["total"] = 0
         _dl_bytes["partial"] = 0
         # Extracted ONCE, unprocessed, and handed to the download below: a
@@ -1371,6 +1379,14 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             import ssrf_guard
             ssrf_guard.assert_public_urls(info)
         sanitized = sanitize_filename(info.get('title', 'youtube_video'))
+        if audio_language:
+            if info.get('_type', 'video') != 'video':
+                raise youtube_io.SourceAudioUnavailable(audio_language)
+            info = youtube_io.select_audio_language(info, audio_language)
+            audio_track_seen = True
+            # The filename also identifies the transcript checkpoint.
+            suffix = f"_audio-{audio_language}"
+            sanitized = truncate_bytes(sanitized, MAX_TITLE_BYTES - len(suffix)) + suffix
         # Only when the whole source is far bigger than what was paid for: a
         # ranged fetch goes through ffmpeg at ~1-2.5x realtime, while a native
         # download of a source a bit over the cap takes seconds. A 21-min video
@@ -1383,7 +1399,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         # Once per download, and not on the per-GB proxy (that is paid bytes,
         # and it is the last resort anyway). Not for a ranged download either:
         # the early audio would be the whole source.
-        if (on_audio and not _early["started"] and info.get('formats') and not ranged
+        if (on_audio and not audio_language and not _early["started"] and info.get('formats') and not ranged
                 and not (_proxy and proxy == _proxy)):
             _early["started"] = True
             threading.Thread(target=_early_audio, args=(info, extractor_args, proxy, cookies),
@@ -1398,6 +1414,8 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             'merge_output_format': 'mp4', 'overwrites': True,
             'progress_hooks': [_progress_hook],
         }
+        if audio_language:
+            dl_opts['postprocessors'] = [{'key': 'FFmpegVideoRemuxer', 'preferedformat': 'mp4'}]
         _dl_bytes["ranged"] = ranged
         # What a ranged fetch must bring back: the whole range when the source
         # is known to be longer (always, when ranged with a duration).
@@ -1440,6 +1458,8 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                 # Fetched again, a slow one is slow again: it is kept at once.
                 err.slow = slow
                 raise err
+        if audio_language and not os.path.isfile(final):
+            raise RuntimeError("Could not prepare the requested audio as an MP4 video.")
         return sanitized
 
     # DIRECT_FIRST=1: try the server's own IP before spending proxy bandwidth.
@@ -1488,7 +1508,11 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     # are bound to its address) and with the same client list; when it does
     # not work the attempts below run as if it had never been there.
     short_before = False
+    missing_track = None
+    import youtube_io
     stored = _stored_extraction(url, attempts, _proxy, need_seconds=_range_cap or 0)
+    if stored is not None and audio_language and audio_language not in youtube_io.audio_languages(stored[-1]):
+        stored = None
     if stored is not None:
         label, ea, fmt, proxy, cookies, info = stored
         try:
@@ -1522,6 +1546,8 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     for label, ea, fmt, proxy, cookies in attempts:
         if sanitized_title is not None:
             break                 # the reused extraction already has the file
+        if _proxy and proxy == _proxy and missing_track and not audio_track_seen:
+            continue             # a missing track does not justify paid retries
         if cookies and cookies_path and yt_session.spent:
             # YouTube said twice for this video (or, during a cooldown, to
             # everybody) that the account is limited: one more request with
@@ -1578,6 +1604,9 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                                     "paid": proxy is not None and proxy == _proxy,
                                     "error": str(e)[:300]})
                 print(f"⚠️  Download attempt '{label}' failed: {str(e)[:200]}")
+                if isinstance(e, youtube_io.SourceAudioUnavailable):
+                    missing_track = e
+                    break
                 if cookies and yt_account.is_rate_limit(str(e)):
                     account_limited = True
                     if yt_session.limited():
@@ -1651,6 +1680,10 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         print(f"YT_ACCOUNT_LIMITED {yt_account.cooling_down():.0f}", flush=True)
         if last_err is None:      # every attempt needed the account
             last_err = RuntimeError("The YouTube account is rate-limited by YouTube.")
+
+    if sanitized_title is None and missing_track and not audio_track_seen and not account_limited:
+        print(f"❌ {missing_track}")
+        raise missing_track
 
     if sanitized_title is None:
         import sys
@@ -2144,7 +2177,7 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     """
     # v2 engine: analyze downscaled, render natively in ffmpeg. Any failure
     # falls back to the v1 frame loop below so a v2 edge case can't kill jobs.
-    if os.environ.get("REFRAME_ENGINE", "v2").strip().lower() != "v1":
+    if force_strategy == "SPORTS" or os.environ.get("REFRAME_ENGINE", "v2").strip().lower() != "v1":
         try:
             import reframe_v2
             t0 = time.time()
@@ -2413,7 +2446,7 @@ def load_transcript_checkpoint(output_dir, input_video, duration):
         return None
 
 
-def prepare_transcript(input_video, output_dir, url, mode):
+def prepare_transcript(input_video, output_dir, url, mode, audio_language=None):
     """``--prepare-only``: leave this source's transcript as the job's
     checkpoint, so the run that renders it (a remote worker with no GPU, or
     the retry on this host) reuses it instead of transcribing.
@@ -2436,7 +2469,7 @@ def prepare_transcript(input_video, output_dir, url, mode):
         transcript, from_cache = None, False
         if url:
             import source_cache
-            transcript = source_cache.fetch_transcript(url, duration)
+            transcript = source_cache.fetch_transcript(url, duration, audio_language=audio_language)
             from_cache = transcript is not None
         if transcript is None and mode == "1":
             from transcribe_backends import NoAudioError, GpuUnavailable, require_gpu
@@ -2461,7 +2494,7 @@ def prepare_transcript(input_video, output_dir, url, mode):
         save_transcript_checkpoint(output_dir, transcript, input_video, duration)
         if url and not from_cache:
             import source_cache
-            source_cache.store_transcript(url, duration, transcript, input_video)
+            source_cache.store_transcript(url, duration, transcript, input_video, audio_language=audio_language)
         return True
     except Exception as e:
         print(f"⚠️ Transcript not prepared ({type(e).__name__}: {e}).")
@@ -3144,14 +3177,25 @@ if __name__ == '__main__':
     parser.add_argument('--skip-analysis', action='store_true', help="Skip AI analysis and convert the whole video.")
     parser.add_argument('--format', type=str, default="auto", choices=["auto", "vertical", "horizontal", "square"],
                         help="Output aspect: vertical/auto (9:16), horizontal (keep 16:9), square (1:1).")
+    parser.add_argument('--framing-method', choices=["sports"],
+                        help="Follow action in vertical or square sports clips.")
     parser.add_argument('--transcript', type=str,
                         help="Path to a precomputed transcript JSON (transcribe_media shape); skips transcription.")
+    parser.add_argument('--source-audio-language', help="Use an available YouTube audio language code.")
     parser.add_argument('--prepare-only', action='store_true',
                         help="Fetch the source (download, cut to the paid minutes), print "
                              "SOURCE_READY <path> and exit: a remote worker renders it.")
 
     args = parser.parse_args()
+    selected_audio = None
+    if args.source_audio_language is not None:
+        from source_cache import video_id
+        from youtube_io import normalize_audio_language
+        selected_audio = normalize_audio_language(args.source_audio_language)
+        if not selected_audio or not video_id(args.url):
+            parser.error("--source-audio-language needs a valid language code and a YouTube video URL")
     output_format = args.format
+    force_strategy = "SPORTS" if args.framing_method == "sports" and output_format != "horizontal" else None
 
     script_start_time = time.time()
 
@@ -3284,7 +3328,8 @@ if __name__ == '__main__':
                      and not os.environ.get("MAX_SOURCE_MINUTES", "").strip()
                      and not os.path.exists(os.path.join(output_dir, TRANSCRIPT_CHECKPOINT)))
         input_video, video_title = download_youtube_video(
-            args.url, output_dir, on_audio=_on_audio if use_early else None, use_cache=True)
+            args.url, output_dir, on_audio=_on_audio if use_early else None, use_cache=True,
+            audio_language=selected_audio)
     else:
         input_video = args.input
         video_title = os.path.splitext(os.path.basename(input_video))[0]
@@ -3332,7 +3377,7 @@ if __name__ == '__main__':
         print(f"SOURCE_READY {input_video}", flush=True)
         _mode = os.environ.get("PREPARE_TRANSCRIPT", "").strip().lower()
         if _mode in ("1", "cache") and not args.skip_analysis and not args.transcript:
-            prepare_transcript(input_video, output_dir, args.url, _mode)
+            prepare_transcript(input_video, output_dir, args.url, _mode, selected_audio)
         if os.environ.get("PREPARE_SCENES", "").strip() == "1" and not args.skip_analysis:
             prepare_scenes(input_video, output_dir)
         sys.exit(0)
@@ -3341,7 +3386,7 @@ if __name__ == '__main__':
     # instead of one per clip, and the answer is a property of the material
     # ("this is a screencast"), which does not change between its own clips.
     # It runs before any render so the modules are switched on in time.
-    if layout_picker.ENABLED:
+    if layout_picker.ENABLED and force_strategy != "SPORTS":
         try:
             _cap = cv2.VideoCapture(input_video)
             _fps = _cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -3387,7 +3432,7 @@ if __name__ == '__main__':
         output_file = args.output
         if not output_file or _is_output_dir(output_file):
             output_file = os.path.join(output_dir, f"{video_title}_vertical.mp4")
-        render_clip(input_video, output_file, output_format)
+        render_clip(input_video, output_file, output_format, force_strategy=force_strategy)
     else:
         # Get duration (needed by both the transcript and the vision path).
         cap = cv2.VideoCapture(input_video)
@@ -3439,7 +3484,7 @@ if __name__ == '__main__':
         transcript_from_cache = False
         if transcript is None and args.url:
             import source_cache
-            transcript = source_cache.fetch_transcript(args.url, duration)
+            transcript = source_cache.fetch_transcript(args.url, duration, audio_language=selected_audio)
             if transcript is not None:
                 transcript_from_cache = True
                 save_transcript_checkpoint(output_dir, transcript, input_video, duration)
@@ -3452,7 +3497,7 @@ if __name__ == '__main__':
         if transcript is not None and args.url and not transcript_from_cache:
             # Kept only when this job's source is the cached file, uncut.
             import source_cache
-            source_cache.store_transcript(args.url, duration, transcript, input_video)
+            source_cache.store_transcript(args.url, duration, transcript, input_video, audio_language=selected_audio)
 
         # Music-only or wordless footage transcribes to a handful of words.
         # Clip it by what is on screen instead, like a video with no audio.
@@ -3491,6 +3536,12 @@ if __name__ == '__main__':
             # --keep-original) or in uploads/ (upload jobs).
             clips_data['source_video'] = os.path.basename(input_video)
             clips_data['output_format'] = output_format
+            if force_strategy == "SPORTS":
+                clips_data['framing_method'] = "sports"
+                for clip in clips_data['shorts']:
+                    clip_range = {"start": clip['start'], "end": clip['end']}
+                    clip['recipe'] = {"v": 1, "framing": "sports", "canonical_range": clip_range,
+                                      "segments": [dict(clip_range)]}
             if source_subtitle_band:
                 clips_data['source_subtitle_band'] = source_subtitle_band
             metadata_file = os.path.join(output_dir, f"{video_title}_metadata.json")
@@ -3530,6 +3581,7 @@ if __name__ == '__main__':
                     # made. Each worker writes only its own clip dict, so the
                     # re-dump after the pool is race-free.
                     success = render_clip(clip_temp_path, clip_final_path, output_format,
+                                          force_strategy=force_strategy,
                                           subtitle_band=source_subtitle_band)
                     if success:
                         print(f"   🎞️ Clip {i+1} framed")
@@ -3548,7 +3600,8 @@ if __name__ == '__main__':
                     # on, and the timeline they are laid on (its cuts); the
                     # canonical reframe stays, it is the clip's normal mode.
                     base_path, words, w_start, w_end = clip_final_path, transcript, start, end
-                    pro = pro_clip(clip_final_path, clip, transcript) if success else None
+                    pro = (pro_clip(clip_final_path, clip, transcript)
+                           if success and force_strategy != "SPORTS" else None)
                     cap_style = None
                     if pro:
                         deliver_path = base_path = pro[0]

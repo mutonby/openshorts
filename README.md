@@ -102,13 +102,15 @@ Add OpenShorts to Claude or ChatGPT with one URL and ask for clips in plain lang
 - **Smart 9:16 Reframing**: per scene: TRACK (MediaPipe + YOLOv8 face tracking), GENERAL (blurred background), SPLIT (two speakers stacked, captions on the seam) and SCREENCAST (screen over presenter); the layout is picked per video by Gemini or forced from the dashboard
 - **Captions**: faster-whisper (or Parakeet on GPU) with word-level timestamps, several caption styles, burned into the clip
 - **Clip editor**: word-level cuts, extra segments, framing changes and fast re-renders
-- **Hook overlays**: an opening line written from what is said in the clip, editable in text, style, font and position
+- **Hook overlays and closing text**: edit the opening hook's text, style, font, position and duration. Add an optional closing call to action that takes over before the clip ends.
+- **Sports action framing**: follow a confidently tracked ball, follow concentrated motion, or keep the full shot visible when the framing evidence is weak.
 - **AI Voice Dubbing**: ElevenLabs, 30+ languages with voice cloning (bring your own ElevenLabs key, on the Cloud too)
 - **AI Video Effects**: Gemini-generated FFmpeg filters
 
 ### Social Auto-Publishing (via [Upload-Post](https://www.upload-post.com))
-- **Post a clip to TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky at once**, or schedule it for any date and time
+- **Post a clip to TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads, Bluesky and X at once**, or schedule it for any date and time
 - **Schedule a week**: spread a batch of clips across the coming days in one go
+- **Content calendar**: review, reschedule and cancel pending Upload-Post posts from Settings
 - **Post analytics**: views of the clips you published from OpenShorts, in the app
 - On the Cloud it is wired up on every paid plan; self-hosted, paste your own Upload-Post key
 - **Only want to post videos you already have, without clipping?** Use [Upload-Post](https://www.upload-post.com) directly: TikTok, Instagram, YouTube, LinkedIn, Facebook, X, Threads, Pinterest, Bluesky and more, with a free plan, a REST API and an MCP server
@@ -375,6 +377,8 @@ curl -X POST https://api.openshorts.app/api/process \
 
 Interactive docs at `/docs` (OpenAPI) on any instance.
 
+For a YouTube video with multiple audio tracks, select **Check source audio tracks** on the link form. REST clients can pass a language from `POST /api/process/audio-tracks` as `source_audio_language` on `/api/process`. The MCP equivalents are `list_source_audio_tracks` and `process_video`. See the [feature reference](docs/ssemble-reference.md) for more about these workflows.
+
 ### Completion webhooks
 
 Pass `webhook_url` (and optionally `webhook_secret`) to `POST /api/process` and you get exactly one `POST` when the job reaches a terminal state — no polling loops in your n8n / Zapier / cron pipelines:
@@ -397,6 +401,8 @@ export OPENSHORTS_API_KEY=osk_...              # hosted
 # export OPENSHORTS_API_URL=http://localhost:8000   # self-hosted, no key
 
 openshorts process "https://youtube.com/watch?v=..." --wait
+openshorts audio-tracks "https://youtube.com/watch?v=..."
+openshorts process "https://youtube.com/watch?v=..." --source-audio-language pt-BR --framing sports --wait
 openshorts clips <job_id>
 openshorts publish <job_id> 0 --platforms tiktok,youtube
 ```

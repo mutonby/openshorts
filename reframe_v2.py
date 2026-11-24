@@ -29,6 +29,7 @@ import punch_in
 import screencast_layout
 import layout_ranges
 import split_layout
+import sports_framing
 from ffmpeg_utils import (video_encode_args, blurred_backdrop, escape_filter_value,
                           QUALITY_FAST, METADATA_SCRUB)
 
@@ -664,6 +665,7 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     """
     import main as m
     content_ranges = content_ranges or []
+    sports = force_strategy == "SPORTS"
 
     print("   🚀 Reframe engine v2 (ffmpeg-native render)")
     scenes, fps = m.detect_scenes(input_video)
@@ -687,7 +689,10 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     # whole frame into the middle of a blurred copy of itself. Skip the
     # classifier and every layout upgrade instead of trying to survive them.
     passthrough = source_already_fits(orig_w, orig_h, aspect_ratio)
-    if force_strategy:
+    if sports:
+        strategies = ['TRACK'] * len(scenes)
+        content_ranges = []
+    elif force_strategy:
         strategies = [force_strategy] * len(scenes)
         content_ranges = []  # no screencast/inset upgrades over an explicit choice
         print(f"   🎯 Framing override: every scene -> {force_strategy}")
@@ -708,7 +713,7 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     # that begin past the last decoded frame, and those get dropped).
     splits = {}
     split_scene_of = {}
-    detected_splits = {} if passthrough else split_layout.detect_split_scenes(
+    detected_splits = {} if passthrough or sports else split_layout.detect_split_scenes(
         input_video, scenes, strategies)
     for scene_idx, centres in detected_splits.items():
         strategies[scene_idx] = 'SPLIT'
@@ -812,21 +817,24 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     # reads the output pair. So out_w/out_h being the (possibly upscaled)
     # delivery size doesn't move the camera; only the final scale= uses it.
     cameraman = m.SmoothedCameraman(out_w, out_h, orig_w, orig_h, aspect_ratio=aspect_ratio)
-    tracker = m.SpeakerTracker(cooldown_frames=30)
+    crop_w, crop_h = cameraman.crop_width, cameraman.crop_height
 
-    xs = _analyze_trajectory(input_video, scene_boundaries, strategies, fps,
-                             orig_w, orig_h, cameraman, tracker)
+    if sports:
+        xs, strategies = sports_framing.trajectory(input_video, scene_boundaries, fps, orig_w,
+                                                   orig_w if passthrough else crop_w)
+    else:
+        tracker = m.SpeakerTracker(cooldown_frames=30)
+        xs = _analyze_trajectory(input_video, scene_boundaries, strategies, fps,
+                                 orig_w, orig_h, cameraman, tracker)
     if not xs:
         raise RuntimeError("analysis produced no frames")
 
     # Beats are found once per clip; each scene takes the ones inside it.
     beats = []
-    if punch_in.ENABLED:
+    if punch_in.ENABLED and not sports:
         beats = punch_in.emphasis_times(input_video, len(xs) / fps)
         if beats:
             print(f"   🔍 Punch-in on {len(beats)} beat(s)")
-
-    crop_w, crop_h = cameraman.crop_width, cameraman.crop_height
 
     # ALTERNATE renders through the TRACK path: hard cuts between two speakers
     # are still just a list of crop x values, so no new filtergraph is needed.

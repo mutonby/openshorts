@@ -12,12 +12,14 @@ Two things are pinned here:
    the client's value. The call sites used to read ``forced_profile or
    req.user_id``; that is the exact shape that turns a resolver bug into a
    cross-tenant write.
-2. The vendor-facing list helper filters by profile. Upload-Post's schedule
-   endpoint takes no profile filter and returns the whole account, so dropping
-   this filter would expose (and let anyone cancel) every other user's queue.
+2. The vendor-facing list helper filters by profile even if the provider
+   returns additional profiles. Listing and mutations share that check.
 """
 import asyncio
+import json
+from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -79,6 +81,7 @@ class TestScheduledPostsAreFilteredByProfile:
         }
 
         async def fake_get(api_key, url, params):
+            assert params == {"profile_username": "os_mine"}
             return vendor_rows
 
         monkeypatch.setattr(app_module, "_upload_post_get", fake_get)
@@ -86,6 +89,52 @@ class TestScheduledPostsAreFilteredByProfile:
 
         assert [r["job_id"] for r in rows] == ["mine-1", "mine-2"]
         assert all(r.get("profile_username") == "os_mine" for r in rows)
+
+
+def test_reschedule_changes_the_time_only_for_a_post_owned_by_the_profile(monkeypatch):
+    calls = []
+    when = datetime.now(timezone(timedelta(hours=2))) + timedelta(days=2)
+    utc_when = when.astimezone(timezone.utc).isoformat()
+
+    async def managed_profile(request, byok_profile):
+        assert byok_profile == OTHER_TENANT
+        return "managed-key", "os_mine"
+
+    def vendor(request):
+        assert request.headers["Authorization"] == "Apikey managed-key"
+        calls.append((request.method, request.url.path))
+        if request.method == "GET":
+            assert request.url.params["profile_username"] == "os_mine"
+            return httpx.Response(200, json={"scheduled_posts": [
+                {"job_id": "mine", "profile_username": "os_mine"},
+                {"job_id": "theirs", "profile_username": OTHER_TENANT},
+            ]})
+        assert request.method == "PATCH"
+        assert json.loads(request.content) == {"scheduled_date": utc_when}
+        return httpx.Response(200, json={"success": True, "scheduled_date": utc_when})
+
+    monkeypatch.setattr(app_module, "_social_analytics_auth", managed_profile)
+    monkeypatch.setattr(app_module.social_platforms, "upload_post_client",
+                        lambda timeout: httpx.AsyncClient(transport=httpx.MockTransport(vendor)))
+
+    async def exercise_route():
+        transport = httpx.ASGITransport(app=app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            base = "/api/social/scheduled"
+            params = {"user": OTHER_TENANT}
+            body = {"scheduled_date": when.isoformat()}
+            denied = await client.patch(f"{base}/theirs", json=body, params=params)
+            assert denied.status_code == 404
+            result = await client.patch(f"{base}/mine", json=body, params=params)
+            assert result.status_code == 200
+            assert result.json() == {"success": True, "job_id": "mine", "scheduled_date": utc_when}
+
+    asyncio.run(exercise_route())
+    assert calls == [
+        ("GET", "/api/uploadposts/schedule"),
+        ("GET", "/api/uploadposts/schedule"),
+        ("PATCH", "/api/uploadposts/schedule/mine"),
+    ]
 
 
 class TestImpressionsWithoutAProfile:

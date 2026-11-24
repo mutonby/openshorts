@@ -266,7 +266,8 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
                   reframe=False, output_format="auto", watermark=False,
                   captions_transcript=None, force_strategy=None,
                   crop_overrides=None, runner=None, renderer=None,
-                  watermarker=None, captioner=None, subtitle_band=None):
+                  watermarker=None, captioner=None, subtitle_band=None,
+                  text_overlay=None):
     """Render a recut clip. Returns (served_filename, clean_filename).
 
     - ``input_path``/``segments``: the file to cut from and the times ON THAT
@@ -279,6 +280,8 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
       ``virtual_transcript``); when given and non-empty, captions are burned
       LAST onto a ``subtitled_<ts>_`` derivative, preserving the invariant
       that the clean file stays clean for later re-styling.
+    - ``text_overlay``: optional renderer for text on the recut timeline,
+      applied to the clean picture before the captions.
     - ``crop_overrides``: scene index -> crop centre as a fraction of the
       source width, for scenes the user framed by hand. Source path only, for
       the same reason as ``reframe``: the canonical file is already cropped, so
@@ -325,10 +328,13 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
         if watermark:
             (watermarker or _main_attr("apply_watermark"))(out_path)
 
-        served_name = out_name
-        if captions_transcript and captions_transcript.get("segments"):
+        has_captions = bool(captions_transcript and captions_transcript.get("segments"))
+        layered_path = (text_overlay(out_path, has_captions=has_captions)
+                        if text_overlay else out_path)
+        served_name = os.path.basename(layered_path)
+        if has_captions:
             caption = captioner or _main_attr("auto_caption_clip")
-            captioned = caption(out_path, captions_transcript,
+            captioned = caption(layered_path, captions_transcript,
                                 0.0, total_duration(segments))
             if captioned:
                 served_name = os.path.basename(captioned)

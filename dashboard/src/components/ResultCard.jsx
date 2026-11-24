@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Download, Share2, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp, Sparkles } from 'lucide-react';
 import { getApiUrl } from '../config';
-import { apiFetch, QuotaError, openQuotaWall } from '../lib/api';
+import { apiFetch, apiJson, QuotaError, openQuotaWall } from '../lib/api';
 import { platformOptions as buildPlatformOptions, defaultPlatformFlags, flagsFromList } from '../lib/socialPlatforms';
 import { track } from '../lib/analytics';
 import SubtitleModal from './SubtitleModal';
@@ -51,7 +51,7 @@ function clipDurationSeconds(clip) {
     if (segments?.length) {
         return segments.reduce((acc, s) => acc + (s.end - s.start), 0);
     }
-    return clip.end && clip.start ? clip.end - clip.start : NaN;
+    return Number.isFinite(clip.end) && Number.isFinite(clip.start) ? clip.end - clip.start : NaN;
 }
 
 function formatDuration(clip) {
@@ -275,6 +275,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     // one the server refuses, so the switch is not offered there. Unknown
     // until the video's metadata loads, and offered meanwhile.
     const [isUpright, setIsUpright] = useState(true);
+    const [mediaInfo, setMediaInfo] = useState(null);
     const canSwitchMode = Boolean(onModeChanged) && (isUpright || isPro);
     const handleMode = async () => {
         setIsSwitchingMode(true);
@@ -333,7 +334,15 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     // The hook currently burned into the server file (auto-hook or a manual
     // one). /api/hook REPLACES it; tracked locally so the modal stays honest
     // after edits without refetching the job.
-    const [burnedHook, setBurnedHook] = useState(clip.auto_hook?.text || null);
+    const [burnedHook, setBurnedHook] = useState(clip.auto_hook || null);
+    const serverTextRender = hasServerBurns || Boolean(mediaInfo && mediaInfo.width * 16 !== mediaInfo.height * 9);
+    const savedHook = activeLayers.hook || (burnedHook && {
+        ...burnedHook,
+        displayDurationSec: burnedHook.duration_seconds ?? null,
+        cta: burnedHook.cta && {
+            ...burnedHook.cta, displayDurationSec: burnedHook.cta.duration_seconds,
+        },
+    });
 
     // Fetch clip duration from transcript endpoint
     useEffect(() => {
@@ -368,9 +377,9 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             setIsScheduling(false);
             setScheduleDate("");
             setPostResult(null);
-            // Only preselect platforms the profile can actually publish to.
+            // X is selected explicitly even when the account is connected.
             if (knownConnections) {
-                setPlatforms(flagsFromList(connectedPlatforms));
+                setPlatforms(flagsFromList(connectedPlatforms.filter((platform) => platform !== 'x')));
             }
         }
         // Reset only when the modal opens for a clip; connection changes while
@@ -595,92 +604,68 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
         }
     };
 
-    const handleHook = async (hookData) => {
+    const handleHook = async (hook) => {
         setIsHooking(true);
         setEditError(null);
         try {
-            if (hookData.remotion && !hasServerBurns) {
-                // Accumulate layer and render all layers together
-                const newLayers = { ...activeLayers, hook: hookData.remotion };
-                setActiveLayers(newLayers);
-                const blobUrl = await renderInBrowser({
-                    videoUrl: originalVideoUrl,
-                    durationInSeconds: clipDuration,
-                    subtitles: newLayers.subtitles,
-                    hook: newLayers.hook,
-                    effects: newLayers.effects,
-                });
-                setCurrentVideoUrl(blobUrl);
+            const updatePreview = async (serverUrl, layers) => {
+                const url = layers.subtitles || layers.hook || layers.effects
+                    ? await renderInBrowser({
+                        videoUrl: serverUrl, durationInSeconds: clipDuration, ...layers,
+                    })
+                    : serverUrl;
+                setActiveLayers(layers);
+                setCurrentVideoUrl(url);
                 if (videoRef.current) videoRef.current.load();
+            };
+
+            if (hook ? !hook.cta && !serverTextRender : !burnedHook) {
+                await updatePreview(
+                    getApiUrl(`/videos/${jobId}/${serverVideoFile}`), { ...activeLayers, hook });
                 setShowHookModal(false);
                 return;
             }
 
-            // Fallback: legacy FFmpeg
-            const payload = typeof hookData === 'string'
-                ? { text: hookData, position: 'top', size: 'M' }
-                : hookData;
-
-            const res = await apiFetch('/api/hook', {
+            const data = await apiJson('/api/hook', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     job_id: jobId,
                     clip_index: index,
-                    text: payload.text,
-                    position: payload.position,
-                    size: payload.size,
-                    style: payload.style || 'pill',
-                    font: payload.font || null,
-                    duration_seconds: payload.remotion?.displayDurationSec ?? null,
-                    input_filename: serverVideoFile
-                })
-            });
-
-            if (!res.ok) throw new Error(await res.text());
-            const data = await res.json();
-            if (data.new_video_url) {
-                setCurrentVideoUrl(getApiUrl(data.new_video_url));
-                setServerVideoFile(data.new_video_url.split('/').pop());
-                setBurnedHook(data.burned_hook?.text ?? payload.text ?? null);
-                if (videoRef.current) videoRef.current.load();
-                setShowHookModal(false);
-            }
-        } catch (e) {
-            setEditError(e.message);
-            setTimeout(() => setEditError(null), 5000);
-        } finally {
-            setIsHooking(false);
-        }
-    };
-
-    // Strip the burned hook (auto-hook or manual) off the server file.
-    const handleRemoveHook = async () => {
-        setIsHooking(true);
-        setEditError(null);
-        try {
-            const res = await apiFetch('/api/hook', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    job_id: jobId,
-                    clip_index: index,
-                    remove: true,
                     input_filename: serverVideoFile,
+                    ...(hook ? {
+                        text: hook.text,
+                        position: hook.position,
+                        size: hook.size,
+                        style: hook.style,
+                        font: hook.font,
+                        duration_seconds: hook.displayDurationSec,
+                        cta: hook.cta ? {
+                            text: hook.cta.text, position: hook.cta.position, size: hook.cta.size,
+                            duration_seconds: hook.cta.displayDurationSec,
+                        } : null,
+                    } : { remove: true }),
                 }),
             });
-            if (!res.ok) throw new Error(await res.text());
-            const data = await res.json();
-            if (data.new_video_url) {
-                setCurrentVideoUrl(getApiUrl(data.new_video_url));
-                setServerVideoFile(data.new_video_url.split('/').pop());
-                setBurnedHook(null);
-                if (videoRef.current) videoRef.current.load();
-                setShowHookModal(false);
+            const serverUrl = getApiUrl(data.new_video_url);
+            const remaining = { ...activeLayers, hook: null };
+            setServerVideoFile(data.new_video_url.split('/').pop());
+            setBurnedHook(data.burned_hook);
+            setActiveLayers(remaining);
+            setCurrentVideoUrl(serverUrl);
+            if (remaining.subtitles || remaining.effects) {
+                const blobUrl = await renderInBrowser({
+                    videoUrl: serverUrl,
+                    durationInSeconds: clipDuration,
+                    ...remaining,
+                });
+                setCurrentVideoUrl(blobUrl);
             }
+            if (videoRef.current) videoRef.current.load();
+            setShowHookModal(false);
         } catch (e) {
-            setEditError(e.message);
-            setTimeout(() => setEditError(null), 5000);
+            if (e instanceof QuotaError) openQuotaWall(e, 'clip_text');
+            else setEditError(e.detail || e.message || 'Could not save the clip text.');
         } finally {
             setIsHooking(false);
         }
@@ -874,6 +859,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     onLoadedMetadata={(e) => {
                         if (e.target.videoWidth) {
                             setResolution(`${e.target.videoWidth}×${e.target.videoHeight}`);
+                            setMediaInfo({ width: e.target.videoWidth, height: e.target.videoHeight });
                             setIsUpright(e.target.videoHeight > e.target.videoWidth);
                         }
                     }}
@@ -1116,12 +1102,12 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     </button>
 
                     <button
-                        onClick={() => setShowHookModal(true)}
+                        onClick={() => { setEditError(null); setShowHookModal(true); }}
                         disabled={isHooking}
                         className={QUIET_BTN}
                     >
                         {isHooking ? <Loader2 size={16} className="animate-spin text-brass shrink-0" /> : <Wand2 size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />}
-                        {isHooking ? 'saving…' : 'edit hook'}
+                        {isHooking ? 'saving…' : 'edit hook & CTA'}
                     </button>
 
                     <button
@@ -1333,20 +1319,22 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 existingHook={activeLayers.hook}
             />
 
-            <HookModal
-                isOpen={showHookModal}
+            {showHookModal && <HookModal
+                isOpen
                 onClose={() => setShowHookModal(false)}
                 onGenerate={handleHook}
+                error={editError}
                 isProcessing={isHooking}
                 videoUrl={originalVideoUrl}
                 initialText={clip.viral_hook_text}
-                durationInSeconds={clip.end && clip.start ? clip.end - clip.start : 30}
+                initialHook={savedHook}
+                durationInSeconds={clipDuration}
+                mediaInfo={mediaInfo}
                 existingSubtitles={activeLayers.subtitles}
                 hasCaptions={!!activeLayers.subtitles || /(^|_)subtitled_/.test(serverVideoFile || '')}
-                serverRender={hasServerBurns}
-                burnedHook={burnedHook}
-                onRemove={burnedHook ? handleRemoveHook : null}
-            />
+                serverRender={serverTextRender}
+                onRemove={savedHook ? () => handleHook(null) : null}
+            />}
 
             <TranslateModal
                 isOpen={showTranslateModal}

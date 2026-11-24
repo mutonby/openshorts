@@ -12,6 +12,8 @@ job anyway (fail-open), where the in-job warning still applies.
 import argparse
 import json
 import os
+
+from youtube_io import audio_languages
 import sys
 
 from dotenv import load_dotenv
@@ -37,7 +39,8 @@ def main() -> int:
     parser.add_argument("--url", required=True)
     args = parser.parse_args()
 
-    result = {"max_height": 0, "mode": None, "cookies_invalid": False, "duration": 0}
+    result = {"max_height": 0, "mode": None, "cookies_invalid": False, "duration": 0,
+              "audio_languages": []}
     # Same gates as the metering probe and the download (app.py also checks
     # before spawning this): a URL on a private / tailnet address, or a
     # YouTube page that is not one video, never reaches yt-dlp. The empty
@@ -107,6 +110,7 @@ def main() -> int:
                 if authed:
                     session.ok()
                 formats = info.get('formats') or []
+                result["audio_languages"] = sorted(set(result["audio_languages"]) | set(audio_languages(info)))
                 heights = [
                     f.get('height') or 0
                     for f in formats

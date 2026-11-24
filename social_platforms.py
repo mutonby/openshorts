@@ -13,10 +13,11 @@ What each network shows of a clip:
 - Threads: the caption only (Upload-Post posts ``threads_title`` when set and
   splits text over 500 characters into a thread).
 - Bluesky: the caption only; Upload-Post cuts it to the 300-character limit.
+- X: sends the caption as the post text via ``x_title``.
 """
 from typing import Iterable, List
 
-PLATFORMS = ("tiktok", "instagram", "youtube", "facebook", "linkedin", "threads", "bluesky")
+PLATFORMS = ("tiktok", "instagram", "youtube", "facebook", "linkedin", "threads", "bluesky", "x")
 
 LABELS = {
     "tiktok": "TikTok",
@@ -26,6 +27,7 @@ LABELS = {
     "linkedin": "LinkedIn",
     "threads": "Threads",
     "bluesky": "Bluesky",
+    "x": "X",
 }
 
 # YouTube refuses a title over 100 characters; the Gemini title is not bounded.
@@ -86,6 +88,8 @@ def upload_fields(platforms: Iterable[str], *, title: str, description: str,
     if "bluesky" in ps:
         data["bluesky_title"] = title
         data["bluesky_description"] = description
+    if "x" in ps:
+        data["x_title"] = description
     return data
 
 

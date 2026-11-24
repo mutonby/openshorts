@@ -46,6 +46,8 @@ import re
 import shutil
 import tempfile
 import time
+
+from youtube_io import normalize_audio_language
 from urllib.parse import parse_qs, urlparse
 
 _ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
@@ -109,6 +111,19 @@ def video_id(url):
         elif len(parts) >= 2 and parts[0] in _PATH_PREFIXES:
             vid = parts[1]
     return vid if vid and _ID.match(vid) else None
+
+
+def _media_key(url, audio_language):
+    vid = video_id(url)
+    if vid is None or audio_language is None:
+        return vid
+    language = normalize_audio_language(audio_language)
+    return f"{vid}.audio-{language}" if language else None
+
+
+def _valid_media_key(key):
+    vid, suffix, language = key.partition(".audio-")
+    return bool(_ID.fullmatch(vid) and (not suffix or language == normalize_audio_language(language)))
 
 
 def sanitize(title):
@@ -187,22 +202,22 @@ def _link_or_copy(src, dst):
         shutil.copyfile(src, dst)
 
 
-def has(url) -> bool:
+def has(url, *, audio_language=None) -> bool:
     """Whether a whole copy of ``url`` is kept right now (no use is counted)."""
     if not enabled():
         return False
-    vid = video_id(url)
+    vid = _media_key(url, audio_language)
     try:
         return bool(vid) and _entry(vid) is not None
     except Exception:
         return False
 
 
-def fetch(url, output_dir):
+def fetch(url, output_dir, *, audio_language=None):
     """(path in ``output_dir``, title) of a cached copy of ``url``, or None."""
     if not enabled():
         return None
-    vid = video_id(url)
+    vid = _media_key(url, audio_language)
     if not vid:
         return None
     try:
@@ -224,13 +239,13 @@ def fetch(url, output_dir):
 
 
 @contextlib.contextmanager
-def claim(url):
+def claim(url, *, audio_language=None):
     """Hold the id's lock while downloading it (no-op when off or not YouTube).
 
     Waits up to ``wait_seconds()`` for another job's download of the same
     video, then goes ahead without the lock: a stuck download elsewhere must
     not stall this job for longer than the wait."""
-    vid = video_id(url) if enabled() else None
+    vid = _media_key(url, audio_language) if enabled() else None
     fd = None
     if vid:
         try:
@@ -269,11 +284,11 @@ def claim(url):
                 os.close(fd)
 
 
-def store(url, path, title):
+def store(url, path, title, *, audio_language=None):
     """Keep ``path`` (a whole, freshly downloaded source) for the next job."""
     if not enabled():
         return False
-    vid = video_id(url)
+    vid = _media_key(url, audio_language)
     if not vid:
         return False
     try:
@@ -305,14 +320,14 @@ def _backend():
     return os.environ.get("TRANSCRIBE_BACKEND", "").strip().lower() or "default"
 
 
-def fetch_transcript(url, duration):
+def fetch_transcript(url, duration, *, audio_language=None):
     """The cached transcript of this exact source, or None.
 
     Only for the same length (a job that cut its source is not that file
     any more) and the same ASR backend."""
     if not enabled():
         return None
-    vid = video_id(url)
+    vid = _media_key(url, audio_language)
     if not vid or _entry(vid) is None:
         return None
     data = _read_json(_paths(vid)[3])
@@ -329,11 +344,11 @@ def fetch_transcript(url, duration):
         return None
 
 
-def store_transcript(url, duration, transcript, source_path):
+def store_transcript(url, duration, transcript, source_path, *, audio_language=None):
     """Keep the transcript next to the cached source, if ``source_path`` is it."""
     if not enabled() or not isinstance(transcript, dict) or not transcript.get("segments"):
         return False
-    vid = video_id(url)
+    vid = _media_key(url, audio_language)
     if not vid:
         return False
     try:
@@ -466,7 +481,7 @@ def _probe_path(vid):
 
 
 def probe_get(url):
-    """``{"seconds", "max_height"}`` from a probe of this video in the last
+    """Duration, height and known audio languages from a probe in the last
     ``SOURCE_CACHE_HOURS``, or None."""
     if not enabled():
         return None
@@ -485,10 +500,14 @@ def probe_get(url):
     except (KeyError, TypeError, ValueError):
         return None
     print(f"♻️ Video length known from the download cache ({vid}): no YouTube request.")
-    return {"seconds": seconds, "max_height": height}
+    facts = {"seconds": seconds, "max_height": height}
+    if isinstance(data.get("audio_languages"), list):
+        facts["audio_languages"] = sorted({language for value in data["audio_languages"]
+                                            if (language := normalize_audio_language(value))})
+    return facts
 
 
-def probe_put(url, seconds, max_height=None):
+def probe_put(url, seconds, max_height=None, audio_languages=None):
     """Remember what a probe learned about this video (best effort)."""
     if not enabled():
         return False
@@ -501,8 +520,11 @@ def probe_put(url, seconds, max_height=None):
         return False
     try:
         os.makedirs(cache_dir(), exist_ok=True)
-        _write_json(_probe_path(vid), {"seconds": seconds, "at": time.time(),
-                                       "max_height": int(max_height) if max_height else None})
+        facts = {"seconds": seconds, "at": time.time(),
+                 "max_height": int(max_height) if max_height else None}
+        if isinstance(audio_languages, list):
+            facts["audio_languages"] = audio_languages
+        _write_json(_probe_path(vid), facts)
         return True
     except Exception:
         return False
@@ -541,7 +563,7 @@ def prune(now=None):
         if not name.endswith(".json") or name.endswith(".transcript.json"):
             continue
         vid = name[:-5]
-        if not _ID.match(vid):
+        if not _valid_media_key(vid):
             continue
         hit = _entry(vid, now)
         if hit is None:
@@ -562,7 +584,7 @@ def prune(now=None):
         stem, ext = os.path.splitext(name)
         if ext not in (".mp4", ".lock") or name.startswith(".") or stem in known:
             continue
-        if not _ID.match(stem) or _read_json(_paths(stem)[1]) is not None:
+        if not _valid_media_key(stem) or _read_json(_paths(stem)[1]) is not None:
             continue
         full = os.path.join(d, name)
         age = 3600 if ext == ".mp4" else max(3600.0, ttl_seconds())
