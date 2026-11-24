@@ -149,3 +149,57 @@ def test_score_batch_shrinks_for_local_models(local, monkeypatch):
     monkeypatch.delenv("LLM_BASE_URL")
     monkeypatch.delenv("LLM_SCORE_BATCH")
     assert main.score_batch_size() == 8
+
+
+# --- reasoning effort and OpenCode Go session header -----------------------
+
+def test_reasoning_effort_is_forwarded(local, monkeypatch):
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return _completion({"windows": []})
+
+    _serve(handler, monkeypatch)
+    llm_backend.generate_json("prompt", gemini_worker.ScoreResponse,
+                              reasoning_effort="low")
+    assert seen["body"]["reasoning_effort"] == "low"
+
+
+def test_reasoning_effort_is_absent_when_not_requested(local, monkeypatch):
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return _completion({"windows": []})
+
+    _serve(handler, monkeypatch)
+    llm_backend.generate_json("prompt", gemini_worker.ScoreResponse)
+    assert "reasoning_effort" not in seen["body"]
+
+
+def test_opencode_go_gets_a_stable_session_header(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "https://opencode.ai/inference/go/openai/v1")
+    monkeypatch.setenv("LLM_MODEL", "deepseek-v4.1-flash")
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    seen = {}
+
+    def handler(request):
+        seen["session"] = request.headers.get("x-opencode-session")
+        return _completion({"windows": []})
+
+    _serve(handler, monkeypatch)
+    llm_backend.generate_json("prompt", gemini_worker.ScoreResponse)
+    assert seen["session"] and seen["session"].startswith("ses_")
+
+
+def test_other_compatible_servers_do_not_get_the_session_header(local, monkeypatch):
+    seen = {}
+
+    def handler(request):
+        seen["session"] = request.headers.get("x-opencode-session")
+        return _completion({"windows": []})
+
+    _serve(handler, monkeypatch)
+    llm_backend.generate_json("prompt", gemini_worker.ScoreResponse)
+    assert seen["session"] is None

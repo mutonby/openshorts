@@ -67,6 +67,10 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [layout, setLayout] = useState(() => {
         try { return localStorage.getItem('os_layout') || 'auto'; } catch { return 'auto'; }
     });
+    // Two-pass ASR: the whole source only picks moments; word timings are
+    // refined on the chosen clips. null = follow the server default until the
+    // user (or their saved choice) says otherwise.
+    const [asrClipWords, setAsrClipWords] = useState(null);
     const infoRef = useRef(null);
 
     // Close the compatibility popover on any outside click.
@@ -101,6 +105,13 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     setYoutubeUrlEnabled(false);
                     setMode('file');
                 }
+                let stored = null;
+                try { stored = localStorage.getItem('os_asr_clip_words'); } catch { /* ignore */ }
+                if (stored === '1' || stored === '0') {
+                    setAsrClipWords(stored === '1');
+                } else if (cfg && typeof cfg.asrClipWordsDefault === 'boolean') {
+                    setAsrClipWords(cfg.asrClipWordsDefault);
+                }
             })
             .catch(() => {});
     }, []);
@@ -130,6 +141,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
             autoHook,
             autoHookStyle,
             layout,
+            asrClipWords,
             sourceStart: range ? Math.round(range.start) : null,
             sourceEnd: range ? Math.round(range.end) : null,
         };
@@ -315,7 +327,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     >
                         <ChevronDown size={14} className={`transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
                         advanced options
-                        {(targetClips || clipMinSeconds || clipMaxSeconds || !autoHook) && (
+                        {(targetClips || clipMinSeconds || clipMaxSeconds || !autoHook || !asrClipWords) && (
                             <span className="text-brass">·</span>
                         )}
                     </button>
@@ -403,6 +415,27 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                         afterwards with its hook button.
                                     </p>
                                 )}
+                            </div>
+                            <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">
+                                <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
+                                    <input
+                                        type="checkbox"
+                                        checked={asrClipWords !== false}
+                                        onChange={(e) => {
+                                            setAsrClipWords(e.target.checked);
+                                            try {
+                                                localStorage.setItem('os_asr_clip_words', e.target.checked ? '1' : '0');
+                                            } catch { /* ignore */ }
+                                        }}
+                                        className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer"
+                                    />
+                                    word timings only on chosen clips (faster)
+                                </label>
+                                <p className="w-full text-[11px] leading-relaxed text-muted">
+                                    The full video is transcribed without word timings to find the moments;
+                                    each selected clip gets its own word-level pass for captions. Much faster
+                                    on long videos, and the editor&apos;s word-level source track covers those clips.
+                                </p>
                             </div>
                         </div>
                     )}

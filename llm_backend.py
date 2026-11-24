@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from typing import Optional, Tuple, Type
 
 import httpx
@@ -32,6 +33,11 @@ from pydantic import BaseModel
 
 DEFAULT_MODEL = "llama3.1:8b"
 DEFAULT_TIMEOUT = 600.0  # local models on CPU are slow; a scoring batch can take minutes
+
+# OpenCode Go rejects requests without a stable session id (400
+# MissingSessionID). One per process: main.py runs one process per job, so all
+# scoring and detail calls of a job share it and separate jobs do not.
+_SESSION_ID = (os.environ.get("OPENCODE_SESSION_ID") or "").strip() or f"ses_{uuid.uuid4().hex}"
 
 
 def provider() -> str:
@@ -75,7 +81,12 @@ def _headers() -> dict:
     # Ollama ignores the key but the OpenAI client convention (and vLLM with
     # --api-key) wants the header present; "ollama" is the documented placeholder.
     key = (os.environ.get("LLM_API_KEY") or "ollama").strip()
-    return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    # OpenCode Go (https://opencode.ai/inference/go) requires this on every
+    # request; harmless for Ollama/vLLM/LM Studio, so send it only there.
+    if "opencode.ai" in base_url():
+        headers["x-opencode-session"] = _SESSION_ID
+    return headers
 
 
 def _client(**kwargs) -> httpx.Client:
@@ -100,6 +111,7 @@ def _is_format_rejection(resp: httpx.Response) -> bool:
 
 
 def generate_json(prompt: str, schema: Type[BaseModel], model: Optional[str] = None,
+                  reasoning_effort: Optional[str] = None,
                   ) -> Tuple[dict, Optional[dict]]:
     """One chat completion that must come back as JSON matching ``schema``.
 
@@ -120,6 +132,9 @@ def generate_json(prompt: str, schema: Type[BaseModel], model: Optional[str] = N
     with _client() as client:
         for fmt in _response_formats(schema):
             body = {"model": model, "messages": messages, "temperature": 0.2, "stream": False}
+            effort = (reasoning_effort or os.environ.get("LLM_REASONING_EFFORT") or "").strip()
+            if effort:
+                body["reasoning_effort"] = effort
             if fmt is not None:
                 body["response_format"] = fmt
             resp = client.post(url, json=body, headers=_headers())

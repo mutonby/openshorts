@@ -1289,6 +1289,9 @@ function App() {
         auto_hook_style: data.autoHook ? (data.autoHookStyle || 'pill') : null,
         // 'auto' is the server default, so only a deliberate choice travels.
         layouts: data.layout && data.layout !== 'auto' ? data.layout : null,
+        // Two-pass ASR: only sent when the caller chose; raw API callers keep
+        // the server's ASR_CLIP_WORDS default.
+        asr_clip_words: data.asrClipWords == null ? null : (data.asrClipWords ? '1' : '0'),
         // Set when the user took the quota wall's "clip the first N minutes"
         // offer: the server reserves N minutes and cuts the source to them.
         max_minutes: data.maxMinutes || null,

@@ -31,6 +31,7 @@ from fastapi.responses import (HTMLResponse, FileResponse, JSONResponse, Streami
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
+from transcript_utils import words_transcript
 import recut
 import layout_ranges
 import watermarked
@@ -1779,16 +1780,12 @@ CAPTION_STYLE_FIELDS = (
 def _words_transcript(words, language="en"):
     """A one-segment transcript from clip-relative caption words
     ({word, start, end}, word with its leading space), so the generators burn
-    user-edited text verbatim."""
-    words = sorted(words, key=lambda w: w["start"])
-    return {
-        "language": language,
-        "segments": [{
-            "start": words[0]["start"], "end": max(w["end"] for w in words),
-            "text": " ".join(w["word"] for w in words),
-            "words": words,
-        }],
-    }
+    user-edited text verbatim.
+
+    Thin alias over transcript_utils.words_transcript, kept because existing
+    callers/tests know the underscore name.
+    """
+    return words_transcript(words, language)
 
 
 def _burn_caption_style(video_path, out_path, sub_path, transcript, start, end,
@@ -5799,6 +5796,10 @@ async def get_config(response: Response):
         # Self-host only: tells the dashboard the Gemini key is optional
         # because the moment picker runs on an OpenAI-compatible server.
         "localLlm": None if BILLING_ENABLED else llm_backend.describe(),
+        # Two-pass ASR default for the dashboard's Advanced toggle. The request
+        # field still wins; this only pre-selects the operator's preference.
+        "asrClipWordsDefault": os.environ.get("ASR_CLIP_WORDS", "0").strip().lower()
+        in ("1", "true", "yes"),
     }
 
 async def _probe_youtube_quality(url: str) -> dict:
@@ -6204,6 +6205,7 @@ async def process_endpoint(
     auto_hook_style: Optional[str] = Form(None),
     thumbnail_session_id: Optional[str] = Form(None),
     captions: Optional[str] = Form(None),
+    asr_clip_words: Optional[str] = Form(None),
     upload_id: Optional[str] = Form(None),
     max_minutes: Optional[str] = Form(None),
     source_start: Optional[str] = Form(None),
@@ -6238,6 +6240,7 @@ async def process_endpoint(
         auto_hook_style = body.get("auto_hook_style")
         thumbnail_session_id = body.get("thumbnail_session_id")
         captions = body.get("captions")
+        asr_clip_words = body.get("asr_clip_words")
         upload_id = body.get("upload_id")
         max_minutes = body.get("max_minutes")
         source_start = body.get("source_start")
@@ -6323,6 +6326,9 @@ async def process_endpoint(
     # probe above already gets this right.
     cmd = [sys.executable, "-u", "main.py"] # -u for unbuffered
     env = child_env()
+    if asr_clip_words is not None:
+        env["ASR_CLIP_WORDS"] = (
+            "1" if str(asr_clip_words).lower() in ("1", "true", "yes") else "0")
     if api_key:
         env["GEMINI_API_KEY"] = api_key # Override with key from request
     else:
@@ -7578,15 +7584,23 @@ async def get_clip_transcript(job_id: str, clip_index: int, request: Request):
 
     clip_data = clips[clip_index]
 
-    # Recut clips are concatenations of source segments; remap the transcript
-    # onto the clip timeline so every consumer keeps its flat start..end logic.
-    recipe_segments = (clip_data.get('recipe') or {}).get('segments')
-    if recipe_segments:
-        transcript = recut.virtual_transcript(transcript, recipe_segments)
-        clip_start, clip_end = 0.0, recut.total_duration(recipe_segments)
+    # Two-pass ASR: the clip carries its own word timings (refined on the cut
+    # clip), so the source transcript's words are not needed here.
+    if clip_data.get('caption_words'):
+        transcript = _words_transcript(clip_data['caption_words'],
+                                       transcript.get('language', 'en'))
+        clip_start = 0.0
+        clip_end = transcript['segments'][0]['end']
     else:
-        clip_start = clip_data.get('start', 0)
-        clip_end = clip_data.get('end', 0)
+        # Recut clips are concatenations of source segments; remap the transcript
+        # onto the clip timeline so every consumer keeps its flat start..end logic.
+        recipe_segments = (clip_data.get('recipe') or {}).get('segments')
+        if recipe_segments:
+            transcript = recut.virtual_transcript(transcript, recipe_segments)
+            clip_start, clip_end = 0.0, recut.total_duration(recipe_segments)
+        else:
+            clip_start = clip_data.get('start', 0)
+            clip_end = clip_data.get('end', 0)
 
     # ?format=srt|vtt downloads standard captions (grouped like the burned-in
     # text, same CAPTION_OFFSET_SECONDS nudge); default stays the Remotion JSON.
@@ -7685,6 +7699,18 @@ async def get_clip_edl(job_id: str, clip_index: int, request: Request):
     segments, canonical_range = _clip_recipe_parts(clip)
     transcript = data.get('transcript') or {}
     words = recut.transcript_words(transcript)
+    # Two-pass ASR: the source transcript is segment-level, but the chosen clip
+    # has its own word timings. Put them on the source timeline so the editor's
+    # full-source track stays usable around (and inside) this clip. A recut
+    # clip's caption words are keyed to a different cut and are cleared then.
+    if not words and clip.get('caption_words') and not (clip.get('recipe') or {}).get('segments'):
+        offset = float(clip.get('start') or 0)
+        words = [
+            {"w": str(w.get("word", "")).strip(),
+             "s": float(w["start"]) + offset,
+             "e": float(w["end"]) + offset}
+            for w in clip["caption_words"]
+        ]
 
     source_path = _locate_source(job_id)
     source_duration = _source_duration_seconds(source_path) if source_path else None
