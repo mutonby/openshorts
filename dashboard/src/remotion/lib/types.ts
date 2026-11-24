@@ -66,7 +66,13 @@ export interface HookConfig {
   /** montserrat | anton | serif; unset = the style's own typeface. */
   font?: HookFont;
   entranceAnimation: HookEntrance;
-  displayDurationSec: number;
+  displayDurationSec: number | null;
+  cta?: {
+    text: string;
+    position: HookPosition;
+    size: HookSize;
+    displayDurationSec: number;
+  };
 }
 
 // --- Effects config ---
@@ -131,7 +137,13 @@ export const hookConfigSchema = z.object({
     .default("pill"),
   font: z.enum(["montserrat", "anton", "serif"]).optional(),
   entranceAnimation: z.enum(["spring", "fade", "slide-up", "none"]),
-  displayDurationSec: z.number().positive(),
+  displayDurationSec: z.number().positive().nullable(),
+  cta: z.object({
+    text: z.string().min(1).max(180),
+    position: z.enum(["auto", "top", "center", "bottom"]),
+    size: z.enum(["S", "M", "L"]),
+    displayDurationSec: z.number().positive().max(15),
+  }).optional(),
 });
 
 export const effectSegmentSchema = z.object({

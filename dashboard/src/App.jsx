@@ -11,6 +11,7 @@ import ThumbnailStudio from './components/ThumbnailStudio';
 import SaaShortsTab from './components/SaaShortsTab';
 import UGCGallery from './components/UGCGallery';
 import ScheduleWeekModal from './components/ScheduleWeekModal';
+import ContentCalendar from './components/ContentCalendar';
 import ClipEditor from './components/ClipEditor';
 import ReframeEditor from './components/ReframeEditor';
 import UsageMeter from './components/UsageMeter';
@@ -422,6 +423,7 @@ function App() {
   // The job a restored session was polling is no longer on the server.
   const [jobGone, setJobGone] = useState(false);
   const [showScheduleWeek, setShowScheduleWeek] = useState(false);
+  const [showContentCalendar, setShowContentCalendar] = useState(false);
   // Clip editor overlay: index of the clip being edited, or null.
   const [editingClip, setEditingClip] = useState(null);
   const [reframingClip, setReframingClip] = useState(null);
@@ -611,6 +613,7 @@ function App() {
         end: data.end,
         recipe: data.recipe,
         mode: data.mode ?? clips[index].mode,
+        auto_hook: data.burned_hook,
       };
       return { ...prev, clips };
     });
@@ -1002,10 +1005,9 @@ function App() {
       const data = await res.json();
       if (data.profiles && data.profiles.length > 0) {
         setUserProfiles(data.profiles);
-        // Auto select first if none selected
-        if (!uploadUserId) {
-          setUploadUserId(data.profiles[0].username);
-        }
+        setUploadUserId((selected) => data.profiles.some((profile) => profile.username === selected)
+          ? selected
+          : data.profiles[0].username);
       } else if (!silent) {
         alert("No profiles found for this API Key.");
       }
@@ -1229,18 +1231,6 @@ function App() {
     }
   };
 
-  // Open the Upload-Post white-label page (which includes the scheduling calendar)
-  // in a new tab, for consulting/managing scheduled posts from the dashboard.
-  const handleOpenCalendar = async () => {
-    try {
-      const { access_url } = await apiJson('/api/social/connect', { method: 'POST' });
-      if (access_url) window.open(access_url, '_blank', 'noopener');
-    } catch (e) {
-      if (e instanceof QuotaError) { openQuotaWall(e, 'calendar'); return; }
-      alert('Could not open the calendar. Please try again.');
-    }
-  };
-
   const handleProcess = async (data, forceLowQuality = false) => {
     // Hosted: must be signed in AND on an active plan/trial. Self-host: BYOK keys.
     if (billingEnabled) {
@@ -1287,8 +1277,10 @@ function App() {
         // but the dashboard always states the user's choice.
         auto_hook: data.autoHook ? '1' : '0',
         auto_hook_style: data.autoHook ? (data.autoHookStyle || 'pill') : null,
+        source_audio_language: data.sourceAudioLanguage || null,
         // 'auto' is the server default, so only a deliberate choice travels.
-        layouts: data.layout && data.layout !== 'auto' ? data.layout : null,
+        layouts: data.layout && !['auto', 'sports'].includes(data.layout) ? data.layout : null,
+        framing_method: data.layout === 'sports' && data.outputFormat !== 'horizontal' ? 'sports' : null,
         // Set when the user took the quota wall's "clip the first N minutes"
         // offer: the server reserves N minutes and cuts the source to them.
         max_minutes: data.maxMinutes || null,
@@ -1865,7 +1857,7 @@ function App() {
                     <button onClick={handleConnectSocials} className="btn-primary py-2 px-4 text-sm">
                       <Share2 size={16} /> Connect social accounts
                     </button>
-                    <button onClick={handleOpenCalendar} className="btn-quiet py-2 px-4 text-sm">
+                    <button onClick={() => setShowContentCalendar(true)} className="btn-quiet py-2 px-4 text-sm">
                       <Calendar size={16} /> Content calendar
                     </button>
                   </div>
@@ -1919,6 +1911,11 @@ function App() {
                     <button onClick={fetchUserProfiles} className="btn-quiet py-2 px-4 text-sm">
                       Connect
                     </button>
+                    {uploadPostKey && uploadUserId && (
+                      <button onClick={() => setShowContentCalendar(true)} className="btn-quiet py-2 px-4 text-sm shrink-0">
+                        <Calendar size={16} /> Content calendar
+                      </button>
+                    )}
                   </div>
                   <div className="text-xs text-muted leading-relaxed">
                     Connect your Upload-Post account to enable one-click publishing.
@@ -2796,12 +2793,29 @@ function App() {
       <ScheduleWeekModal
         isOpen={showScheduleWeek}
         onClose={() => setShowScheduleWeek(false)}
+        onViewCalendar={() => {
+          setShowScheduleWeek(false);
+          setShowContentCalendar(true);
+        }}
         clips={results?.clips || []}
         jobId={jobId}
         uploadPostKey={uploadPostKey}
         uploadUserId={uploadUserId}
         isManaged={isManaged}
       />
+      {showContentCalendar && (
+        <ContentCalendar
+          key={isManaged ? 'managed' : uploadUserId}
+          isManaged={isManaged}
+          uploadPostKey={uploadPostKey}
+          uploadUserId={uploadUserId}
+          onConnect={() => {
+            setShowContentCalendar(false);
+            handleConnectSocials();
+          }}
+          onClose={() => setShowContentCalendar(false)}
+        />
+      )}
 
       {/* Pre-flight quality gate */}
       {qualityGate && (

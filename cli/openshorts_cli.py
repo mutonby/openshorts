@@ -81,8 +81,12 @@ def cmd_process(args):
     body = {"url": args.url, "acknowledged": True}
     if args.layouts:
         body["layouts"] = args.layouts
+    if args.framing:
+        body["framing_method"] = args.framing
     if args.format:
         body["output_format"] = args.format
+    if args.source_audio_language:
+        body["source_audio_language"] = args.source_audio_language
     if args.webhook:
         body["webhook_url"] = args.webhook
     if args.webhook_secret:
@@ -99,6 +103,16 @@ def cmd_process(args):
         _watch(job_id, as_json=args.json)
     else:
         print(f"follow it with: openshorts status {job_id} --watch")
+
+
+def cmd_audio_tracks(args):
+    status, payload = _request("POST", "/api/process/audio-tracks", {"url": args.url})
+    if status >= 400:
+        _die(status, payload)
+    if args.json:
+        print(json.dumps(payload))
+    else:
+        print("\n".join(payload.get("audio_languages", [])) or "No selectable audio languages were found.")
 
 
 def _watch(job_id, as_json=False):
@@ -199,12 +213,18 @@ def main(argv=None):
 
     p = sub.add_parser("process", help="submit a video URL for clipping")
     p.add_argument("url", help="YouTube or direct video URL")
+    p.add_argument("--source-audio-language", help="use an available YouTube audio language code")
     p.add_argument("--layouts", help="comma list: auto,split,screencast,speaker_cut,punch_in")
+    p.add_argument("--framing", choices=["sports"], help="follow the action in vertical or square sports clips")
     p.add_argument("--format", help="output format, e.g. 1080p")
     p.add_argument("--webhook", help="webhook URL fired once when the job ends")
     p.add_argument("--webhook-secret", help="HMAC secret for X-OpenShorts-Signature")
     p.add_argument("--wait", action="store_true", help="stream logs until the job ends")
     p.set_defaults(func=cmd_process)
+
+    p = sub.add_parser("audio-tracks", help="list audio languages for a YouTube URL")
+    p.add_argument("url", help="YouTube video URL")
+    p.set_defaults(func=cmd_audio_tracks)
 
     p = sub.add_parser("status", help="job status and last log line")
     p.add_argument("job_id")
@@ -221,7 +241,7 @@ def main(argv=None):
     p = sub.add_parser("publish", help="post or schedule one clip to social platforms")
     p.add_argument("job_id")
     p.add_argument("clip_index", type=int)
-    p.add_argument("--platforms", required=True, help="comma list: tiktok,instagram,youtube,facebook,linkedin,threads,bluesky")
+    p.add_argument("--platforms", required=True, help="comma list: tiktok,instagram,youtube,facebook,linkedin,threads,bluesky,x")
     p.add_argument("--title")
     p.add_argument("--schedule", help="ISO datetime for scheduled posting")
     p.add_argument("--timezone", help="IANA timezone for --schedule")

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Link2, Upload, FileVideo, X, Info, Loader2, ChevronDown } from 'lucide-react';
 import { track } from '../lib/analytics';
 import { getApiUrl } from '../config';
+import { apiJson } from '../lib/api';
 import SourceCost from './SourceCost';
 import { useAuth } from '../contexts/AuthContext';
 import { FREE_CLIPS_PER_VIDEO, FREE_CLIPS_QUIET, MAX_CLIPS_PER_VIDEO } from '../lib/clipProgress';
@@ -16,6 +17,16 @@ const SUPPORTED_PLATFORMS = [
 // says so the moment the file is picked (a 27 s upload used to end in a bare
 // "That run failed").
 const MIN_SOURCE_SECONDS = 45;
+
+const youtubeLink = /^https?:\/\/(?:(?:www\.|m\.|music\.)?youtube\.com|youtu\.be|(?:www\.)?youtube-nocookie\.com)\//i;
+
+function audioLanguageLabel(code) {
+    const descriptive = code.endsWith('-desc');
+    const tag = descriptive ? code.slice(0, -5) : code;
+    let name = tag;
+    try { name = new Intl.DisplayNames(undefined, { type: 'language' }).of(tag) || tag; } catch { /* show the code */ }
+    return descriptive ? `${name} (audio description)` : name;
+}
 
 // Duration of a local video file in seconds, or null when the browser cannot
 // read it (unsupported codec): then the server stays the judge.
@@ -38,6 +49,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
     // File upload is the primary path; the link is secondary.
     const [mode, setMode] = useState('file'); // 'file' | 'url'
     const [url, setUrl] = useState('');
+    const [audioLookup, setAudioLookup] = useState(null);
+    const [sourceAudio, setSourceAudio] = useState(null);
+
     const [file, setFile] = useState(null);
     const [fileSeconds, setFileSeconds] = useState(null);
     const fileTooShort = fileSeconds != null && fileSeconds < MIN_SOURCE_SECONDS;
@@ -68,6 +82,11 @@ export default function MediaInput({ onProcess, isProcessing }) {
         try { return localStorage.getItem('os_layout') || 'auto'; } catch { return 'auto'; }
     });
     const infoRef = useRef(null);
+    const sourceUrl = url.trim();
+    const canChooseAudio = mode === 'url' && youtubeLink.test(sourceUrl);
+    const audioTracks = audioLookup?.url === sourceUrl ? audioLookup : null;
+    const audioLanguage = sourceAudio?.url === sourceUrl ? sourceAudio.language : '';
+
 
     // Close the compatibility popover on any outside click.
     useEffect(() => {
@@ -120,6 +139,23 @@ export default function MediaInput({ onProcess, isProcessing }) {
         }
     }, []);
 
+    const checkAudioTracks = async () => {
+        const request = { url: sourceUrl, loading: true };
+        setAudioLookup(request);
+        try {
+            const data = await apiJson('/api/process/audio-tracks', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: sourceUrl }),
+            });
+            setAudioLookup((current) => current === request
+                ? { url: sourceUrl, languages: data.audio_languages } : current);
+        } catch (err) {
+            setAudioLookup((current) => current === request
+                ? { url: sourceUrl, error: err.detail || 'Could not check the source audio tracks.' } : current);
+        }
+    };
+
     const handleSubmit = (e) => {
         e.preventDefault();
         if (!acknowledged) return;
@@ -129,6 +165,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
             clipMaxSeconds: clipMaxSeconds || null,
             autoHook,
             autoHookStyle,
+            sourceAudioLanguage: canChooseAudio ? audioLanguage || null : null,
             layout,
             sourceStart: range ? Math.round(range.start) : null,
             sourceEnd: range ? Math.round(range.end) : null,
@@ -138,8 +175,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
             localStorage.setItem('os_auto_hook_style_v2', autoHookStyle);
             localStorage.setItem('os_layout', layout);
         } catch { /* ignore */ }
-        if (mode === 'url' && url) {
-            onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat, ...advanced });
+        if (mode === 'url' && sourceUrl) {
+            onProcess({ type: 'url', payload: sourceUrl, acknowledged: true, outputFormat, ...advanced });
         } else if (mode === 'file' && file && !fileTooShort) {
             onProcess({ type: 'file', payload: file, acknowledged: true, outputFormat, ...advanced });
         }
@@ -218,6 +255,32 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                 )}
                             </div>
                         </div>
+                        {canChooseAudio && (
+                            <div className="space-y-1.5">
+                                {audioTracks?.languages?.length ? (
+                                    <label className="block">
+                                        <span className="eyebrow mb-1.5 block">Source audio</span>
+                                        <select aria-label="Source audio" className="input-field" value={audioLanguage}
+                                            onChange={(e) => setSourceAudio({ url: sourceUrl, language: e.target.value })}>
+                                            <option value="">Default audio</option>
+                                            {audioTracks.languages.map((code) => (
+                                                <option key={code} value={code}>{audioLanguageLabel(code)}</option>
+                                            ))}
+                                        </select>
+                                    </label>
+                                ) : (
+                                    <button type="button" onClick={checkAudioTracks} disabled={audioTracks?.loading}
+                                        className="flex items-center gap-2 text-xs text-brass hover:underline disabled:opacity-70">
+                                        {audioTracks?.loading && <Loader2 size={12} className="animate-spin" />}
+                                        {audioTracks?.loading ? 'Checking source audio…' : 'Check source audio tracks'}
+                                    </button>
+                                )}
+                                {audioTracks?.error && <p className="text-xs text-danger" role="alert">{audioTracks.error}</p>}
+                                {audioTracks?.languages?.length === 0 && (
+                                    <p className="text-xs text-muted" role="status">This source will use its default audio.</p>
+                                )}
+                            </div>
+                        )}
                     </div>
                 ) : (
                     <div
@@ -370,7 +433,13 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                     <option value="split">Two speakers stacked</option>
                                     <option value="screencast">Screen over presenter</option>
                                     <option value="none">Single crop only</option>
+                                    <option value="sports" disabled={outputFormat === 'horizontal'}>Sports action</option>
                                 </select>
+                                {layout === 'sports' && outputFormat !== 'horizontal' && (
+                                    <p className="basis-full text-[11px] text-muted">
+                                        Follows the ball or clear motion and keeps the whole shot when tracking is uncertain.
+                                    </p>
+                                )}
                             </div>
                             <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">
                                 <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">

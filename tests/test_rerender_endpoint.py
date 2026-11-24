@@ -258,21 +258,22 @@ class TestRerenderPaths:
         assert resp.status_code == 200
         assert fake_recut[0]["captions_transcript"] is None
 
-    def test_framing_full_forces_source_path_and_persists(self, job, fake_recut):
+    @pytest.mark.parametrize(("framing", "strategy"), [("full", "WIDE"), ("sports", "SPORTS")])
+    def test_framing_override_forces_source_path_and_persists(self, job, fake_recut, framing, strategy):
         # In-range segments would take the fast path, but a framing override
         # must re-reframe from the source with the forced layout.
         resp = _request("POST", "/api/clip/rerender", {
-            "job_id": JOB_ID, "clip_index": 0, "framing": "full",
+            "job_id": JOB_ID, "clip_index": 0, "framing": framing,
             "segments": [{"start": 12, "end": 22}]})
         assert resp.status_code == 200
         data = resp.json()
         assert data["render_path"] == "source"
-        assert data["framing"] == "full"
-        assert data["recipe"]["framing"] == "full"
+        assert data["framing"] == framing
+        assert data["recipe"]["framing"] == framing
         call = fake_recut[0]
         assert call["input_path"].endswith("src.mp4")
         assert call["reframe"] is True
-        assert call["force_strategy"] == "WIDE"
+        assert call["force_strategy"] == strategy
 
         # A follow-up trim WITHOUT a framing field inherits the recipe's
         # framing (the look must not silently revert on a plain trim)...
@@ -280,8 +281,8 @@ class TestRerenderPaths:
             "job_id": JOB_ID, "clip_index": 0,
             "segments": [{"start": 13, "end": 21}]})
         assert resp2.status_code == 200
-        assert resp2.json()["framing"] == "full"
-        assert fake_recut[1]["force_strategy"] == "WIDE"
+        assert resp2.json()["framing"] == framing
+        assert fake_recut[1]["force_strategy"] == strategy
 
         # ...while an explicit 'auto' resets to the classifier and the fast path.
         resp3 = _request("POST", "/api/clip/rerender", {
@@ -290,6 +291,25 @@ class TestRerenderPaths:
         assert resp3.status_code == 200
         assert resp3.json()["render_path"] == "fast"
         assert "framing" not in resp3.json()["recipe"]
+
+    def test_sports_canonical_fast_trim_and_reset_to_automatic_use_the_right_source(self, job, fake_recut):
+        meta = json.loads(job["meta_path"].read_text())
+        meta["framing_method"] = "sports"
+        meta["shorts"][0]["recipe"] = {"v": 1, "framing": "sports"}
+        job["meta_path"].write_text(json.dumps(meta))
+        edit = {"job_id": JOB_ID, "clip_index": 0, "segments": [{"start": 12, "end": 22}]}
+
+        trim = _request("POST", "/api/clip/rerender", edit)
+        assert trim.status_code == 200
+        assert trim.json()["framing"] == "sports"
+        assert trim.json()["render_path"] == "fast"
+        assert fake_recut[0]["input_path"].endswith("mytitle_clip_1.mp4")
+
+        reset = _request("POST", "/api/clip/rerender", {**edit, "framing": "auto"})
+        assert reset.status_code == 200
+        assert reset.json()["render_path"] == "source"
+        assert fake_recut[1]["input_path"].endswith("src.mp4")
+        assert fake_recut[1]["force_strategy"] is None
 
 
 class TestRerenderPersistence:

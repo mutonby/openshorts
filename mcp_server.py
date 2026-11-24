@@ -114,6 +114,10 @@ TOOLS = [
                                    "stack) or the user wants clean clips; add_subtitles can still "
                                    "caption a clip later.",
                 },
+                "source_audio_language": {
+                    "type": "string",
+                    "description": "Audio track language offered by the source YouTube video, such as en or pt-BR.",
+                },
                 "confirm_rights": {
                     "type": "boolean",
                     "description": "Must be true: the user owns the content or has rights to process it.",
@@ -123,6 +127,11 @@ TOOLS = [
                     "items": {"type": "string",
                               "enum": ["auto", "split", "screencast", "speaker_cut", "punch_in"]},
                     "description": "Optional extra reframe layouts. 'auto' lets AI pick per video.",
+                },
+                "framing_method": {
+                    "type": "string",
+                    "enum": ["sports"],
+                    "description": "Follow the ball or motion in vertical or square sports clips.",
                 },
                 "output_format": {
                     "type": "string",
@@ -157,6 +166,17 @@ TOOLS = [
                 },
             },
             "required": ["confirm_rights"],
+        },
+    },
+    {
+        "name": "list_source_audio_tracks",
+        "title": "List YouTube audio languages",
+        "description": ("Look up audio language codes for a YouTube video. Pass a returned code as "
+                        "source_audio_language when creating clips."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"source_url": {"type": "string"}},
+            "required": ["source_url"],
         },
     },
     {
@@ -304,10 +324,11 @@ TOOLS = [
                     "description": "Burn default captions back on after the recut (default true).",
                 },
                 "framing": {
-                    "type": "string", "enum": ["auto", "full", "track"],
+                    "type": "string", "enum": ["auto", "full", "track", "sports"],
                     "description": "Layout override: 'full' shows the whole source frame "
                                    "(no side-cropping), 'track' forces the subject-tracking "
-                                   "crop, 'auto' resets to the AI classifier. Omit to keep "
+                                   "crop, 'sports' follows the ball or motion, and 'auto' resets "
+                                   "to the AI classifier. Omit to keep "
                                    "the clip's current framing. Non-auto values re-run the "
                                    "reframe engine and need the retained source video.",
                 },
@@ -352,6 +373,7 @@ _ANNOTATIONS = {
     "process_video": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
     "create_upload": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
     "get_job_status": _READ,
+    "list_source_audio_tracks": {**_READ, "openWorldHint": True},
     "list_clips": _READ,
     "get_quota": _READ,
     "add_subtitles": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
@@ -395,12 +417,13 @@ async def _tool_process_video(client, args):
         "upload_id": args.get("upload_id"),
         "acknowledged": True,
         "layouts": args.get("layouts") or [],
+        "framing_method": args.get("framing_method"),
         "output_format": args.get("output_format"),
         "force_low_quality": bool(args.get("force_low_quality")),
         "webhook_url": args.get("webhook_url"),
         "webhook_secret": args.get("webhook_secret"),
     }
-    for k in ("target_clips", "clip_min_seconds", "clip_max_seconds", "captions"):
+    for k in ("target_clips", "clip_min_seconds", "clip_max_seconds", "captions", "source_audio_language"):
         if args.get(k) is not None:
             body[k] = args[k]
     # Same default as the dashboard: hook on unless the caller opts out. The
@@ -421,6 +444,13 @@ async def _tool_process_video(client, args):
     data["hint"] = ("Processing takes minutes. Poll get_job_status every 30-60s"
                     + ("" if body["webhook_url"] else " (or re-run with webhook_url for a callback)") + ".")
     return data, False
+
+
+async def _tool_list_source_audio_tracks(client, args):
+    resp = await client.post("/api/process/audio-tracks", json={"url": args.get("source_url")})
+    if resp.status_code >= 400:
+        return _api_error(resp), True
+    return resp.json(), False
 
 
 async def _tool_create_upload(client, args):
@@ -597,6 +627,7 @@ async def _tool_publish_clip(client, args):
 
 _TOOL_IMPLS = {
     "process_video": _tool_process_video,
+    "list_source_audio_tracks": _tool_list_source_audio_tracks,
     "create_upload": _tool_create_upload,
     "get_job_status": _tool_get_job_status,
     "list_clips": _tool_list_clips,

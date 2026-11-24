@@ -5,12 +5,12 @@ import social_platforms as sp
 
 
 def test_clean_keeps_known_networks_in_a_stable_order():
-    assert sp.clean(["Bluesky", "tiktok", "x", "LinkedIn"]) == ["tiktok", "linkedin", "bluesky"]
+    assert sp.clean(["Bluesky", "tiktok", "x", "LinkedIn"]) == ["tiktok", "linkedin", "bluesky", "x"]
     assert sp.clean(None) == []
 
 
 def test_unknown_names_what_is_not_offered():
-    assert sp.unknown(["tiktok", "x", "pinterest"]) == ["x", "pinterest"]
+    assert sp.unknown(["tiktok", "x", "pinterest"]) == ["pinterest"]
 
 
 def test_each_network_gets_its_own_text_fields():
@@ -23,6 +23,7 @@ def test_each_network_gets_its_own_text_fields():
     # Threads posts its *_title as the text: it must be the caption, not the title.
     assert data["threads_title"] == "D"
     assert data["bluesky_description"] == "D"
+    assert data["x_title"] == "D"
 
 
 def test_only_the_chosen_networks_get_fields():
@@ -38,8 +39,8 @@ def test_post_endpoints_refuse_an_unsupported_network():
     import app as app_module
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as e:
-        app_module._checked_platforms(["tiktok", "x"])
-    assert e.value.status_code == 400 and "x" in e.value.detail
+        app_module._checked_platforms(["tiktok", "snapchat"])
+    assert e.value.status_code == 400 and "snapchat" in e.value.detail
     with pytest.raises(HTTPException):
         app_module._checked_platforms([])
     assert app_module._checked_platforms(["Threads", "tiktok"]) == ["tiktok", "threads"]
