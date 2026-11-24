@@ -1020,7 +1020,8 @@ function App() {
   // A self-hosted server running the moment picker on a local LLM
   // (LLM_BASE_URL) does not need a Gemini key for the core pipeline.
   const geminiOk = !!apiKey || !!localLlm;
-  const keysMissing = !billingEnabled && (!geminiOk || !uploadPostKey);
+  // Self-host, clips only: Upload-Post is for publishing, not for clipping.
+  const keysMissing = !billingEnabled && !geminiOk;
   const needsPlan = billingEnabled && !isManaged;   // hosted, signed-out or no active plan/trial
 
   // Fresh sign-up: Clip Generator tutorial (AuthContext set os_show_clip_tutorial
@@ -1900,7 +1901,7 @@ function App() {
                     </div>
                     <h2 className="text-base font-medium text-ink lowercase">Social Integration</h2>
                   </div>
-                  <span className="badge-warn">Required</span>
+                  <span className="readout">For posting</span>
                 </div>
                 <p className="text-xs text-muted mb-6 leading-relaxed">
                   Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts via <strong>Upload-Post</strong>.
