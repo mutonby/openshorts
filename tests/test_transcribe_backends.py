@@ -842,3 +842,94 @@ def test_another_parakeet_failure_goes_straight_to_whisper(monkeypatch):
     monkeypatch.setattr(tb, "_card_free_mb", lambda: pytest.fail("it does not wait"))
     assert tb.transcribe_media("x.mp4") == {"language": "es"}
     assert seen == ["parakeet", "drop", "whisper"]
+
+
+# --- the spoken language is asked before Parakeet ------------------------------
+
+def _wav(tmp_path, seconds):
+    import wave
+    path = str(tmp_path / "a.wav")
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"\x01\x00" * int(16000 * seconds))
+    return path
+
+
+def _probe(monkeypatch, answers):
+    """A probe model that gives one answer per window, in order."""
+    monkeypatch.setenv("ASR_LANGUAGE_PROBE", "1")
+    left, asked = list(answers), []
+
+    class _Model:
+        def detect_language(self, audio=None, vad_filter=False):
+            asked.append((len(audio), vad_filter))
+            answer = left.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer[0], answer[1], []
+    monkeypatch.setattr(tb, "_language_probe_model", lambda: _Model())
+    return asked
+
+
+def test_the_probe_listens_to_three_windows_of_a_long_source(monkeypatch, tmp_path):
+    asked = _probe(monkeypatch, [("id", 0.97), ("ms", 0.91), ("id", 0.99)])
+    assert tb.language_outside_parakeet(_wav(tmp_path, 100)) == ("id", 0.91)
+    assert asked == [(480000, True)] * 3                # 30 s each, speech only
+
+
+def test_a_short_source_is_one_window(monkeypatch, tmp_path):
+    asked = _probe(monkeypatch, [("hi", 0.95)])
+    assert tb.language_outside_parakeet(_wav(tmp_path, 12)) == ("hi", 0.95)
+    assert asked == [(192000, True)]
+
+
+@pytest.mark.parametrize("answers", [
+    [("id", 0.97), ("en", 0.55), ("id", 0.99)],         # one window is one of parakeet's
+    [("id", 0.97), ("id", 0.62), ("id", 0.99)],         # one window is not sure
+    [("id", 0.97), ValueError("no speech"), ValueError("no speech")],   # one answer only
+    [ValueError("no speech")] * 3,                      # music
+])
+def test_an_unsure_probe_leaves_parakeet_first(monkeypatch, tmp_path, answers):
+    _probe(monkeypatch, answers)
+    assert tb.language_outside_parakeet(_wav(tmp_path, 100)) is None
+
+
+def test_the_probe_is_off_unless_asked_for(monkeypatch, tmp_path):
+    monkeypatch.delenv("ASR_LANGUAGE_PROBE", raising=False)
+    monkeypatch.setattr(tb, "_language_probe_model", lambda: pytest.fail("no probe"))
+    assert tb.language_outside_parakeet(_wav(tmp_path, 100)) is None
+
+
+def test_a_probe_that_breaks_leaves_parakeet_first(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("ASR_LANGUAGE_PROBE", "1")
+
+    def broken():
+        raise OSError("model not found")
+    monkeypatch.setattr(tb, "_language_probe_model", broken)
+    assert tb.language_outside_parakeet(_wav(tmp_path, 100)) is None
+    assert "language probe skipped" in capsys.readouterr().out
+
+
+def test_a_source_parakeet_does_not_cover_never_loads_it(monkeypatch, tmp_path):
+    wav = _wav(tmp_path, 100)
+    _probe(monkeypatch, [("id", 0.97), ("id", 0.95), ("id", 0.99)])
+    monkeypatch.setenv("TRANSCRIBE_BACKEND", "parakeet")
+    monkeypatch.setattr(tb, "_has_audio_stream", lambda p: True)
+    monkeypatch.setattr(tb, "_extract_wav", lambda p: wav)
+    monkeypatch.setattr(tb, "_get_parakeet_model", lambda: pytest.fail("parakeet loaded"))
+    monkeypatch.setattr(tb, "_card_free_mb", lambda: pytest.fail("it does not wait"))
+    monkeypatch.setattr(tb, "_transcribe_with_whisper", lambda p: {"language": "id"})
+    assert tb.transcribe_media("x.mp4") == {"language": "id"}
+    import os
+    assert not os.path.exists(wav)                      # the wav is cleaned up all the same
+
+
+def test_a_source_parakeet_covers_goes_to_it_as_before(monkeypatch, tmp_path, fake_parakeet):
+    wav = _wav(tmp_path, 100)
+    _probe(monkeypatch, [("en", 0.99), ("en", 0.98), ("en", 0.99)])
+    monkeypatch.setattr(tb, "_extract_wav", lambda p: wav)
+    monkeypatch.setattr(tb, "_repair_script_drift", lambda t, w: 0)
+    transcript = tb._transcribe_with_parakeet("x.mp4")
+    assert transcript["segments"]

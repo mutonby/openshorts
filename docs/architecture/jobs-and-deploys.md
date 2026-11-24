@@ -50,6 +50,15 @@ Guards that keep the card from filling:
   card filled for a few seconds by the other slots sent a whole long source
   to CPU whisper, on several cores for as long as the video lasts. A
   `require_gpu` process (prepare-only) never waits: its worker transcribes.
+- **The spoken language is asked first** (`ASR_LANGUAGE_PROBE=1`, off by
+  default; `transcribe_backends.language_outside_parakeet`). A small whisper
+  (`ASR_LANGUAGE_PROBE_MODEL`, `tiny`) listens to three 30 s windows on the
+  CPU, and a source every window places outside Parakeet's languages
+  (`ASR_LANGUAGE_PROBE_MIN`, 0.7) goes straight to whisper: no Parakeet pass
+  to throw away, and no noise that reads as English accepted as a transcript.
+  It only ever skips Parakeet; unsure or broken, the order is as before. It
+  costs a few CPU seconds on every source, so it is a trade of CPU for room
+  on the card and for the right words.
 - **Parakeet leaves the card before the whisper fallback**
   (`transcribe_backends._drop_parakeet`): its arena (~7 GB on a long video)
   made whisper hit CUDA OOM and the whole transcription ran on the CPU. A

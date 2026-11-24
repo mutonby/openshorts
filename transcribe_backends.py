@@ -681,6 +681,114 @@ def _words_from_tokens(tokens, timestamps, seg_start, seg_end):
     return words
 
 
+# --- the spoken language, before Parakeet -----------------------------------
+#
+# Parakeet writes a language it does not cover as noise, the result is
+# rejected and whisper transcribes the source again: such a video pays for two
+# transcriptions, and the wasted one is the one that takes the most room on
+# the card. With ``ASR_LANGUAGE_PROBE=1`` a small whisper listens to a few
+# windows of the audio on the CPU first, and a source it is sure is in none of
+# Parakeet's languages goes straight to whisper. It only ever skips Parakeet:
+# an unsure answer, or any failure, leaves the order as it was.
+#
+# It also catches what the rejection cannot: speech in a language Parakeet
+# does not cover sometimes comes out as words that read as English, and that
+# transcript was accepted, captions and all.
+LANGUAGE_PROBE_MODEL = os.environ.get("ASR_LANGUAGE_PROBE_MODEL", "tiny").strip() or "tiny"
+LANGUAGE_PROBE_SECONDS = 30.0
+LANGUAGE_PROBE_AT = (0.15, 0.5, 0.85)       # where in the audio each window starts
+
+
+def language_probe_enabled():
+    return os.environ.get("ASR_LANGUAGE_PROBE", "0").strip() == "1"
+
+
+def language_probe_min():
+    """How sure every window has to be (``ASR_LANGUAGE_PROBE_MIN``, 0.7).
+
+    Checked against transcripts the pipeline had kept: at 0.7 the probe named
+    most of the sources whisper ended up transcribing, and every source it
+    named that Parakeet had passed as English was noise that happened to
+    read as English. Higher floors only let more of both through."""
+    try:
+        return float(os.environ.get("ASR_LANGUAGE_PROBE_MIN", "") or 0.7)
+    except ValueError:
+        return 0.7
+
+
+class ParakeetSkipped(Exception):
+    """The source is spoken in a language Parakeet does not cover."""
+
+
+def _probe_windows(wav_path):
+    """A few 30 s stretches of a 16 kHz mono s16le wav, as float arrays."""
+    import wave
+    import numpy as np
+    out = []
+    with wave.open(wav_path, "rb") as w:
+        rate, total = w.getframerate(), w.getnframes()
+        size = int(LANGUAGE_PROBE_SECONDS * rate)
+        if total <= size:
+            starts = [0]
+        else:
+            starts = sorted({int((total - size) * at) for at in LANGUAGE_PROBE_AT})
+        for start in starts:
+            w.setpos(start)
+            frames = w.readframes(size)
+            if frames:
+                out.append(np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0)
+    return out
+
+
+def _language_probe_model():
+    from faster_whisper import WhisperModel
+    return WhisperModel(LANGUAGE_PROBE_MODEL, device="cpu", compute_type="int8",
+                        cpu_threads=2)
+
+
+def _window_languages(wav_path):
+    """[(language, probability)] for each window that had speech in it."""
+    model = _language_probe_model()
+    try:
+        heard = []
+        for audio in _probe_windows(wav_path):
+            try:
+                language, probability, _all = model.detect_language(
+                    audio=audio, vad_filter=True)
+            except Exception:
+                continue        # a window of silence or music: no answer
+            if language:
+                heard.append((language, float(probability)))
+        return heard
+    finally:
+        del model
+
+
+def language_outside_parakeet(wav_path):
+    """(language, probability) when the audio is surely in a language Parakeet
+    does not cover, else None.
+
+    Sure means every window that had speech named a language outside the set
+    with at least ``language_probe_min()``, and more than one window did when
+    the audio is long enough for several. The windows need not agree on which
+    one: close languages are told apart badly, and neither is Parakeet's."""
+    if not language_probe_enabled():
+        return None
+    try:
+        expected = len(_probe_windows(wav_path))
+        heard = _window_languages(wav_path)
+    except Exception as e:
+        print(f"⚠️ [ASR] language probe skipped ({type(e).__name__}: {e})", flush=True)
+        return None
+    if not heard or len(heard) < min(2, expected):
+        return None
+    floor = language_probe_min()
+    if any(lang in PARAKEET_LANGS or prob < floor for lang, prob in heard):
+        return None
+    names = [lang for lang, _ in heard]
+    return max(set(names), key=names.count), min(prob for _, prob in heard)
+
+
 def _transcribe_with_parakeet(media_path):
     wav_path = _extract_wav(media_path)
     try:
@@ -689,6 +797,10 @@ def _transcribe_with_parakeet(media_path):
             duration = os.path.getsize(wav_path) / 32000.0
         except OSError:
             duration = 0.0
+        outside = language_outside_parakeet(wav_path)
+        if outside:
+            raise ParakeetSkipped(
+                f"spoken language '{outside[0]}' ({outside[1]:.2f}) is not one of parakeet's")
         with _ASR_GATE:
             model = _get_parakeet_model()  # inside the gate: see release_models
             progress = _TranscribeProgress(duration)
@@ -951,6 +1063,8 @@ def transcribe_media(media_path):
                     return transcript
                 print(f"⚠️ [ASR] parakeet result rejected ({reason}) — "
                       f"falling back to whisper")
+            except ParakeetSkipped as e:
+                print(f"🎙️ [ASR] {e} — straight to whisper", flush=True)
             except Exception as e:
                 if attempt == 1 and _parakeet_gets_another_try(e):
                     print("🎙️ [ASR] room on the card again — parakeet tries it "
