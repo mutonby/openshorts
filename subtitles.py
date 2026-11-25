@@ -300,7 +300,7 @@ AUTO_CAPTION_STYLE = {
     "style": "karaoke",
     "alignment": "bottom",
     "font_name": "Anton",
-    "font_size": 40,
+    "font_size": 20,
     "font_color": "#FFFFFF",
     "highlight_color": "#FFE500",
     "border_color": "#000000",
@@ -328,7 +328,7 @@ _PRESET_BASE = {"style": "karaoke", "font_color": "#FFFFFF", "bg_opacity": 0.0,
                 "base_opacity": 1.0, "reveal": False, "shadow": 0,
                 "max_duration": 1.4}
 CAPTION_PRESETS = {
-    "default": {**_PRESET_BASE, "font_name": "Anton", "font_size": 40,
+    "default": {**_PRESET_BASE, "font_name": "Anton", "font_size": 20,
                 "highlight_color": "#FFE500", "border_width": 2, "effect": "pop",
                 "uppercase": True, "max_chars": 18},
     # Words appear as they are spoken, yellow active word, shadow.
@@ -362,8 +362,9 @@ CAPTION_PRESETS = {
 }
 
 # Characters per line at font size 44, per font (Anton is condensed,
-# Montserrat wide). Mirrors lineBudget in SubtitleModal.jsx.
-_LINE_CHARS = {"Anton": 16, "Montserrat ExtraBold": 9, "Impact": 16}
+# Montserrat wide). Measured on the shipped font files: 14 Anton characters
+# fit at 44, 8.5 Montserrat. Mirrors lineBudget in SubtitleModal.jsx.
+_LINE_CHARS = {"Anton": 14, "Montserrat ExtraBold": 9, "Impact": 14}
 
 
 def line_budget(font_name, font_size):

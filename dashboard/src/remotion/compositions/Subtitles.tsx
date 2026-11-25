@@ -21,10 +21,16 @@ interface SubtitlesProps {
 const RTL_CHARS = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
 
 const POSITION_MAP: Record<string, React.CSSProperties> = {
-  top: { top: "12%", bottom: "auto" },
-  middle: { top: "45%", bottom: "auto" },
-  bottom: { bottom: "10%", top: "auto" },
+  // subtitles.SAFE_MARGIN_V is 43 of PlayResY 288 = 15% of the frame, on the
+  // top and bottom alike; middle is anchored dead centre (\\an5).
+  top: { top: "15%", bottom: "auto" },
+  middle: { top: "50%", bottom: "auto", transform: "translateY(-50%)" },
+  bottom: { bottom: "15%", top: "auto" },
 };
+
+// One PlayRes unit in the 1080x1920 composition (subtitles.generate_ass uses
+// PlayResY 288).
+const PREVIEW_PX_PER_UNIT = 1920 / 288;
 
 export const Subtitles: React.FC<SubtitlesProps> = ({ config }) => {
   const { fps } = useVideoConfig();
@@ -240,9 +246,9 @@ const WordSpan: React.FC<WordSpanProps> = ({
           `0 -${style.borderWidth}px 0 ${style.borderColor}`,
         ].join(", ")
       : "none";
-  // Burn units -> preview px, same scale as the font size (3.85 * 0.85).
+  // Burn units -> composition px, the same scale as the font size.
   const dropShadow = style.shadow
-    ? `${style.shadow * 3}px ${style.shadow * 3}px ${style.shadow * 2}px rgba(0,0,0,0.55)`
+    ? `${style.shadow * PREVIEW_PX_PER_UNIT}px ${style.shadow * PREVIEW_PX_PER_UNIT}px ${style.shadow * PREVIEW_PX_PER_UNIT * 0.7}px rgba(0,0,0,0.55)`
     : "";
   const outline = strokeShadow === "none" ? "" : strokeShadow;
 
