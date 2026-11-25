@@ -451,6 +451,33 @@ def test_claim_takes_the_first_free_job_and_no_gpu_slot(api, monkeypatch):
     assert not api._remote_jobs and not api._running_jobs
 
 
+def test_a_worker_in_reserve_waits_for_the_queue_to_back_up(api, monkeypatch):
+    api._admitting.add("someone-waiting")
+    monkeypatch.setattr(api, "REMOTE_STANDBY_WORKERS", frozenset({"w1"}))
+    monkeypatch.setattr(api, "REMOTE_STANDBY_AFTER_SECONDS", 1800)
+    job_id, _ = _queued(api)
+    api.jobs[job_id]["submitted_at"] = time.time() - 60
+    assert _claim(api, monkeypatch)[0] is None            # the others keep up
+    assert api.job_queue.qsize() == 1
+    assert not api._remote_standby_idle("another")        # not in reserve: it claims as ever
+    api.jobs[job_id]["submitted_at"] = time.time() - 3600
+    (claimed, _), _ = _claim(api, monkeypatch)
+    assert claimed == job_id
+
+
+def test_a_job_just_handed_back_or_kept_here_does_not_wake_the_reserve(api, monkeypatch):
+    monkeypatch.setattr(api, "REMOTE_STANDBY_WORKERS", frozenset({"w1"}))
+    monkeypatch.setattr(api, "REMOTE_STANDBY_AFTER_SECONDS", 1800)
+    old = time.time() - 3600
+    back, _ = _queued(api)
+    api.jobs[back].update(submitted_at=old, last_run=time.time() - 30)    # cut a moment ago
+    paid, _ = _queued(api, priority=1)
+    api.jobs[paid]["submitted_at"] = old                  # a paid job never leaves this host
+    assert api._remote_standby_idle("w1")
+    assert not api._remote_standby_idle("w1", now=time.time() + 1800)     # it has waited by then
+    assert not api._remote_standby_idle(None) and not api._remote_standby_idle("w2")
+
+
 @pytest.mark.parametrize("why", ["paid", "own_key", "retried", "transcript", "twitch",
                                  "draining", "off", "full", "short_token", "breaker"])
 def test_jobs_that_stay_on_this_host(api, monkeypatch, why):

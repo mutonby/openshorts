@@ -2058,6 +2058,33 @@ def _remote_quiet(worker, minute=None) -> bool:
     if REMOTE_QUIET_WORKERS and str(worker or "") not in REMOTE_QUIET_WORKERS:
         return False
     return (time.gmtime().tm_min if minute is None else minute) in REMOTE_QUIET_MINUTES
+
+
+# Workers kept in reserve, by the name they claim with ("a,b"): one on a host
+# it shares with another service stays idle while the others keep up, and is
+# handed work only while a job it could take has waited this long.
+REMOTE_STANDBY_WORKERS = frozenset(
+    w.strip() for w in os.environ.get("REMOTE_STANDBY_WORKERS", "").split(",") if w.strip())
+REMOTE_STANDBY_AFTER_SECONDS = _int_env("REMOTE_STANDBY_AFTER_SECONDS", 1800)
+
+
+def _remote_standby_idle(worker, now=None) -> bool:
+    """Whether a worker in reserve gets nothing for now: no queued job it
+    could take has waited ``REMOTE_STANDBY_AFTER_SECONDS`` since the later of
+    its submission and its last run (a job handed back a moment ago is not a
+    queue that backed up)."""
+    if str(worker or "") not in REMOTE_STANDBY_WORKERS:
+        return False
+    line = (time.time() if now is None else now) - REMOTE_STANDBY_AFTER_SECONDS
+    for prio, _key, job_id in list(job_queue._queue):
+        job = jobs.get(job_id)
+        if job is None or max(float(job.get('submitted_at') or 0), _job_last_run(job)) > line:
+            continue
+        if _remote_eligible(job_id, prio):
+            return False
+    return True
+
+
 # Per-transfer cap on the source sent to the worker, in Mbit/s (0: none).
 REMOTE_SOURCE_MBPS = _int_env("REMOTE_SOURCE_MBPS", 0)
 _remote_jobs: set = set()            # the subset of _running_jobs run remotely
@@ -5323,7 +5350,7 @@ def _claim_remote_job(worker, source_only=False, downloads=False):
         return None
     if time.time() < _remote_breaker["until"]:
         return None
-    if _remote_quiet(worker):
+    if _remote_quiet(worker) or _remote_standby_idle(worker):
         return None
     heap = job_queue._queue
     for entry in sorted(heap):

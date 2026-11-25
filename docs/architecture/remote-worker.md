@@ -202,7 +202,10 @@ it may hold at once), `REMOTE_LEASE_SECONDS`, `REMOTE_MAX_SECONDS`,
 `REMOTE_BREAKER_SECONDS`, `REMOTE_QUIET_MINUTES` (minutes of the hour, UTC,
 like `55-5`, with no new claim: when the worker's host shares its link with
 something that peaks at fixed times), `REMOTE_QUIET_WORKERS` (the worker names
-those minutes are for, comma separated; unset: every worker), `REMOTE_SOURCE_MBPS` (cap for all source
+those minutes are for, comma separated; unset: every worker), `REMOTE_STANDBY_WORKERS`
+(worker names kept in reserve: one of them is handed a job only while a job it
+could take has waited `REMOTE_STANDBY_AFTER_SECONDS`, 1800, so a worker on a
+shared host idles until the queue backs up), `REMOTE_SOURCE_MBPS` (cap for all source
 transfers together, 0 for none), `PREPARE_TRANSCRIPT` (`1`, `cache` or unset:
 whether the source's transcript is prepared for the worker), `PREPARE_SCENES`
 (`1` or unset: whether the source's scene probabilities are), `SCENE_HOST_SLOTS` (2),
