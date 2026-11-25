@@ -33,6 +33,7 @@ from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 import recut
 import layout_ranges
+import clean_twin
 import watermarked
 import media_auth
 import remote_worker
@@ -1592,7 +1593,8 @@ def _clips_actually_rendered(job_id, output_dir, base_name, clips):
 
 
 def _strip_watermark_copy(output_dir, filename):
-    """``wm_<final>`` -> ``<final>`` when the clean twin is on disk.
+    """``wm_<final>`` -> ``<final>`` when the clean twin is on disk or kept
+    as a recipe (clean_twin.py: a name only, nothing is encoded here).
 
     The free plan serves a marked copy of the final file and keeps the clean
     one next to it (see the ``watermarked`` module); every derivation starts
@@ -1601,7 +1603,7 @@ def _strip_watermark_copy(output_dir, filename):
     nothing to strip or the twin is gone."""
     if watermarked.is_marked(filename):
         clean = watermarked.clean_name(filename)
-        if os.path.exists(os.path.join(output_dir, clean)):
+        if clean_twin.available(output_dir, clean):
             return clean
     return filename
 
@@ -1614,20 +1616,28 @@ def _strip_burned_captions(output_dir, filename, materialize=True):
     version). A hooked-only picture the pipeline kept as a recipe
     (hooks.materialize) counts as there and is encoded here, unless
     ``materialize`` is False (the caller strips the hook next and never opens
-    it). Encodes: call it off the event loop.
+    it). A free clip's clean captioned twin kept as a recipe (clean_twin.py)
+    is encoded only when the walk stops on it. Encodes: call it off the
+    event loop.
     """
     import hooks
     filename = _strip_watermark_copy(output_dir, filename)
+
+    def stop(name):
+        if not os.path.exists(os.path.join(output_dir, name)):
+            clean_twin.materialize(output_dir, name)
+        return name
+
     while True:
         m = re.match(r'^subtitled_\d+_(.+)$', filename)
         if not m:
-            return filename
+            return stop(filename)
         under = m.group(1)
         if not os.path.exists(os.path.join(output_dir, under)):
             if not hooks.has_recipe(output_dir, under):
-                return filename
+                return stop(filename)
             if materialize and not hooks.materialize(output_dir, under):
-                return filename
+                return stop(filename)
         filename = under
 
 
@@ -1715,6 +1725,42 @@ def _unmark_local_job(job_id, clip_index, clean_filename):
             os.remove(marked_path)
         except OSError:
             pass
+
+
+# Clean twins encoded at once by upgrades: the card's encoder is shared with
+# the jobs in flight.
+_clean_twin_sem = asyncio.Semaphore(2)
+
+
+async def _render_clean_twin(user_id, proj, clean_filename):
+    """For cloud/videos.unmark_user_library: encode the clean twin of a free
+    clip from its recipe (clean_twin.py) and put it in R2 next to the clip.
+
+    The job's working files are brought back from R2 first when they are
+    gone (the recipe rides there with the clip). True when the twin is in R2
+    afterwards; any failure is False and the clip keeps its mark, as a clip
+    whose twin is missing always has."""
+    from cloud import storage as cloud_storage
+    job_id = str(proj.job_id)
+    job_dir = os.path.join(OUTPUT_DIR, job_id)
+    clean_filename = os.path.basename(clean_filename)
+    try:
+        if not clean_twin.available(job_dir, clean_filename):
+            recipe = os.path.basename(clean_twin.recipe_paths(job_dir, clean_filename)[0])
+            key = cloud_storage.job_key(user_id, job_id, recipe)
+            if await asyncio.to_thread(cloud_storage.object_size, key) is None:
+                return False
+            await _restore_job_files(job_id, proj, str(user_id))
+        async with _clean_twin_sem:
+            if not await asyncio.to_thread(clean_twin.materialize, job_dir, clean_filename):
+                return False
+        await asyncio.to_thread(
+            cloud_storage.upload_file, os.path.join(job_dir, clean_filename),
+            cloud_storage.job_key(user_id, job_id, clean_filename))
+        return True
+    except Exception as e:
+        print(f"⚠️ Clean twin {clean_filename} of {job_id} not made: {e}")
+        return False
 
 
 def _reapply_captions(job_id, clip_index, video_path):
@@ -2587,8 +2633,10 @@ def _register_resumed(picked) -> int:
                 pass
         if m.get("watermark"):
             env["WATERMARK"] = "1"
+            env["CLEAN_LAZY"] = "1"
         else:
             env.pop("WATERMARK", None)
+            env.pop("CLEAN_LAZY", None)
         _apply_rate_cap(env)
         partial = m.get("partial")
         _apply_source_cut(env, partial)
@@ -4473,6 +4521,8 @@ async def lifespan(app: FastAPI):
         # re-points their clips at the clean twins in R2 and hands us each
         # one so the working copy (and an open dashboard) follows.
         cloud.videos.register_local_unmark(_unmark_local_job)
+        # The free plan's clean twins are encoded at the upgrade (clean_twin.py).
+        cloud.videos.register_clean_render(_render_clean_twin)
         # And for the queue: paying moves the user's waiting videos up.
         cloud.billing.register_local_reprioritize(reprioritize_user_jobs)
         # Autopilot: watch connected YouTube channels for new videos. Paused
@@ -6550,8 +6600,11 @@ async def process_endpoint(
         _apply_source_cut(env, partial)
     if user_plan == "free":
         # Free-plan clips carry a burned-in watermark (applied by the main.py
-        # subprocess after each clip renders).
+        # subprocess after each clip renders). The clean twin an upgrade
+        # needs is kept as a recipe, not encoded (clean_twin.py); a remote
+        # worker is never told so (not a job option) and encodes it.
         env["WATERMARK"] = "1"
+        env["CLEAN_LAZY"] = "1"
     _apply_rate_cap(env)
 
     # Absolute-URL base for the webhook payload: explicit env wins (the API may

@@ -537,7 +537,8 @@ function App() {
   }, [status, plan, isManaged, jobId, results?.clips?.length, tutorialPhase]);
 
   // Paying re-points the clips already on screen at their clean twins (the API
-  // does it from the Stripe webhook, a few seconds after the plan flips). Chase
+  // does it from the Stripe webhook, a few seconds after the plan flips, plus
+  // a few more per clip when the twin is encoded then: clean_twin.py). Chase
   // the job result until no served file carries the wm_ prefix, then refresh
   // the durable map so the players switch to the clean R2 copies too.
   useEffect(() => {
@@ -546,7 +547,7 @@ function App() {
     if (!(results?.clips || []).some(isMarked)) return;
     let cancelled = false;
     (async () => {
-      for (const delay of [1500, 3000, 6000, 12000, 20000]) {
+      for (const delay of [1500, 3000, 6000, 12000, 20000, 30000, 45000]) {
         await new Promise((r) => setTimeout(r, delay));
         if (cancelled || jobIdRef.current !== jobId) return;
         let data;

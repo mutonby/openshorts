@@ -484,7 +484,7 @@ def _auto_place(video_path, text, target_box_width, hook_filename, font_scale, s
 
 def add_hook_to_video(video_path, text, output_path, position="top", font_scale=1.0, duration=None, style="pill",
                       also=None, font=None, layout_ranges=None, has_captions=True,
-                      mark=None):
+                      mark=None, clean=True):
     """
     Overlays text hook onto video.
     position: 'top', 'center', 'bottom', or 'auto' (hook_placement: off the
@@ -506,6 +506,9 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
       write ``path`` = the captioned picture with the free-plan mark, from the
       same decode (the served ``wm_`` copy, see main.mark_delivery).
       ``make_filter(vw, vh, video=, logo=, out=)`` is main.watermark_filter.
+    clean: with ``mark``, False writes only the marked copy and keeps a
+      recipe for the clean captioned file instead (clean_twin.py, ``also[2]``
+      = the caption file it is made from).
     """
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video {video_path} not found")
@@ -572,13 +575,16 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
         tail = _encode_tail()
         lazy = also is not None and LAZY
         hooked_out = [] if lazy else ['-map', '[h]', '-map', '0:a?', *tail, output_path]
+        clean = clean or not (also and mark)
         if also and mark:
-            extra_vf, extra_path = also
+            extra_vf, extra_path = also[:2]
             logo_path, make_filter, mark_path = mark
             marked = make_filter(video_width, video_height, video="[sm]",
                                  logo="[2:v]", out="[m]")
-            graph = (f"{overlay},{extra_vf},split=2[s][sm];{marked}" if lazy else
-                     f"{overlay},split=2[h][c];[c]{extra_vf},split=2[s][sm];{marked}")
+            captioned = f"{extra_vf},split=2[s][sm]" if clean else f"{extra_vf}[sm]"
+            graph = (f"{overlay},{captioned};{marked}" if lazy else
+                     f"{overlay},split=2[h][c];[c]{captioned};{marked}")
+            clean_out = ['-map', '[s]', '-map', '0:a?', *tail, extra_path] if clean else []
             ffmpeg_cmd = [
                 'ffmpeg', '-y',
                 '-i', video_path,
@@ -586,11 +592,11 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
                 '-i', logo_path,
                 '-filter_complex', graph,
                 *hooked_out,
-                '-map', '[s]', '-map', '0:a?', *tail, extra_path,
+                *clean_out,
                 '-map', '[m]', '-map', '0:a?', *tail, mark_path,
             ]
         elif also:
-            extra_vf, extra_path = also
+            extra_vf, extra_path = also[:2]
             graph = (f"{overlay},{extra_vf}[s]" if lazy else
                      f"{overlay},split=2[h][c];[c]{extra_vf}[s]")
             ffmpeg_cmd = [
@@ -607,8 +613,9 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
         outputs = [] if lazy else [output_path]
         stages = [] if lazy else [("hook", output_path)]
         if also:
-            outputs.append(also[1])
-            stages.append(("ass", also[1]))
+            if clean:
+                outputs.append(also[1])
+                stages.append(("ass", also[1]))
             if mark:
                 outputs.append(mark[2])
                 stages.append(("mark", mark[2]))
@@ -636,6 +643,11 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
                                                         done.stdout, done.stderr)
         else:
             print(f"✅ Hook added to {output_path}")
+        if not clean:
+            # Only the marked copy was encoded: keep how to make the clean one
+            # (clean_twin.py). A failure here fails the pass like an encode.
+            import clean_twin
+            clean_twin.write_recipe(also[1], output_path, also[2])
         if placed:
             return {"position": "auto", "y": placed["y"], "scale": placed["scale"],
                     "height": round(box_h / video_height, 3)}

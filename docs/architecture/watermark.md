@@ -6,7 +6,8 @@ burned in (`main.mark_delivery`, the last step after captions; in the job the co
 is one more output of the ffmpeg that burns the captions, `auto_hook_clip(mark=)` /
 `auto_caption_clip(mark=)`, and `mark_delivery` only finds it made; the editor endpoints get it from `app._deliver`, decided from the
 caller's plan right now, not from the job's flag, which a restart loses). Both
-twins live on disk and in R2 (`cloud.videos._twins_to_archive`). The mark must
+twins live on disk and in R2 (`cloud.videos._twins_to_archive`), except that
+this host's free jobs keep the clean captioned twin as a recipe (below). The mark must
 never be burned into the canonical reframe: every derivative would inherit it
 and "upgrade to remove the watermark" would be false for clips already made.
 
@@ -15,8 +16,8 @@ and "upgrade to remove the watermark" would be false for clips already made.
   so does a paid `invoice.paid` after a lapse (past_due/unpaid → active). Per
   clip it checks the clean twin exists in R2, moves the history row and the
   project state to it, deletes the marked object and calls back into
-  `app._unmark_local_job` so an open dashboard polls the clean URL. No render,
-  no source video. The dashboard chases the job result after the plan flips
+  `app._unmark_local_job` so an open dashboard polls the clean URL. No source
+  video; a render only for twins kept as a recipe (below). The dashboard chases the job result after the plan flips
   (`App.jsx`, the `wm_` regex) and refreshes the durable map.
 - **Paid while it waited**: a job submitted on the free plan that finishes
   after its owner paid (queued for hours, or running when the webhook came)
@@ -25,9 +26,27 @@ and "upgrade to remove the watermark" would be false for clips already made.
   only (`unmark_user_library(user_id, job_id=)`), after the archive and before
   the caller's webhook and the clips-ready email. A failed lookup or a twin
   missing from R2 leaves the job marked.
+- **Clean twin on demand** (`clean_twin.py`, `CLEAN_LAZY=1`): the job's
+  hook + captions pass on a free job encodes only the `wm_` copy. The clean
+  captioned twin was one NVENC encode per free clip watched only after a
+  payment or an edit (balrog's encoder at 95-100 %, 87 % of the burns free,
+  25-nov-2026), so the pass keeps a recipe instead:
+  `.cleanrecipe_<twin>.json` (the picture the captions go on: a file, or a
+  hooked picture kept as a hook recipe) + `.cleanrecipe_<twin>.ass`.
+  `clean_twin.materialize` repeats the pass's graph (hook overlay, captions)
+  from the same source with the same encoder, so the twin is the file the
+  pass used to write (`tests/test_clean_twin.py`). The recipe files ride to
+  R2 instead of the twin (`videos._archived_twins`). At the upgrade
+  `videos._clean_size` asks app.py (`_render_clean_twin`, two at a time) to
+  encode a twin R2 does not hold, restoring the project first when its
+  working files are gone, and uploads it; then the re-pointing goes on as
+  before, newest project first. The upgrade is no longer instant: a few
+  seconds per clip, which the dashboard's chase waits for. Only this host
+  sets `CLEAN_LAZY` (not a job option): a remote worker encodes the twin.
 - **Walk-backs**: `wm_` is the outermost layer; `_strip_burned_captions` /
-  `_strip_burned_hook` drop it first, `_canonical_clip_file` globs
-  `wm_*{clean}`.
+  `_strip_burned_hook` drop it first (a twin kept as a recipe counts as
+  there; `_strip_burned_captions` encodes it only when the walk stops on it),
+  `_canonical_clip_file` globs `wm_*{clean}`.
 - **`/videos` guard** (`app._media_guard`): a job rendered for the free plan
   carries a `.marked` dotfile (`watermarked.MARKER_FILE`, written by `main.py`,
   restored with the project, removed on unmark; `_deliver` marks only jobs that

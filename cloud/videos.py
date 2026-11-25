@@ -15,6 +15,7 @@ from . import database, storage, metering, media_redirect
 from .models import UserVideo, Subscription, Project, User, ClipExpiryWarning
 from .auth import get_current_user_required
 
+import clean_twin
 import watermarked
 
 router = APIRouter()
@@ -49,6 +50,20 @@ def _twins_to_archive(served, base_name, clip_index):
     m = _HOOK_CHAIN_RE.match(clean)
     if m and m.group(1) != canonical:
         out.append(m.group(1))
+    return out
+
+
+def _archived_twins(output_dir, served, base_name, clip_index):
+    """The files of ``_twins_to_archive`` that are on disk, and for a clean
+    twin kept as a recipe (clean_twin.py) the recipe's files instead: a
+    restored project, or an upgrade after the working files are gone, can
+    still encode it."""
+    out = []
+    for name in _twins_to_archive(served, base_name, clip_index):
+        if os.path.exists(os.path.join(output_dir, name)):
+            out.append(name)
+        else:
+            out += [n for n in clean_twin.archive_names(output_dir, name) if n not in out]
     return out
 
 
@@ -101,12 +116,41 @@ def register_local_unmark(fn):
     _local_unmark = fn
 
 
+# app.py encodes a clean twin kept as a recipe (clean_twin.py) and uploads it:
+# ``async (user_id, project, clean_filename) -> bool``.
+_clean_render = None
+
+
+def register_clean_render(fn):
+    global _clean_render
+    _clean_render = fn
+
+
+async def _clean_size(user_id, proj, clean):
+    """Size of ``clean`` in R2, encoding it from its recipe first if it is
+    not there (a free clip from CLEAN_LAZY); None when it cannot be had."""
+    clean_key = storage.job_key(user_id, proj.job_id, clean)
+    try:
+        size = await asyncio.to_thread(storage.object_size, clean_key)
+    except Exception as e:
+        print(f"⚠️  R2 head failed for {clean_key}: {e}")
+        return None
+    if size is None and _clean_render is not None and await _clean_render(user_id, proj, clean):
+        try:
+            size = await asyncio.to_thread(storage.object_size, clean_key)
+        except Exception as e:
+            print(f"⚠️  R2 head failed for {clean_key}: {e}")
+            return None
+    return size
+
+
 async def unmark_user_library(user_id, job_id=None) -> int:
     """After an upgrade: serve every clip this user has through its clean twin.
 
     The free plan burns the mark into a ``wm_`` copy and archives the clean
-    final next to it (``_twins_to_archive``), so losing the mark is a
-    re-pointing, not a render: the history row and the project state move to
+    final next to it (``_twins_to_archive``), or since 25-nov-2026 a recipe
+    for it that is encoded here (``_clean_size``), so losing the mark is a
+    re-pointing: the history row and the project state move to
     the twin, the marked object is deleted, and app.py is told so a dashboard
     that is open on the job follows. A clip whose twin is not in R2 keeps its
     marked file: a dead link would be worse than the mark. Returns the number
@@ -116,7 +160,10 @@ async def unmark_user_library(user_id, job_id=None) -> int:
     if not settings.r2_configured:
         return 0
     async with database.session() as s:
-        q = select(Project).where(Project.user_id == user_id)
+        # Newest first: the job a dashboard is open on gets its clean files
+        # first when twins have to be encoded (clean_twin.py).
+        q = select(Project).where(Project.user_id == user_id).order_by(
+            Project.created_at.desc())
         if job_id is not None:
             q = q.where(Project.job_id == str(job_id))
         projects = list((await s.execute(q)).scalars())
@@ -127,17 +174,21 @@ async def unmark_user_library(user_id, job_id=None) -> int:
             continue
         applied = []
         for index, wm_name, clean in changes:
-            clean_key = storage.job_key(user_id, proj.job_id, clean)
-            try:
-                size = await asyncio.to_thread(storage.object_size, clean_key)
-            except Exception as e:
-                print(f"⚠️  R2 head failed for {clean_key}: {e}")
-                size = None
+            size = await _clean_size(user_id, proj, clean)
             if size is None:
                 continue
-            applied.append((index, wm_name, clean, clean_key, size))
+            applied.append((index, wm_name, clean,
+                            storage.job_key(user_id, proj.job_id, clean), size))
         if not applied:
             continue
+        # The pristine original of an edited clip is a free clip's served file
+        # too: its twin is what "back to the original" opens once unmarked.
+        served = {clean for _i, _wm, clean, _k, _s in applied}
+        for c in (proj.state or {}).get("clips", []):
+            original = c.get("original_file") or ""
+            if (watermarked.is_marked(original)
+                    and watermarked.clean_name(original) not in served):
+                await _clean_size(user_id, proj, watermarked.clean_name(original))
         applied_idx = {a[0] for a in applied}
         # Clips whose twin is missing keep their marked entry.
         prior = {c.get("index"): c for c in (proj.state or {}).get("clips", [])}
@@ -238,14 +289,13 @@ async def archive_job(user_id, job_id, clips, output_dir, attestation=None):
         # Free plan: the served file is the wm_ copy of the final one, and the
         # clean final rides along so an upgrade can re-point at it without a
         # render (unmark_user_library). The canonical is handled just above.
-        for twin_name in _twins_to_archive(filename, base_name, i):
-            twin_path = os.path.join(output_dir, twin_name)
-            if os.path.exists(twin_path):
-                twin_key = storage.job_key(user_id, job_id, twin_name)
-                try:
-                    await asyncio.to_thread(storage.upload_file, twin_path, twin_key)
-                except Exception as e:
-                    print(f"⚠️  R2 upload failed for {twin_key}: {e}")
+        for twin_name in _archived_twins(output_dir, filename, base_name, i):
+            twin_key = storage.job_key(user_id, job_id, twin_name)
+            try:
+                await asyncio.to_thread(storage.upload_file,
+                                        os.path.join(output_dir, twin_name), twin_key)
+            except Exception as e:
+                print(f"⚠️  R2 upload failed for {twin_key}: {e}")
 
     if not uploaded:
         return
@@ -326,15 +376,13 @@ async def archive_clip_edit(user_id, job_id, clip_index, output_dir, new_filenam
     # Same chain rule as archive_job: a captioned hook needs its hooked_
     # intermediate archived too, or the restored project cannot re-style; and
     # a wm_ copy needs its clean twin, or an upgrade cannot drop the mark.
-    for twin_name in _twins_to_archive(new_filename, base_name, clip_index):
-        twin_path = os.path.join(output_dir, twin_name)
-        if os.path.exists(twin_path):
-            try:
-                await asyncio.to_thread(
-                    storage.upload_file, twin_path,
-                    storage.job_key(user_id, job_id, twin_name))
-            except Exception as e:
-                print(f"⚠️  R2 upload failed for {twin_name} of {job_id}: {e}")
+    for twin_name in _archived_twins(output_dir, new_filename, base_name, clip_index):
+        try:
+            await asyncio.to_thread(
+                storage.upload_file, os.path.join(output_dir, twin_name),
+                storage.job_key(user_id, job_id, twin_name))
+        except Exception as e:
+            print(f"⚠️  R2 upload failed for {twin_name} of {job_id}: {e}")
     if meta_files:
         metadata_r2_key = storage.job_key(user_id, job_id, os.path.basename(meta_files[0]))
         try:

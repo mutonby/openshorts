@@ -833,7 +833,7 @@ def _video_size(path):
 def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
                    font_name="Verdana", font_color="#FFFFFF",
                    border_color="#000000", border_width=2,
-                   bg_color="#000000", bg_opacity=0.0, mark=None):
+                   bg_color="#000000", bg_opacity=0.0, mark=None, clean=True):
     """
     Burns subtitles into the video using FFmpeg.
     Supports two modes:
@@ -844,6 +844,10 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
     the captioned picture with the free-plan mark (the served ``wm_`` copy,
     main.mark_delivery), from the same decode. ``make_filter(vw, vh, video=,
     logo=, out=)`` is main.watermark_filter.
+
+    ``clean``: with ``mark``, False writes only the marked copy and keeps a
+    recipe for ``output_path`` instead (clean_twin.py), made from
+    ``video_path`` and the .ass ``srt_path``.
     """
     vf = subtitles_filter(srt_path, alignment=alignment, fontsize=fontsize,
                           font_name=font_name, font_color=font_color,
@@ -852,29 +856,38 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
 
     tail = ['-c:a', 'copy', *video_encode_args(QUALITY), *METADATA_SCRUB,
             '-movflags', '+faststart']
-    outputs = [output_path]
     size = _video_size(video_path) if mark else None
+    clean = clean or not size or not str(srt_path).lower().endswith(".ass")
+    outputs = [output_path] if clean else []
     if size:
         logo_path, make_filter, mark_path = mark
         marked = make_filter(size[0], size[1], video="[sm]", logo="[1:v]", out="[m]")
+        captioned = f"[0:v]{vf},split=2[s][sm]" if clean else f"[0:v]{vf}[sm]"
         cmd = [
             'ffmpeg', '-y',
             '-i', video_path,
             '-i', logo_path,
-            '-filter_complex', f"[0:v]{vf},split=2[s][sm];{marked}",
-            '-map', '[s]', '-map', '0:a?', *tail, output_path,
+            '-filter_complex', f"{captioned};{marked}",
+            *(['-map', '[s]', '-map', '0:a?', *tail, output_path] if clean else []),
             '-map', '[m]', '-map', '0:a?', *tail, mark_path,
         ]
         outputs.append(mark_path)
     else:
         cmd = ['ffmpeg', '-y', '-i', video_path, '-vf', vf, *tail, output_path]
 
+    def done():
+        if not clean:
+            # Only the marked copy was encoded: keep how to make the clean one.
+            import clean_twin
+            clean_twin.write_recipe(output_path, video_path, srt_path)
+        return True
+
     import gpu_burn
     # The same pictures from the card when it can (gpu_burn.py), else ffmpeg.
-    stages = [("ass", output_path)] + ([("mark", mark[2])] if size else [])
+    stages = ([("ass", output_path)] if clean else []) + ([("mark", mark[2])] if size else [])
     if gpu_burn.burn(video_path, stages, ass_vf=vf,
                      mark=(mark[0], mark[1]) if size else None, video_size=size):
-        return True
+        return done()
 
     _log(f"🎬 Burning subtitles: {' '.join(cmd)}")
     result = gpu_decode.run(
@@ -889,5 +902,5 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
         _log(f"❌ FFmpeg Subtitle Error: {stderr_text}")
         raise Exception(f"FFmpeg failed: {stderr_text}")
 
-    return True
+    return done()
 

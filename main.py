@@ -32,6 +32,7 @@ import mediapipe as mp
 from google import genai
 from google.genai import types as genai_types
 
+import clean_twin
 import frame_sampler
 import gpu_decode
 import gemini_worker
@@ -1738,10 +1739,13 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
     problem must never cost the user the clip they already paid for).
 
     ``plan_only`` writes the .ass but burns nothing: returns (vf,
-    generation_id) for auto_hook_clip to burn in the same pass as the hook.
+    generation_id, ass path) for auto_hook_clip to burn in the same pass as
+    the hook.
 
     ``mark`` (free plan): the same ffmpeg also writes the served ``wm_`` copy
-    of the captioned file, so mark_delivery finds it made.
+    of the captioned file, so mark_delivery finds it made. With CLEAN_LAZY=1
+    only that copy is encoded and the returned clean file is kept as a recipe
+    (clean_twin.py) until an upgrade or an edit asks for it.
     """
     if os.environ.get("AUTO_CAPTIONS", "1").strip() == "0":
         return None
@@ -1802,7 +1806,7 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
                 ass_path, alignment=style["alignment"], fontsize=style["font_size"],
                 font_name=style["font_name"], font_color=style["font_color"],
                 border_color=style["border_color"], border_width=style["border_width"])
-            return vf, generation_id
+            return vf, generation_id, ass_path
         marked = None
         if mark and os.path.exists(watermark_logo_path()):
             import watermarked
@@ -1814,7 +1818,7 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
                 alignment=style["alignment"], fontsize=style["font_size"],
                 font_name=style["font_name"], font_color=style["font_color"],
                 border_color=style["border_color"], border_width=style["border_width"],
-                mark=marked)
+                mark=marked, clean=not (marked and clean_twin.lazy()))
         except Exception:
             if marked and os.path.exists(marked[2]):
                 os.remove(marked[2])  # never serve a half-written wm_ copy
@@ -1840,7 +1844,7 @@ def auto_hook_clip(clip_path, clip, captions=None, mark=False):
     hook problem must never cost the user the clip itself (same fail-open
     contract as auto_caption_clip).
 
-    ``captions`` = (vf, generation_id) from auto_caption_clip(plan_only=True):
+    ``captions`` = (vf, generation_id, ass) from auto_caption_clip(plan_only=True):
     the captioned ``subtitled_<id>_hooked_...`` file is written by the same
     ffmpeg, from the same decode, and its path lands in hook_config under
     "_captioned" (popped by the caller). If that combined pass fails, the hook
@@ -1876,7 +1880,7 @@ def auto_hook_clip(clip_path, clip, captions=None, mark=False):
                 config["y"] = result["y"]
 
         if captions:
-            vf, generation_id = captions
+            vf, generation_id, ass_path = captions
             captioned = os.path.join(
                 output_dir, f"subtitled_{generation_id}_{os.path.basename(out_path)}")
             marked = None
@@ -1886,8 +1890,8 @@ def auto_hook_clip(clip_path, clip, captions=None, mark=False):
                           os.path.join(output_dir, watermarked.marked_name(captioned)))
             try:
                 note(add_hook_to_video(clip_path, text, out_path, duration=seconds,
-                                       style=style, also=(vf, captioned), mark=marked,
-                                       **place))
+                                       style=style, also=(vf, captioned, ass_path), mark=marked,
+                                       clean=not (marked and clean_twin.lazy()), **place))
                 print(f"   🪝 Hook + 💬 captions burned in one pass ({style}, {seconds:g}s): {text}")
                 return out_path, {**config, "_captioned": captioned}
             except Exception as e:
