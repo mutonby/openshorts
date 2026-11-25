@@ -223,6 +223,9 @@ unsafe fn send_packet(dctx: *mut ff::AVCodecContext, pkt: *mut ff::AVPacket) -> 
     false
 }
 
+/// How many 1 ms waits a draining decoder gets before the run gives up.
+const DRAIN_WAITS: u32 = 30_000;
+
 fn cs(s: &str) -> CString {
     CString::new(s).unwrap_or_else(|_| fail("string with NUL"))
 }
@@ -470,6 +473,7 @@ unsafe fn run(input: &str, plan: &Plan, output: &str) -> usize {
     let mut flushing = false;
     let mut done = false;
     let mut held = false;
+    let mut drain_waits = 0u32;
     while !done {
         if !flushing {
             if !held && ff::av_read_frame(ictx, pkt) < 0 {
@@ -494,7 +498,13 @@ unsafe fn run(input: &str, plan: &Plan, output: &str) -> usize {
             if r < 0 {
                 av(r, "decode");
                 if flushing {
-                    done = true;
+                    // Draining: EAGAIN here only means the last frames are
+                    // not out of the card yet; EOF ends the stream.
+                    drain_waits += 1;
+                    if drain_waits > DRAIN_WAITS {
+                        fail("decoder did not finish draining");
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
                 }
                 break;
             }

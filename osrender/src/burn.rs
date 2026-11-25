@@ -18,7 +18,7 @@
 //! ffmpeg instead.
 
 use crate::ass::{AssImage, Subtitles};
-use crate::{av, ck, cs, fail, pick_cuda, send_packet, CuPtr, Cuda};
+use crate::{av, ck, cs, fail, pick_cuda, send_packet, CuPtr, Cuda, DRAIN_WAITS};
 use ffmpeg_sys_next as ff;
 use serde::Deserialize;
 use std::ffi::{c_int, c_void};
@@ -563,6 +563,7 @@ unsafe fn run(spec: &Spec) -> usize {
     let mut flushing = false;
     let mut done = false;
     let mut held = false;
+    let mut drain_waits = 0u32;
     while !done {
         if !flushing {
             if !held && ff::av_read_frame(ictx, pkt) < 0 {
@@ -603,7 +604,13 @@ unsafe fn run(spec: &Spec) -> usize {
             if r < 0 {
                 av(r, "decode");
                 if flushing {
-                    done = true;
+                    // Draining: EAGAIN here only means the last frames are
+                    // not out of the card yet; EOF ends the stream.
+                    drain_waits += 1;
+                    if drain_waits > DRAIN_WAITS {
+                        fail("decoder did not finish draining");
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
                 }
                 break;
             }
