@@ -366,9 +366,9 @@ def test_the_worker_asks_for_the_source_alone_only_when_told_to(monkeypatch):
     worker = pytest.importorskip("worker")
     monkeypatch.setattr(worker, "NAME", "w1")
     monkeypatch.setattr(worker, "SOURCE_ONLY", False)
-    assert worker.claim_body() == {"worker": "w1"}
+    assert worker.claim_body() == {"worker": "w1", "hook_recipes": True}
     monkeypatch.setattr(worker, "SOURCE_ONLY", True)
-    assert worker.claim_body() == {"worker": "w1", "source_only": True}
+    assert worker.claim_body() == {"worker": "w1", "hook_recipes": True, "source_only": True}
 
 
 # --- inside the API -----------------------------------------------------------
@@ -1194,9 +1194,10 @@ def test_the_worker_says_it_downloads_only_when_told_to(monkeypatch):
     monkeypatch.setattr(worker, "NAME", "w1")
     monkeypatch.setattr(worker, "SOURCE_ONLY", True)
     monkeypatch.setattr(worker, "DOWNLOADS", False)
-    assert worker.claim_body() == {"worker": "w1", "source_only": True}
+    assert worker.claim_body() == {"worker": "w1", "hook_recipes": True, "source_only": True}
     monkeypatch.setattr(worker, "DOWNLOADS", True)
-    assert worker.claim_body() == {"worker": "w1", "source_only": True, "downloads": True}
+    assert worker.claim_body() == {"worker": "w1", "hook_recipes": True, "source_only": True,
+                                   "downloads": True}
 
 
 @pytest.fixture
@@ -1527,3 +1528,80 @@ def test_end_to_end_with_a_worker_that_fetches_the_link(api, monkeypatch, tmp_pa
         assert "the source could not be fetched here" in out
         assert not os.path.exists(os.path.join(d, "V.mp4"))
         assert m._remote_breaker["recent"] == [] and m._remote_breaker["until"] == 0.0
+
+
+# --- hook recipes instead of the hooked-only picture ---------------------------
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"rest of the image"
+HOOKED = "hooked_17_V_clip_1.mp4"
+
+
+def _recipe(d, data, png=PNG, name=HOOKED):
+    raw = json.dumps(data).encode()
+    _put(d, f"hookrecipe_{name}.png", 0, png, size=len(png))
+    _put(d, f"hookrecipe_{name}.json", 0, raw, size=len(raw))
+
+
+def test_a_recipe_from_a_worker_that_sends_them_is_adopted_as_data(tmp_path):
+    import hooks
+    d = str(tmp_path)
+    rw.begin(d, "w", hook_recipes=True)
+    _recipe(d, {"source": "V_clip_1.mp4", "x": 69, "y": 1085.0, "duration": 5, "extra": "$(rm)"})
+    json_path, png_path = hooks.recipe_paths(d, HOOKED)
+    assert json.load(open(json_path)) == {"source": "V_clip_1.mp4", "x": 69, "y": 1085,
+                                          "duration": 5.0}
+    assert open(png_path, "rb").read() == PNG
+    assert not [n for n in os.listdir(d) if n.startswith(rw.RECIPE_UPLOAD_PREFIX)]
+    assert hooks.has_recipe(d, HOOKED)
+
+
+@pytest.mark.parametrize("data", [
+    {"source": "../V_clip_1.mp4", "x": 1, "y": 1, "duration": 5},
+    {"source": ".owner", "x": 1, "y": 1, "duration": 5},
+    {"source": "V_clip_1.mp4", "x": "1;drawtext", "y": 1, "duration": 5},
+    {"source": "V_clip_1.mp4", "x": True, "y": 1, "duration": 5},
+    {"source": "V_clip_1.mp4", "x": 1.5, "y": 1, "duration": 5},
+    {"source": "V_clip_1.mp4", "x": 1, "y": 99999, "duration": 5},
+    {"source": "V_clip_1.mp4", "x": 1, "y": 1, "duration": "5"},
+    {"source": "V_clip_1.mp4", "x": 1, "y": 1, "duration": -1},
+    [1, 2],
+])
+def test_a_recipe_that_does_not_check_out_is_dropped(tmp_path, data):
+    import hooks
+    d = str(tmp_path)
+    rw.begin(d, "w", hook_recipes=True)
+    _recipe(d, data)
+    assert not os.path.exists(hooks.recipe_paths(d, HOOKED)[0])
+    assert not [n for n in os.listdir(d) if n.startswith(rw.RECIPE_UPLOAD_PREFIX)]
+
+
+def test_no_recipe_for_another_file_or_from_a_worker_that_did_not_say(tmp_path):
+    import hooks
+    d = str(tmp_path)
+    rw.begin(d, "w", hook_recipes=True)
+    _recipe(d, {"source": "V_clip_1.mp4", "x": 1, "y": 1, "duration": 5}, name="V_metadata.json.mp4")
+    _recipe(d, {"source": "V_clip_1.mp4", "x": 1, "y": 1, "duration": 5}, png=b"GIF89a")
+    assert not os.path.exists(hooks.recipe_paths(d, HOOKED)[1])
+    e = str(tmp_path / "old")
+    os.makedirs(e)
+    rw.begin(e, "w")
+    _recipe(e, {"source": "V_clip_1.mp4", "x": 1, "y": 1, "duration": 5})
+    assert os.listdir(e) and not any(n.startswith((".hookrecipe_", rw.RECIPE_UPLOAD_PREFIX))
+                                     for n in os.listdir(e))
+
+
+def test_the_worker_sends_its_recipes_under_plain_names(tmp_path, monkeypatch):
+    import worker
+    d = str(tmp_path)
+    sent = []
+    monkeypatch.setattr(worker, "upload_file", lambda job, claim, out, rel: sent.append(rel) or True)
+    for name, data in ((f".hookrecipe_{HOOKED}.png", PNG), (f".hookrecipe_{HOOKED}.json", b"{}"),
+                       (".hookrecipe_hooked_2_V_clip_2.mp4.png", PNG),   # its JSON is not there yet
+                       ("V_clip_1.mp4", b"v")):
+        with open(os.path.join(d, name), "wb") as f:
+            f.write(data)
+    up = worker.Uploader("job", "claim", d, skip=[])
+    up.publish_recipes()
+    assert sent == [f"hookrecipe_{HOOKED}.png", f"hookrecipe_{HOOKED}.json"]
+    assert os.path.exists(os.path.join(d, ".hookrecipe_hooked_2_V_clip_2.mp4.png"))
+    assert worker.claim_body()["hook_recipes"] is True

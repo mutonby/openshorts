@@ -152,8 +152,12 @@ the API host.
   before it (the source). The dotfiles of a job directory are what the API
   trusts (owner, manifest, the free-plan mark, encode recipes), so they are
   written on the API host only: the API sets `.marked` for a free job before
-  the worker is given it, and remote jobs run with `HOOK_LAZY=0` so no recipe
-  is needed.
+  the worker is given it. A worker that says it sends hook recipes
+  (`hook_recipes` in its claim) runs with `HOOK_LAZY=1` like this host and
+  sends each recipe under its plain name (`hookrecipe_<hooked>.json` + `.png`,
+  `worker.Uploader.publish_recipes`); the API reads the JSON as numbers and a
+  plain clip name, checks the image is a PNG and writes the dotfiles itself
+  (`remote_worker.adopt_recipe`). An older worker runs with `HOOK_LAZY=0`.
 - One upload request per job at a time (`upload_lock`, a file lock both
   containers of a deploy share). Files land atomically, and the claim and the
   budget are checked again at that moment on what is on disk:

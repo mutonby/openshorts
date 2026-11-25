@@ -5336,11 +5336,12 @@ def _remote_eligible(job_id, priority) -> bool:
     return os.path.exists(_manifest_path(job_id))
 
 
-def _claim_remote_job(worker, source_only=False, downloads=False):
+def _claim_remote_job(worker, source_only=False, downloads=False, hook_recipes=False):
     """Hand the next eligible queued job to the remote worker, or None.
     ``(job_id, claim)``. Loop thread only: it edits the heap.
     ``source_only``: the worker wants the source alone (it has its own card).
     ``downloads``: it fetches a video link itself (``_worker_link``).
+    ``hook_recipes``: it sends hook recipes (remote_worker.adopt_recipe).
 
     Only while a job is already waiting for a GPU slot: with room on the card
     the job runs here, where it is faster."""
@@ -5379,7 +5380,7 @@ def _claim_remote_job(worker, source_only=False, downloads=False):
         job['run_started'] = time.time()
         _touch_manifest(job_id, started=True)
         claim = remote_worker.begin(job['output_dir'], worker, source_only=source_only,
-                                    downloads=downloads)
+                                    downloads=downloads, hook_recipes=hook_recipes)
         print(f"🛰️ Job {job_id} goes to the remote worker {str(worker)[:40]!r}.")
         asyncio.create_task(run_job_wrapper(job_id))
         return job_id, claim
@@ -5453,10 +5454,11 @@ async def _run_job_remote(job_id, job_data):
             print(f"🛰️ Job {job_id}: the worker fetches the source itself.")
         options = remote_worker.job_options(job_data['env'], os.environ,
                                             link=link is not None)
-        # The worker encodes the hooked-only picture itself: the lazy path
-        # leaves an encode recipe next to the clip, and a recipe is something
-        # this host runs later, so it never comes from another machine.
-        options["HOOK_LAZY"] = "0"
+        # A worker that sends hook recipes skips the hooked-only picture like
+        # this host does: the editor's first ask encodes it here from the
+        # recipe, which remote_worker.adopt_recipe has read as numbers. One
+        # that does not (an older worker) encodes it itself.
+        options["HOOK_LAZY"] = "1" if remote_worker.hook_recipes(output_dir) else "0"
         if job_data['env'].get("WATERMARK") == "1":
             # Free plan: the mark is this host's to set, and it is set before
             # the worker can send anything, so /videos refuses the clean
@@ -5618,7 +5620,8 @@ async def worker_claim(request: Request):
     body = await _worker_body(request)
     claimed = _claim_remote_job(str(body.get("worker") or "worker"),
                                 source_only=body.get("source_only") is True,
-                                downloads=body.get("downloads") is True)
+                                downloads=body.get("downloads") is True,
+                                hook_recipes=body.get("hook_recipes") is True)
     if claimed is None:
         return JSONResponse({"job_id": None})
     return {"job_id": claimed[0], "claim": claimed[1]}

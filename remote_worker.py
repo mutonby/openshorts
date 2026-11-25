@@ -231,18 +231,20 @@ def _inside(job_dir, rel):
 
 # --- The claim --------------------------------------------------------------
 
-def begin(job_dir, worker, source_only=False, downloads=False):
+def begin(job_dir, worker, source_only=False, downloads=False, hook_recipes=False):
     """Claim the job for ``worker``: a fresh claim id, state ``preparing``.
     ``source_only``: the worker asked for the source alone (it has a card of
     its own), so this host prepares no transcript and no scenes for it.
     ``downloads``: the worker fetches a video link itself, with the accounts
-    its operator gave it, when this host has no copy to send."""
+    its operator gave it, when this host has no copy to send.
+    ``hook_recipes``: the worker sends the hook's recipe instead of encoding
+    the hooked-only picture (see ``adopt_recipe``)."""
     clear(job_dir)
     claim = secrets.token_hex(16)
     write_json_atomic(os.path.join(job_dir, CLAIM_FILE), {
         "claim": claim, "worker": str(worker or "")[:64], "state": PREPARING,
         "source_only": source_only is True, "downloads": downloads is True,
-        "claimed_at": time.time()})
+        "hook_recipes": hook_recipes is True, "claimed_at": time.time()})
     touch_seen(job_dir)
     return claim
 
@@ -250,6 +252,85 @@ def begin(job_dir, worker, source_only=False, downloads=False):
 def downloads(job_dir):
     """Whether the worker that holds the job fetches links itself."""
     return (read(job_dir) or {}).get("downloads") is True
+
+
+def hook_recipes(job_dir):
+    """Whether the worker that holds the job sends hook recipes (HOOK_LAZY)."""
+    return (read(job_dir) or {}).get("hook_recipes") is True
+
+
+# A worker writes only plain names, so the recipe hooks.py keeps next to a
+# clip (``.hookrecipe_<hooked>.json`` + ``.png``) travels without its dot.
+RECIPE_UPLOAD_PREFIX = "hookrecipe_"
+_RECIPE_LIMIT = 20000
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def recipe_upload_name(name):
+    """The plain name a worker sends the recipe file ``name`` under, or None."""
+    if not name.startswith("." + RECIPE_UPLOAD_PREFIX):
+        return None
+    plain = name[1:]
+    return plain if safe_relpath(plain) and plain.endswith((".json", ".png")) else None
+
+
+def _recipe_number(value, low, high, integer):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if integer and value != int(value):
+        return None
+    if not low <= value <= high:
+        return None
+    return int(value) if integer else float(value)
+
+
+def adopt_recipe(job_dir, rel, path):
+    """Put a hook recipe the worker sent (``path``, uploaded as ``rel`` =
+    ``hookrecipe_<hooked>.json|.png``) where hooks.materialize reads it.
+
+    It is data from another machine: the JSON is read as numbers and a plain
+    clip name and written again from them, the image must be a PNG, and the
+    hooked file it is for must be a plain ``hooked_*.mp4`` name. A job whose
+    worker did not say it sends recipes, or anything that does not check
+    out, keeps nothing. True when the recipe file was adopted."""
+    import hooks
+    try:
+        base, ext = os.path.splitext(rel)
+        hooked = base[len(RECIPE_UPLOAD_PREFIX):]
+        ok = (hook_recipes(job_dir) and rel.startswith(RECIPE_UPLOAD_PREFIX)
+              and ext in (".json", ".png") and safe_relpath(hooked) == hooked
+              and hooked.startswith("hooked_") and hooked.endswith(".mp4"))
+        json_path, png_path = hooks.recipe_paths(job_dir, hooked) if ok else (None, None)
+        if ok and ext == ".json":
+            with open(path) as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return False
+            source = data.get("source")
+            x = _recipe_number(data.get("x"), -_RECIPE_LIMIT, _RECIPE_LIMIT, True)
+            y = _recipe_number(data.get("y"), -_RECIPE_LIMIT, _RECIPE_LIMIT, True)
+            duration = data.get("duration")
+            if duration is not None:
+                duration = _recipe_number(duration, 0.001, 86400, False)
+            ok = (isinstance(source, str) and safe_relpath(source) == source
+                  and source.endswith(".mp4") and x is not None and y is not None
+                  and (duration is not None or data.get("duration") is None))
+            if ok:
+                write_json_atomic(json_path, {"source": source, "x": x, "y": y,
+                                              "duration": duration})
+        elif ok:
+            with open(path, "rb") as f:
+                ok = f.read(len(_PNG_SIGNATURE)) == _PNG_SIGNATURE
+            if ok:
+                os.replace(path, png_path)
+        return bool(ok)
+    except (OSError, ValueError, TypeError):
+        return False
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def source_only(job_dir):
@@ -593,6 +674,8 @@ def finish_upload(job_dir, rel, size, claim, max_bytes=None, max_job_bytes=None)
         # with no file, never a file nobody will clean up.
         write_json_atomic(os.path.join(job_dir, FILES_FILE), names + [rel])
     os.replace(tmp, target)
+    if rel.startswith(RECIPE_UPLOAD_PREFIX):
+        adopt_recipe(job_dir, rel, target)
     touch_seen(job_dir)
     return target
 

@@ -176,8 +176,10 @@ def link_settled(job_id, fetched=None, now=None):
 
 
 def claim_body():
-    """What this worker says of itself when it asks for a job."""
-    body = {"worker": NAME}
+    """What this worker says of itself when it asks for a job. It always
+    sends hook recipes (``Uploader.publish_recipes``), so the API may let it
+    skip encoding the hooked-only picture (HOOK_LAZY)."""
+    body = {"worker": NAME, "hook_recipes": True}
     if SOURCE_ONLY:
         body["source_only"] = True
     if asks_for_a_link():
@@ -330,7 +332,30 @@ class Uploader:
             if upload_file(self.job_id, self.claim, self.out_dir, rel):
                 self.sent[rel] = stamp
 
+    def publish_recipes(self):
+        """Send the hook recipes main.py finished (HOOK_LAZY=1): hooks.py
+        keeps them as dotfiles, which the API never takes, so each goes under
+        its plain name (remote_worker.recipe_upload_name). The image first:
+        the JSON is written last and atomically, so a recipe whose JSON is
+        there is whole."""
+        for name in sorted(os.listdir(self.out_dir)):
+            if not name.endswith(".json"):
+                continue
+            plain_json = remote_worker.recipe_upload_name(name)
+            png = name[:-len(".json")] + ".png"
+            plain_png = remote_worker.recipe_upload_name(png)
+            if not plain_json or not plain_png:
+                continue
+            try:
+                os.replace(os.path.join(self.out_dir, png), os.path.join(self.out_dir, plain_png))
+                os.replace(os.path.join(self.out_dir, name), os.path.join(self.out_dir, plain_json))
+            except OSError:
+                continue
+            self.send(plain_png)
+            self.send(plain_json)
+
     def send_all(self):
+        self.publish_recipes()
         for name in sorted(os.listdir(self.out_dir)):
             self.send(name)
 
@@ -411,6 +436,7 @@ def run_job(job_id, claim):
                     # file and the metadata that lists it go first.
                     try:
                         uploader.send(line.split(" ", 2)[2])
+                        uploader.publish_recipes()
                         for name in os.listdir(out_dir):
                             if name.endswith("_metadata.json"):
                                 uploader.send(name)
