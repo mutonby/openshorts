@@ -2,6 +2,7 @@
 //! frames off the GPU.
 //!
 //!     osrender <input.mp4> <plan.json> <output.mp4>
+//!     osrender burn <spec.json>        (hook + captions + mark, see burn.rs)
 //!
 //! NVDEC decodes into CUDA frames, the kernels in `kernels.cu` compose each
 //! output frame from the plan's layers (crop + scale, optionally blurred) and
@@ -86,6 +87,55 @@ struct Cuda {
     htod: unsafe extern "C" fn(CuPtr, *const c_void, usize) -> CuRes,
     memset2d: unsafe extern "C" fn(CuPtr, usize, u8, usize, usize) -> CuRes,
     ctx_push: unsafe extern "C" fn(*mut c_void) -> CuRes,
+    memcpy2d: unsafe extern "C" fn(*const Memcpy2D, *mut c_void) -> CuRes,
+    sync: unsafe extern "C" fn() -> CuRes,
+    free: unsafe extern "C" fn(CuPtr) -> CuRes,
+}
+
+/// `CUDA_MEMCPY2D` (cuda.h).
+#[repr(C)]
+struct Memcpy2D {
+    src_x: usize,
+    src_y: usize,
+    src_type: c_uint,
+    src_host: *const c_void,
+    src_device: CuPtr,
+    src_array: *mut c_void,
+    src_pitch: usize,
+    dst_x: usize,
+    dst_y: usize,
+    dst_type: c_uint,
+    dst_host: *mut c_void,
+    dst_device: CuPtr,
+    dst_array: *mut c_void,
+    dst_pitch: usize,
+    width: usize,
+    height: usize,
+}
+
+const CU_MEMORYTYPE_HOST: c_uint = 1;
+const CU_MEMORYTYPE_DEVICE: c_uint = 2;
+
+impl Memcpy2D {
+    fn blank() -> Memcpy2D {
+        Memcpy2D { src_x: 0, src_y: 0, src_type: 0, src_host: null(), src_device: 0, src_array: null_mut(),
+                   src_pitch: 0, dst_x: 0, dst_y: 0, dst_type: 0, dst_host: null_mut(), dst_device: 0,
+                   dst_array: null_mut(), dst_pitch: 0, width: 0, height: 0 }
+    }
+
+    /// Device to device, `width` bytes by `height` rows.
+    fn device(src: CuPtr, sp: usize, dst: CuPtr, dp: usize, width: usize, height: usize) -> Memcpy2D {
+        Memcpy2D { src_type: CU_MEMORYTYPE_DEVICE, src_device: src, src_pitch: sp,
+                   dst_type: CU_MEMORYTYPE_DEVICE, dst_device: dst, dst_pitch: dp,
+                   width, height, ..Memcpy2D::blank() }
+    }
+
+    /// Device to host.
+    fn to_host(src: CuPtr, sp: usize, dst: *mut u8, dp: usize, width: usize, height: usize) -> Memcpy2D {
+        Memcpy2D { src_type: CU_MEMORYTYPE_DEVICE, src_device: src, src_pitch: sp,
+                   dst_type: CU_MEMORYTYPE_HOST, dst_host: dst as *mut c_void, dst_pitch: dp,
+                   width, height, ..Memcpy2D::blank() }
+    }
 }
 
 fn ck(r: CuRes, what: &str) {
@@ -111,6 +161,9 @@ impl Cuda {
             htod: sym!(b"cuMemcpyHtoD_v2\0"),
             memset2d: sym!(b"cuMemsetD2D8_v2\0"),
             ctx_push: sym!(b"cuCtxPushCurrent_v2\0"),
+            memcpy2d: sym!(b"cuMemcpy2DAsync_v2\0"),
+            sync: sym!(b"cuCtxSynchronize\0"),
+            free: sym!(b"cuMemFree_v2\0"),
             _lib: lib,
         }
     }
@@ -136,6 +189,9 @@ impl Cuda {
 macro_rules! args {
     ($($v:expr),* $(,)?) => { [$(&mut $v as *mut _ as *mut c_void),*] };
 }
+
+mod ass;
+mod burn;
 
 // ------------------------------------------------------------------ helpers
 
@@ -260,6 +316,11 @@ struct Scratch {
 fn main() {
     std::panic::set_hook(Box::new(|info| fail(&format!("panic: {info}"))));
     let a: Vec<String> = std::env::args().collect();
+    if a.len() == 3 && a[1] == "burn" {
+        let frames = burn::main(&a[2]);
+        eprintln!("osrender: {frames} frames");
+        unsafe { _exit(0) };
+    }
     if a.len() != 4 {
         eprintln!("usage: osrender <input> <plan.json> <output>");
         unsafe { _exit(2) };

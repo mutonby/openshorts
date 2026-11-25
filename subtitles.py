@@ -869,6 +869,13 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
     else:
         cmd = ['ffmpeg', '-y', '-i', video_path, '-vf', vf, *tail, output_path]
 
+    import gpu_burn
+    # The same pictures from the card when it can (gpu_burn.py), else ffmpeg.
+    stages = [("ass", output_path)] + ([("mark", mark[2])] if size else [])
+    if gpu_burn.burn(video_path, stages, ass_vf=vf,
+                     mark=(mark[0], mark[1]) if size else None, video_size=size):
+        return True
+
     _log(f"🎬 Burning subtitles: {' '.join(cmd)}")
     result = gpu_decode.run(
         lambda on_gpu: gpu_decode.on_card(cmd, video_path) if on_gpu else cmd,

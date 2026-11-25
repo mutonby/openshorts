@@ -60,7 +60,7 @@ COPY osrender /src/osrender
 RUN mkdir -p /out && if [ "$GPU" = "1" ]; then \
       apt-get update && apt-get install -y --no-install-recommends \
         pkg-config clang libclang-dev libavcodec-dev libavformat-dev libavutil-dev \
-        libavfilter-dev libavdevice-dev libswscale-dev libswresample-dev \
+        libavfilter-dev libavdevice-dev libswscale-dev libswresample-dev libass-dev \
       && rm -rf /var/lib/apt/lists/* \
       && cd /src/osrender && cargo build --release --locked \
       && cp target/release/osrender /out/; \

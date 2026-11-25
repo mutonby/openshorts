@@ -605,14 +605,23 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
             ffmpeg_cmd = _overlay_cmd(video_path, img_path, overlay, output_path)
 
         outputs = [] if lazy else [output_path]
+        stages = [] if lazy else [("hook", output_path)]
         if also:
             outputs.append(also[1])
+            stages.append(("ass", also[1]))
             if mark:
                 outputs.append(mark[2])
-        result = _run_encode(ffmpeg_cmd, video_path, outputs)
-        if result.returncode != 0 and not finished_before_crash(result, outputs):
-            raise subprocess.CalledProcessError(result.returncode, ffmpeg_cmd,
-                                                result.stdout, result.stderr)
+                stages.append(("mark", mark[2]))
+        import gpu_burn
+        # The same pictures from the card when it can (gpu_burn.py), else ffmpeg.
+        if not gpu_burn.burn(video_path, stages, hook=(img_path, overlay_x, overlay_y, duration),
+                             ass_vf=also[0] if also else None,
+                             mark=(mark[0], mark[1]) if also and mark else None,
+                             video_size=(video_width, video_height)):
+            result = _run_encode(ffmpeg_cmd, video_path, outputs)
+            if result.returncode != 0 and not finished_before_crash(result, outputs):
+                raise subprocess.CalledProcessError(result.returncode, ffmpeg_cmd,
+                                                    result.stdout, result.stderr)
         if lazy:
             try:
                 _write_recipe(output_path, video_path, img_path, overlay_x, overlay_y, duration)
@@ -695,9 +704,13 @@ def _write_recipe(output_path, video_path, img_path, x, y, duration):
         raise ValueError("the hook's source must be next to its output")
     json_path, png_path = recipe_paths(output_dir, os.path.basename(output_path))
     shutil.copyfile(img_path, png_path)
-    with open(json_path, "w") as f:
+    # The JSON last and atomically: a recipe whose JSON exists is whole (a
+    # remote worker sends recipes while the job is still running).
+    tmp = f"{json_path}.{uuid.uuid4().hex[:8]}.part"
+    with open(tmp, "w") as f:
         json.dump({"source": os.path.basename(video_path), "x": x, "y": y,
                    "duration": duration}, f)
+    os.replace(tmp, json_path)
 
 
 def materialize(output_dir, hooked_name):
@@ -730,6 +743,10 @@ def materialize(output_dir, hooked_name):
     tmp = os.path.join(output_dir, f".part_{uuid.uuid4().hex[:8]}_{hooked_name}")
     cmd = _overlay_cmd(source, png_path, _overlay_graph(x, y, duration), tmp)
     try:
+        import gpu_burn
+        if gpu_burn.burn(source, [("hook", tmp)], hook=(png_path, x, y, duration)):
+            os.replace(tmp, path)
+            return True
         result = _run_encode(cmd, source, [tmp])
         if result.returncode != 0 and not finished_before_crash(result, [tmp]):
             print(f"⚠️ Could not encode {hooked_name} from its recipe")

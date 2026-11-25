@@ -176,7 +176,18 @@ Speed at equal quality:
   asked for, off the event loop; `/api/hook` strips past it without encoding.
   Same filter and encoder as before, so the file is the same. No recipe or a
   failed encode: the walk-back stops as it always did. `HOOK_LAZY=0` encodes
-  it in the pass again.
+  it in the pass again. Remote workers that send recipes skip it too
+  (`remote_worker.adopt_recipe`, see remote-worker.md).
+- **Burn on the card** (`gpu_burn.py` + `osrender burn`): the hook + captions
+  (+ `wm_`) pass decodes on NVDEC, repeats `overlay`'s and `ass`'s 8-bit blend
+  arithmetic in CUDA (same libass, set up as vf_subtitles does; the static
+  images converted to yuva420p by ffmpeg itself) and encodes every output
+  from device memory with the same NVENC settings, the audio copied. Its
+  pictures are the ffmpeg pass's byte for byte
+  (`tests/test_gpu_burn_equivalence.py`). Only for an `ass=filename=..:
+  fontsdir=..` caption filter and `main.watermark_filter`'s mark; anything else
+  or any failure burns with ffmpeg. `GPU_BURN=0` turns it off. Also used by
+  `subtitles.burn_subtitles` and `hooks.materialize`.
 - **Sparse trajectory** (`reframe_v2._sparse_trajectory`, `SPARSE_TRAJECTORY`):
   the detectors look at one frame in `DETECT_STRIDE` plus scene starts, and only
   in TRACK scenes, so only those are scaled and piped (ffmpeg `select`). It
