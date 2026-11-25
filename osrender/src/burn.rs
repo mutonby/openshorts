@@ -18,7 +18,7 @@
 //! ffmpeg instead.
 
 use crate::ass::{AssImage, Subtitles};
-use crate::{av, ck, cs, fail, pick_cuda, CuPtr, Cuda};
+use crate::{av, ck, cs, fail, pick_cuda, send_packet, CuPtr, Cuda};
 use ffmpeg_sys_next as ff;
 use serde::Deserialize;
 use std::ffi::{c_int, c_void};
@@ -562,14 +562,16 @@ unsafe fn run(spec: &Spec) -> usize {
 
     let mut flushing = false;
     let mut done = false;
+    let mut held = false;
     while !done {
         if !flushing {
-            if ff::av_read_frame(ictx, pkt) < 0 {
+            if !held && ff::av_read_frame(ictx, pkt) < 0 {
                 flushing = true;
                 ff::avcodec_send_packet(dctx, null());
             } else {
+                held = false;
                 if (*pkt).stream_index == vidx {
-                    av(ff::avcodec_send_packet(dctx, pkt), "decode");
+                    held = send_packet(dctx, pkt);
                 } else if (*pkt).stream_index == aidx {
                     for o in outs.iter().filter(|o| !o.ast.is_null()) {
                         let c = ff::av_packet_clone(pkt);
@@ -587,7 +589,9 @@ unsafe fn run(spec: &Spec) -> usize {
                         ff::av_packet_free(&mut c);
                     }
                 }
-                ff::av_packet_unref(pkt);
+                if !held {
+                    ff::av_packet_unref(pkt);
+                }
             }
         }
         loop {

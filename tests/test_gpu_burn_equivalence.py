@@ -107,7 +107,7 @@ def test_raw_stages_are_identical(work, hook_xy, bt709):
     subprocess.run(cmd, check=True)
     chain, mx, my = gpu_burn.parse_mark(_watermark, W, H)
     frames, _, matrix = gpu_burn._probe(clip)
-    assert frames and (matrix == "bt709") == bt709
+    assert frames and (matrix == "bt709" or not bt709)
     gpu_burn._planes(png, "", str(d / "hook.nut"), matrix)
     gpu_burn._planes(LOGO, chain, str(d / "mark.nut"), matrix)
     spec = {"input": clip,

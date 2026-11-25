@@ -211,6 +211,18 @@ fn av(r: c_int, what: &str) -> c_int {
     r
 }
 
+/// Hand `pkt` to the decoder. True when it is not taken yet (EAGAIN: the
+/// decoder wants its decoded frames received first), so the caller keeps the
+/// packet and sends it again; dropping it would lose its frame.
+unsafe fn send_packet(dctx: *mut ff::AVCodecContext, pkt: *mut ff::AVPacket) -> bool {
+    let r = ff::avcodec_send_packet(dctx, pkt);
+    if r == ff::AVERROR(ff::EAGAIN) {
+        return true;
+    }
+    av(r, "decode");
+    false
+}
+
 fn cs(s: &str) -> CString {
     CString::new(s).unwrap_or_else(|_| fail("string with NUL"))
 }
@@ -457,16 +469,20 @@ unsafe fn run(input: &str, plan: &Plan, output: &str) -> usize {
 
     let mut flushing = false;
     let mut done = false;
+    let mut held = false;
     while !done {
         if !flushing {
-            if ff::av_read_frame(ictx, pkt) < 0 {
+            if !held && ff::av_read_frame(ictx, pkt) < 0 {
                 flushing = true;
                 ff::avcodec_send_packet(dctx, null());
             } else {
+                held = false;
                 if (*pkt).stream_index == vidx {
-                    av(ff::avcodec_send_packet(dctx, pkt), "decode");
+                    held = send_packet(dctx, pkt);
                 }
-                ff::av_packet_unref(pkt);
+                if !held {
+                    ff::av_packet_unref(pkt);
+                }
             }
         }
         loop {
