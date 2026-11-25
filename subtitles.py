@@ -293,9 +293,11 @@ SAFE_MARGIN_V = 43
 # Yellow because it is the one colour that almost never occurs in footage, so
 # the active word reads instantly on any background; the base text stays fully
 # opaque (dimming it tested worse over bright scenes). Size and outline came
-# down from 44 / 4 to 40 / 2 (17-nov-2026): at 44 a line held one or two words
-# and the outline ate the letter shapes. This is a starting point, not a cage:
-# the subtitle modal still overrides every field.
+# down from 44 / 4 to 40 / 2 (17-nov-2026), then to 20 / 2 (25-nov-2026): at
+# 44 a line held one or two words and the outline ate the letter shapes, and
+# at 40 a Cyrillic line was still a headline that clipped on a phone. This is
+# a starting point, not a cage: the subtitle modal still overrides every
+# field.
 AUTO_CAPTION_STYLE = {
     "style": "karaoke",
     "alignment": "bottom",
