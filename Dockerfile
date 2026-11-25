@@ -124,7 +124,10 @@ ENV LD_LIBRARY_PATH=/opt/venv/lib/python3.11/site-packages/nvidia/cublas/lib:/op
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
 
 # Latest yt-dlp (nightly — it updates frequently) plus its helper plugin.
-RUN pip install --upgrade --pre --no-cache-dir "yt-dlp[default]" bgutil-ytdlp-pot-provider
+# A cached layer keeps the build it was made with, so the floor is raised
+# whenever YouTube ships a player the installed build cannot read (the JS
+# challenges fail and every format goes missing).
+RUN pip install --upgrade --pre --no-cache-dir "yt-dlp[default]>=2026.11.23" bgutil-ytdlp-pot-provider
 
 # Copy application code
 COPY . .
