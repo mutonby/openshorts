@@ -65,7 +65,7 @@ class TestFallback:
     def card(self, monkeypatch):
         monkeypatch.setattr(gpu_render, "usable", lambda p: True)
         monkeypatch.setattr(gpu_burn, "ENABLED", True)
-        monkeypatch.setattr(gpu_burn, "_frame_count", lambda p: (100, 4.0))
+        monkeypatch.setattr(gpu_burn, "_probe", lambda p: (100, 4.0, None))
         monkeypatch.setattr(gpu_burn, "_planes", lambda *a: None)
 
     def test_a_caption_filter_it_cannot_read_burns_with_ffmpeg(self, card, monkeypatch, tmp_path):

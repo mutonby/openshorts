@@ -78,9 +78,23 @@ def _frames(path):
     return [hashlib.md5(data[i:i + size]).hexdigest() for i in range(0, len(data), size)]
 
 
-@pytest.mark.parametrize("hook_xy", [(69, 1085), (54, 3), (0, 1700)])
-def test_raw_stages_are_identical(work, hook_xy):
+def _tagged(clip, d):
+    """The clip with BT.709 in its headers: ffmpeg then converts the static
+    images to that matrix, and the GPU burn must do the same."""
+    out = str(d / "clip709.mp4")
+    if not os.path.exists(out):
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", clip, "-c", "copy", "-bsf:v",
+                        "h264_metadata=colour_primaries=1:transfer_characteristics=1:matrix_coefficients=1",
+                        out], check=True)
+    return out
+
+
+@pytest.mark.parametrize("hook_xy,bt709", [((69, 1085), False), ((54, 3), False),
+                                           ((0, 1700), False), ((69, 1085), True)])
+def test_raw_stages_are_identical(work, hook_xy, bt709):
     d, clip, ass, png = work
+    if bt709:
+        clip = _tagged(clip, d)
     x, y = hook_xy
     vf = subtitles.subtitles_filter(ass)
     graph = (f"[0:v]hwdownload,format=nv12,format=yuv420p[g];[g][1:v]overlay={x}:{y}:"
@@ -92,8 +106,10 @@ def test_raw_stages_are_identical(work, hook_xy):
         cmd += ["-map", f"[{s}]", "-f", "rawvideo", "-pix_fmt", "yuv420p", str(d / f"ref_{s}.yuv")]
     subprocess.run(cmd, check=True)
     chain, mx, my = gpu_burn.parse_mark(_watermark, W, H)
-    gpu_burn._planes(png, "", str(d / "hook.nut"))
-    gpu_burn._planes(LOGO, chain, str(d / "mark.nut"))
+    frames, _, matrix = gpu_burn._probe(clip)
+    assert frames and (matrix == "bt709") == bt709
+    gpu_burn._planes(png, "", str(d / "hook.nut"), matrix)
+    gpu_burn._planes(LOGO, chain, str(d / "mark.nut"), matrix)
     spec = {"input": clip,
             "hook": {"planes": str(d / "hook.nut"), "x": x, "y": y, "until": 5.0},
             "ass": {"file": ass, "fonts_dir": gpu_burn.parse_ass(vf)[1]},

@@ -77,27 +77,44 @@ def usable(video_path):
     return ENABLED and gpu_render.usable(video_path)
 
 
-def _planes(image, chain, out):
+# ffprobe's colour space names that ffmpeg's scale filter takes as a matrix.
+_MATRICES = {"bt709": "bt709", "smpte170m": "smpte170m", "bt470bg": "bt470"}
+
+
+def _planes(image, chain, out, matrix=None):
     """``image`` through ``chain`` (the burn graph's own filters for it), as
-    the yuva420p picture ``overlay`` blends, in a one-frame NUT file."""
-    graph = f"[0:v]{chain + ',' if chain else ''}format=yuva420p[o]"
+    the yuva420p picture ``overlay`` blends, in a one-frame NUT file. In the
+    burn graph ffmpeg converts it to the clip's colour space, so a clip that
+    names one (``matrix``) gets that conversion here too."""
+    convert = f"scale=out_color_matrix={matrix}:out_range=tv," if matrix else ""
+    graph = f"[0:v]{chain + ',' if chain else ''}{convert}format=yuva420p[o]"
     cmd = ["ffmpeg", "-v", "error", "-y", "-i", image, "-filter_complex", graph,
            "-map", "[o]", "-frames:v", "1", "-c:v", "rawvideo", "-f", "nut", out]
     subprocess.run(cmd, check=True, capture_output=True, timeout=60)
 
 
-def _frame_count(path):
-    """Frames in the first video stream according to its header, or None."""
+def _probe(path):
+    """(frames by the header, duration, colour matrix for _planes) of the
+    first video stream. Frames is None when unknown or when the clip is in a
+    colour space or range the GPU burn does not reproduce."""
     try:
         out = subprocess.check_output(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=nb_frames,duration", "-of", "json", path],
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=nb_frames,duration,color_space,color_range", "-of", "json", path],
             stderr=subprocess.DEVNULL, timeout=60, text=True)
         stream = (json.loads(out).get("streams") or [{}])[0]
         n = int(stream.get("nb_frames") or 0)
-        return n or None, float(stream.get("duration") or 0)
+        duration = float(stream.get("duration") or 0)
     except (OSError, ValueError, subprocess.SubprocessError):
-        return None, 0.0
+        return None, 0.0, None
+    space = str(stream.get("color_space") or "unknown")
+    if str(stream.get("color_range") or "unknown") not in ("unknown", "tv"):
+        return None, duration, None
+    if space in ("unknown", "unspecified"):
+        return n or None, duration, None
+    if space not in _MATRICES:
+        return None, duration, None
+    return n or None, duration, _MATRICES[space]
 
 
 def burn(video_path, outputs, hook=None, ass_vf=None, mark=None, video_size=None):
@@ -126,7 +143,7 @@ def burn(video_path, outputs, hook=None, ass_vf=None, mark=None, video_size=None
             return False
     elif "mark" in stages:
         return False
-    frames, duration = _frame_count(video_path)
+    frames, duration, matrix = _probe(video_path)
     if not frames:
         return False
 
@@ -141,7 +158,7 @@ def burn(video_path, outputs, hook=None, ass_vf=None, mark=None, video_size=None
             if hook is not None:
                 image, x, y, seconds = hook
                 nut = os.path.join(tmp, "hook.nut")
-                _planes(image, "", nut)
+                _planes(image, "", nut, matrix)
                 spec["hook"] = {"planes": nut, "x": int(x), "y": int(y),
                                 "until": float(seconds) if seconds else None}
             if ass is not None:
@@ -149,7 +166,7 @@ def burn(video_path, outputs, hook=None, ass_vf=None, mark=None, video_size=None
             if mark_spec is not None:
                 chain, x, y = mark_spec
                 nut = os.path.join(tmp, "mark.nut")
-                _planes(mark[0], chain, nut)
+                _planes(mark[0], chain, nut, matrix)
                 spec["mark"] = {"planes": nut, "x": x, "y": y, "until": None}
             spec_path = os.path.join(tmp, "spec.json")
             with open(spec_path, "w") as f:

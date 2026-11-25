@@ -454,6 +454,10 @@ unsafe fn run(spec: &Spec) -> usize {
     }
     let enc_tb = ff::AVRational { num: fr.den, den: fr.num };
     let coef = luma_coefficients((*par).color_space);
+    // FFmpeg's drawing code and the blends here are for a limited-range picture.
+    if (*par).color_range == ff::AVColorRange::AVCOL_RANGE_JPEG {
+        fail("full-range clip not supported by the GPU burn");
+    }
 
     let mut outs: Vec<Output> = Vec::new();
     for o in &spec.outputs {
