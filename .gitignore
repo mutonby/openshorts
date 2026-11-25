@@ -52,3 +52,10 @@ CLAUDE.local.md
 
 # Rust build output
 osrender/target/
+
+# Self-host deployment files: OAuth tokens, client secrets, certificates
+/deploy/
+client_secret*.json
+youtube_token.json
+.env.bak
+docker-compose.override.yml

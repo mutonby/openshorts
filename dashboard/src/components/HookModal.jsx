@@ -124,6 +124,7 @@ export default function HookModal({ isOpen, onClose, onGenerate, onRemove, isPro
                             <video src={videoUrl} className="w-full h-full object-contain opacity-50" muted playsInline />
                             <div className={`absolute w-full px-8 text-center transition-all duration-300 pointer-events-none flex flex-col h-full ${getPositionClass()}`}>
                                 <div
+                                    dir="auto"
                                     className="text-black font-bold px-3 py-2 rounded-xl shadow-2xl text-center whitespace-pre-wrap transition-all duration-200"
                                     style={{
                                         ...getSizeStyle(),
@@ -150,6 +151,7 @@ export default function HookModal({ isOpen, onClose, onGenerate, onRemove, isPro
                         <div>
                             <p className="eyebrow mb-2">Text</p>
                             <textarea
+                                dir="auto"
                                 value={text}
                                 onChange={(e) => setText(e.target.value)}
                                 rows={4}

@@ -190,7 +190,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                 setRenderedSegments(data.segments.map((s) => ({ ...s })));
                 setFraming(data.framing || 'auto');
                 setRenderedFraming(data.framing || 'auto');
-                setReapplyCaptions(true);
+                setReapplyCaptions(!!data.has_captions);
                 setPreviewUrl(getApiUrl(`/videos/${jobId}/${data.current_file}`));
             } catch (e) {
                 if (!cancelled) setLoadError(e.detail || e.message || 'could not load the clip recipe');
@@ -1256,6 +1256,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                             ) : (
                                 <div
                                     ref={transcriptRef}
+                                    dir="auto"
                                     className="relative flex-1 min-h-0 flex flex-wrap content-start gap-x-1 gap-y-1.5 overflow-y-auto custom-scrollbar pr-1"
                                 >
                                     {chunks.map((c) => {

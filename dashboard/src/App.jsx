@@ -741,17 +741,17 @@ function App() {
     } catch { /* keep current results */ }
   };
 
-  const handleDownloadAll = async () => {
+  const handleDownloadAll = async (subtitles = true) => {
     if (!jobId) return;
-    setDownloadingAll(true);
+    setDownloadingAll(subtitles ? 'all' : 'clean');
     try {
-      const res = await apiFetch(`/api/jobs/${jobId}/download-all`);
+      const res = await apiFetch(`/api/jobs/${jobId}/download-all${subtitles ? '' : '?subtitles=0'}`);
       if (!res.ok) throw new Error(await res.text());
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `openshorts_clips_${(jobId || '').slice(0, 8)}.zip`;
+      a.download = `openshorts_clips_${(jobId || '').slice(0, 8)}${subtitles ? '' : '_no_subtitles'}.zip`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -1287,6 +1287,8 @@ function App() {
         // but the dashboard always states the user's choice.
         auto_hook: data.autoHook ? '1' : '0',
         auto_hook_style: data.autoHook ? (data.autoHookStyle || 'pill') : null,
+        // Absent = on (the server default), so only "off" travels.
+        captions: data.captions === false ? '0' : null,
         // 'auto' is the server default, so only a deliberate choice travels.
         layouts: data.layout && data.layout !== 'auto' ? data.layout : null,
         // Set when the user took the quota wall's "clip the first N minutes"
@@ -2483,14 +2485,24 @@ function App() {
                   {results?.clips?.length > 0 && status === 'complete' && (
                     <div className="flex flex-col sm:flex-row sm:justify-end items-stretch sm:items-center gap-2">
                       <button
-                        onClick={handleDownloadAll}
-                        disabled={downloadingAll}
+                        onClick={() => handleDownloadAll()}
+                        disabled={!!downloadingAll}
                         className="btn-ghost px-3 py-2 text-xs"
                         title="Download all clips as a ZIP"
                       >
-                        {downloadingAll
+                        {downloadingAll === 'all'
                           ? <><Loader2 size={14} className="animate-spin" />zipping…</>
                           : <><Download size={14} />download all</>}
+                      </button>
+                      <button
+                        onClick={() => handleDownloadAll(false)}
+                        disabled={!!downloadingAll}
+                        className="btn-ghost px-3 py-2 text-xs"
+                        title="Download all clips without subtitles (hook titles stay); the project is not changed"
+                      >
+                        {downloadingAll === 'clean'
+                          ? <><Loader2 size={14} className="animate-spin" />zipping…</>
+                          : <><Download size={14} />without subtitles</>}
                       </button>
                       {results.clips.length > 1 && (
                         <button

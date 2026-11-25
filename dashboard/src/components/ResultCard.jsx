@@ -947,7 +947,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             {/* Right: Content & Details */}
             <div className="flex-1 p-4 md:p-5 flex flex-col overflow-hidden min-w-0">
                 <div className="mb-4">
-                    <h3 className="text-base font-medium text-ink leading-tight line-clamp-2 mb-2 break-words" title={clip.video_title_for_youtube_short}>
+                    <h3 dir="auto" className="text-base font-medium text-ink leading-tight line-clamp-2 mb-2 break-words" title={clip.video_title_for_youtube_short}>
                         {clip.video_title_for_youtube_short || "Viral Clip Generated"}
                     </h3>
                     {/* The score alone says how much, not why. One line from
@@ -990,7 +990,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 <div className="flex-1 min-h-0 space-y-2 mb-4">
                     <div className="bg-paper rounded-input px-3 py-2 border border-rule flex items-center gap-2 min-w-0 overflow-hidden">
                         <span className="eyebrow shrink-0">YOUTUBE</span>
-                        <p className="text-xs text-ink2 truncate flex-1 min-w-0">
+                        <p dir="auto" className="text-xs text-ink2 truncate flex-1 min-w-0">
                             {clip.video_title_for_youtube_short || "Viral Short Video"}
                         </p>
                         <button
@@ -1004,7 +1004,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
 
                     <div className="bg-paper rounded-input px-3 py-2 border border-rule flex items-center gap-2 min-w-0 overflow-hidden">
                         <span className="eyebrow shrink-0">TIKTOK · IG</span>
-                        <p className="text-xs text-ink2 truncate flex-1 min-w-0">
+                        <p dir="auto" className="text-xs text-ink2 truncate flex-1 min-w-0">
                             {clip.video_description_for_tiktok || clip.video_description_for_instagram}
                         </p>
                         <button
@@ -1178,7 +1178,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                                 {copied === 'youtube' ? <Check size={14} className="text-ok" /> : <Copy size={14} />}
                             </button>
                         </div>
-                        <p className="text-sm text-ink2 select-all break-words bg-paper rounded-input p-3 border border-rule">
+                        <p dir="auto" className="text-sm text-ink2 select-all break-words bg-paper rounded-input p-3 border border-rule">
                             {clip.video_title_for_youtube_short || "Viral Short Video"}
                         </p>
                     </div>
@@ -1194,7 +1194,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                                 {copied === 'caption' ? <Check size={14} className="text-ok" /> : <Copy size={14} />}
                             </button>
                         </div>
-                        <p className="text-sm text-ink2 select-all break-words bg-paper rounded-input p-3 border border-rule whitespace-pre-wrap">
+                        <p dir="auto" className="text-sm text-ink2 select-all break-words bg-paper rounded-input p-3 border border-rule whitespace-pre-wrap">
                             {clip.video_description_for_tiktok || clip.video_description_for_instagram}
                         </p>
                     </div>
@@ -1249,6 +1249,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         <label className="eyebrow block mb-1.5">TITLE</label>
                         <input
                             type="text"
+                            dir="auto"
                             value={postTitle}
                             onChange={(e) => setPostTitle(e.target.value)}
                             className="input-field"
@@ -1259,6 +1260,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     <div>
                         <label className="eyebrow block mb-1.5">CAPTION</label>
                         <textarea
+                            dir="auto"
                             value={postDescription}
                             onChange={(e) => setPostDescription(e.target.value)}
                             rows={4}

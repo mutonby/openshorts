@@ -1717,6 +1717,30 @@ def _unmark_local_job(job_id, clip_index, clean_filename):
             pass
 
 
+def _current_clip_file(job_id, clip_index, clip, base_name):
+    """The file a clip is served as right now. The live record knows it; the
+    metadata only carries video_url once the clip has been edited."""
+    mem = ((jobs.get(job_id) or {}).get('result') or {}).get('clips') or []
+    url = ((mem[clip_index] or {}).get('video_url') if clip_index < len(mem) else None
+           ) or clip.get('video_url')
+    if url:
+        return url.split('/')[-1]
+    return _canonical_clip_file(os.path.join(OUTPUT_DIR, job_id), base_name, clip_index)
+
+
+def _has_burned_captions(filename):
+    return bool(re.match(r'^subtitled_\d+_', watermarked.clean_name(filename)))
+
+
+def _wants_captions(req, clip, base_name):
+    """reapply_captions of a recut / reframe. Unset follows the clip: one made
+    (or turned) subtitle-free must not get them back through a trim."""
+    if req.reapply_captions is not None:
+        return req.reapply_captions
+    return _has_burned_captions(
+        _current_clip_file(req.job_id, req.clip_index, clip, base_name))
+
+
 def _reapply_captions(job_id, clip_index, video_path):
     """Re-burn the default captions onto a freshly derived file.
 
@@ -2404,10 +2428,15 @@ def _install_drain_signal_handler():
         print(f"⚠️ Drain-on-SIGTERM unavailable ({e}); jobs will resume on restart instead.")
 
 
+# Per-job env that decides what text gets burned; a resumed job needs it again.
+_RESUME_TEXT_ENV = ("AUTO_CAPTIONS", "AUTO_HOOK", "AUTO_HOOK_STYLE")
+
+
 def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, watermark,
                            webhook_url=None, webhook_secret=None, base_url=None,
                            partial=None, source_cap_minutes=None, skip_statics=False,
-                           via_api_key=False, lane=None, submitted_at=None, topup=False):
+                           via_api_key=False, lane=None, submitted_at=None, topup=False,
+                           env=None):
     try:
         path = os.path.join(OUTPUT_DIR, job_id, _RESUME_FILE)
         # Atomic like every manifest write: the other instance reads them.
@@ -2437,6 +2466,7 @@ def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, water
                 "lane": lane or _queue_mode.NORMAL,
                 "submitted_at": submitted_at,
                 "topup": bool(topup),
+                "text_env": {k: env[k] for k in _RESUME_TEXT_ENV if env and k in env},
         })
     except Exception as e:
         print(f"⚠️ Could not write resume manifest for {job_id}: {e}")
@@ -2600,6 +2630,9 @@ def _register_resumed(picked) -> int:
             env["DOWNLOAD_SKIP_STATICS"] = "1"
         else:
             env.pop("DOWNLOAD_SKIP_STATICS", None)
+        for key, value in (m.get("text_env") or {}).items():
+            if key in _RESUME_TEXT_ENV:
+                env[key] = str(value)
 
         priority = int(m.get("priority", 2))
         # Whatever a remote worker was doing for the instance that held this
@@ -6608,7 +6641,7 @@ async def process_endpoint(
                            source_cap_minutes=source_cap, skip_statics=skip_statics,
                            via_api_key=jobs[job_id]['via_api_key'],
                            lane=jobs[job_id]['lane'], submitted_at=jobs[job_id]['submitted_at'],
-                           topup=jobs[job_id]['topup'])
+                           topup=jobs[job_id]['topup'], env=env)
 
     _enqueue_job(job_id, priority)
     if _saturation_on():
@@ -7081,8 +7114,9 @@ async def get_source_video(job_id: str, request: Request,
 
 
 @app.get("/api/jobs/{job_id}/download-all")
-async def download_all_clips(job_id: str, request: Request):
-    """Bundle the current version of every clip of a job into one ZIP."""
+async def download_all_clips(job_id: str, request: Request, subtitles: bool = True):
+    """Bundle the current version of every clip of a job into one ZIP.
+    ``subtitles=0``: the same versions minus burned captions; changes nothing."""
     await _ensure_job_files(job_id, request)
     if job_id in jobs and jobs[job_id].get("user_id") is not None:
         await _assert_job_owner(request, jobs[job_id])
@@ -7112,6 +7146,14 @@ async def download_all_clips(job_id: str, request: Request):
         url = url or clip.get('video_url')
         filename = (os.path.basename(url.split('/')[-1]) if url
                     else _canonical_clip_file(output_dir, base_name, i))
+        if filename and not subtitles:
+            filename = await asyncio.to_thread(_strip_burned_captions, output_dir, filename)
+            if _has_burned_captions(filename):
+                # Better no ZIP than a "no subtitles" ZIP with subtitles in it.
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Clip {i + 1} has no subtitle-free version on the server any more.")
+            filename = await _deliver(request, job_id, filename)
         path = os.path.join(output_dir, filename)
         if filename and os.path.exists(path):
             files.append((i, path))
@@ -7144,7 +7186,7 @@ async def download_all_clips(job_id: str, request: Request):
     return FileResponse(
         zip_path,
         media_type="application/zip",
-        filename=f"openshorts_clips_{job_id[:8]}.zip",
+        filename=f"openshorts_clips_{job_id[:8]}{'' if subtitles else '_no_subtitles'}.zip",
         background=BackgroundTask(remove_zip),
     )
 
@@ -7737,10 +7779,9 @@ async def get_clip_edl(job_id: str, clip_index: int, request: Request):
         for w in words
     ]
 
-    current_file = (clip.get('video_url') or '').split('/')[-1]
-    if not current_file:
-        base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
-        current_file = _canonical_clip_file(output_dir, base_name, clip_index)
+    current_file = _current_clip_file(
+        job_id, clip_index, clip,
+        os.path.basename(json_files[0]).replace('_metadata.json', ''))
 
     total = recut.total_duration(segments)
     return {
@@ -7752,8 +7793,7 @@ async def get_clip_edl(job_id: str, clip_index: int, request: Request):
         "canonical_range": canonical_range,
         "duration": total,
         "current_file": current_file,
-        "has_captions": bool(re.match(r'^subtitled_\d+_',
-                                      watermarked.clean_name(current_file))),
+        "has_captions": _has_burned_captions(current_file),
         "words": words_out,
         "source": {
             "available": bool(source_path or archived),
@@ -7780,7 +7820,7 @@ class RerenderRequest(BaseModel):
     clip_index: int
     segments: List[RerenderSegment]
     snap_to_words: bool = False
-    reapply_captions: bool = True
+    reapply_captions: Optional[bool] = None  # None = as the clip is now
     # None = inherit the recipe's framing (so plain trims keep the look);
     # 'auto' resets to the classifier; 'full'/'track' force a layout.
     framing: Optional[str] = None
@@ -7908,7 +7948,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
         request, rerender_minutes, req.job_id, "rerender")
 
     v_transcript = (recut.virtual_transcript(transcript, segments)
-                    if req.reapply_captions else None)
+                    if _wants_captions(req, clip, base_name) else None)
 
     def run_recut():
         if fast:
@@ -8249,7 +8289,7 @@ class ReframeRequest(BaseModel):
     # regions. Fractions travel instead of pixels so the editor never needs to
     # know the source dimensions.
     crop_overrides: Dict[str, Any]
-    reapply_captions: bool = True
+    reapply_captions: Optional[bool] = None  # None = as the clip is now
 
 
 def _clip_scene_workfile(source_path, segments, output_dir, token):
@@ -8513,12 +8553,11 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
     reservation_id = await reserve_managed_action(
         request, rerender_minutes, req.job_id, "reframe")
 
-    # Every default clip ships with burned captions; re-rendering without them
-    # would silently hand back a caption-less file.
-    v_transcript = (recut.virtual_transcript(data.get('transcript') or {}, segments)
-                    if req.reapply_captions else None)
-
     base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+    # A captioned clip re-rendered without them would silently hand back a
+    # caption-less file; a subtitle-free one must not suddenly grow them.
+    v_transcript = (recut.virtual_transcript(data.get('transcript') or {}, segments)
+                    if _wants_captions(req, clip, base_name) else None)
     # The CLEAN base name, exactly as /api/clip/rerender does — never the
     # current derived file. perform_recut prefixes whatever it is given, so
     # feeding it the newest derivative made every re-render add another
@@ -9376,6 +9415,7 @@ class SocialPostRequest(BaseModel):
     timezone: Optional[str] = "UTC"
 
 import httpx
+import youtube_direct
 
 
 def _post_video_blocking(url, headers, data, file_path, filename, timeout):
@@ -9498,10 +9538,16 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
 
     # Resolve the Upload-Post key + profile. For managed users the server key is
     # used and their own profile is forced (body api_key / user_id are ignored).
+    # Self-host: YouTube goes straight to the YouTube API once connected
+    # (youtube_direct.py); Upload-Post only gets the other platforms.
+    direct_youtube = (not BILLING_ENABLED and "youtube" in req.platforms
+                      and youtube_direct.is_connected())
+    other_platforms = [p for p in req.platforms if not (direct_youtube and p == "youtube")]
+
     upload_key, forced_profile = await resolve_upload_post(request, req.api_key)
-    if not upload_key:
+    if not upload_key and other_platforms:
         raise HTTPException(status_code=400, detail="Missing Upload-Post API key")
-    post_user = resolve_post_profile(forced_profile, req.user_id)
+    post_user = resolve_post_profile(forced_profile, req.user_id) if other_platforms else None
 
     # The awaits above can let cleanup or an account delete drop the job.
     job = jobs.get(req.job_id)
@@ -9553,6 +9599,20 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
         final_title = req.title or clip.get('title', 'Viral Short')
         final_description = req.description or clip.get('video_description_for_instagram') or clip.get('video_description_for_tiktok') or "Check this out!"
         
+        direct_result = None
+        if direct_youtube:
+            yt_title = req.title or clip.get('video_title_for_youtube_short', final_title)
+            print("📡 Uploading directly to YouTube")
+            try:
+                direct_result = await asyncio.to_thread(
+                    youtube_direct.upload, file_path, youtube_title(yt_title),
+                    final_description, req.scheduled_date, req.timezone)
+            except youtube_direct.YouTubeDirectError as e:
+                raise HTTPException(status_code=502, detail=f"YouTube: {e}")
+            if not other_platforms:
+                return {"success": True, "results": [direct_result]}
+            req.platforms = other_platforms
+
         # Prepare form data
         url = "https://api.upload-post.com/api/upload"
         headers = {
@@ -9590,9 +9650,13 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
 
         if response.status_code not in [200, 201, 202]: # Added 201
              print(f"❌ Upload-Post Error: {response.text}")
-             raise HTTPException(status_code=response.status_code, detail=f"Vendor API Error: {response.text}")
+             done = (f"YouTube already uploaded ({direct_result['url']}); do not resend it. "
+                     if direct_result else "")
+             raise HTTPException(status_code=response.status_code, detail=f"{done}Vendor API Error: {response.text}")
 
         out = response.json()
+        if direct_result and isinstance(out, dict):
+            out["youtube_direct"] = direct_result
         if isinstance(out, dict) and out.get("request_id"):
             _post_request_owners[str(out["request_id"])] = await _owner_id(request)
         if isinstance(out, dict) and free_left is not None:
@@ -9602,6 +9666,8 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
     except Exception as e:
         await _give_back_free_post(free_claim)
         print(f"❌ Social Post Exception: {e}")
+        if not BILLING_ENABLED and isinstance(e, HTTPException):
+            raise  # keep the status and message (YouTube's, the vendor's)
         raise HTTPException(status_code=500, detail=str(e))
 
 

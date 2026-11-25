@@ -11,6 +11,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 from ffmpeg_utils import video_encode_args, QUALITY, METADATA_SCRUB, finished_before_crash
 import gpu_decode
+import rtl_text
 
 
 def _truncate_bytes(text, max_bytes):
@@ -104,6 +105,13 @@ def _split_emoji_runs(text):
     return runs
 
 
+def _text_opts(font):
+    """PIL layout options: the Arabic font is only picked for an RTL hook."""
+    if getattr(font, "path", None) == rtl_text.ARABIC_FONT_PATH:
+        return rtl_text.layout_opts()
+    return {}
+
+
 def _emoji_scale(font, emoji_font):
     """Draw-time scale factor from the emoji font's native size to the text
     size. 1.0 for scalable emoji fonts; < 1 for fixed-bitmap strikes."""
@@ -122,7 +130,7 @@ def _measure_width(draw, text, font, emoji_font):
             width += (draw.textlength(chunk, font=emoji_font[0])
                       * _emoji_scale(font, emoji_font))
         else:
-            width += draw.textlength(chunk, font=font)
+            width += draw.textlength(chunk, font=font, **_text_opts(font))
     return width
 
 
@@ -154,20 +162,26 @@ def _draw_mixed(img, draw, xy, text, font, emoji_font, fill, outline=None):
     x, y = xy
     stroke_w = outline[1] if outline else 0
     stroke_fill = outline[0] if outline else None
-    for is_emoji, chunk in _split_emoji_runs(text):
+    opts = _text_opts(font)
+    runs = _split_emoji_runs(text)
+    if opts:
+        runs.reverse()  # x advances to the right, an RTL line starts there
+    for is_emoji, chunk in runs:
         if is_emoji and emoji_font:
             scale = _emoji_scale(font, emoji_font)
             rendered = _render_emoji_chunk(chunk, emoji_font, scale, fill)
             if rendered is not None:
-                img.alpha_composite(rendered, (int(x), int(y)))
+                # Sit the emoji on the baseline (the Arabic ascent is much taller).
+                drop = font.getmetrics()[0] - 0.92 * font.size if opts else 0
+                img.alpha_composite(rendered, (int(x), int(y + drop)))
                 x += draw.textlength(chunk, font=emoji_font[0]) * scale
         else:
             if stroke_w:
                 draw.text((x, y), chunk, font=font, fill=fill,
-                          stroke_width=stroke_w, stroke_fill=stroke_fill)
+                          stroke_width=stroke_w, stroke_fill=stroke_fill, **opts)
             else:
-                draw.text((x, y), chunk, font=font, fill=fill)
-            x += draw.textlength(chunk, font=font)
+                draw.text((x, y), chunk, font=font, fill=fill, **opts)
+            x += draw.textlength(chunk, font=font, **opts)
 
 
 def _break_long_word(draw, word, font, emoji_font, max_width):
@@ -235,7 +249,9 @@ def _draw_pills(lines, font, emoji_font, font_size, box_fill, text_fill, output_
     pad_y = int(font_size * 0.24)
     radius = int(font_size * 0.36)
     probe = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
-    top, bottom = probe.textbbox((0, 0), "ÁÉÍÓÚÑgjpqy", font=font)[1::2]
+    opts = _text_opts(font)
+    sample = "أإلجحعي" if opts else "ÁÉÍÓÚÑgjpqy"
+    top, bottom = probe.textbbox((0, 0), sample, font=font, **opts)[1::2]
     line_h = (bottom - top) + 2 * pad_y
     widths = [int(_measure_width(probe, ln, font, emoji_font)) for ln in lines]
     canvas_w = max(widths) + 2 * pad_x + 40
@@ -286,6 +302,8 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
     font_path, size_factor = HOOK_FONTS.get(font or default_font, HOOK_FONTS[default_font])
     base_font_size = int(target_width * size_factor)
     font_size = int(base_font_size * font_scale)
+    if rtl_text.is_arabic(text):
+        font_path = rtl_text.ARABIC_FONT_PATH  # the display fonts have no Arabic
     
     try:
         font = ImageFont.truetype(font_path, font_size)
@@ -360,7 +378,7 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
             continue
 
         w = _measure_width(draw, line, font, emoji_font)
-        bbox = draw.textbbox((0, 0), line, font=font)
+        bbox = draw.textbbox((0, 0), line, font=font, **_text_opts(font))
         h = bbox[3] - bbox[1]
         max_line_width = max(max_line_width, int(w))
         text_heights.append(h)
@@ -414,14 +432,16 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
             continue
 
         line_w = _measure_width(draw_final, line, font, emoji_font)
-        bbox = draw_final.textbbox((0, 0), line, font=font)
+        bbox = draw_final.textbbox((0, 0), line, font=font, **_text_opts(font))
         line_h = text_heights[i] if i < len(text_heights) else bbox[3] - bbox[1]
 
         # Center X
         x = 20 + int(box_width - line_w) // 2
 
         # Draw text in the style's color (emoji runs use the emoji font)
-        _draw_mixed(img, draw_final, (x, current_y), line, font, emoji_font,
+        # The Arabic font's ascent is tall: measure from the ink, not the ascender.
+        y = current_y + 2 - bbox[1] if _text_opts(font) else current_y
+        _draw_mixed(img, draw_final, (x, y), line, font, emoji_font,
                     fill=text_fill, outline=outline)
 
         current_y += line_h + line_spacing

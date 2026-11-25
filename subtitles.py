@@ -6,6 +6,7 @@ import sys
 from ffmpeg_utils import (video_encode_args, escape_filter_value, QUALITY,
                           METADATA_SCRUB, finished_before_crash)
 import gpu_decode
+import rtl_text
 
 
 _STDIO_CONFIGURED = False
@@ -237,7 +238,8 @@ def generate_srt(transcript, clip_start, clip_end, output_path, max_chars=20, ma
     srt_content = ""
     for index, block in enumerate(blocks, 1):
         text = " ".join(w['word'] for w in block).strip()
-        srt_content += format_srt_block(index, block[0]['start'], block[-1]['end'], text)
+        srt_content += format_srt_block(index, block[0]['start'], block[-1]['end'],
+                                        rtl_text.embed(text))
 
     # Write UTF-8 with BOM so Windows/FFmpeg subtitle readers reliably detect Unicode text.
     with open(output_path, 'w', encoding='utf-8-sig') as f:
@@ -373,7 +375,8 @@ def line_budget(font_name, font_size):
 # with); any other font keeps the budget and libass's own wrapping.
 _FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 _FONT_FILES = {"Anton": "Anton-Regular.ttf", "Impact": "Anton-Regular.ttf",
-               "Montserrat ExtraBold": "Montserrat-ExtraBold.ttf"}
+               "Montserrat ExtraBold": "Montserrat-ExtraBold.ttf",
+               rtl_text.ARABIC_FONT_NAME: os.path.basename(rtl_text.ARABIC_FONT_PATH)}
 # PlayResX that libass derives for a 9:16 frame from PlayResY 288, minus the
 # style's MarginL + MarginR (10 each).
 _LINE_UNITS = 288 * 9 / 16 - 20
@@ -495,6 +498,32 @@ def _dim_hex_color(hex_color, opacity, fallback="FFFFFF"):
     return f"{r:02X}{g:02X}{b:02X}"
 
 
+def _rtl_event_text(texts, active, active_prefix, reveal, font_size, outline_width):
+    """One karaoke event of an RTL block: visual word order, own line breaks."""
+    # PlayResY 288 on 9:16 is 162 units wide; the 10+10 margins are on libass's
+    # implicit PlayResX of 384. The 1.06 leaves room for the pop on the active word.
+    usable = (162 * (1 - 20 / 384) - 2 * outline_width) / 1.06
+    lines, size = rtl_text.wrap_words(texts, font_size, usable)
+    base = f"\\fs{size}"
+    if rtl_text.is_arabic(" ".join(texts)):
+        base = f"\\fn{rtl_text.ARABIC_FONT_NAME}" + base
+    base = f"{{{base}}}"
+    rendered = []
+    for line in lines:
+        parts = []
+        for pos, text in rtl_text.visual_order([texts[k] for k in line]):
+            word = line[pos]
+            # \\r also resets the font, so it is set again after every reset.
+            if word == active:
+                parts.append(f"{active_prefix}{base}{text}{{\\r}}{base}")
+            elif reveal and word > active:
+                parts.append(f"{{\\alpha&HFF&}}{text}{{\\r}}{base}")
+            else:
+                parts.append(text)
+        rendered.append(rtl_text.WORD_GAP.join(parts))
+    return f"{{\\q2}}{base}" + "\\N".join(rendered)
+
+
 def generate_ass(transcript, clip_start, clip_end, output_path,
                  max_chars=20, max_duration=2.0, alignment='bottom',
                  fontsize=16, font_name="Verdana", font_color="#FFFFFF",
@@ -571,8 +600,12 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     # text is the active word's own border: glow and box thicken it.
     edge = {"glow": max(3, int(outline_width) + 2), "box": max(4, int(outline_width) + 3),
             "highlight": max(2, round(final_fontsize * 0.12))}.get(effect, int(outline_width))
+    # Arabic is drawn, so measured, in the Arabic font.
+    spoken = _collect_word_blocks(transcript, clip_start, clip_end, max_chars, max_duration)
+    arabic = rtl_text.is_arabic(" ".join(w['word'] for b in spoken for w in b))
+    fit_font = rtl_text.ARABIC_FONT_NAME if arabic else font_name
     fits = None if max_chars == 1 else line_fitter(
-        font_name, final_fontsize, uppercase=uppercase,
+        fit_font, final_fontsize, uppercase=uppercase,
         grow=0.08 if effect == "pop" else 0.0, padding=edge + shadow)
     blocks = _collect_word_blocks(transcript, clip_start, clip_end, max_chars, max_duration,
                                   fits=fits)
@@ -646,10 +679,14 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
         squeeze = ""
         if fits and len(block) == 1:
             lone = _escape_ass_text(block[0]['word'])
-            wide = line_width(font_name, final_fontsize, lone.upper() if uppercase else lone)
+            wide = line_width(fit_font, final_fontsize, lone.upper() if uppercase else lone)
             if wide > fits.budget:
                 pct = max(40, int(100 * fits.budget / wide))
                 squeeze = f"{{\\c{highlight_inline}\\fscx{pct}\\fscy{pct}}}"
+        texts = [_escape_ass_text(w['word']) for w in block]
+        if uppercase:
+            texts = [t.upper() for t in texts]
+        rtl = rtl_text.is_rtl(" ".join(texts))
         for i, word in enumerate(block):
             # Event runs until the next word starts (no flicker in gaps);
             # the last word holds until the block ends.
@@ -658,11 +695,17 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
             if ev_end <= ev_start:
                 continue
 
+            if rtl:
+                line = _rtl_event_text(texts, i, active_prefix, reveal,
+                                       final_fontsize, outline_width)
+                events.append(
+                    f"Dialogue: 0,{_ass_time(ev_start)},{_ass_time(ev_end)},Default,,0,0,0,,"
+                    f"{seam_prefix(ev_start)}{line}"
+                )
+                continue
+
             parts = []
-            for j, other in enumerate(block):
-                text = _escape_ass_text(other['word'])
-                if uppercase:
-                    text = text.upper()
+            for j, text in enumerate(texts):
                 if j == i:
                     parts.append(f"{squeeze or active_prefix}{text}{{\\r}}")
                 elif reveal and j > i:
@@ -739,6 +782,14 @@ def _sanitize_font_name(name):
     return cleaned or "Verdana"
 
 
+def _srt_has_arabic(path):
+    try:
+        with open(path, encoding='utf-8-sig', errors='replace') as f:
+            return rtl_text.is_arabic(f.read())
+    except OSError:
+        return False
+
+
 def subtitles_filter(srt_path, alignment=2, fontsize=16,
                      font_name="Verdana", font_color="#FFFFFF",
                      border_color="#000000", border_width=2,
@@ -761,6 +812,9 @@ def subtitles_filter(srt_path, alignment=2, fontsize=16,
         final_fontsize = 10
 
     safe_font_name = _sanitize_font_name(font_name)
+    # libass's own fallback for Arabic (Noto Kufi) burns as boxes here.
+    if str(srt_path).lower().endswith('.srt') and _srt_has_arabic(srt_path):
+        safe_font_name = rtl_text.ARABIC_FONT_NAME
     bg_opacity = _clamp_number(bg_opacity, 0.0, 1.0, 0.0)
     border_width = _clamp_number(border_width, 0, 10, 2)
 

@@ -217,6 +217,8 @@ class TestRerenderValidation:
 
 class TestRerenderPaths:
     def test_fast_path_cuts_from_canonical_clip(self, job, fake_recut):
+        app_module.jobs[JOB_ID]["result"]["clips"] = [
+            {"video_url": f"/videos/{JOB_ID}/subtitled_1_mytitle_clip_1.mp4"}]
         resp = _request("POST", "/api/clip/rerender", {
             "job_id": JOB_ID, "clip_index": 0,
             "segments": [{"start": 12, "end": 22}, {"start": 30, "end": 35}]})

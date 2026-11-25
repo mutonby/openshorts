@@ -26,6 +26,8 @@ const POSITION_STYLE: Record<string, React.CSSProperties> = {
   bottom: { top: "68%", bottom: "auto" },
 };
 
+const RTL_CHARS = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
+
 // Must mirror hooks.py HOOK_STYLES so preview == burned output.
 interface HookLook {
   box: string | null;
@@ -151,6 +153,7 @@ const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames }) => {
           padding: look.box ? `${25 * scale}px ${30 * scale}px` : `${8 * scale}px ${12 * scale}px`,
           boxShadow: look.shadow ? "5px 5px 15px rgba(0, 0, 0, 0.25)" : "none",
           textAlign: "center",
+          direction: RTL_CHARS.test(config.text) ? "rtl" : "ltr",
         }}
       >
         <span

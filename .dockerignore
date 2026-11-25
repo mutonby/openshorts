@@ -68,3 +68,8 @@ README.md
 
 # Rust build output
 osrender/target/
+
+# Self-host deployment secrets (never baked into the image)
+deploy/
+client_secret*.json
+youtube_token.json

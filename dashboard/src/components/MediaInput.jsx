@@ -61,6 +61,10 @@ export default function MediaInput({ onProcess, isProcessing }) {
         // v2 key: the default became 'pill'; an old saved 'classic' was just the old default.
         try { return localStorage.getItem('os_auto_hook_style_v2') || 'pill'; } catch { return 'pill'; }
     });
+    // Burned subtitles: on by default; like the hook, the choice persists.
+    const [captions, setCaptions] = useState(() => {
+        try { return localStorage.getItem('os_captions') !== '0'; } catch { return true; }
+    });
     // Layout: 'auto' lets the AI pick per video (server default); the others
     // force one on so a podcast host who knows what they uploaded doesn't
     // depend on the detector, and 'none' keeps the plain single crop.
@@ -129,6 +133,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
             clipMaxSeconds: clipMaxSeconds || null,
             autoHook,
             autoHookStyle,
+            captions,
             layout,
             sourceStart: range ? Math.round(range.start) : null,
             sourceEnd: range ? Math.round(range.end) : null,
@@ -137,6 +142,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
             localStorage.setItem('os_auto_hook_style_v2', autoHookStyle);
             localStorage.setItem('os_layout', layout);
+            localStorage.setItem('os_captions', captions ? '1' : '0');
         } catch { /* ignore */ }
         if (mode === 'url' && url) {
             onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat, ...advanced });
@@ -304,6 +310,26 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             );
                         })}
                     </div>
+                </div>
+
+                {/* Outside advanced options: it changes every clip of the project */}
+                <div className="mt-4">
+                    <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            checked={captions}
+                            onChange={(e) => setCaptions(e.target.checked)}
+                            className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer"
+                        />
+                        burn subtitles on clips
+                    </label>
+                    {!captions && (
+                        <p className="mt-1.5 text-left text-[11px] leading-relaxed text-muted">
+                            {autoHook
+                                ? 'No subtitles. The hook title still shows; for clips with no text at all, also turn off auto hook titles in advanced options.'
+                                : 'Clips will have no text on them.'}
+                        </p>
+                    )}
                 </div>
 
                 {/* Advanced generation controls — collapsed by default; blank = AI decides */}
