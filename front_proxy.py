@@ -9,6 +9,10 @@ import re
 import httpx
 
 ENGINE_SOCKET = os.environ.get("ENGINE_SOCKET") or "/tmp/openshorts-engine.sock"
+# Requests one front may have open on the engine at once. Each is a socket in
+# both processes: fdlimit.py lifts the open-file limit well above
+# API_FRONT_WORKERS times this.
+ENGINE_LIMITS = httpx.Limits(max_connections=1000, max_keepalive_connections=100)
 
 _UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 # (method, exact path). Each was checked to need none of the engine's memory.
@@ -88,14 +92,19 @@ class Front:
 
     def client(self) -> httpx.AsyncClient:
         if self._client is None:
+            # The limits go on the transport: httpx ignores a client's
+            # ``limits`` once it is handed a transport, and the default pool is
+            # 100 connections. A video the browser reads slowly holds one for as
+            # long as it plays, so a single viewer seeking through a long source
+            # filled a front's pool and every other request of that front
+            # waited 10 s for a 503.
             transport = self._transport or httpx.AsyncHTTPTransport(
-                uds=self.socket_path, retries=1)
+                uds=self.socket_path, retries=1, limits=ENGINE_LIMITS)
             # No read/write timeout: uploads, long polls and MCP streams last
             # as long as they last, as they did when the API was one process.
             self._client = httpx.AsyncClient(
                 transport=transport, base_url="http://engine",
-                timeout=httpx.Timeout(None, connect=5.0, pool=10.0),
-                limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100))
+                timeout=httpx.Timeout(None, connect=5.0, pool=10.0))
         return self._client
 
     async def __call__(self, scope, receive, send):

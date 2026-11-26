@@ -393,6 +393,106 @@ def test_an_engine_that_is_not_up_is_a_503_to_retry():
 
 # --- 5. Pool sizes -------------------------------------------------------------
 
+def _room_for_sockets(needed):
+    """Lift this process's open-file limit to ``needed`` if it can be."""
+    try:
+        import resource
+    except ImportError:
+        return False
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft == resource.RLIM_INFINITY or soft >= needed:
+        return True
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (needed, hard))
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def test_slow_video_streams_do_not_fill_a_fronts_pool():
+    """A video the browser reads slowly holds its connection to the engine for
+    as long as it plays. httpx's default pool is 100 connections, and limits
+    given to the client are ignored once it has a transport: one viewer
+    seeking through a long source held 100 of them and every other request of
+    that front waited 10 s for a 503 (25-nov-2026)."""
+    import shutil
+    import tempfile
+    if not hasattr(asyncio, "start_unix_server"):
+        pytest.skip("no unix sockets on this platform")
+    held_wanted = 120            # more than httpx's default pool
+    if not _room_for_sockets(2 * held_wanted + 128):
+        pytest.skip("open-file limit too low for this test")
+    # A short path: AF_UNIX names are limited to ~100 bytes.
+    folder = tempfile.mkdtemp(prefix="osf-", dir="/tmp")
+    sock = os.path.join(folder, "e.sock")
+
+    async def run():
+        release = asyncio.Event()
+        held = []
+
+        async def engine(reader, writer):
+            try:
+                head = await reader.readuntil(b"\r\n\r\n")
+                if head.split(b" ", 2)[1].startswith(b"/api/source/"):
+                    # The start of a long file, then nothing: a paused player.
+                    writer.write(b"HTTP/1.1 206 Partial Content\r\ncontent-type: video/mp4\r\n"
+                                 b"content-length: 1000000\r\n\r\n" + b"x" * 1024)
+                    await writer.drain()
+                    held.append(1)
+                    await release.wait()
+                else:
+                    body = b'{"ok":true}'
+                    writer.write(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n"
+                                 b"connection: close\r\ncontent-length: "
+                                 + str(len(body)).encode() + b"\r\n\r\n" + body)
+                    await writer.drain()
+            except (asyncio.IncompleteReadError, ConnectionError):
+                pass
+            finally:
+                writer.close()
+
+        server = await asyncio.start_unix_server(engine, path=sock)
+        front = front_proxy.Front(_recording_app("local", []), socket_path=sock)
+
+        async def request(path):
+            sent = []
+
+            async def receive():
+                await asyncio.Event().wait()      # a client that stays connected
+
+            async def send(message):
+                sent.append(message)
+            scope = {"type": "http", "method": "GET", "path": path, "raw_path": path.encode(),
+                     "query_string": b"", "headers": [], "client": ("203.0.113.9", 1),
+                     "scheme": "http"}
+            await front(scope, receive, send)
+            return sent
+
+        streams = [asyncio.create_task(request(f"/api/source/{SAMPLE_ID}"))
+                   for _ in range(held_wanted)]
+        try:
+            for _ in range(100):
+                if len(held) >= held_wanted:
+                    break
+                await asyncio.sleep(0.05)
+            assert len(held) == held_wanted, \
+                f"only {len(held)} of {held_wanted} streams reached the engine"
+            sent = await asyncio.wait_for(request("/api/history"), 5)
+            assert sent[0]["status"] == 200
+        finally:
+            release.set()
+            await asyncio.gather(*streams, return_exceptions=True)
+            if front._client is not None:
+                await front._client.aclose()
+            server.close()
+            await server.wait_closed()
+
+    try:
+        asyncio.run(run())
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
 def test_a_front_keeps_a_small_pool(monkeypatch):
     database = pytest.importorskip("cloud.database")
     url = "postgresql+asyncpg://u:p@h/db"
