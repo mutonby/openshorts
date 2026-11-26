@@ -116,10 +116,10 @@ class TestPrepareOnly:
             return TRANSCRIPT
         monkeypatch.setattr(main, "transcribe_video", transcribe)
         import source_cache
-        monkeypatch.setattr(source_cache, "fetch_transcript", lambda url, dur: None)
+        monkeypatch.setattr(source_cache, "fetch_transcript", lambda url, dur, **kwargs: None)
         stored = []
         monkeypatch.setattr(source_cache, "store_transcript",
-                            lambda *a: stored.append(a) or True)
+                            lambda *a, **kwargs: stored.append(a) or True)
         return calls, stored
 
     def test_transcribes_here_and_leaves_the_checkpoint(self, tmp_path, prep):
@@ -136,7 +136,7 @@ class TestPrepareOnly:
         assert not main.prepare_transcript(SRC, str(tmp_path), "https://youtu.be/x", "cache")
         assert calls == [] and _load(tmp_path) is None
         import source_cache
-        monkeypatch.setattr(source_cache, "fetch_transcript", lambda url, dur: TRANSCRIPT)
+        monkeypatch.setattr(source_cache, "fetch_transcript", lambda url, dur, **kwargs: TRANSCRIPT)
         assert main.prepare_transcript(SRC, str(tmp_path), "https://youtu.be/x", "cache")
         assert calls == [] and stored == [] and _load(tmp_path) == TRANSCRIPT
 

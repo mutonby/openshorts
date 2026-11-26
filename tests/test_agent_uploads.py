@@ -50,6 +50,7 @@ def test_create_upload_is_an_mcp_tool():
     pv = next(t for t in __import__("mcp_server").TOOLS if t["name"] == "process_video")
     assert "upload_id" in pv["inputSchema"]["properties"]
     assert "captions" in pv["inputSchema"]["properties"]
+    assert "framing_method" in pv["inputSchema"]["properties"]
     assert "source_url" not in pv["inputSchema"]["required"]
 
 
@@ -79,10 +80,16 @@ def test_put_then_process_with_upload_id_and_captions_off(dirs, monkeypatch):
     monkeypatch.setattr(app_module.job_queue, "put", fake_put)
 
     payload = _tool_payload(_mcp("process_video", {
-        "upload_id": slot["upload_id"], "confirm_rights": True, "captions": False}))
+        "upload_id": slot["upload_id"], "confirm_rights": True, "captions": False,
+        "framing_method": "motion"}))
     assert "job_id" in payload, payload
     job = app_module.jobs[payload["job_id"]]
     assert job["env"]["AUTO_CAPTIONS"] == "0"
+    assert job["env"]["FRAMING_METHOD"] == "motion"
+    manifest = app_module._read_manifest(payload["job_id"])
+    assert manifest["generation_options"]["FRAMING_METHOD"] == "motion"
+    assert manifest["generation_options"]["AUTO_CAPTIONS"] == "0"
+    assert app_module.remote_worker.job_options(job["env"], {"FRAMING_METHOD": "motion"})["FRAMING_METHOD"] == "motion"
     assert slot["upload_id"] not in app_module.pending_uploads
     input_path = job["cmd"][job["cmd"].index("-i") + 1]
     assert os.path.exists(input_path) and input_path.startswith(str(up_root))
@@ -160,6 +167,7 @@ def test_auto_hook_reaches_the_job_env(dirs, monkeypatch):
 
 
 def test_auto_hook_false_opts_out(dirs, monkeypatch):
+    monkeypatch.setenv("AUTO_HOOK", "1")
     slot = _tool_payload(_mcp("create_upload", {}))
     async def _put():
         async with _client() as c:
@@ -168,4 +176,44 @@ def test_auto_hook_false_opts_out(dirs, monkeypatch):
     async def fake_put(item): pass
     monkeypatch.setattr(app_module.job_queue, "put", fake_put)
     payload = _tool_payload(_mcp("process_video", {"upload_id": slot["upload_id"], "confirm_rights": True, "auto_hook": False}))
-    assert "AUTO_HOOK" not in app_module.jobs[payload["job_id"]]["env"]
+    assert app_module.jobs[payload["job_id"]]["env"]["AUTO_HOOK"] == "0"
+
+
+def test_process_upload_restores_explicit_framing_and_caption_settings(dirs, monkeypatch):
+    monkeypatch.setattr(app_module, "_enqueue_job", lambda *a: None)
+    monkeypatch.setenv("FRAMING_METHOD", "legacy")
+    monkeypatch.setenv("AUTO_CAPTIONS", "0")
+
+    async def submit():
+        async with _client() as c:
+            return await c.post("/api/process", files={"file": ("source.mp4", b"sample", "video/mp4")},
+                                data={"acknowledged": "true", "framing_method": "detail",
+                                      "captions": "true", "output_format": "square"})
+
+    response = asyncio.run(submit())
+    assert response.status_code == 200, response.text
+    job_id = response.json()["job_id"]
+    original = app_module.jobs.pop(job_id)
+    assert original["env"]["FRAMING_METHOD"] == "detail"
+    assert original["env"]["AUTO_CAPTIONS"] == "1"
+    try:
+        assert app_module._register_resumed([(job_id, app_module._read_manifest(job_id))]) == 1
+        resumed = app_module.jobs[job_id]["env"]
+        assert resumed["FRAMING_METHOD"] == "detail"
+        assert resumed["AUTO_CAPTIONS"] == "1"
+    finally:
+        app_module.jobs.pop(job_id, None)
+
+
+@pytest.mark.parametrize("options", [{"framing_method": []}, {"target_clips": "nan"}])
+def test_invalid_generation_options_do_not_allocate_output(dirs, options):
+    output_dir, _, _ = dirs
+
+    async def submit():
+        async with _client() as c:
+            return await c.post("/api/process", json={"url": "https://example.com/source.mp4",
+                                                     "acknowledged": True, **options})
+
+    response = asyncio.run(submit())
+    assert response.status_code == 400
+    assert not list(output_dir.iterdir())

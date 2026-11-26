@@ -1,13 +1,14 @@
 import React from "react";
 import {
   AbsoluteFill,
+  Img,
   Sequence,
   useCurrentFrame,
   useVideoConfig,
   spring,
   interpolate,
 } from "remotion";
-import type { HookConfig } from "../lib/types";
+import type { HookArtwork, HookConfig } from "../lib/types";
 import {
   notoSerifFontFace,
   montserratFontFace,
@@ -54,15 +55,31 @@ const HOOK_LOOKS: Record<string, HookLook> = {
 };
 
 export const HookOverlay: React.FC<HookOverlayProps> = ({ config }) => {
-  const { fps } = useVideoConfig();
-  const displayFrames = Math.round(config.displayDurationSec * fps);
+  const { fps, durationInFrames } = useVideoConfig();
+  const { cta } = config;
+  const closingFrames = cta
+    ? Math.min(durationInFrames, Math.max(1, Math.round(cta.displayDurationSec * fps)))
+    : 0;
+  const closingStart = durationInFrames - closingFrames;
+  const hookFrames = Math.min(
+    closingStart,
+    config.displayDurationSec == null ? durationInFrames : Math.round(config.displayDurationSec * fps),
+  );
 
   return (
     <AbsoluteFill>
       <style>{notoSerifFontFace + montserratFontFace + antonFontFace}</style>
-      <Sequence from={0} durationInFrames={displayFrames} layout="none">
-        <HookBox config={config} displayFrames={displayFrames} />
-      </Sequence>
+      {config.text && hookFrames > 0 && (
+        <Sequence from={0} durationInFrames={hookFrames} layout="none">
+          <HookBox config={config} displayFrames={hookFrames} artwork={config.artwork?.opening} />
+        </Sequence>
+      )}
+      {cta && (
+        <Sequence from={closingStart} durationInFrames={closingFrames} layout="none">
+          <HookBox config={{ ...config, ...cta, entranceAnimation: "none" }}
+            displayFrames={closingFrames} artwork={config.artwork?.closing} />
+        </Sequence>
+      )}
     </AbsoluteFill>
   );
 };
@@ -70,11 +87,25 @@ export const HookOverlay: React.FC<HookOverlayProps> = ({ config }) => {
 interface HookBoxProps {
   config: HookConfig;
   displayFrames: number;
+  artwork?: HookArtwork | null;
 }
 
-const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames }) => {
+const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames, artwork }) => {
   const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
+  const { fps, width, height } = useVideoConfig();
+  if (config.design) {
+    if (!artwork) return null;
+    const y = config.position === "center"
+      ? Math.floor((height - artwork.height) / 2)
+      : Math.floor(height * (config.position === "bottom" ? 0.7 : 0.2));
+    return <Img src={artwork.src} alt="" style={{
+      position: "absolute",
+      left: Math.floor((width - artwork.width) / 2),
+      top: y,
+      width: artwork.width,
+      height: artwork.height,
+    }} />;
+  }
   const scale = SIZE_SCALE[config.size] ?? 1.0;
 
   // Entrance animation
@@ -116,8 +147,8 @@ const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames }) => {
   }
 
   // Exit fade (last 15 frames)
-  const fadeOutStart = displayFrames - 15;
-  if (frame > fadeOutStart) {
+  const fadeOutStart = Math.max(0, displayFrames - 15);
+  if (config.entranceAnimation !== "none" && frame > fadeOutStart) {
     animOpacity *= interpolate(frame, [fadeOutStart, displayFrames], [1, 0], {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
@@ -130,7 +161,7 @@ const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames }) => {
   // Typeface and size as hooks.py: the chosen font, else the style's own;
   // font size = factor x the 90%-of-width box.
   const typeface = HOOK_FONTS[config.font ?? (look.pills ? "montserrat" : "serif")] ?? HOOK_FONTS.serif;
-  const fontSize = Math.round(1080 * 0.9 * typeface.factor * scale);
+  const fontSize = Math.round(width * 0.9 * typeface.factor * scale);
   const outlinePx = Math.round(look.outlinePx * scale);
 
   if (look.pills) {

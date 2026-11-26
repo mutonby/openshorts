@@ -31,6 +31,7 @@ from fastapi.responses import JSONResponse, Response
 
 import mcp_ui
 import social_platforms
+from framing import FRAMING_METHODS
 from subtitles import CAPTION_PRESETS, line_budget
 
 router = APIRouter()
@@ -114,6 +115,16 @@ TOOLS = [
                                    "stack) or the user wants clean clips; add_subtitles can still "
                                    "caption a clip later.",
                 },
+                "endcard_settings": {
+                    "type": "object", "additionalProperties": False,
+                    "description": "Optional text end card appended after each finished clip.",
+                    "properties": {
+                        "text": {"type": "string", "maxLength": 96},
+                        "handle": {"type": "string", "maxLength": 40},
+                        "duration": {"type": "integer", "enum": [1, 2, 3]},
+                        "sound": {"type": "string", "enum": ["silent", "chime"]}
+                    }
+                },
                 "confirm_rights": {
                     "type": "boolean",
                     "description": "Must be true: the user owns the content or has rights to process it.",
@@ -124,10 +135,26 @@ TOOLS = [
                               "enum": ["auto", "split", "screencast", "speaker_cut", "punch_in"]},
                     "description": "Optional extra reframe layouts. 'auto' lets AI pick per video.",
                 },
+                "framing_method": {
+                    "type": "string",
+                    "enum": list(FRAMING_METHODS),
+                    "description": "Framing for vertical or square clips. Auto uses motion and detail "
+                                   "without face detection. Legacy enables speaker-based layouts.",
+                },
+                "framing_focus": {
+                    "type": "string",
+                    "enum": ["auto", "streamer", "balanced", "gameplay"],
+                    "description": "Stream and game clips: how large the streamer's facecam is. "
+                                   "auto follows the moment (the streamer's reaction or the play).",
+                },
                 "output_format": {
                     "type": "string",
                     "enum": ["auto", "vertical", "horizontal", "square"],
                     "description": "Clip aspect. Default auto (vertical).",
+                },
+                "source_audio_language": {
+                    "type": "string",
+                    "description": "Audio track language offered by the source YouTube video, such as en or pt-BR.",
                 },
                 "webhook_url": {
                     "type": "string",
@@ -147,6 +174,18 @@ TOOLS = [
                                    "fewer come back when the material doesn't hold them. "
                                    "Default: the AI decides (usually 2-6).",
                 },
+                "exact_range": {
+                    "type": "boolean",
+                    "description": "Export the entire source or selected interval as one clip with no highlight selection or automatic cuts.",
+                },
+                "source_start": {
+                    "type": "number", "minimum": 0,
+                    "description": "Start time in the original source, in seconds. Omit to start at the beginning.",
+                },
+                "source_end": {
+                    "type": "number", "minimum": 0,
+                    "description": "End time in the original source, in seconds. Omit to use the end of the source.",
+                },
                 "clip_min_seconds": {
                     "type": "number", "minimum": 5, "maximum": 175,
                     "description": "Minimum clip length in seconds (default 15).",
@@ -157,6 +196,17 @@ TOOLS = [
                 },
             },
             "required": ["confirm_rights"],
+        },
+    },
+    {
+        "name": "list_source_audio_tracks",
+        "title": "List YouTube audio languages",
+        "description": ("Look up audio language codes for a YouTube video. Pass a returned code as "
+                        "source_audio_language when creating clips."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"source_url": {"type": "string"}},
+            "required": ["source_url"],
         },
     },
     {
@@ -223,6 +273,22 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "list_jobs",
+        "title": "List your recent jobs",
+        "description": (
+            "Your most recent clip jobs and their status, newest first. Use it "
+            "to recover a job_id you lost or to see what is still processing, "
+            "then call get_job_status / list_clips with an id from here."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer",
+                          "description": "How many to return, newest first (default 50, max 200)."},
+            },
+        },
+    },
+    {
         "name": "add_subtitles",
         "title": "Burn styled captions onto a clip",
         "description": (
@@ -256,6 +322,7 @@ TOOLS = [
                            "description": "Karaoke active-word effect; 'highlight' = solid box behind it."},
                 "reveal": {"type": "boolean", "description": "Karaoke: words appear as they are spoken."},
                 "one_word": {"type": "boolean", "description": "Show one word at a time."},
+                "max_words": {"type": "integer", "minimum": 1, "maximum": 12, "description": "Maximum words in each caption block."},
                 "shadow": {"type": "integer", "description": "Drop shadow depth 0-6."},
                 "border_width": {"type": "integer", "description": "Outline 0-10 (0 needs a shadow to stay readable)."},
                 "uppercase": {"type": "boolean"},
@@ -350,10 +417,12 @@ TOOLS = [
 _READ = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False, "idempotentHint": True}
 _ANNOTATIONS = {
     "process_video": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
+    "list_source_audio_tracks": {**_READ, "openWorldHint": True},
     "create_upload": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
     "get_job_status": _READ,
     "list_clips": _READ,
     "get_quota": _READ,
+    "list_jobs": _READ,
     "add_subtitles": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
     # Replaces the clip's current render with the new cut.
     "recut_clip": {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False},
@@ -400,16 +469,16 @@ async def _tool_process_video(client, args):
         "webhook_url": args.get("webhook_url"),
         "webhook_secret": args.get("webhook_secret"),
     }
-    for k in ("target_clips", "clip_min_seconds", "clip_max_seconds", "captions"):
+    for k in ("target_clips", "clip_min_seconds", "clip_max_seconds", "captions", "framing_method",
+              "framing_focus", "source_audio_language", "exact_range", "source_start", "source_end", "endcard_settings"):
         if args.get(k) is not None:
             body[k] = args[k]
     # Same default as the dashboard: hook on unless the caller opts out. The
     # REST endpoint keeps "absent = off" for older integrations; the MCP
     # tool is newer than the hook and its users expect the dashboard output.
-    if args.get("auto_hook", True):
-        body["auto_hook"] = True
-        if args.get("hook_style"):
-            body["auto_hook_style"] = args["hook_style"]
+    body["auto_hook"] = args.get("auto_hook", not args.get("exact_range"))
+    if body["auto_hook"] and args.get("hook_style"):
+        body["auto_hook_style"] = args["hook_style"]
     resp = await client.post("/api/process", json=body)
     if resp.status_code >= 400:
         return _api_error(resp), True
@@ -421,6 +490,13 @@ async def _tool_process_video(client, args):
     data["hint"] = ("Processing takes minutes. Poll get_job_status every 30-60s"
                     + ("" if body["webhook_url"] else " (or re-run with webhook_url for a callback)") + ".")
     return data, False
+
+
+async def _tool_list_source_audio_tracks(client, args):
+    resp = await client.post("/api/process/audio-tracks", json={"url": args.get("source_url")})
+    if resp.status_code >= 400:
+        return _api_error(resp), True
+    return resp.json(), False
 
 
 async def _tool_create_upload(client, args):
@@ -548,11 +624,21 @@ async def _tool_get_quota(client, args):
     return out, False
 
 
+async def _tool_list_jobs(client, args):
+    params = {}
+    if args.get("limit") is not None:
+        params["limit"] = args["limit"]
+    resp = await client.get("/api/jobs", params=params)
+    if resp.status_code >= 400:
+        return _api_error(resp), True
+    return resp.json(), False
+
+
 async def _tool_add_subtitles(client, args):
     body = {"job_id": args["job_id"], "clip_index": args["clip_index"]}
     for k in ("preset", "style", "position", "font_size", "font_name", "font_color",
               "highlight_color", "effect", "reveal", "shadow", "border_width",
-              "uppercase"):
+              "uppercase", "max_words"):
         if args.get(k) is not None:
             body[k] = args[k]
     if args.get("one_word"):
@@ -597,10 +683,12 @@ async def _tool_publish_clip(client, args):
 
 _TOOL_IMPLS = {
     "process_video": _tool_process_video,
+    "list_source_audio_tracks": _tool_list_source_audio_tracks,
     "create_upload": _tool_create_upload,
     "get_job_status": _tool_get_job_status,
     "list_clips": _tool_list_clips,
     "get_quota": _tool_get_quota,
+    "list_jobs": _tool_list_jobs,
     "add_subtitles": _tool_add_subtitles,
     "recut_clip": _tool_recut_clip,
     "publish_clip": _tool_publish_clip,

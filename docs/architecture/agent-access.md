@@ -4,10 +4,24 @@
 
 - `POST /api/process`: submit a video for processing. Optional `source_start` /
   `source_end` (seconds) clip and bill only that stretch.
+  Optional `framing_method` selects `auto`, `motion`, `detail`, `center`,
+  `fit`, `gameplay`, or `legacy` for vertical and square output. MCP `process_video`
+  accepts the same field. Omitting it uses the deployment default.
 - `GET /api/status/{job_id}`: poll job status and logs.
+- `DELETE /api/projects/{job_id}`: permanently remove one of the caller's
+  projects, including its working files, generated clips and archived source.
+  An active job or file operation returns 409. The owner can retry an interrupted
+  deletion with the same job ID.
 - `POST /api/edit`: apply AI video effects.
+- `POST /api/clip/rerender`: accepts optional `cue_effects` entries with
+  `kind`, `source_time` (seconds), `duration` (seconds), and `volume` (0–1
+  for sounds). The clip EDL returns the catalog and saved cues. Omit the field
+  to keep saved cues, or pass an empty list to clear them. Source anchors follow
+  the cut. Preview built-in sounds at `GET /api/clip-cues/sounds/{kind}`.
 - `POST /api/subtitle`: generate and apply subtitles (auto-transcribes dubbed videos).
-- `POST /api/hook`: add text hook overlays.
+- `POST /api/hook`: save an opening title, a closing `cta`, or both. An optional
+  `design` sets their shared shape, colors, outline, corners, and case. For
+  exact artwork at a chosen frame width, use `POST /api/hook/design-preview`.
 - `POST /api/translate`: AI voice dubbing via ElevenLabs.
 - `GET /api/translate/languages`: supported dubbing languages.
 - `POST /api/social/post`: post to social media (async upload). Cloud posts
@@ -19,6 +33,12 @@
   `post_requires_plan` with an `upgrade_url`, and the response carries
   `free_posts_left` while it has some. Thumbnail and SaaSShorts publishing
   count too.
+- `GET /api/social/scheduled`: list pending posts in the caller's Upload-Post
+  profile. `PATCH /api/social/scheduled/{job_id}` changes the publish time
+  (`scheduled_date`, ISO 8601 with a UTC offset). `DELETE` on the same route
+  cancels a pending post. Both mutations check that the post belongs to the
+  resolved profile. Self-hosted clients supply the profile as `?user=` and
+  use an `X-Upload-Post-Key` header or the server's configured Upload-Post key.
 - `POST /mcp`: MCP server (JSON-RPC), the pipeline as agent tools.
 - `POST/GET/DELETE /api/keys`: user API keys (cloud mode, session JWT only).
 - `DELETE /api/account`: erase the account and everything in it (GDPR art. 17).

@@ -6,7 +6,7 @@ the two speakers sit one above the other and the seam between the halves is
 the emptiest place in the frame, so that is where the captions go (OpusClip
 does the same). On every other layout they stay at the bottom.
 
-A WIDE stretch also records ``content``: the (top, bottom) frame fractions its
+A WIDE or FIT stretch also records ``content``: the (top, bottom) frame fractions its
 picture fills over the blurred backdrop, so the auto-placed hook can sit in
 the blur instead of over the action (hook_placement.content_bands).
 
@@ -32,7 +32,7 @@ def write(video_path, ranges):
     """``ranges``: iterable of (start_s, end_s, strategy) or (start_s, end_s,
     strategy, content), ``content`` being the (top, bottom) frame fractions
     the picture fills on a layout that floats it over a blurred backdrop
-    (WIDE), or None. Best effort: a failure here must never fail a render that
+    (WIDE or FIT), or None. Best effort: a failure here must never fail a render that
     already succeeded."""
     payload = []
     for r in ranges:
@@ -42,6 +42,7 @@ def write(video_path, ranges):
         band = _band(r[3] if len(r) > 3 else None)
         if band:
             entry["content"] = list(band)
+        entry.update(_anchors(r[4] if len(r) > 4 else None))
         payload.append(entry)
     try:
         with open(sidecar_path(video_path), "w") as f:
@@ -75,6 +76,26 @@ def _band(value):
     return None
 
 
+# Optional per-range fractions of the frame height (0 = top) that a stacked
+# layout records: ``seam`` (where its two bands meet, the hook's spot) and
+# ``caption_y`` (where the captions are centred). A SPLIT is cut in half, a
+# streamer stack wherever composition.py put its seam.
+_ANCHORS = ("seam", "caption_y")
+
+
+def _anchors(value):
+    out = {}
+    if isinstance(value, dict):
+        for key in _ANCHORS:
+            try:
+                v = float(value.get(key))
+            except (TypeError, ValueError):
+                continue
+            if 0.05 <= v <= 0.95:
+                out[key] = round(v, 4)
+    return out
+
+
 def normalise(ranges):
     """Accept the sidecar/metadata shape or bare tuples; drop anything odd
     (an old metadata file, a hand-edited value) instead of raising. A
@@ -85,9 +106,11 @@ def normalise(ranges):
             if isinstance(r, dict):
                 s, e, layout = r["start"], r["end"], r.get("layout", "")
                 band = r.get("content")
+                anchors = _anchors(r)
             else:
                 s, e, layout = r[:3]
                 band = r[3] if len(r) > 3 else None
+                anchors = _anchors(r[4] if len(r) > 4 else None)
             s, e = float(s), float(e)
         except (KeyError, TypeError, ValueError):
             continue
@@ -96,17 +119,52 @@ def normalise(ranges):
             band = _band(band)
             if band:
                 entry["content"] = list(band)
+            entry.update(anchors)
             out.append(entry)
     return out
 
 
 def split_ranges(ranges):
-    """(start, end) pairs of the stretches where captions belong on the seam."""
-    return [(r["start"], r["end"]) for r in normalise(ranges) if r["layout"] == "split"]
+    """The stretches whose captions leave the bottom, for
+    subtitles.generate_ass: (start, end) on a SPLIT's mid-frame seam, and
+    (start, end, y) on a streamer stack, ``y`` being where composition.py
+    put its captions (share of the height)."""
+    return [(s, e) if abs(y - 0.5) < 1e-3 else (s, e, y) for s, e, y in caption_anchors(ranges)]
+
+
+def caption_anchors(ranges):
+    """(start, end, y) of the stretches whose captions leave the bottom: a
+    SPLIT's seam (mid-frame) and a streamer stack's ``caption_y`` (its seam,
+    or the blurred fill under the game). ``y`` is a share of the height;
+    older STACK sidecars without one use the old fixed seam."""
+    out = []
+    for r in normalise(ranges):
+        if r["layout"] == "split":
+            out.append((r["start"], r["end"], 0.5))
+        elif r["layout"] == "stack":
+            out.append((r["start"], r["end"], r.get("caption_y", r.get("seam", STACK_SEAM_DEFAULT))))
+    return out
+
+
+def seam_of(ranges, t=0.0):
+    """The stacked layout's seam (share of the height) at clip time ``t``,
+    or None."""
+    for r in normalise(ranges):
+        if r["start"] - 1e-6 <= t < r["end"]:
+            if r["layout"] == "stack":
+                return r.get("seam", STACK_SEAM_DEFAULT)
+            if r["layout"] == "split":
+                return 0.5
+            return None
+    return None
+
+
+# Where clips rendered before composition.py put the facecam/game seam.
+STACK_SEAM_DEFAULT = 0.40
 
 
 def in_split(t, splits):
-    return any(s <= t < e for s, e in splits or [])
+    return any(r[0] <= t < r[1] for r in splits or [])
 
 
 def remap(ranges, segments):

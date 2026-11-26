@@ -216,6 +216,28 @@ class TestRerenderValidation:
 
 
 class TestRerenderPaths:
+    def test_sports_trim_reuses_canonical_and_auto_reset_reframes(self, job, fake_recut):
+        metadata = json.loads(job["meta_path"].read_text())
+        metadata["framing_method"] = "sports"
+        job["meta_path"].write_text(json.dumps(metadata))
+
+        edl = _request("GET", f"/api/clip/{JOB_ID}/0/edl")
+        assert edl.json()["framing"] == "sports"
+        request = {"job_id": JOB_ID, "clip_index": 0, "segments": [{"start": 12, "end": 22}]}
+        trimmed = _request("POST", "/api/clip/rerender", request)
+        assert trimmed.status_code == 200, trimmed.text
+        assert trimmed.json()["render_path"] == "fast"
+
+        reset = _request("POST", "/api/clip/rerender", {**request, "framing": "auto"})
+        assert reset.status_code == 200, reset.text
+        assert reset.json()["render_path"] == "source"
+        assert reset.json()["recipe"]["framing"] == "auto"
+        assert fake_recut[1]["framing_method"] == "auto"
+
+        next_trim = _request("POST", "/api/clip/rerender", request)
+        assert next_trim.status_code == 200, next_trim.text
+        assert next_trim.json()["framing"] == "auto"
+
     def test_fast_path_cuts_from_canonical_clip(self, job, fake_recut):
         resp = _request("POST", "/api/clip/rerender", {
             "job_id": JOB_ID, "clip_index": 0,

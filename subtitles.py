@@ -146,7 +146,8 @@ def generate_srt_from_video(video_path, output_path, max_chars=20, max_duration=
 
     if style == "karaoke":
         return generate_ass(transcript, 0, duration, output_path, max_chars, max_duration, **style_opts)
-    return generate_srt(transcript, 0, duration, output_path, max_chars, max_duration)
+    return generate_srt(transcript, 0, duration, output_path, max_chars, max_duration,
+                        max_words=style_opts.get("max_words"))
 
 
 def caption_offset_seconds():
@@ -166,7 +167,7 @@ def caption_offset_seconds():
 
 
 def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_duration=2.0,
-                         fits=None):
+                         fits=None, max_words=None):
     """
     Flatten transcript words for a clip range and group them into short blocks
     suitable for vertical video. Returns a list of blocks; each block is a list
@@ -213,7 +214,8 @@ def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_dur
 
         too_wide = fits is not None and not fits(
             [w['word'] for w in current_block] + [word['word']])
-        if current_text_len + len(word['word']) > max_chars or duration > max_duration or too_wide:
+        word_limit = max_words is not None and len(current_block) >= max_words
+        if current_text_len + len(word['word']) > max_chars or duration > max_duration or too_wide or word_limit:
             blocks.append(current_block)
             current_block = [word]
             block_start = word['start']
@@ -225,12 +227,12 @@ def _collect_word_blocks(transcript, clip_start, clip_end, max_chars=20, max_dur
     return blocks
 
 
-def generate_srt(transcript, clip_start, clip_end, output_path, max_chars=20, max_duration=2.0):
+def generate_srt(transcript, clip_start, clip_end, output_path, max_chars=20, max_duration=2.0, max_words=None):
     """
     Generates an SRT file from the transcript for a specific time range.
     Groups words into short lines suitable for vertical video.
     """
-    blocks = _collect_word_blocks(transcript, clip_start, clip_end, max_chars, max_duration)
+    blocks = _collect_word_blocks(transcript, clip_start, clip_end, max_chars, max_duration, max_words=max_words)
     if not blocks:
         return False
 
@@ -310,6 +312,43 @@ AUTO_CAPTION_STYLE = {
     "uppercase": True,
     "max_chars": 18,
     "max_duration": 1.4,
+}
+
+# Stream highlights with the viral edit (viral_edit.py): the bold default
+# look plus emphasis, the words that carry a reaction ("no", "wait", "insane",
+# numbers, anything shouted with "!") in their own colour while not active.
+STREAM_CAPTION_STYLE = {
+    **AUTO_CAPTION_STYLE,
+    "font_size": 38,
+    "effect": "pop",
+    "highlight_color": "#FFE500",
+    "emphasis_color": "#FF4D4D",
+    "uppercase": True,
+    "max_chars": 16,
+    "max_duration": 1.2,
+}
+
+EMPHASIS_WORDS = frozenset({
+    "no", "nope", "nah", "what", "wait", "why", "bro", "insane", "crazy", "never", "omg", "wow",
+    "run", "stop", "help", "dead", "huge", "impossible", "clutch", "yes", "yo", "dude", "wtf",
+})
+
+
+def is_emphasis(word):
+    """A caption word that gets STREAM_CAPTION_STYLE's emphasis colour."""
+    raw = str(word or "").strip()
+    bare = re.sub(r"[^\w']", "", raw.casefold())
+    return bool(bare) and (bare in EMPHASIS_WORDS or "!" in raw or any(c.isdigit() for c in bare))
+
+
+GAMEPLAY_CAPTION_STYLE = {
+    **AUTO_CAPTION_STYLE,
+    "font_size": 29,
+    "effect": "none",
+    "highlight_color": "#FFFFFF",
+    "uppercase": False,
+    "max_chars": 24,
+    "max_duration": 2.2,
 }
 
 
@@ -502,7 +541,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
                  highlight_color="#FFD700", bg_color="#000000", bg_opacity=0.0,
                  effect="none", base_opacity=1.0, uppercase=False,
                  margin_v=SAFE_MARGIN_V, split_ranges=None,
-                 reveal=False, shadow=0):
+                 reveal=False, shadow=0, emphasis_color=None, max_words=None):
     """
     Generates a karaoke-style ASS file: each block is shown like the SRT path,
     but the currently spoken word is rendered in highlight_color (modern
@@ -521,6 +560,8 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     shadow: drop shadow depth in PlayRes units (0 = none). With border_width
     0 it is the soft "clean" look; a hard outline does not need it.
     max_chars=1 puts one word on screen at a time.
+    emphasis_color: words is_emphasis() picks out are drawn in it while not
+    the active word (None: off, every existing look unchanged).
     """
     # Match the SRT burn path: PlayResY 288 keeps font sizes consistent.
     final_fontsize = int(_clamp_number(fontsize, 10, 200, 16) * 0.85)
@@ -538,10 +579,34 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     # (start, end) in clip seconds (layout_ranges.split_ranges); the style's
     # own alignment still rules everywhere else. Only the ASS path can do
     # this: SRT burns carry one alignment for the whole file.
-    seam_ranges = [(float(a), float(b)) for a, b in (split_ranges or [])]
+    # A streamer stack's captions sit wherever composition.py put them (its
+    # seam, or the blurred fill under the game): those ranges carry a third
+    # value, the centre as a share of the height, and are placed with a
+    # bottom-anchored per-event MarginV (PlayResY units), which needs no
+    # knowledge of the frame width.
+    seam_ranges = []
+    for r in split_ranges or []:
+        try:
+            a, b = float(r[0]), float(r[1])
+            y = float(r[2]) if len(r) > 2 else 0.5
+        except (TypeError, ValueError, IndexError):
+            continue
+        seam_ranges.append((a, b, y))
+
+    def seam_at(t):
+        return next((y for a, b, y in seam_ranges if a <= t < b), None)
 
     def seam_prefix(t):
-        return "{\\an5}" if any(a <= t < b for a, b in seam_ranges) else ""
+        y = seam_at(t)
+        if y is None:
+            return ""
+        return "{\\an5}" if abs(y - 0.5) < 1e-3 else "{\\an2}"
+
+    def seam_margin(t):
+        y = seam_at(t)
+        if y is None or abs(y - 0.5) < 1e-3:
+            return 0
+        return max(4, int(round(288 * (1.0 - y) - 0.5 * final_fontsize)))
 
     safe_font = _sanitize_font_name(font_name)
     base_opacity = _clamp_number(base_opacity, 0.05, 1.0, 1.0)
@@ -566,6 +631,8 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
 
     back_colour = hex_to_ass_color("#000000", 0.55 if shadow else 0.0)
     highlight_inline = _hex_to_ass_inline_color(highlight_color, fallback="FFD700")
+    emphasis_inline = (_hex_to_ass_inline_color(emphasis_color, fallback="FF4D4D")
+                       if emphasis_color else None)
 
     # One line per block (see line_fitter). The widest thing drawn around the
     # text is the active word's own border: glow and box thicken it.
@@ -575,7 +642,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
         font_name, final_fontsize, uppercase=uppercase,
         grow=0.08 if effect == "pop" else 0.0, padding=edge + shadow)
     blocks = _collect_word_blocks(transcript, clip_start, clip_end, max_chars, max_duration,
-                                  fits=fits)
+                                  fits=fits, max_words=max_words)
     if not blocks:
         return False
 
@@ -667,12 +734,14 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
                     parts.append(f"{squeeze or active_prefix}{text}{{\\r}}")
                 elif reveal and j > i:
                     parts.append(f"{{\\alpha&HFF&}}{text}{{\\r}}")
+                elif emphasis_inline and is_emphasis(other['word']):
+                    parts.append(f"{{\\c{emphasis_inline}}}{text}{{\\r}}")
                 else:
                     parts.append(text)
 
             events.append(
-                f"Dialogue: 0,{_ass_time(ev_start)},{_ass_time(ev_end)},Default,,0,0,0,,"
-                f"{seam_prefix(ev_start)}{' '.join(parts)}"
+                f"Dialogue: 0,{_ass_time(ev_start)},{_ass_time(ev_end)},Default,,0,0,"
+                f"{seam_margin(ev_start)},,{seam_prefix(ev_start)}{' '.join(parts)}"
             )
 
     if not events:
@@ -685,10 +754,9 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
 
 def format_srt_block(index, start, end, text):
     def format_time(seconds):
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        millis = int((seconds - int(seconds)) * 1000)
+        total_seconds, millis = divmod(round(seconds * 1000), 1000)
+        hours, remaining_seconds = divmod(total_seconds, 3600)
+        minutes, secs = divmod(remaining_seconds, 60)
         return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
         
     return f"{index}\n{format_time(start)} --> {format_time(end)}\n{text}\n\n"

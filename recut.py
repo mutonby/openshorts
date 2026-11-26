@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from contextlib import suppress
 
 from ffmpeg_utils import (METADATA_SCRUB, QUALITY_FAST, audio_encode_args,
                           video_encode_args)
@@ -266,7 +267,8 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
                   reframe=False, output_format="auto", watermark=False,
                   captions_transcript=None, force_strategy=None,
                   crop_overrides=None, runner=None, renderer=None,
-                  watermarker=None, captioner=None, subtitle_band=None):
+                  watermarker=None, captioner=None, subtitle_band=None,
+                  framing_method=None, text_overlay=None, picture_layers=()):
     """Render a recut clip. Returns (served_filename, clean_filename).
 
     - ``input_path``/``segments``: the file to cut from and the times ON THAT
@@ -279,6 +281,10 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
       ``virtual_transcript``); when given and non-empty, captions are burned
       LAST onto a ``subtitled_<ts>_`` derivative, preserving the invariant
       that the clean file stays clean for later re-styling.
+    - ``text_overlay``: optional renderer for text on the recut timeline,
+      applied to the clean picture before the captions.
+    - ``picture_layers``: ordered in-place picture operations applied to the
+      clean recut before text and captions.
     - ``crop_overrides``: scene index -> crop centre as a fraction of the
       source width, for scenes the user framed by hand. Source path only, for
       the same reason as ``reframe``: the canonical file is already cropped, so
@@ -309,7 +315,8 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
                 def render(i, o, f):
                     return main_render(i, o, f, force_strategy=force_strategy,
                                        crop_overrides=crop_overrides,
-                                       subtitle_band=subtitle_band)
+                                       subtitle_band=subtitle_band,
+                                       framing_method=framing_method)
             if not render(work_path, out_path, output_format):
                 raise RuntimeError("reframe failed on the recut clip")
         else:
@@ -322,13 +329,27 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
                 (r["start"], r["end"], r["layout"], r.get("content"))
                 for r in layout_ranges.remap(layout_ranges.read(input_path), segments)])
 
+        if picture_layers:
+            try:
+                for render_layer in picture_layers:
+                    render_layer(out_path)
+            except BaseException:
+                import layout_ranges
+                for partial in (out_path, layout_ranges.sidecar_path(out_path)):
+                    with suppress(FileNotFoundError):
+                        os.remove(partial)
+                raise
+
         if watermark:
             (watermarker or _main_attr("apply_watermark"))(out_path)
 
-        served_name = out_name
-        if captions_transcript and captions_transcript.get("segments"):
+        has_captions = bool(captions_transcript and captions_transcript.get("segments"))
+        layered_path = (text_overlay(out_path, has_captions=has_captions)
+                        if text_overlay else out_path)
+        served_name = os.path.basename(layered_path)
+        if has_captions:
             caption = captioner or _main_attr("auto_caption_clip")
-            captioned = caption(out_path, captions_transcript,
+            captioned = caption(layered_path, captions_transcript,
                                 0.0, total_duration(segments))
             if captioned:
                 served_name = os.path.basename(captioned)

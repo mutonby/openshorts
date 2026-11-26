@@ -159,7 +159,7 @@ def presigned_get(key, expires=3600, download_name=None) -> str:
     return client().generate_presigned_url("get_object", Params=params, ExpiresIn=expires)
 
 
-def delete_prefix(prefix) -> int:
+def delete_prefix(prefix, *, strict=False) -> int:
     """Delete every object under a prefix. Returns the count deleted."""
     c = client()
     deleted = 0
@@ -170,8 +170,12 @@ def delete_prefix(prefix) -> int:
             kw["ContinuationToken"] = token
         resp = c.list_objects_v2(**kw)
         objs = [{"Key": o["Key"]} for o in resp.get("Contents", [])]
+        if strict and any(not obj["Key"].startswith(prefix) for obj in objs):
+            raise OSError("Object storage returned a key outside the project prefix")
         if objs:
-            c.delete_objects(Bucket=settings.r2_bucket, Delete={"Objects": objs})
+            result = c.delete_objects(Bucket=settings.r2_bucket, Delete={"Objects": objs})
+            if strict and result.get("Errors"):
+                raise OSError("Object storage refused one or more deletions")
             deleted += len(objs)
         if not resp.get("IsTruncated"):
             break

@@ -24,7 +24,9 @@ import json
 import os
 from typing import Optional
 
-SCREEN_LAYOUTS = {"screencast", "wide", "inset"}
+# "stack" is the streamer stack: half of it is the game, and a title written
+# from the transcript alone named incidents the footage did not show.
+SCREEN_LAYOUTS = {"screencast", "wide", "inset", "gameplay", "stack"}
 FRAMES = int(os.environ.get("HOOK_GROUNDING_FRAMES", "3"))
 WIDTH = int(os.environ.get("HOOK_GROUNDING_WIDTH", "1024"))
 # Ignore a blip: the screen stretches must cover this share of the clip.
@@ -121,7 +123,7 @@ def frames_at(video_path, times, width=None):
     return out
 
 
-def _ask_gemini(frames, prompt, api_key):
+def _ask_gemini(frames, prompt, api_key, schema=None):
     """One vision call; returns the parsed dict. Split out so tests can stub it."""
     from google import genai
     from google.genai import types as genai_types
@@ -135,7 +137,7 @@ def _ask_gemini(frames, prompt, api_key):
         contents=parts + [prompt],
         config=genai_types.GenerateContentConfig(
             response_mime_type="application/json",
-            response_schema=gemini_worker.GroundedHook,
+            response_schema=schema or gemini_worker.GroundedHook,
         ))
     gemini_worker.raise_if_blocked(response)
     return json.loads(response.text) or {}
@@ -166,13 +168,17 @@ def reground(clip_path, clip, transcript, start, end) -> Optional[dict]:
         answer = _ask_gemini(frames, prompt, api_key)
         hook = str(answer.get("viral_hook_text") or "").strip()
         title = str(answer.get("video_title_for_youtube_short") or "").strip()
-        if not hook:
+        summary = str(answer.get("clip_summary") or title or hook).strip()[:240]
+        if not summary:
             return None
         before = {"viral_hook_text": clip.get("viral_hook_text"),
-                  "video_title_for_youtube_short": clip.get("video_title_for_youtube_short")}
+                  "video_title_for_youtube_short": clip.get("video_title_for_youtube_short"),
+                  "video_description_for_tiktok": clip.get("video_description_for_tiktok"),
+                  "video_description_for_instagram": clip.get("video_description_for_instagram")}
         clip["viral_hook_text"] = hook
-        if title:
-            clip["video_title_for_youtube_short"] = title[:100]
+        clip["video_title_for_youtube_short"] = (title or summary)[:100]
+        clip["video_description_for_tiktok"] = summary
+        clip["video_description_for_instagram"] = summary
         clip["hook_grounding"] = {
             "on_screen": str(answer.get("on_screen") or "")[:200],
             "before": before,

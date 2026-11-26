@@ -37,7 +37,7 @@ jobs:
       # reaches the Postgres service.
       - name: Install test dependencies
         run: >
-          pip install pytest pillow httpx pydantic sqlalchemy greenlet numpy
+          pip install pytest pillow httpx pydantic sqlalchemy greenlet numpy scipy
           opencv-python-headless python-dotenv google-genai fastapi boto3
           PyJWT email-validator python-multipart asyncpg
       - name: Run tests

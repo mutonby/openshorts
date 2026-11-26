@@ -31,8 +31,8 @@ def connect_platforms():
 def connect_description(platforms) -> str:
     """The connect page's subtitle. Twitch is read-only there, so it is named
     as a source to clip from, never as somewhere shorts get posted."""
-    text = ("Link TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads and Bluesky "
-            "to post your shorts directly from OpenShorts.")
+    text = ("Link TikTok, Instagram, YouTube, Facebook, LinkedIn, Threads, Bluesky, "
+            "X and Pinterest to post your shorts directly from OpenShorts.")
     if "twitch" in platforms:
         text += " Link Twitch so Autopilot can clip your past broadcasts (read-only)."
     return text

@@ -32,6 +32,8 @@ _ADDITIVE_COLUMNS = (
     # Month on hold from the cancel flow (cloud/cancellation, config.ON_HOLD).
     "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS hold_from TIMESTAMPTZ",
     "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS hold_until TIMESTAMPTZ",
+    "ALTER TABLE autopilot_settings ADD COLUMN IF NOT EXISTS min_publish_score INTEGER",
+    "ALTER TABLE autopilot_settings ADD COLUMN IF NOT EXISTS source_credit_url TEXT",
 )
 
 

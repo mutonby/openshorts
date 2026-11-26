@@ -95,6 +95,14 @@ def _clip(meta_path):
 
 
 class TestSwitchToPro:
+    def test_face_model_free_clip_keeps_its_framing(self, job, fake_render):
+        meta = json.loads(job["meta_path"].read_text())
+        meta["framing_method"] = "motion"
+        job["meta_path"].write_text(json.dumps(meta))
+        resp = _switch("pro")
+        assert resp.status_code == 400
+        assert fake_render == []
+
     def test_the_clip_becomes_a_pro_recut(self, job, fake_render):
         resp = _switch("pro")
         assert resp.status_code == 200, resp.text
@@ -123,6 +131,17 @@ class TestSwitchToPro:
         assert again.status_code == 200
         assert again.json()["unchanged"] is True
         assert again.json()["new_video_url"] == first["new_video_url"]
+        assert len(fake_render) == 1
+
+    def test_failed_end_card_leaves_mode_and_file_retryable(self, job, fake_render, monkeypatch):
+        before = job["meta_path"].read_text()
+        async def fail_card(*_args):
+            raise RuntimeError("end card failed")
+        monkeypatch.setattr(app_module, "_append_endcard", fail_card)
+        response = _switch("pro")
+        assert response.status_code == 500
+        assert job["meta_path"].read_text() == before
+        assert app_module.jobs[JOB_ID]["result"]["clips"][0].get("mode", "normal") == "normal"
         assert len(fake_render) == 1
 
     def test_a_busy_host_says_so_and_changes_nothing(self, job, monkeypatch):
@@ -180,8 +199,9 @@ class TestLayersGoBackOn:
             with open(output_path, "wb") as f:
                 f.write(b"hooked")
 
-        def fake_captions(job_id, clip_index, video_path):
-            captions.append(os.path.basename(video_path))
+        def fake_captions(job_id, clip_index, video_path, *, metadata):
+            captions.append({"file": os.path.basename(video_path),
+                             "clip": dict(metadata["shorts"][clip_index])})
             out = os.path.join(os.path.dirname(video_path),
                                f"subtitled_9_{os.path.basename(video_path)}")
             with open(out, "wb") as f:
@@ -205,12 +225,15 @@ class TestLayersGoBackOn:
         hook = layered_job["hooks"][0]
         assert hook["on"].startswith("recut_") and hook["text"] == "Wait for it"
         assert hook["position"] == "auto" and hook["has_captions"] is True
-        assert layered_job["captions"][0].startswith("hooked_")
+        assert layered_job["captions"][0]["file"].startswith("hooked_")
 
     def test_pro_mode_brings_its_caption_style_and_takes_it_back(self, layered_job, fake_render):
         _switch("pro")
         clip = _clip(layered_job["meta_path"])
         assert clip["caption_style"] == app_module.CAPTION_PRESETS["cine"]
+        pending = layered_job["captions"][0]["clip"]
+        assert pending["caption_style"] == clip["caption_style"]
+        assert pending["recipe"] == clip["recipe"]
         _switch("normal")
         assert not _clip(layered_job["meta_path"]).get("caption_style")
 
@@ -319,8 +342,8 @@ class TestServedFileOfAFreshJob:
         meta_path.write_text(json.dumps(data))
         captions = []
 
-        def fake_captions(job_id, clip_index, video_path):
-            captions.append(os.path.basename(video_path))
+        def fake_captions(job_id, clip_index, video_path, *, metadata):
+            captions.append(metadata["shorts"][clip_index]["mode"])
             out = os.path.join(os.path.dirname(video_path),
                                f"subtitled_9_{os.path.basename(video_path)}")
             with open(out, "wb") as f:
@@ -338,7 +361,7 @@ class TestServedFileOfAFreshJob:
         assert resp.status_code == 200, resp.text
         assert resp.json()["new_video_url"].split("/")[-1].startswith("subtitled_9_recut_")
         assert fake_render[0]["clip"] == "mytitle_clip_1.mp4"
-        assert len(fresh_job["captions"]) == 1
+        assert fresh_job["captions"] == ["pro"]
 
     def test_the_disk_answers_after_a_restart_lost_the_result(self, fresh_job, fake_render):
         app_module.jobs[JOB_ID]["result"]["clips"][0].pop("video_url")

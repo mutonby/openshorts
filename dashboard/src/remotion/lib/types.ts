@@ -38,6 +38,7 @@ export interface SubtitleConfig {
   style: SubtitleStyle;
   // Line budget, mirrors the burn's max_chars / max_duration.
   maxChars?: number;
+  maxWords?: number;
   maxDurationMs?: number;
 }
 
@@ -58,6 +59,22 @@ export type HookStyle =
 
 export type HookFont = "montserrat" | "anton" | "serif";
 
+export interface HookDesign {
+  shape: "pill" | "box" | "none";
+  text_color: string;
+  background_color: string;
+  outline_color: string;
+  outline_width: number;
+  corner_radius: number;
+  text_case: "as_written" | "uppercase";
+}
+
+export interface HookArtwork {
+  src: string;
+  width: number;
+  height: number;
+}
+
 export interface HookConfig {
   text: string;
   position: HookPosition;
@@ -66,7 +83,15 @@ export interface HookConfig {
   /** montserrat | anton | serif; unset = the style's own typeface. */
   font?: HookFont;
   entranceAnimation: HookEntrance;
-  displayDurationSec: number;
+  displayDurationSec: number | null;
+  design?: HookDesign;
+  artwork?: { opening: HookArtwork | null; closing: HookArtwork | null };
+  cta?: {
+    text: string;
+    position: HookPosition;
+    size: HookSize;
+    displayDurationSec: number;
+  };
 }
 
 // --- Effects config ---
@@ -122,6 +147,14 @@ export const subtitleConfigSchema = z.object({
   style: subtitleStyleSchema,
 });
 
+const hookArtworkSchema = z.object({
+  src: z.string(),
+  width: z.number().positive(),
+  height: z.number().positive(),
+});
+
+const hookColor = z.string().regex(/^#[0-9a-f]{6}$/i);
+
 export const hookConfigSchema = z.object({
   text: z.string(),
   position: z.enum(["auto", "top", "center", "bottom"]),
@@ -131,7 +164,23 @@ export const hookConfigSchema = z.object({
     .default("pill"),
   font: z.enum(["montserrat", "anton", "serif"]).optional(),
   entranceAnimation: z.enum(["spring", "fade", "slide-up", "none"]),
-  displayDurationSec: z.number().positive(),
+  displayDurationSec: z.number().positive().nullable(),
+  design: z.object({
+    shape: z.enum(["pill", "box", "none"]),
+    text_color: hookColor,
+    background_color: hookColor,
+    outline_color: hookColor,
+    outline_width: z.number().int().min(0).max(20),
+    corner_radius: z.number().int().min(0).max(120),
+    text_case: z.enum(["as_written", "uppercase"]),
+  }).optional(),
+  artwork: z.object({ opening: hookArtworkSchema.nullable(), closing: hookArtworkSchema.nullable() }).optional(),
+  cta: z.object({
+    text: z.string().min(1).max(180),
+    position: z.enum(["auto", "top", "center", "bottom"]),
+    size: z.enum(["S", "M", "L"]),
+    displayDurationSec: z.number().positive().max(15),
+  }).optional(),
 });
 
 export const effectSegmentSchema = z.object({

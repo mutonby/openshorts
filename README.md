@@ -375,6 +375,8 @@ curl -X POST https://api.openshorts.app/api/process \
 
 Interactive docs at `/docs` (OpenAPI) on any instance.
 
+For multilingual YouTube videos, click **Check source audio tracks** in the dashboard and choose a language before generating clips. In the REST API, send the video URL to `POST /api/process/audio-tracks`, then pass a returned `audio_languages` code as `source_audio_language` on `POST /api/process`. MCP clients can use `list_source_audio_tracks` and set the same option on `process_video`. Audio-first review requires a seekable copy of the selected track.
+
 ### Completion webhooks
 
 Pass `webhook_url` (and optionally `webhook_secret`) to `POST /api/process` and you get exactly one `POST` when the job reaches a terminal state — no polling loops in your n8n / Zapier / cron pipelines:
@@ -397,9 +399,14 @@ export OPENSHORTS_API_KEY=osk_...              # hosted
 # export OPENSHORTS_API_URL=http://localhost:8000   # self-hosted, no key
 
 openshorts process "https://youtube.com/watch?v=..." --wait
+openshorts audio-tracks "https://youtube.com/watch?v=..."
+openshorts process "https://youtube.com/watch?v=..." --source-audio-language pt-BR --wait
 openshorts clips <job_id>
 openshorts publish <job_id> 0 --platforms tiktok,youtube
 ```
+
+Use `openshorts trends` to research regional topics and `openshorts trend-generate`
+to queue clips from your own source library. [CLI guide](cli/README.md#trend-driven-clips)
 
 ### Agent skill
 

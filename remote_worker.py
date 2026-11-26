@@ -31,6 +31,8 @@ import secrets
 import time
 
 from jsonfile import write_json_atomic
+from framing import FRAMING_METHODS
+from composition import FOCUSES as FRAMING_FOCUSES
 
 CLAIM_FILE = ".remote.json"
 LOG_FILE = ".remote.log"
@@ -64,7 +66,8 @@ _IMAGE_FILE_BYTES = 32 * 1024 * 1024
 # storage secret: this host downloads the source and delivers the result.
 _OPTION_NAMES = frozenset({
     "WATERMARK", "MAX_SOURCE_MINUTES", "SOURCE_CAP_MINUTES", "HOOK_LAZY",
-    "CUT_MAX_FPS"})
+    "CUT_MAX_FPS", "FRAMING_METHOD", "FRAMING_FOCUS", "SPLIT_LAYOUT", "SCREENCAST_LAYOUT",
+    "SPEAKER_CUT", "SPEAKER_SIGNAL", "PUNCH_IN"})
 _OPTION_PREFIXES = ("AUTO_", "CLIP_")
 # Only for a worker that fetches the link itself: where the user's stretch
 # starts. A worker that is sent the source gets it already cut, and cutting
@@ -81,6 +84,17 @@ def allowed_option(name, value="", link=False):
     ``link``: the worker fetches the source itself (``_LINK_OPTION_NAMES``)."""
     if not isinstance(name, str) or not re.match(r"^[A-Z][A-Z0-9_]{0,63}$", name):
         return False
+    if name == "FRAMING_METHOD":
+        return value in FRAMING_METHODS
+    if name == "FRAMING_FOCUS":
+        return value in FRAMING_FOCUSES
+    if name == "CLIP_ENDCARD_JSON":
+        from endcard import generation_config, EndCardError
+        try:
+            generation_config(value)
+            return isinstance(value, str)
+        except EndCardError:
+            return False
     if (name not in _OPTION_NAMES and not name.startswith(_OPTION_PREFIXES)
             and not (link and name in _LINK_OPTION_NAMES)):
         return False
@@ -94,7 +108,8 @@ def job_options(job_env, base_env, link=False):
     for name, value in (job_env or {}).items():
         if not allowed_option(name, value, link=link):
             continue
-        if (base_env or {}).get(name) == value:
+        # The worker's own default can differ from the server's framing choice.
+        if name != "FRAMING_METHOD" and (base_env or {}).get(name) == value:
             continue
         out[name] = str(value)
     return out
@@ -120,6 +135,11 @@ def worker_args(cmd):
             i += 2
         elif a == "--keep-original":
             i += 1
+        elif a == "--source-audio-language" and i + 1 < len(cmd):
+            from youtube_io import normalize_audio_language
+            if not normalize_audio_language(cmd[i + 1]):
+                return None
+            i += 2  # The server's prepare-only run already selects the track.
         elif a == "--format" and i + 1 < len(cmd) and cmd[i + 1] in _FORMATS:
             rest += [a, cmd[i + 1]]
             i += 2

@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Loader2, Calendar, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Circle, ExternalLink } from 'lucide-react';
+import { Loader2, Calendar, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Circle } from 'lucide-react';
 import { apiFetch, QuotaError, openQuotaWall } from '../lib/api';
 import { platformOptions, defaultPlatformFlags, flagsFromList } from '../lib/socialPlatforms';
 import Modal from './ui/Modal';
@@ -70,7 +70,7 @@ function detectTimezone() {
     }
 }
 
-export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploadPostKey, uploadUserId, isManaged }) {
+export default function ScheduleWeekModal({ isOpen, onClose, onViewCalendar, clips, jobId, uploadPostKey, uploadUserId, isManaged }) {
     const [time, setTime] = useState('12:00');
     const [timezone, setTimezone] = useState(detectTimezone);
     const [platforms, setPlatforms] = useState(defaultPlatformFlags);
@@ -202,15 +202,14 @@ export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploa
                     )}
                 </button>
             ) : (
-                <a
-                    href="https://app.upload-post.com/calendar"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="btn-primary flex-1 no-underline"
+                <button
+                    type="button"
+                    onClick={onViewCalendar}
+                    className="btn-primary flex-1"
                 >
-                    <ExternalLink size={16} />
+                    <Calendar size={16} />
                     view calendar
-                </a>
+                </button>
             )}
         </div>
     );

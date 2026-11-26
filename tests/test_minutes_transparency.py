@@ -111,7 +111,12 @@ def dirs(tmp_path, monkeypatch):
 
     async def _probe(url):
         return {"max_height": 1080, "duration": 45 * 60}
+
+    async def _allow_url(url):
+        return None
+
     monkeypatch.setattr(app_module, "_probe_youtube_quality", _probe)
+    monkeypatch.setattr(app_module, "_validate_source_url", _allow_url)
     return out_root, up_root
 
 
@@ -140,6 +145,34 @@ def test_source_range_reaches_the_reservation_and_the_job(dirs, monkeypatch):
     assert job["env"]["MAX_SOURCE_MINUTES"] == "5.5000"
     manifest = json.load(open(os.path.join(out_root, resp.json()["job_id"], app_module._RESUME_FILE)))
     assert manifest["partial"] == partial
+
+
+def test_self_host_range_trims_job_and_reuses_the_quality_probe(dirs, monkeypatch):
+    probes = []
+
+    async def probe(url):
+        probes.append(url)
+        return {"max_height": 1080, "duration": 600}
+
+    monkeypatch.setattr(app_module, "_probe_youtube_quality", probe)
+    monkeypatch.setattr(app_module, "QUALITY_GATE_MIN_HEIGHT", 720)
+    url = "https://www.youtube.com/watch?v=long"
+
+    async def do():
+        transport = httpx.ASGITransport(app=app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            return await client.post("/api/process", json={
+                "url": url, "acknowledged": True,
+                "source_start": 90, "source_end": 270,
+            }, headers={"X-Gemini-Key": "k"})
+
+    response = asyncio.run(do())
+    assert response.status_code == 200, response.text
+    assert probes == [url]
+    job = app_module.jobs[response.json()["job_id"]]
+    assert job["env"]["SOURCE_START_SECONDS"] == "90.000"
+    assert job["env"]["MAX_SOURCE_MINUTES"] == "3.0000"
+    assert job["partial"]["chosen"] is True
 
 
 def test_estimate_without_billing_says_so():

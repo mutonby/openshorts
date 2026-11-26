@@ -27,6 +27,7 @@ import time
 import subprocess
 
 import yt_account
+import youtube_io
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 
@@ -209,6 +210,8 @@ def probe_url_minutes(url: str, allow_paid: bool = True) -> float:
         if known.get("max_height"):
             _probe_facts[url] = {"at": time.time(), "max_height": int(known["max_height"]),
                                  "duration": int(known["seconds"])}
+            if "audio_languages" in known:
+                _probe_facts[url]["audio_languages"] = known["audio_languages"]
         return known["seconds"] / 60.0
 
     bgutil_http = os.environ.get("BGUTIL_BASE_URL", "").strip()
@@ -265,7 +268,7 @@ def probe_url_minutes(url: str, allow_paid: bool = True) -> float:
     finally:
         session.close()
     facts = _probe_facts.get(url) or {}
-    source_cache.probe_put(url, minutes * 60.0, facts.get("max_height"))
+    source_cache.probe_put(url, minutes * 60.0, facts.get("max_height"), facts.get("audio_languages"))
     return minutes
 
 
@@ -405,7 +408,8 @@ def _remember_probe(url, info):
         for k in [k for k, v in _probe_facts.items() if now - v["at"] > _PROBE_FACTS_TTL]:
             _probe_facts.pop(k, None)
         _probe_facts[url] = {"at": now, "max_height": int(height),
-                             "duration": int(info.get("duration") or 0)}
+                             "duration": int(info.get("duration") or 0),
+                             "audio_languages": youtube_io.audio_languages(info)}
     except Exception:
         pass
 
@@ -416,8 +420,11 @@ def probe_facts(url):
     f = _probe_facts.get(url)
     if not f or time.time() - f["at"] > _PROBE_FACTS_TTL:
         return None
-    return {"max_height": f["max_height"], "duration": f["duration"],
-            "mode": "metering-probe", "cookies_invalid": False}
+    facts = {"max_height": f["max_height"], "duration": f["duration"],
+             "mode": "metering-probe", "cookies_invalid": False}
+    if "audio_languages" in f:
+        facts["audio_languages"] = f["audio_languages"]
+    return facts
 
 
 def _probe_with_proxies(url, proxies, strategies, static_errors, paid, ck_path):

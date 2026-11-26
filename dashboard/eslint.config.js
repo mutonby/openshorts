@@ -26,11 +26,12 @@ export default defineConfig([
     rules: {
       // `catch (e)` / `catch (_)` with the error deliberately ignored is the
       // house style for best-effort localStorage and fetch calls.
+      // A capitalised name is a component rendered as JSX (`icon: Icon` then
+      // `<Icon />`), which this rule cannot see, for variables and arguments alike.
       'no-unused-vars': ['error', {
-        // A capitalised destructured arg (`{ icon: Icon }`) is a component used
-        // as JSX, which this config's core rule does not see.
         varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^(_|[A-Z])', caughtErrors: 'none',
       }],
+      'no-empty': ['error', { allowEmptyCatch: true }],
       // Contexts and modals export a hook or a constant next to the component.
       'react-refresh/only-export-components': ['error', { allowConstantExport: true }],
     },

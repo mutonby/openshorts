@@ -16,6 +16,7 @@ import { connectNotice } from '../lib/connectReturn';
 
 const PLATFORM_LABELS = Object.fromEntries(
   PLATFORM_VALUES.map((v) => [v, v === 'youtube' ? 'YouTube Shorts' : platformLabel(v)]));
+const PUBLISH_SCORE_CHOICES = Array.from({ length: 21 }, (_, index) => index * 5);
 
 const ERROR_TEXT = {
   plan_required: 'Autopilot is paused: it needs an active Starter, Creator or Pro plan.',
@@ -81,6 +82,7 @@ function StatusBadge({ run }) {
       <span className="badge-ok inline-flex items-center gap-1">
         <CheckCircle2 size={11} /> {run.clips_count || 0} clips
         {run.posted_count ? ` · ${run.posted_count} scheduled` : ''}
+        {run.reason === 'publish_score_not_met' ? ' · none met the minimum score' : ''}
       </span>
     );
   }
@@ -228,6 +230,10 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
   }
 
   const s = data?.settings || {};
+  const minPublishScore = s.min_publish_score ?? '';
+  const publishScoreChoices = minPublishScore !== '' && !PUBLISH_SCORE_CHOICES.includes(minPublishScore)
+    ? [...PUBLISH_SCORE_CHOICES, minPublishScore].sort((a, b) => a - b)
+    : PUBLISH_SCORE_CHOICES;
   const yt = data?.youtube;
   const tw = data?.twitch;
   const twitchAvailable = !!data?.twitch_available;
@@ -372,7 +378,7 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
             <p className="eyebrow mb-1">03 · AUTOPUBLISH</p>
             <p className="text-ink">{s.autopublish ? 'the best clips are scheduled for you' : 'off: you review and post the clips yourself'}</p>
             <p className="text-muted text-sm mt-1">
-              Picks the {s.clips_to_publish || 3} highest-scoring clips of each video and schedules
+              Picks up to {s.clips_to_publish || 3} of the highest-scoring clips per video and schedules
               them one a day at {String(s.publish_hour ?? 17).padStart(2, '0')}:00 ({s.timezone || browserTimezone()}).
             </p>
           </div>
@@ -416,7 +422,7 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
                 <p className="text-muted text-xs mt-3">TikTok clips arrive as drafts in your TikTok inbox: open the app to post them.</p>
               )}
             </div>
-            <div className="grid sm:grid-cols-2 gap-4 mt-5">
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-5">
               <label className="block">
                 <span className="eyebrow block mb-2">clips per video</span>
                 <select
@@ -429,6 +435,21 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
                     <option key={n} value={n}>{n} {n === 1 ? 'clip' : 'clips'} (one a day)</option>
                   ))}
                 </select>
+              </label>
+              <label className="block">
+                <span className="eyebrow block mb-2">minimum clip score</span>
+                <select
+                  className="input-field"
+                  value={minPublishScore}
+                  disabled={saving}
+                  onChange={(e) => save({ min_publish_score: e.target.value === '' ? null : Number(e.target.value) })}
+                >
+                  <option value="">any score</option>
+                  {publishScoreChoices.map((score) => <option key={score} value={score}>{score} / 100</option>)}
+                </select>
+                <span className="block mt-2 text-xs text-muted">
+                  Set a minimum to keep lower-scoring and unscored clips for manual review.
+                </span>
               </label>
               <label className="block">
                 <span className="eyebrow block mb-2">time of day</span>
@@ -447,6 +468,19 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
           </>
         )}
       </div>
+
+      {!!s.autopublish && (
+        <label className="block card p-4 text-sm text-ink2">
+          <span className="eyebrow block mb-2">Source credit URL</span>
+          <input key={s.source_credit_url || 'none'} type="url" defaultValue={s.source_credit_url || ''}
+            placeholder="https://…" className="input-field" disabled={saving}
+            onBlur={(event) => {
+              const value = event.target.value.trim() || null;
+              if (value !== (s.source_credit_url || null)) save({ source_credit_url: value });
+            }} />
+          <span className="block mt-2 text-xs text-muted">Include this link in descriptions of future automatic posts.</span>
+        </label>
+      )}
 
       {/* 4 · channel videos */}
       {(yt || tw) && (

@@ -3,12 +3,18 @@ purge after the subscription grace period.
 """
 import asyncio
 import glob
+import io
+import json
+import mimetypes
 import os
 import re
+import uuid
 from datetime import timedelta
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select, delete
+from sqlalchemy.exc import IntegrityError
 
 from .config import settings, VIDEO_RETENTION_GRACE_DAYS, FREE_CLIP_RETENTION_DAYS
 from . import database, storage, metering, media_redirect
@@ -25,7 +31,7 @@ def _clip_title(clip) -> str:
     return clip.get("title") or clip.get("video_title_for_youtube_short") or "Short"
 
 
-_HOOK_CHAIN_RE = re.compile(r'^subtitled_\d+_((?:hooked_\d+_|hook_).+)$')
+_LAYER_PREFIX = re.compile(r'^(?:endcard_[a-f0-9]{8}_|subtitled_\d+_|hooked_\d+_|hook_)(.+)$')
 
 
 def _canonical_name(base_name, clip_index):
@@ -47,9 +53,12 @@ def _twins_to_archive(served, base_name, clip_index):
     canonical = _canonical_name(base_name, clip_index)
     if clean != served and clean != canonical:
         out.append(clean)
-    m = _HOOK_CHAIN_RE.match(clean)
-    if m and m.group(1) != canonical:
-        out.append(m.group(1))
+    match = _LAYER_PREFIX.match(clean)
+    while match:
+        clean = match.group(1)
+        if clean != canonical and clean not in out:
+            out.append(clean)
+        match = _LAYER_PREFIX.match(clean)
     return out
 
 
@@ -76,6 +85,7 @@ def _superseded_names(prev, original_file, new_filename, base_name, clip_index):
     keep = {new_filename, watermarked.clean_name(new_filename),
             original_file or "", watermarked.clean_name(original_file or ""),
             _canonical_name(base_name, clip_index) or ""}
+    keep.update(_twins_to_archive(new_filename, base_name, clip_index))
     out = []
     for name in (prev, watermarked.clean_name(prev)):
         if name and name not in keep and name not in out:
@@ -148,10 +158,9 @@ async def unmark_user_library(user_id, job_id=None) -> int:
     """After an upgrade: serve every clip this user has through its clean twin.
 
     The free plan burns the mark into a ``wm_`` copy and archives the clean
-    final next to it (``_twins_to_archive``), or since 25-nov-2026 a recipe
-    for it that is encoded here (``_clean_size``), so losing the mark is a
-    re-pointing: the history row and the project state move to
-    the twin, the marked object is deleted, and app.py is told so a dashboard
+    final next to it, or a recipe for it that can be encoded on demand.
+    Losing the mark re-points history and project state to the clean twin,
+    and app.py is told so a dashboard
     that is open on the job follows. A clip whose twin is not in R2 keeps its
     marked file: a dead link would be worse than the mark. Returns the number
     of clips re-pointed. ``job_id`` limits it to that job (a free job that
@@ -169,7 +178,7 @@ async def unmark_user_library(user_id, job_id=None) -> int:
         projects = list((await s.execute(q)).scalars())
     done = 0
     for proj in projects:
-        new_state, changes = unmarked_clip_state(proj.state)
+        _, changes = unmarked_clip_state(proj.state)
         if not changes:
             continue
         applied = []
@@ -189,19 +198,25 @@ async def unmark_user_library(user_id, job_id=None) -> int:
             if (watermarked.is_marked(original)
                     and watermarked.clean_name(original) not in served):
                 await _clean_size(user_id, proj, watermarked.clean_name(original))
-        applied_idx = {a[0] for a in applied}
-        # Clips whose twin is missing keep their marked entry.
-        prior = {c.get("index"): c for c in (proj.state or {}).get("clips", [])}
-        new_state["clips"] = [
-            c if c.get("index") in applied_idx else dict(prior.get(c.get("index"), c))
-            for c in new_state["clips"]]
         async with database.session() as s:
             async with s.begin():
                 row = (await s.execute(
-                    select(Project).where(Project.id == proj.id)
+                    select(Project).where(Project.id == proj.id).with_for_update()
                 )).scalar_one_or_none()
-                if row is not None:
-                    row.state = new_state
+                if row is None:
+                    continue
+                prior = {c.get("index"): c for c in (row.state or {}).get("clips", [])}
+                # The project may have changed while storage was checked.
+                applied = [a for a in applied if (prior.get(a[0]) or {}).get("server_file") == a[1]]
+                if not applied:
+                    continue
+                applied_idx = {a[0] for a in applied}
+                new_state, _ = unmarked_clip_state(row.state)
+                new_state["clips"] = [
+                    c if c.get("index") in applied_idx else dict(prior.get(c.get("index"), c))
+                    for c in new_state["clips"]]
+                row.state = new_state
+                retain_snapshot = _archive_revision(new_state) > 0
                 for index, _wm, _clean, clean_key, size in applied:
                     vid = (await s.execute(
                         select(UserVideo).where(UserVideo.user_id == user_id,
@@ -211,11 +226,12 @@ async def unmark_user_library(user_id, job_id=None) -> int:
                     if vid is not None:
                         vid.r2_key, vid.size_bytes = clean_key, size
         for index, wm_name, clean, _key, _size in applied:
-            try:
-                await asyncio.to_thread(
-                    storage.delete_key, storage.job_key(user_id, proj.job_id, wm_name))
-            except Exception as e:
-                print(f"⚠️  Could not delete marked R2 object {wm_name}: {e}")
+            if not retain_snapshot:
+                try:
+                    await asyncio.to_thread(
+                        storage.delete_key, storage.job_key(user_id, proj.job_id, wm_name))
+                except Exception as e:
+                    print(f"⚠️  Could not delete marked R2 object {wm_name}: {e}")
             if _local_unmark is not None:
                 try:
                     _local_unmark(proj.job_id, index, clean)
@@ -228,214 +244,226 @@ async def unmark_user_library(user_id, job_id=None) -> int:
     return done
 
 
-async def archive_job(user_id, job_id, clips, output_dir, attestation=None):
-    """Upload a completed managed job's clips + metadata JSON to R2 and record
-    them for history. The metadata (transcript included) plus the Project row
-    make the whole job re-openable and editable later, not just viewable.
+def _archive_filename(name, suffixes):
+    if (not isinstance(name, str) or name.startswith(".")
+            or re.search(r"[/\\\x00-\x1f]", name)
+            or not name.endswith(suffixes)):
+        raise ValueError("The project snapshot contains an invalid filename.")
+    return name
 
-    ``attestation`` is the "I hold the rights to this video" declaration the
-    submitter ticked (truncated IP, user agent, timestamp, which input path).
-    The privacy policy promises to keep it; the Project row is where it lives,
-    so it is deleted with the account like everything else that names a user.
-    """
-    if not settings.r2_configured or not clips:
-        return
-    metadata_r2_key = None
-    meta_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
-    if meta_files:
-        key = storage.job_key(user_id, job_id, os.path.basename(meta_files[0]))
+
+def _clip_filename(job_id, url):
+    prefix, _, name = urlsplit(url).path.rpartition("/")
+    if prefix not in ("", f"/videos/{job_id}"):
+        raise ValueError("The project snapshot contains a clip URL outside its job.")
+    return _archive_filename(name, (".mp4",))
+
+
+def _snapshot_dependencies(job_id, metadata_name, snapshot):
+    base_name = _archive_filename(metadata_name, ("_metadata.json",)).removesuffix("_metadata.json")
+    rows, dependency_names = [], {}
+    suffixes = (".mp4", ".png", ".m4a", ".json")
+    for index, clip in enumerate(snapshot["shorts"]):
+        if not clip.get("video_url") or (clip.get("quality") or {}).get("valid") is False:
+            continue
+        filename = _clip_filename(job_id, clip["video_url"])
+        rows.append((index, filename, _clip_title(clip)))
+        dependency_names[filename] = None
+        canonical = _canonical_name(base_name, index)
+        if canonical:
+            dependency_names[_archive_filename(canonical, suffixes)] = None
+        for twin in _twins_to_archive(filename, base_name, index):
+            dependency_names[_archive_filename(twin, suffixes)] = None
+        before = clip.get("pro_before") or {}
+        for reference in (before.get("base"), before.get("served")):
+            if reference:
+                prior = _archive_filename(reference, (".mp4",))
+                dependency_names[prior] = None
+                for twin in _twins_to_archive(prior, base_name, index):
+                    dependency_names[_archive_filename(twin, suffixes)] = None
+
+        # Editor assets can outlive the local output directory. A saved cut
+        # still needs its original videos, music and card image after restore.
+        broll_ids = [placement.get("asset_id") for placement in (clip.get("broll") or [])]
+        if clip.get("bottom_video_asset_id"):
+            broll_ids.append(clip["bottom_video_asset_id"])
+        references = [("broll", ident, "mp4") for ident in broll_ids]
+        for kind, extension in (("music", "m4a"), ("endcard", "png")):
+            ident = (clip.get(kind) or {}).get("asset_id")
+            if ident is not None:
+                references.append((kind, ident, extension))
+        for kind, ident, extension in references:
+            if not isinstance(ident, str) or not re.fullmatch(r"[a-f0-9]{32}", ident):
+                raise ValueError("The project snapshot contains an invalid editor asset ID.")
+            dependency_names[f"{kind}_asset_{ident}.{extension}"] = None
+            dependency_names[f"{kind}_asset_{ident}.json"] = None
+    return rows, dependency_names
+
+
+def _ensure_archive_object(directory, name, key):
+    """Reuse an immutable media object or upload from one stable local inode."""
+    path = os.path.join(directory, name)
+    if os.path.islink(path):
+        raise ValueError(f"Cannot archive a symbolic link: {name}")
+    remote_size = storage.object_size(key)
+    if remote_size is not None:
+        if remote_size <= 0 or (os.path.isfile(path) and os.path.getsize(path) != remote_size):
+            raise ValueError(f"Archived file does not match the snapshot: {name}")
+        return remote_size
+    if not os.path.isfile(path) and clean_twin.available(directory, name):
+        # A free clip may retain its clean picture as a recipe. Keep that
+        # recipe and all its inputs durable without eagerly encoding it.
+        names = clean_twin.archive_names(directory, name)
+        if not names or any(not os.path.isfile(part) for part in clean_twin.recipe_paths(directory, name)):
+            raise FileNotFoundError(f"The clean clip recipe is missing: {name}")
+        prefix = key.rsplit("/", 1)[0]
+        for asset in names:
+            _ensure_archive_object(directory, asset, f"{prefix}/{asset}")
+        return 0
+    if not os.path.isfile(path) and name.startswith(("hooked_", "hook_")):
+        from hooks import has_recipe, materialize
+
+        if has_recipe(directory, name):
+            materialize(directory, name)
+    content_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    with open(path, "rb") as handle:
+        size = os.fstat(handle.fileno()).st_size
+        if size <= 0:
+            raise ValueError(f"Cannot archive an empty file: {name}")
+        storage.upload_fileobj(handle, key, content_type)
+    return size
+
+
+def _archive_revision(state):
+    try:
+        return int((state or {}).get("archive_revision") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _publish_archive_revision(user_id, job_id, metadata_key, revision, uploaded, attestation):
+    """Move history and project pointers together, conditional on the revision."""
+    for attempt in range(2):
+        creating = False
         try:
-            await asyncio.to_thread(storage.upload_file, meta_files[0], key, "application/json")
-            metadata_r2_key = key
-        except Exception as e:
-            print(f"⚠️  R2 upload failed for {key}: {e}")
+            async with database.session() as session:
+                async with session.begin():
+                    project = (await session.execute(
+                        select(Project).where(Project.job_id == job_id).with_for_update()
+                    )).scalar_one_or_none()
+                    if project is not None and str(project.user_id) != str(user_id):
+                        raise ValueError("The project snapshot does not belong to this owner.")
+                    state = dict(project.state or {}) if project is not None else {}
+                    if attestation and "rights_attestation" not in state:
+                        state["rights_attestation"] = {
+                            "acknowledged": bool(attestation.get("acknowledged")),
+                            "ip_network": attestation.get("ip"),
+                            "user_agent": (attestation.get("user_agent") or "")[:300],
+                            "timestamp": attestation.get("timestamp"),
+                            "source": attestation.get("source"),
+                        }
+                    if project is not None and revision <= _archive_revision(state):
+                        if state != project.state:
+                            project.state = state
+                        return False
 
-    base_name = (os.path.basename(meta_files[0]).replace("_metadata.json", "")
-                 if meta_files else None)
-    uploaded = []  # (clip_index, filename, key, title, size_bytes)
-    for i, clip in enumerate(clips):
-        video_url = clip.get("video_url") or ""
-        filename = video_url.split("/")[-1]
-        if not filename:
-            continue
-        local_path = os.path.join(output_dir, filename)
-        if not os.path.exists(local_path):
-            continue
-        key = storage.job_key(user_id, job_id, filename)
-        try:
-            await asyncio.to_thread(storage.upload_file, local_path, key)
-        except Exception as e:
-            print(f"⚠️  R2 upload failed for {key}: {e}")
-            continue
-        uploaded.append((i, filename, key, _clip_title(clip), os.path.getsize(local_path)))
+                    clips = {clip["index"]: dict(clip) for clip in state.get("clips", [])}
+                    for index, filename, _key, _title, _size in uploaded:
+                        clip = clips.setdefault(index, {"index": index, "active_layers": None})
+                        clip["original_file"] = clip.get("original_file") or filename
+                        clip["server_file"] = filename
+                    state.update(v=state.get("v", 1), clips=list(clips.values()),
+                                 archive_revision=str(revision))
+                    total = sum(size for _index, _filename, _key, _title, size in uploaded)
+                    if project is None:
+                        creating = True
+                        project = Project(user_id=user_id, job_id=job_id, title=uploaded[0][3],
+                                          metadata_r2_key=metadata_key)
+                        session.add(project)
+                        # Establish the unique job row before creating history
+                        # rows. A concurrent creator retries under the row lock.
+                        await session.flush()
+                    project.metadata_r2_key = metadata_key
+                    project.state = state
+                    project.size_bytes = total
 
-        # Also archive the clean canonical when the served file is a derived
-        # one (captioned/recut): it is the editable master — the clip editor's
-        # fast path and /api/subtitle re-styles cut from it, so a project
-        # restored after a redeploy is only editable if it comes back too.
-        # Restore downloads every key under the job prefix (except the
-        # archived source, cloud/source_archive.py), so no change is needed on
-        # that side; the free-retention purge deletes by prefix.
-        if base_name:
-            clean = f"{base_name}_clip_{i + 1}.mp4"
-            clean_path = os.path.join(output_dir, clean)
-            if clean != filename and os.path.exists(clean_path):
-                clean_key = storage.job_key(user_id, job_id, clean)
-                try:
-                    await asyncio.to_thread(storage.upload_file, clean_path, clean_key)
-                except Exception as e:
-                    print(f"⚠️  R2 upload failed for {clean_key}: {e}")
-
-        # Free plan: the served file is the wm_ copy of the final one, and the
-        # clean final rides along so an upgrade can re-point at it without a
-        # render (unmark_user_library). The canonical is handled just above.
-        for twin_name in _archived_twins(output_dir, filename, base_name, i):
-            twin_key = storage.job_key(user_id, job_id, twin_name)
-            try:
-                await asyncio.to_thread(storage.upload_file,
-                                        os.path.join(output_dir, twin_name), twin_key)
-            except Exception as e:
-                print(f"⚠️  R2 upload failed for {twin_key}: {e}")
-
-    if not uploaded:
-        return
-    async with database.session() as s:
-        async with s.begin():
-            # Upsert per-clip history rows: re-archiving a job must repoint the
-            # existing rows, never duplicate them.
-            existing = {
-                v.clip_index: v for v in (await s.execute(
-                    select(UserVideo).where(UserVideo.user_id == user_id,
-                                            UserVideo.job_id == job_id)
-                )).scalars()
-            }
-            for i, _filename, key, title, size in uploaded:
-                row = existing.get(i)
-                if row is not None:
-                    row.r2_key, row.title, row.size_bytes = key, title, size
-                else:
-                    s.add(UserVideo(user_id=user_id, job_id=job_id, clip_index=i,
-                                    r2_key=key, title=title, size_bytes=size))
-            # Upsert the Project row (only re-openable with the metadata in R2).
-            if metadata_r2_key:
-                proj = (await s.execute(
-                    select(Project).where(Project.job_id == job_id)
-                )).scalar_one_or_none()
-                state = {"v": 1, "clips": [
-                    {"index": i, "original_file": filename, "server_file": filename,
-                     "active_layers": None}
-                    for i, filename, _key, _title, _size in uploaded
-                ]}
-                if attestation:
-                    state["rights_attestation"] = {
-                        "acknowledged": bool(attestation.get("acknowledged")),
-                        # Already truncated to a /24 (or /48) by app.py.
-                        "ip_network": attestation.get("ip"),
-                        "user_agent": (attestation.get("user_agent") or "")[:300],
-                        "timestamp": attestation.get("timestamp"),
-                        "source": attestation.get("source"),
+                    existing = {
+                        video.clip_index: video for video in (await session.execute(
+                            select(UserVideo).where(UserVideo.user_id == user_id, UserVideo.job_id == job_id)
+                        )).scalars()
                     }
-                elif proj is not None and isinstance(proj.state, dict):
-                    # Re-archiving must not erase the original declaration.
-                    prior = proj.state.get("rights_attestation")
-                    if prior:
-                        state["rights_attestation"] = prior
-                total = sum(u[4] for u in uploaded)
-                if proj is None:
-                    s.add(Project(user_id=user_id, job_id=job_id, title=uploaded[0][3],
-                                  metadata_r2_key=metadata_r2_key, state=state,
-                                  size_bytes=total))
-                else:
-                    proj.metadata_r2_key = metadata_r2_key
-                    proj.state = state
-                    proj.size_bytes = total
-    media_redirect.forget(job_id)
-    print(f"☁️  Archived {len(uploaded)} clip(s) to R2 for user {user_id}.")
+                    for index, _filename, key, title, size in uploaded:
+                        video = existing.get(index)
+                        if video is None:
+                            session.add(UserVideo(user_id=user_id, job_id=job_id, clip_index=index,
+                                                  r2_key=key, title=title, size_bytes=size))
+                        else:
+                            video.r2_key, video.title, video.size_bytes = key, title, size
+            return True
+        except IntegrityError:
+            if not creating or attempt:
+                raise
 
 
-async def archive_clip_edit(user_id, job_id, clip_index, output_dir, new_filename):
-    """Re-archive one clip after a server-side edit (subtitles/hook/effects/dub).
+async def _archive_snapshot(user_id, job_id, output_dir, metadata_name, metadata_snapshot,
+                            revision, rows, dependencies, attestation=None):
+    if not rows:
+        return
+    uploaded_sizes = {}
+    for name in dependencies:
+        key = storage.job_key(user_id, job_id, name)
+        uploaded_sizes[name] = await asyncio.to_thread(
+            _ensure_archive_object, output_dir, name, key)
+    metadata_key = storage.job_key(
+        user_id, job_id, f"metadata/{revision}-{uuid.uuid4().hex}/{metadata_name}")
+    with io.BytesIO(metadata_snapshot) as metadata_file:
+        await asyncio.to_thread(storage.upload_fileobj, metadata_file, metadata_key, "application/json")
+    uploaded = [(index, name, storage.job_key(user_id, job_id, name), title, uploaded_sizes[name])
+                for index, name, title in rows]
+    committed = await _publish_archive_revision(
+        user_id, job_id, metadata_key, revision, uploaded, attestation)
+    if committed:
+        media_redirect.forget(job_id)
+        print(f"☁️  Archived {len(uploaded)} clip(s) to R2 for user {user_id}.")
 
-    Uploads the new current file plus the refreshed metadata JSON, repoints the
-    history row and the project state, and deletes the superseded R2 object —
-    per clip only the pristine original and the current version are kept.
-    """
+
+async def archive_job(user_id, job_id, clips, output_dir, attestation=None):
+    """Archive the completed job as an immutable metadata and media snapshot."""
+    if not settings.r2_configured or not user_id or not clips:
+        return
+    metadata_path = next(iter(glob.glob(os.path.join(output_dir, "*_metadata.json"))), None)
+    if metadata_path is None or os.path.islink(metadata_path):
+        raise FileNotFoundError("The project metadata could not be archived.")
+    with open(metadata_path, "rb") as handle:
+        metadata_snapshot = handle.read()
+        revision = os.fstat(handle.fileno()).st_mtime_ns
+    metadata_name = os.path.basename(metadata_path)
+    snapshot = json.loads(metadata_snapshot)
+    for position, clip in enumerate(clips):
+        index = clip.get("clip_index", position)
+        if type(index) is not int or not 0 <= index < len(snapshot["shorts"]):
+            raise ValueError("The completed clip does not match the project snapshot.")
+        # Initial pipeline metadata predates serving URLs. Preserve URLs
+        # already recorded by an editor that saved before this task ran.
+        if clip.get("video_url") and not snapshot["shorts"][index].get("video_url"):
+            snapshot["shorts"][index]["video_url"] = clip["video_url"]
+    rows, dependencies = _snapshot_dependencies(job_id, metadata_name, snapshot)
+    await _archive_snapshot(user_id, job_id, output_dir, metadata_name,
+                            json.dumps(snapshot, ensure_ascii=False).encode(), revision,
+                            rows, dependencies, attestation)
+
+
+async def archive_clip_edit(user_id, job_id, clip_index, output_dir, new_filename, *,
+                            metadata_name, metadata_snapshot, revision):
+    """Archive a captured edit only after every referenced file is durable."""
     if not settings.r2_configured or not user_id:
         return
-    local_path = os.path.join(output_dir, new_filename)
-    if not os.path.exists(local_path):
-        return
-    new_key = storage.job_key(user_id, job_id, new_filename)
-    await asyncio.to_thread(storage.upload_file, local_path, new_key)
-
-    metadata_r2_key = None
-    meta_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
-    base_name = (os.path.basename(meta_files[0]).replace("_metadata.json", "")
-                 if meta_files else None)
-
-    # Same chain rule as archive_job: a captioned hook needs its hooked_
-    # intermediate archived too, or the restored project cannot re-style; and
-    # a wm_ copy needs its clean twin, or an upgrade cannot drop the mark.
-    for twin_name in _archived_twins(output_dir, new_filename, base_name, clip_index):
-        try:
-            await asyncio.to_thread(
-                storage.upload_file, os.path.join(output_dir, twin_name),
-                storage.job_key(user_id, job_id, twin_name))
-        except Exception as e:
-            print(f"⚠️  R2 upload failed for {twin_name} of {job_id}: {e}")
-    if meta_files:
-        metadata_r2_key = storage.job_key(user_id, job_id, os.path.basename(meta_files[0]))
-        try:
-            await asyncio.to_thread(storage.upload_file, meta_files[0], metadata_r2_key,
-                                    "application/json")
-        except Exception as e:
-            print(f"⚠️  R2 metadata refresh failed for {job_id}: {e}")
-            metadata_r2_key = None
-
-    size = os.path.getsize(local_path)
-    superseded = []
-    async with database.session() as s:
-        async with s.begin():
-            proj = (await s.execute(
-                select(Project).where(Project.job_id == job_id)
-            )).scalar_one_or_none()
-            if proj is not None:
-                state = dict(proj.state or {"v": 1, "clips": []})
-                clips_state = [dict(c) for c in state.get("clips", [])]
-                entry = next((c for c in clips_state if c.get("index") == clip_index), None)
-                if entry is None:
-                    entry = {"index": clip_index, "original_file": new_filename,
-                             "active_layers": None}
-                    clips_state.append(entry)
-                prev = entry.get("server_file")
-                superseded = [
-                    storage.job_key(user_id, job_id, name) for name in
-                    _superseded_names(prev, entry.get("original_file"), new_filename,
-                                      base_name, clip_index)]
-                entry["server_file"] = new_filename
-                state["clips"] = clips_state
-                proj.state = state
-                if metadata_r2_key:
-                    proj.metadata_r2_key = metadata_r2_key
-            vid = (await s.execute(
-                select(UserVideo).where(UserVideo.user_id == user_id,
-                                        UserVideo.job_id == job_id,
-                                        UserVideo.clip_index == clip_index)
-            )).scalars().first()
-            if vid is not None:
-                vid.r2_key, vid.size_bytes = new_key, size
-            else:
-                s.add(UserVideo(user_id=user_id, job_id=job_id, clip_index=clip_index,
-                                r2_key=new_key, size_bytes=size))
-    media_redirect.forget(job_id)
-    for superseded_key in superseded:
-        if superseded_key == new_key:
-            continue
-        try:
-            await asyncio.to_thread(storage.delete_key, superseded_key)
-        except Exception as e:
-            print(f"⚠️  Could not delete superseded R2 object {superseded_key}: {e}")
-
+    snapshot = json.loads(metadata_snapshot)
+    rows, dependencies = _snapshot_dependencies(job_id, metadata_name, snapshot)
+    if not any(index == clip_index and name == new_filename for index, name, _title in rows):
+        raise ValueError("The edited clip does not match the project snapshot.")
+    await _archive_snapshot(user_id, job_id, output_dir, metadata_name, metadata_snapshot,
+                            revision, rows, dependencies)
 
 @router.get("/api/projects")
 async def list_projects(request: Request):
@@ -471,7 +499,7 @@ async def save_project_state(job_id: str, request: Request):
     async with database.session() as s:
         async with s.begin():
             proj = (await s.execute(
-                select(Project).where(Project.job_id == job_id)
+                select(Project).where(Project.job_id == job_id).with_for_update()
             )).scalar_one_or_none()
             if proj is None or str(proj.user_id) != str(user.id):
                 raise HTTPException(status_code=404, detail="Project not found")
@@ -489,7 +517,10 @@ async def save_project_state(job_id: str, request: Request):
                     clips_state.append(entry)
                     by_index[idx] = entry
                 entry["active_layers"] = c.get("active_layers")
-                if c.get("server_file"):
+                # Versioned metadata and its server filenames are advanced
+                # together by the archive transaction, even when a browser
+                # saves its local layers from an older tab.
+                if c.get("server_file") and not _archive_revision(state):
                     entry["server_file"] = os.path.basename(str(c["server_file"]))
             state["clips"] = clips_state
             proj.state = state

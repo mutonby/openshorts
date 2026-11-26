@@ -26,15 +26,17 @@ const clock = (seconds) => {
 
 const looksLikeUrl = (u) => /^https?:\/\/\S+\.\S+/.test((u || '').trim());
 
-export default function SourceCost({ mode, url, fileSeconds, range, onRangeChange }) {
+export default function SourceCost({ mode, url, file, fileSeconds, range, onRangeChange, localRanges, exactRange }) {
     const { isManaged } = useAuth();
     const [estimate, setEstimate] = useState(null);
     const [loading, setLoading] = useState(false);
     const [picking, setPicking] = useState(false);
+    const minRange = exactRange ? 1 : MIN_RANGE_SECONDS;
 
     // A new source starts from the whole video again.
     useEffect(() => {
         setEstimate(null);
+        setLoading(false);
         setPicking(false);
         onRangeChange(null);
         if (!isManaged) return undefined;
@@ -66,7 +68,54 @@ export default function SourceCost({ mode, url, fileSeconds, range, onRangeChang
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isManaged, mode, url, fileSeconds]);
 
-    if (!isManaged) return null;
+    if (!isManaged) {
+        const seconds = mode === 'file' ? fileSeconds : null;
+        const duration = seconds ? (exactRange ? Number(seconds.toFixed(3)) : Math.floor(seconds)) : null;
+        if (!localRanges || (mode === 'url' ? !looksLikeUrl(url) : !file || (duration && duration <= minRange))) {
+            return null;
+        }
+        const from = Number(range?.start || 0);
+        const to = Number(range?.end || 0);
+        return (
+            <fieldset className="mt-3 rounded-input border border-rule px-3 py-2.5">
+                <label className="flex items-center gap-2 text-xs text-ink2">
+                    <input type="checkbox" className="accent-brass" checked={picking}
+                        onChange={(event) => {
+                            const open = event.target.checked;
+                            setPicking(open);
+                            onRangeChange(open ? { start: '0', end: duration ? String(duration) : '' } : null);
+                        }} />
+                    {exactRange ? 'Export a source section' : 'Analyze a source section'}
+                    {duration > 0 && <span className="readout ml-auto">{clock(duration)} source</span>}
+                </label>
+                {picking && range && (
+                    <>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                            <label>
+                                <span className="eyebrow block mb-1">Start (s)</span>
+                                <input type="number" className="input-field" required min="0" step={exactRange ? '0.001' : '1'}
+                                    max={duration ? Number((duration - minRange).toFixed(3)) : undefined}
+                                    value={range.start}
+                                    onChange={(event) => onRangeChange({ ...range, start: event.target.value })} />
+                            </label>
+                            <label>
+                                <span className="eyebrow block mb-1">End (s)</span>
+                                <input type="number" className="input-field" required min={Number((from + minRange).toFixed(3))} step={exactRange ? '0.001' : '1'}
+                                    max={duration || undefined}
+                                    value={range.end}
+                                    onChange={(event) => onRangeChange({ ...range, end: event.target.value })} />
+                            </label>
+                        </div>
+                        <p className="text-xs text-muted mt-2">
+                            {to - from >= minRange
+                                ? `${exactRange ? 'Export' : 'Analyze'} ${clock(to - from)} of source footage.`
+                                : `Choose a section of at least ${minRange}s.`}
+                        </p>
+                    </>
+                )}
+            </fieldset>
+        );
+    }
     if (loading && !estimate) {
         return (
             <p className="mt-3 flex items-center gap-2 text-xs text-muted">
@@ -76,11 +125,11 @@ export default function SourceCost({ mode, url, fileSeconds, range, onRangeChang
     }
     if (!estimate) return null;
 
-    const total = estimate.source_minutes * 60;
+    const total = exactRange ? (estimate.source_seconds ?? estimate.source_minutes * 60) : estimate.source_minutes * 60;
     const remaining = estimate.remaining;
     const start = range ? range.start : 0;
     const end = range ? range.end : total;
-    const rangeCost = billable(end - start);
+    const rangeCost = billable(Number(end) - Number(start));
     const short = rangeCost > remaining;
 
     const setStart = (v) => onRangeChange({ start: Math.min(v, end - MIN_RANGE_SECONDS), end });
@@ -112,7 +161,7 @@ export default function SourceCost({ mode, url, fileSeconds, range, onRangeChang
         );
     }
 
-    const canPick = total >= MIN_RANGE_SECONDS * 2;
+    const canPick = exactRange ? total > minRange : total >= MIN_RANGE_SECONDS * 2;
 
     return (
         <div className="mt-3 text-xs leading-relaxed">
@@ -135,7 +184,23 @@ export default function SourceCost({ mode, url, fileSeconds, range, onRangeChang
                 )}
             </div>
             <p className="text-muted mt-0.5">Billed per minute of video you import. Trims, reframes, hooks and captions on the clips are free.</p>
-            {(picking || range) && range && (
+            {(picking || range) && range && exactRange && (
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                    <label>
+                        <span className="eyebrow block mb-1">Start (s)</span>
+                        <input type="number" className="input-field" required min="0" step="0.001"
+                            max={Number((total - minRange).toFixed(3))} value={start}
+                            onChange={(e) => onRangeChange({ start: e.target.value, end })} />
+                    </label>
+                    <label>
+                        <span className="eyebrow block mb-1">End (s)</span>
+                        <input type="number" className="input-field" required min={Number((Number(start) + minRange).toFixed(3))}
+                            max={total} step="0.001" value={end}
+                            onChange={(e) => onRangeChange({ start, end: e.target.value })} />
+                    </label>
+                </div>
+            )}
+            {(picking || range) && range && !exactRange && (
                 <div className="mt-3 space-y-2 animate-fade">
                     <label className="block">
                         <span className="flex justify-between"><span className="eyebrow">from</span><span className="readout">{clock(start)}</span></span>

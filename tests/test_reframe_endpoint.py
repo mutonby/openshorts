@@ -113,6 +113,9 @@ class TestReframeValidation:
 
 class TestReframeRender:
     def test_renders_from_source_with_overrides_and_captions(self, job, fake_recut):
+        meta = json.loads(job["meta_path"].read_text())
+        meta["framing_method"] = "motion"
+        job["meta_path"].write_text(json.dumps(meta))
         resp = _request("POST", "/api/clip/reframe", {
             "job_id": JOB_ID, "clip_index": 0,
             "crop_overrides": {"0": 0.2, "1": {"top": 0.6, "bottom": {"x": 0.3, "y": 0.4}}}})
@@ -123,6 +126,7 @@ class TestReframeRender:
         call = fake_recut[0]
         assert call["input_path"].endswith("src.mp4")
         assert call["reframe"] is True
+        assert call["framing_method"] == "motion"
         assert call["crop_overrides"][0] == 0.2
         assert call["crop_overrides"][1]["top"] == {"x": 0.6, "y": 0.5}
         assert call["crop_overrides"][1]["bottom"] == {"x": 0.3, "y": 0.4}

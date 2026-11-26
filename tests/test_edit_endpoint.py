@@ -80,8 +80,9 @@ def editor(monkeypatch):
 def test_the_edit_becomes_the_clips_file(job, editor):
     resp = _request({"job_id": JOB_ID, "clip_index": 0})
     assert resp.status_code == 200, resp.text
-    assert resp.json()["new_video_url"] == f"/videos/{JOB_ID}/edited_t_clip_1.mp4"
-    assert (job["dir"] / "edited_t_clip_1.mp4").read_bytes() == b"edited:clip1"
+    url = resp.json()["new_video_url"]
+    assert url.startswith(f"/videos/{JOB_ID}/edited_") and url.endswith("_t_clip_1.mp4")
+    assert (job["dir"] / os.path.basename(url)).read_bytes() == b"edited:clip1"
     assert not [f for f in os.listdir(job["dir"]) if f.startswith("temp_")]
 
 
@@ -89,11 +90,21 @@ def test_two_clips_of_a_job_never_share_temp_files(job, editor):
     """With one temp name per job, edits running at once overwrote each
     other's input and moved each other's result."""
     _fake, calls = editor
-    assert _request({"job_id": JOB_ID, "clip_index": 0}).status_code == 200
-    assert _request({"job_id": JOB_ID, "clip_index": 1}).status_code == 200
+    first = _request({"job_id": JOB_ID, "clip_index": 0})
+    second = _request({"job_id": JOB_ID, "clip_index": 1})
+    assert first.status_code == second.status_code == 200
     (in_a, out_a), (in_b, out_b) = calls
     assert in_a != in_b and out_a != out_b
-    assert (job["dir"] / "edited_t_clip_2.mp4").read_bytes() == b"edited:clip2"
+    assert (job["dir"] / os.path.basename(second.json()["new_video_url"])).read_bytes() == b"edited:clip2"
+
+
+def test_repeated_edits_of_same_input_keep_both_versions(job, editor):
+    request = {"job_id": JOB_ID, "clip_index": 0, "input_filename": "t_clip_1.mp4"}
+    first, second = _request(request), _request(request)
+    assert first.status_code == second.status_code == 200
+    names = [os.path.basename(response.json()["new_video_url"]) for response in (first, second)]
+    assert names[0] != names[1]
+    assert all((job["dir"] / name).read_bytes() == b"edited:clip1" for name in names)
 
 
 def test_an_edit_that_wrote_no_video_is_an_error(job, editor):

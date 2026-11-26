@@ -3,6 +3,7 @@ import argparse
 import ast
 import atexit
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -53,11 +54,15 @@ def run_cli(monkeypatch, tmp_path):
             argv += ["--output", str(output)]
         monkeypatch.setattr(sys, "argv", argv)
         namespace = {
-            "argparse": argparse, "os": os, "time": time, "json": json,
+            "argparse": argparse, "os": os, "time": time, "json": json, "math": math,
             "threading": threading, "layout_picker": SimpleNamespace(ENABLED=False),
             "download_youtube_video": download,
-            "render_clip": lambda video, path, fmt: renders.append((video, path, fmt)),
+            "render_clip": lambda video, path, fmt, **kwargs: renders.append((video, path, fmt)),
         }
+        import framing
+        import hook_grounding
+        namespace["framing"] = framing
+        namespace["hook_grounding"] = hook_grounding
         exec(code, namespace)
         assert len(renders) == 1
         return renders[0][1], downloads
