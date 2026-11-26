@@ -149,3 +149,22 @@ def test_url_wins_over_session_id(dirs, session, monkeypatch):
     assert "-u" in job["cmd"]
     assert "--transcript" not in job["cmd"]
     assert job["attestation"]["source"] == "url"
+
+
+def _post_raw(content):
+    async def _do():
+        transport = httpx.ASGITransport(app=app_module.app)
+        async with httpx.AsyncClient(transport=transport,
+                                     base_url="http://testserver") as client:
+            return await client.post(
+                "/api/process", content=content,
+                headers={"X-Gemini-Key": "test-key",
+                         "Content-Type": "application/json"},
+            )
+    return asyncio.run(_do())
+
+
+@pytest.mark.parametrize("raw", [b"{'url': 'x'}", b"not json", b"\xff\xfe", b"[1, 2]", b"null"])
+def test_malformed_json_body_is_400_not_500(dirs, raw):
+    r = _post_raw(raw)
+    assert r.status_code == 400
