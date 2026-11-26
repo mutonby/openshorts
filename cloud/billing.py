@@ -703,9 +703,9 @@ async def _upsert_subscription(sub_obj: dict, event_created: datetime):
             "🔻 Subscription canceled",
             f"A {plan} subscriber just canceled in the Stripe portal"
             f"{f' (reason: {feedback})' if feedback else ''}.\n"
-            f"Access continues until {end_dt:%Y-%m-%d}. Google-authed users then "
-            f"drop to the free plan (clips expire after 7 days); others keep their "
-            f"videos {VIDEO_RETENTION_GRACE_DAYS} more days before deletion.",
+            f"Access continues until {end_dt:%Y-%m-%d}, and the library is kept "
+            f"{VIDEO_RETENTION_GRACE_DAYS} more days after that. Accounts that fall "
+            f"back to the free plan then follow its 7-day clip expiry.",
         )
 
 

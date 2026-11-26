@@ -87,8 +87,9 @@ function StatusBadge({ run }) {
   if (status === 'processing' || status === 'queued') {
     return <span className="badge-brass inline-flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> clipping</span>;
   }
-  if (status === 'skipped') return <span className="badge-warn">{REASON_TEXT[run.reason] || 'skipped'}</span>;
-  return <span className="badge-danger">{REASON_TEXT[run.reason] || 'failed'}</span>;
+  // The badge is three words; the sentence the API sends rides as its tooltip.
+  if (status === 'skipped') return <span className="badge-warn" title={run.message || undefined}>{REASON_TEXT[run.reason] || 'skipped'}</span>;
+  return <span className="badge-danger" title={run.message || undefined}>{REASON_TEXT[run.reason] || 'failed'}</span>;
 }
 
 export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }) {
@@ -203,7 +204,9 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
       });
       track('AutopilotManualRun', { props: { status: r.status } });
       if (r.status === 'processing') setListNotice(`Clipping “${video.title || 'your video'}”. We will email you when the clips are ready.`);
-      else setListNotice(`Not clipped: ${REASON_TEXT[r.reason] || r.reason || r.status}.`);
+      // The API says why in a sentence (a Short has nothing to cut, a private
+      // video needs unlisting); the short label is for an older API.
+      else setListNotice(r.message ? `Not clipped. ${r.message}` : `Not clipped: ${REASON_TEXT[r.reason] || r.reason || r.status}.`);
     } catch (e) {
       if (e?.name === 'QuotaError') {
         setListNotice('You are out of minutes for this period.');
@@ -332,7 +335,8 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
             <p className="text-ink">{s.enabled ? 'on: new videos are clipped automatically' : 'off'}</p>
             <p className="text-muted text-sm mt-1">
               Only videos you publish from now on. Up to {limits.daily_auto || 1} video a day, the first
-              {' '}{s.max_minutes || 30} minutes of each. Shorts are skipped.
+              {' '}{s.max_minutes || 30} minutes of each. Shorts are skipped: Autopilot clips your
+              regular, longer videos.
             </p>
             {s.enabled && s.last_checked_at && (
               <p className="readout mt-2 flex items-center gap-1"><Clock size={11} /> last check {fmtDate(s.last_checked_at)} · every hour</p>
@@ -458,6 +462,13 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
             </div>
             <button onClick={load} className="btn-quiet text-xs" aria-label="refresh"><RefreshCw size={13} /> refresh</button>
           </div>
+          {/* A channel whose every tried video was a Short: said once, in
+              words, or the list reads as a row of buttons that do nothing. */}
+          {data?.notice && (
+            <p className="text-warn text-sm mb-4 flex items-start gap-2">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" /> <span>{data.notice}</span>
+            </p>
+          )}
           {listNotice && (
             <div className="mb-4 rounded-card border border-brass/40 bg-brass/5 px-4 py-3 text-sm text-ink2" role="status">{listNotice}</div>
           )}
@@ -518,6 +529,11 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
                     : r.status === 'skipped' ? <Play size={15} className="text-muted shrink-0" />
                       : <AlertTriangle size={15} className="text-danger shrink-0" />}
                 <span className="text-ink2 truncate flex-1">{r.video_title || r.video_id}</span>
+                {(r.status === 'skipped' || r.status === 'failed') && (
+                  <span className="readout shrink-0" title={r.message || undefined}>
+                    {REASON_TEXT[r.reason] || (r.status === 'skipped' ? 'skipped' : 'failed')}
+                  </span>
+                )}
                 {r.posted_count ? <span className="readout hidden sm:inline-flex items-center gap-1"><Send size={11} /> {r.posted_count} scheduled</span> : null}
                 <span className="readout shrink-0">{r.trigger === 'manual' ? 'manual' : 'auto'} · {fmtDate(r.created_at)}</span>
               </div>

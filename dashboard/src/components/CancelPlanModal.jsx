@@ -320,8 +320,9 @@ export default function CancelPlanModal({ plan, periodEnd, onClose, onCanceled }
             You won't be charged again.
           </p>
           <p>
-            After that your library is no longer kept for good: on the free plan clips are{' '}
-            <b className="text-ink">deleted 7 days after they are made</b>, so download the ones you want to keep.
+            After that your library is no longer kept for good: your clips are{' '}
+            <b className="text-ink">deleted 7 days after your plan ends</b> (later ones, 7 days after
+            they are made), so download the ones you want to keep.
             {pause ? ' Pausing keeps them.' : ''}
           </p>
           <p>You can undo this from your account page any time before then.</p>

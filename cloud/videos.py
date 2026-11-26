@@ -574,6 +574,10 @@ async def purge_free_expired():
     Paid libraries are durable; the free plan keeps R2 storage bounded (and the
     limited retention is an upgrade lever). Only rows whose owner is currently
     on the free plan are touched — a user who upgraded keeps everything.
+
+    A plan that ended keeps its library VIDEO_RETENTION_GRACE_DAYS more
+    (Terms, section 13: "deleted 7 days after it ends"); only after that does
+    the account's library follow the free per-clip expiry.
     """
     from datetime import datetime, timezone
     cutoff = datetime.now(timezone.utc) - timedelta(days=FREE_CLIP_RETENTION_DAYS)
@@ -594,6 +598,8 @@ async def purge_free_expired():
     for user_id, items in by_user.items():
         async with database.session() as s:
             if not await metering.is_free_user(s, user_id):
+                continue
+            if await metering.in_paid_grace(s, user_id, VIDEO_RETENTION_GRACE_DAYS):
                 continue
         try:
             for v in items["videos"]:
@@ -658,6 +664,10 @@ async def warn_free_expiring():
     for user_id, vids in by_user.items():
         async with database.session() as s:
             if not await metering.is_free_user(s, user_id):
+                continue
+            # Not about to be deleted: the plan's grace still covers them, and
+            # a warning recorded now would never be sent again.
+            if await metering.in_paid_grace(s, user_id, VIDEO_RETENTION_GRACE_DAYS):
                 continue
             user = await s.get(User, user_id)
         if not user or not user.email:
