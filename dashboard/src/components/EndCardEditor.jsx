@@ -4,7 +4,7 @@ import { getApiUrl } from '../config';
 
 const DEFAULT = { text: 'Follow for more', handle: '', duration: 2, sound: 'chime', asset_id: null };
 
-export default function EndCardEditor({ jobId, clipIndex, value, onChange, assets, setAssets, disabled, preview }) {
+export default function EndCardEditor({ jobId, clipIndex, value, onChange, assets, setAssets, disabled, preview, hasSavedCard }) {
     const [uploading, setUploading] = useState(false);
     const [error, setError] = useState('');
     const input = useRef(null);
@@ -61,7 +61,7 @@ export default function EndCardEditor({ jobId, clipIndex, value, onChange, asset
                     aria-label="Upload end card image" onChange={upload} />
                 <button type="button" className="btn-ghost text-xs w-full" disabled={disabled || uploading}
                     onClick={() => input.current?.click()}>{uploading ? 'uploading…' : 'upload image or GIF'}</button>
-                <button type="button" className="btn-ghost text-xs w-full" disabled={disabled} onClick={preview}>Preview saved end card</button>
+                <button type="button" className="btn-ghost text-xs w-full" disabled={disabled || !hasSavedCard} onClick={preview}>Preview saved end card</button>
                 <p className="text-muted">Appends {value.duration}s to the clip. Re-render to save changes.</p>
             </>}
             {error && <p role="alert" className="text-danger">{error}</p>}

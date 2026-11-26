@@ -68,6 +68,7 @@ The final upstream-integrated regression run passed **3,050 tests with 63 skips 
 - Project deletion checks cover sibling isolation, ownership, active work, held leases, and retryable partial cleanup.
 - Provider tests verify attribution, ID-based imports, redirect restrictions, download limits, source-credit handling, and profile ownership for scheduling.
 - Dashboard lint and the production build pass. The build reports the existing bundle-size and optional analytics-environment notices.
+- Saved end-card preview plays through the delivery tail while pending edits remain unsaved. A browser check reached the five-second endpoint with the editable body readout held at three seconds.
 - The local backend and dashboard were restarted with the update. The desktop dashboard bundle and CLI were refreshed, with the prior dashboard bundle retained.
 - A live synthetic source export selected seconds 1.25–4.25, produced a three-second body plus a two-second chime card, and completed without composition warnings. A second live rerender combined B-roll, a looping bottom panel, ducked music, timed effects, and an animated card. FFprobe and sampled decoding verified a 5.000 second 1080×1920 delivery with audio. CamoFox checks inspected the result card, loaded editor controls, effect catalog, playback metadata, and rendered artwork.
 

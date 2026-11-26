@@ -158,6 +158,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
     const [markOut, setMarkOut] = useState(null);
 
     const videoRef = useRef(null);
+    const endcardPreviewRef = useRef(false);
     const sourceRef = useRef(null);
     const clipTrackRef = useRef(null);
     const sourceTrackRef = useRef(null);
@@ -674,7 +675,14 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
     // the frame left on screen is the endpoint itself, not the overshoot.
     const stepPlayback = useCallback((v) => {
         if (dragRef.current?.kind === 'scrub') return;   // seeks report a frame late
-        if (!dirty) { setPlayhead(v.currentTime); return; }
+        if (endcardPreviewRef.current) {
+            if (v.currentTime >= totalOf(renderedSegments || segments) - COVERAGE_EPSILON) {
+                setPlayhead(totalOf(segments));
+                return;
+            }
+            endcardPreviewRef.current = false;
+        }
+        if (!dirty) { setPlayhead(Math.min(v.currentTime, totalOf(segments))); return; }
 
         let i = playSpanRef.current;
         let sp = coverage[i];
@@ -701,7 +709,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
         playSpanRef.current = i;
         setPlayhead(next.start);
         try { v.currentTime = next.rendered; } catch { /* not seekable yet */ }
-    }, [coverage, dirty, segments]);
+    }, [coverage, dirty, renderedSegments, segments]);
 
     const onClipTimeUpdate = useCallback((e) => stepPlayback(e.target), [stepPlayback]);
 
@@ -737,7 +745,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
 
     // Refuse to roll from a span the file cannot show — same reason as above.
     const onClipPlay = useCallback((e) => {
-        if (dirty) {
+        if (dirty && !endcardPreviewRef.current) {
             const sp = coverage[playSpanRef.current];
             if (sp && sp.rendered === null) { e.target.pause(); return; }
         }
@@ -1431,8 +1439,13 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                         }} disabled={rendering} />
                     <EndCardEditor jobId={jobId} clipIndex={clipIndex} assets={endcardAssets} setAssets={setEndcardAssets}
                         value={endcard} onChange={(config) => dispatch({ type: 'commit', endcard: config })} disabled={rendering}
+                        hasSavedCard={!!renderedEndcard}
                         preview={() => {
-                            if (videoRef.current) videoRef.current.currentTime = totalOf(renderedSegments || segments);
+                            if (videoRef.current && renderedEndcard) {
+                                endcardPreviewRef.current = true;
+                                videoRef.current.currentTime = totalOf(renderedSegments || segments);
+                                videoRef.current.play().catch(() => {});
+                            }
                         }} />
                 </div>
 
