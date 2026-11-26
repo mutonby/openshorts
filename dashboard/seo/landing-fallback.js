@@ -175,7 +175,7 @@ ${NAV_SCRIPT}
   <h1 style="${S.h1}">Free AI clip maker: long video in, viral shorts out</h1>
   <p style="${S.p};max-width:44rem;font-size:1.05rem">Paste a YouTube link or upload a podcast, stream or interview. The AI picks the 3 to 15 moments worth posting, reframes them to 9:16 around the people talking, and burns in the captions, ready for TikTok, Reels and Shorts in minutes. Prefer to run it yourself? It is <a href="/free-ai-clip-generator" style="${S.a}">free and open source</a>. Claude, ChatGPT and n8n can drive it too, over <a href="/mcp" style="${S.a}">MCP</a>.</p>
   ${HERO_FORM}
-  <p style="${S.muted};max-width:44rem">45,000+ accounts created &middot; 32,900+ videos clipped &middot; 8,300+ hours of video processed &middot; 7.5k GitHub stars.</p>
+  <p style="${S.muted};max-width:44rem">238,000+ accounts created &middot; 86,500+ videos clipped &middot; 23,900+ hours of video processed &middot; 9.9k GitHub stars.</p>
   <p style="${S.muted};max-width:44rem"><strong style="color:oklch(75% 0.11 150)">No credit card required.</strong> Your first video is free up to 60 minutes, then 20 free minutes every month, and each video gives its 2 to 4 best clips. Paid plans from $12/month without a watermark and with every clip of the video. Prefer to run it yourself? <a style="${S.a}" href="https://github.com/mutonby/openshorts" rel="noopener">Self-host free on GitHub</a>.</p>
   <p style="${S.muted};max-width:44rem">Paste a link to your video on ${WORKS_WITH.map(link).join(' &middot; ')}.</p>
 </div></section>

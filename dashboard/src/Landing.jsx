@@ -680,10 +680,10 @@ export default function Landing({ onLaunchApp }) {
       <section className="border-b border-rule">
         <div className="max-w-6xl mx-auto px-6 py-12 grid grid-cols-2 md:grid-cols-4 gap-y-8 md:divide-x divide-rule text-center">
           {[
-            ['45,000+', 'accounts created'],
-            ['32,900+', 'videos clipped'],
-            ['8,300+', 'hours of video processed'],
-            ['7.5k', 'github stars'],
+            ['238,000+', 'accounts created'],
+            ['86,500+', 'videos clipped'],
+            ['23,900+', 'hours of video processed'],
+            ['9.9k', 'github stars'],
           ].map(([n, label]) => (
             <div key={label} className="px-4">
               <div className="font-display text-4xl md:text-5xl text-ink tabular-nums">{n}</div>
