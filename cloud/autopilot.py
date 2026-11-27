@@ -397,8 +397,6 @@ async def _upload_clip(profile: str, file_path: str, clip: dict, platforms: List
     title = clip.get("video_title_for_youtube_short") or clip.get("title") or "New short"
     description = (clip.get("video_description_for_instagram")
                    or clip.get("video_description_for_tiktok") or title)
-    if clip.get("source_credit_url"):
-        description += f"\n\nSource: {clip['source_credit_url']}"
     data = {
         "user": profile,
         "title": title,
@@ -409,6 +407,7 @@ async def _upload_clip(profile: str, file_path: str, clip: dict, platforms: List
     }
     data.update(social_platforms.upload_fields(
         platforms, title=title, description=description,
+        pinterest_board_id=clip.get("pinterest_board_id"), source_credit_url=clip.get("source_credit_url"),
         tiktok_post_mode=os.environ.get("TIKTOK_POST_MODE", "MEDIA_UPLOAD").strip()))
     files = {"video": (os.path.basename(file_path), content, "video/mp4")}
     async with httpx.AsyncClient(timeout=300) as client:
@@ -772,19 +771,31 @@ async def on_job_finished(job_id: str, job: dict, failure_reason: Optional[str] 
 async def _publish(run_id, profile, items, platforms, prefs):
     """Schedule the chosen clips, one a day. Runs in the background so the
     job slot is not held while the files upload."""
+    board_id = getattr(prefs, "pinterest_board_id", None)
+    reason = None
+    if "pinterest" in platforms:
+        try:
+            await social_platforms.validate_pinterest_board(settings.managed_upload_post_key, profile, board_id)
+        except social_platforms.PinterestBoardError:
+            platforms = [platform for platform in platforms if platform != "pinterest"]
+            reason = "pinterest_board_unavailable"
+            if not platforms:
+                await _update_run(run_id, posted_count=0, reason=reason)
+                return
     slots = schedule_slots(datetime.now(timezone.utc), len(items),
                            prefs.publish_hour if prefs.publish_hour is not None else DEFAULT_PUBLISH_HOUR,
                            prefs.timezone)
     posted = 0
     for (clip, path), when in zip(items, slots):
         try:
-            post_clip = {**clip, "source_credit_url": getattr(prefs, "source_credit_url", None)}
+            post_clip = {**clip, "source_credit_url": getattr(prefs, "source_credit_url", None),
+                         "pinterest_board_id": board_id}
             if await _upload_clip(profile, path, post_clip, platforms, when, prefs.timezone or "UTC"):
                 posted += 1
         except Exception as e:
             print(f"⚠️  Autopilot publish error: {e}")
     await _update_run(run_id, posted_count=posted,
-                      reason=None if posted == len(items) else "publish_partial")
+                      reason=reason or (None if posted == len(items) else "publish_partial"))
 
 
 # --------------------------------------------------------------------------- #
@@ -798,6 +809,7 @@ class AutopilotUpdate(BaseModel):
     clips_to_publish: Optional[int] = None
     min_publish_score: Optional[int] = Field(default=None, ge=0, le=100, strict=True)
     source_credit_url: Optional[str] = Field(default=None, max_length=2083)
+    pinterest_board_id: Optional[str] = Field(default=None, pattern=social_platforms.PINTEREST_BOARD_ID)
     max_minutes: Optional[int] = None
     publish_hour: Optional[int] = None
     timezone: Optional[str] = None
@@ -817,6 +829,7 @@ def _settings_view(prefs: Optional[AutopilotSettings]) -> dict:
         "clips_to_publish": (prefs.clips_to_publish if prefs else None) or DEFAULT_CLIPS_TO_PUBLISH,
         "min_publish_score": prefs.min_publish_score if prefs else None,
         "source_credit_url": prefs.source_credit_url if prefs else None,
+        "pinterest_board_id": prefs.pinterest_board_id if prefs else None,
         "max_minutes": (prefs.max_minutes if prefs else None) or DEFAULT_MAX_MINUTES,
         "publish_hour": prefs.publish_hour if prefs and prefs.publish_hour is not None
         else DEFAULT_PUBLISH_HOUR,
@@ -891,6 +904,13 @@ async def put_autopilot(payload: AutopilotUpdate, request: Request):
             "error": "plan_required",
             "message": "Autopilot is included in the Starter, Creator and Pro plans."})
 
+    if payload.pinterest_board_id is not None:
+        try:
+            await social_platforms.validate_pinterest_board(
+                settings.managed_upload_post_key, await _profile_for(user.id), payload.pinterest_board_id)
+        except social_platforms.PinterestBoardError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
     async with database.session() as s:
         async with s.begin():
             prefs = await s.get(AutopilotSettings, user.id)
@@ -918,6 +938,11 @@ async def put_autopilot(payload: AutopilotUpdate, request: Request):
                 prefs.autopublish = bool(payload.autopublish)
             if payload.publish_platforms is not None:
                 prefs.publish_platforms = clean_platforms(payload.publish_platforms)
+            if "pinterest_board_id" in payload.model_fields_set:
+                prefs.pinterest_board_id = payload.pinterest_board_id
+            if ({"publish_platforms", "pinterest_board_id"} & payload.model_fields_set
+                    and "pinterest" in (prefs.publish_platforms or []) and not prefs.pinterest_board_id):
+                raise HTTPException(status_code=400, detail="Choose a Pinterest board for automatic posts.")
             if payload.clips_to_publish is not None:
                 prefs.clips_to_publish = max(1, min(MAX_CLIPS_TO_PUBLISH, int(payload.clips_to_publish)))
             if "min_publish_score" in payload.model_fields_set:

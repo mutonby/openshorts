@@ -112,6 +112,25 @@ class TestCaptionsOnly:
         subtitles.burn_subtitles(str(clip), str(ass), str(out), clean=False)
         assert out.exists() and not clean_twin.has_recipe(str(d), out.name)
 
+    def test_end_card_walks_back_through_a_lazy_caption_body(self, job):
+        import app
+        import endcard
+        import subtitles
+
+        directory, clip, ass = job
+        captioned = directory / "subtitled_5_t_clip_1.mp4"
+        marked = directory / watermarked.marked_name(captioned.name)
+        subtitles.burn_subtitles(str(clip), str(ass), str(captioned),
+                                 mark=(LOGO, _watermark, str(marked)), clean=False)
+        assert not captioned.exists()
+        assert clean_twin.materialize(str(directory), captioned.name)
+        complete = endcard.append(captioned, {"text": "Follow", "duration": 1})
+        captioned.unlink()
+
+        body = app._clip_edit_body(str(directory), watermarked.marked_name(complete.name))
+        assert body == captioned.name and captioned.exists()
+        assert app._strip_burned_captions(str(directory), body) == clip.name
+
 
 @needs_ass
 class TestHookAndCaptions:

@@ -15,14 +15,29 @@ def test_unknown_names_what_is_not_offered():
 
 def test_x_and_pinterest_are_supported_networks():
     assert sp.clean(["X", "Pinterest"]) == ["x", "pinterest"]
-    data = sp.upload_fields(["x", "pinterest"], title="T", description="D")
+    data = sp.upload_fields(["x", "pinterest"], title="T", description="D", pinterest_board_id="987123")
     assert data["x_title"] == "D"                       # X post text = caption
     assert data["pinterest_title"] == "T"
     assert data["pinterest_description"] == "D"
+    assert data["pinterest_board_id"] == "987123"
+
+
+def test_pinterest_does_not_send_an_upload_without_a_board():
+    with pytest.raises(ValueError, match="Choose a Pinterest board"):
+        sp.upload_fields(["pinterest"], title="T", description="D")
+
+
+def test_source_credit_has_no_dangling_label_if_x_removes_the_url():
+    url = "https://example.com/source"
+    data = sp.upload_fields(["youtube", "x", "pinterest"], title="Title", description="Caption",
+                            pinterest_board_id="987123", source_credit_url=url)
+    assert data["x_title"] == f"Caption\n\n{url}"
+    assert data["youtube_description"] == data["pinterest_description"] == f"Caption\n\nSource: {url}"
 
 
 def test_each_network_gets_its_own_text_fields():
-    data = sp.upload_fields(sp.PLATFORMS, title="T", description="D", yt_title="YT")
+    data = sp.upload_fields(sp.PLATFORMS, title="T", description="D", yt_title="YT",
+                            pinterest_board_id="987123")
     assert data["tiktok_title"] == "D" and data["instagram_title"] == "D"
     assert data["youtube_title"] == "YT" and data["youtube_description"] == "D"
     assert data["facebook_title"] == "T" and data["facebook_description"] == "D"

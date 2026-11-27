@@ -158,3 +158,171 @@ def test_restore_uses_recorded_metadata_key_when_basenames_collide(monkeypatch, 
     assert asyncio.run(app._restore_project_files(job, project, "owner"))
     assert prefix + "metadata/12-old/video_metadata.json" not in pulled
     assert app.jobs[job]["result"]["clips"][0]["video_url"].endswith("video_clip_1.mp4")
+
+
+@pytest.fixture
+def restore_store(monkeypatch, tmp_path):
+    import app
+    job = str(uuid4())
+    prefix = f"users/owner/{job}/"
+    objects = {prefix + "video_clip_1.mp4": b"body"}
+    def download(key, path):
+        from pathlib import Path
+        Path(path).write_bytes(objects[key])
+    monkeypatch.setattr(app, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(app, "jobs", {})
+    monkeypatch.setattr(app, "_restore_locks", {})
+    monkeypatch.setattr(app, "_rerender_locks", {})
+    monkeypatch.setattr(videos.storage, "list_keys", lambda _prefix: list(objects))
+    monkeypatch.setattr(videos.storage, "download_file", download)
+    return app, job, prefix, objects, tmp_path / job
+
+
+def test_upgrade_pointer_survives_restore_and_metadata_reload(restore_store):
+    app, job, prefix, objects, directory = restore_store
+    clean = "subtitled_1_video_clip_1.mp4"
+    marked = "wm_" + clean
+    objects[prefix + clean] = b"clean"
+    objects[prefix + marked] = b"marked"
+    key = prefix + "metadata/12/video_metadata.json"
+    objects[key] = snapshot(job, [marked])
+    project = SimpleNamespace(metadata_r2_key=key, state={"archive_revision": "12", "clips": [
+        {"index": 0, "original_file": clean, "server_file": clean}]})
+    asyncio.run(app._restore_project_files(job, project, "owner"))
+    assert app.jobs[job]["result"]["clips"][0]["video_url"].endswith("/" + clean)
+    assert json.loads((directory / "video_metadata.json").read_text())["shorts"][0]["video_url"].endswith("/" + clean)
+    assert not (directory / ".marked").exists()
+
+
+def test_warm_restore_after_upgrade_opens_clean_delivery_guard(restore_store):
+    app, job, prefix, objects, directory = restore_store
+    key = prefix + "metadata/12/video_metadata.json"
+    marked = "wm_video_clip_1.mp4"
+    objects[key] = snapshot(job, [marked])
+    objects[prefix + marked] = b"marked"
+    project = SimpleNamespace(metadata_r2_key=key, state={"clips": [{"index": 0, "server_file": marked}]})
+    asyncio.run(app._restore_project_files(job, project, "owner"))
+    assert (directory / ".marked").exists()
+    project.state["clips"][0]["server_file"] = "video_clip_1.mp4"
+    asyncio.run(app._restore_project_files(job, project, "owner"))
+    assert not (directory / ".marked").exists()
+    assert app._media_guard(f"{job}/video_clip_1.mp4")
+
+
+def test_restored_results_keep_source_ids_when_an_earlier_clip_failed(restore_store):
+    app, job, prefix, objects, _directory = restore_store
+    key = prefix + "video_metadata.json"
+    data = json.loads(snapshot(job, ["video_clip_1.mp4", "video_clip_2.mp4"]))
+    data["shorts"][0]["quality"] = {"valid": False}
+    objects[key] = json.dumps(data).encode()
+    objects[prefix + "video_clip_2.mp4"] = b"second"
+    project = SimpleNamespace(metadata_r2_key=key, state={"clips": []})
+    asyncio.run(app._restore_project_files(job, project, "owner"))
+    assert [clip["clip_index"] for clip in app.jobs[job]["result"]["clips"]] == [1]
+
+
+def test_same_video_filename_does_not_hide_new_metadata_revision(restore_store):
+    app, job, prefix, objects, directory = restore_store
+    old = prefix + "metadata/12/video_metadata.json"
+    new = prefix + "metadata/13/video_metadata.json"
+    def content(credit):
+        data = json.loads(snapshot(job, ["video_clip_1.mp4"]))
+        data["publishing"] = {"source_credit_url": credit}
+        return json.dumps(data).encode()
+    objects[old] = content("https://example.com/old")
+    project = SimpleNamespace(metadata_r2_key=old, state={"clips": [{"index": 0, "server_file": "video_clip_1.mp4"}]})
+    asyncio.run(app._restore_project_files(job, project, "owner"))
+    objects[new] = content("https://example.com/new")
+    project.metadata_r2_key = new
+    assert asyncio.run(app._restore_project_files(job, project, "owner"))
+    assert json.loads((directory / "video_metadata.json").read_text())["publishing"]["source_credit_url"] == "https://example.com/new"
+
+
+def test_restore_preserves_local_edit_while_archive_upload_is_pending(restore_store):
+    app, job, prefix, objects, directory = restore_store
+    key = prefix + "metadata/12/video_metadata.json"
+    objects[key] = snapshot(job, ["video_clip_1.mp4"])
+    project = SimpleNamespace(metadata_r2_key=key, state={"clips": [{"index": 0, "server_file": "video_clip_1.mp4"}]})
+    asyncio.run(app._restore_project_files(job, project, "owner"))
+    local = json.loads((directory / "video_metadata.json").read_text())
+    local["publishing"] = {"source_credit_url": "https://example.com/pending"}
+    (directory / "video_metadata.json").write_text(json.dumps(local))
+    project.metadata_r2_key = prefix + "metadata/13/video_metadata.json"
+    objects[project.metadata_r2_key] = snapshot(job, ["video_clip_1.mp4"])
+    assert not asyncio.run(app._restore_project_files(job, project, "owner"))
+    assert json.loads((directory / "video_metadata.json").read_text()) == local
+
+
+def test_deleted_asset_stays_hidden_in_current_restore_but_old_snapshot_retains_it(restore_store):
+    app, job, prefix, objects, directory = restore_store
+    name = "broll_asset_" + "a" * 32 + ".mp4"
+    key = prefix + "metadata/12/video_metadata.json"
+    data = json.loads(snapshot(job, ["video_clip_1.mp4"]))
+    data["deleted_editor_assets"] = [name, "../outside.mp4"]
+    objects[key] = json.dumps(data).encode()
+    objects[prefix + name] = b"older snapshot media"
+    project = SimpleNamespace(metadata_r2_key=key, state={"clips": []})
+    asyncio.run(app._restore_project_files(job, project, "owner"))
+    assert not (directory / name).exists()
+    assert objects[prefix + name] == b"older snapshot media"
+
+
+def test_failed_restore_drains_downloads_before_releasing_its_directory(restore_store, monkeypatch):
+    import threading
+    app, job, prefix, objects, directory = restore_store
+    key = prefix + "video_metadata.json"
+    objects[key] = snapshot(job, ["video_clip_1.mp4"])
+    started, failed, release = threading.Event(), threading.Event(), threading.Event()
+    def download(key, path):
+        if key.endswith(".mp4"):
+            started.set()
+            assert release.wait(3)
+            from pathlib import Path
+            Path(path).write_bytes(objects[key])
+        else:
+            assert started.wait(3)
+            failed.set()
+            raise OSError("simulated download failure")
+    monkeypatch.setattr(videos.storage, "download_file", download)
+    project = SimpleNamespace(metadata_r2_key=key, state={"clips": []})
+    async def run():
+        task = asyncio.create_task(app._restore_project_files(job, project, "owner"))
+        try:
+            assert await asyncio.to_thread(failed.wait, 3)
+            await asyncio.sleep(0.02)
+            assert not task.done()
+        finally:
+            release.set()
+        with pytest.raises(Exception, match="502"):
+            await task
+    asyncio.run(run())
+    assert not directory.exists() and not directory.with_name(directory.name + ".restoring").exists()
+
+
+def test_archive_finishing_after_upgrade_reconciles_marked_snapshot(restore_store, monkeypatch):
+    app, job, _prefix, _objects, directory = restore_store
+    directory.mkdir()
+    marked = "wm_video_clip_1.mp4"
+    (directory / "video_metadata.json").write_bytes(snapshot(job, [marked]))
+    # The upgrade has already removed .marked, before this upload finished.
+    app.jobs[job] = {"user_id": "owner", "status": "completed"}
+    monkeypatch.setattr(app, "BILLING_ENABLED", True)
+    monkeypatch.setattr(app, "cloud", SimpleNamespace(videos=videos))
+    async def paid(_owners):
+        return {"owner"}
+    monkeypatch.setattr(app, "_owner_live_plans", paid)
+    calls = []
+    async def run():
+        finished = asyncio.Event()
+        async def archive(*_args, **_kwargs):
+            calls.append("archive-marked")
+        async def unmark(owner, job_id):
+            assert (owner, job_id) == ("owner", job)
+            calls.append("unmark-paid")
+            finished.set()
+        monkeypatch.setattr(app.cloud.videos, "archive_clip_edit", archive)
+        monkeypatch.setattr(app.cloud.videos, "unmark_user_library", unmark)
+        app._archive_clip_edit_bg(job, 0, marked)
+        await asyncio.wait_for(finished.wait(), 2)
+    asyncio.run(run())
+    assert calls == ["archive-marked", "unmark-paid"]

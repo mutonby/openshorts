@@ -101,6 +101,14 @@ def _seekable(track):
     return True
 
 
+def _pinned_video(formats, previous):
+    format_id, height = previous.get("video_format"), previous.get("height")
+    if format_id is None:
+        return None
+    return next((track for track in formats if track["height"] == height
+                 and str(track.get("format_id")) == str(format_id)), None)
+
+
 @dataclass
 class Source:
     url: str
@@ -186,21 +194,20 @@ def _inspect_twitch(canonical, previous=None):
         raise DiscoveryUnavailable("The downloader returned a different recording.")
     videos, audios = _twitch_formats(info)
     usable = [f for f in videos if _safe_track(f)]
-    hd = [f for f in usable if f["height"] <= 1080] or usable
-    if not hd:
+    if not usable:
         raise DiscoveryUnavailable("The VOD has no supported video variants. Use full-source review.")
-    height = max(f["height"] for f in hd)
-    best_at_height = [f for f in hd if f["height"] == height]
     order = lambda f: (float(f.get("fps") or 0), float(f.get("tbr") or 0))
-    best = max(best_at_height, key=order)
     lowest = min(usable, key=lambda f: (f["height"], float(f.get("tbr") or 0)))
     audio = max((f for f in audios if _safe_track(f)), key=lambda f: float(f.get("tbr") or 0), default=lowest)
     if previous:
         if str(previous.get("id")) != str(info["id"]) or abs(duration - float(previous["duration"])) > 1:
             raise DiscoveryUnavailable("The source changed after review. Start a new review.")
-        best = next((f for f in best_at_height if str(f.get("format_id")) == previous["video_format"]), None)
-        if best is None or height != previous["height"]:
+        best = _pinned_video(usable, previous)
+        if best is None:
             raise DiscoveryUnavailable("The approved source formats are unavailable. No lower-quality file was substituted.")
+    else:
+        hd = [f for f in usable if f["height"] <= 1080] or usable
+        best = max(hd, key=lambda f: (f["height"], *order(f)))
     proxies = [f for f in usable if 360 <= f["height"] <= 540]
     preview = max(proxies, key=lambda f: (f["height"], order(f))) if proxies else best
     return Source(canonical, info, best, audio, preview, duration, kind="twitch")
@@ -237,38 +244,40 @@ def inspect_source(url, previous=None, *, audio_language=None):
         raise DiscoveryUnavailable("The downloader returned a different recording.")
 
     videos = _video_formats(info)
-    hd = [f for f in videos if f["height"] <= 1080] or videos
-    if not hd:
+    if not videos:
         raise DiscoveryUnavailable("No video formats were available.")
-    # Match the existing 1080p AVC preference, without accepting lower
-    # resolution because a seekable format happens to be available there.
-    height = max(f["height"] for f in hd)
-    best_at_height = [f for f in hd if f["height"] == height]
     order = lambda f: (str(f.get("vcodec", "")).startswith("avc1"),
                        float(f.get("fps") or 0), float(f.get("tbr") or 0))
-    comparable = max(order(f)[:2] for f in best_at_height)
-    best = max((f for f in best_at_height if _seekable(f) and order(f)[:2] == comparable),
-               key=order, default=None)
     audios = [f for f in info.get("formats", []) if f.get("vcodec") == "none"
               and f.get("acodec") not in (None, "none") and _seekable(f)]
     if previous:
+        if str(previous.get("id")) != str(info["id"]) or abs(duration - float(previous["duration"])) > 1:
+            raise DiscoveryUnavailable("The source changed after review. Start a new review.")
         audio_language = previous.get("audio_language", audio_language)
     if audio_language:
         audios = [f for f in audios if youtube_io.track_language(f) == audio_language]
         if not audios:
             raise DiscoveryUnavailable(f"The {audio_language} audio track is unavailable for audio-first review. "
                                        "Try full-source review with that track.")
-    if not audios or best is None:
-        raise DiscoveryUnavailable("The best source is not seekable with this workflow. Use full-source review.")
-    audio = max(audios, key=lambda f: (float(f.get("language_preference") or 0), not str(f.get("format_id")).endswith("-drc"),
-                                      float(f.get("abr") or f.get("tbr") or 0)))
     if previous:
-        if previous.get("id") != info["id"] or abs(duration - float(previous["duration"])) > 1:
-            raise DiscoveryUnavailable("The source changed after review. Start a new review.")
-        best = next((f for f in best_at_height if f.get("format_id") == previous["video_format"] and _seekable(f)), None)
-        audio = next((f for f in audios if f.get("format_id") == previous["audio_format"]), None)
-        if best is None or audio is None or height != previous["height"]:
+        best = _pinned_video((f for f in videos if _seekable(f)), previous)
+        audio = next((f for f in audios if str(f.get("format_id")) == previous.get("audio_format")), None)
+        if best is None or audio is None:
             raise DiscoveryUnavailable("The approved source formats are unavailable. No lower-quality file was substituted.")
+    else:
+        # Keep the fresh-review quality preference even if only a lower
+        # resolution or frame rate is seekable through this workflow.
+        hd = [f for f in videos if f["height"] <= 1080] or videos
+        height = max(f["height"] for f in hd)
+        best_at_height = [f for f in hd if f["height"] == height]
+        comparable = max(order(f)[:2] for f in best_at_height)
+        best = max((f for f in best_at_height if _seekable(f) and order(f)[:2] == comparable),
+                   key=order, default=None)
+        if not audios or best is None:
+            raise DiscoveryUnavailable("The best source is not seekable with this workflow. Use full-source review.")
+        audio = max(audios, key=lambda f: (float(f.get("language_preference") or 0),
+                                          not str(f.get("format_id")).endswith("-drc"),
+                                          float(f.get("abr") or f.get("tbr") or 0)))
     proxies = [f for f in videos if 360 <= f["height"] <= 540 and _seekable(f)]
     preview = max(proxies, key=lambda f: (f["height"], order(f))) if proxies else best
     return Source(canonical, info, best, audio, preview, duration, requested_audio_language=audio_language)
@@ -357,7 +366,7 @@ def _env_seconds(name, default, lo=None, hi=None):
     return value
 
 
-def attach_recorded_chat(info, directory, duration):
+def attach_recorded_chat(info, directory, duration, *, start=0.0):
     """Chat this machine recorded live (chat_recorder.py) for a Twitch VOD,
     written as the job's imported replay. Returns the message count; an
     uploaded replay always wins."""
@@ -366,17 +375,18 @@ def attach_recorded_chat(info, directory, duration):
     if imported_chat(directory):
         return 0
     login = chat_recorder.channel_name((info or {}).get("uploader_id"))
-    start = (info or {}).get("timestamp")
-    if not login or type(start) not in (int, float) or not duration:
+    vod_start = (info or {}).get("timestamp")
+    if not login or type(vod_start) not in (int, float) or not duration:
         return 0
-    count = chat_recorder.attach(login, float(start), float(duration),
-                                 workspace(directory) / "imported-chat.csv")
+    chat_start = max(0.0, start - _env_seconds("HIGHLIGHT_CHAT_OFFSET", 0.0))
+    count = chat_recorder.attach(login, float(vod_start), float(duration),
+                                 workspace(directory) / "imported-chat.csv", source_start=chat_start)
     if count:
         print(f"Recorded live chat attached: {count} messages.")
     return count
 
 
-def recorded_chat_for_url(url, directory, duration):
+def recorded_chat_for_url(url, directory, duration, *, start=0.0):
     """attach_recorded_chat for a full-source Twitch job: one metadata call,
     made only when something was recorded at all."""
     import chat_recorder
@@ -392,7 +402,7 @@ def recorded_chat_for_url(url, directory, duration):
             info = ydl.extract_info(canonical, download=False, process=False)
     except Exception:
         return 0
-    return attach_recorded_chat(info, directory, duration)
+    return attach_recorded_chat(info, directory, duration, start=start)
 
 
 def collect(directory, media, duration, url=None, *, start=0.0, chat=None, metadata=None, audio=True):
@@ -426,7 +436,7 @@ def hype_enabled():
 
 def clip_band():
     """The clip length band, from the job's generation controls; 30-60 s."""
-    low = _env_seconds("CLIP_MIN_SECONDS", 30.0, 10, 170)
+    low = _env_seconds("CLIP_MIN_SECONDS", 30.0, 5, 175)
     return low, _env_seconds("CLIP_MAX_SECONDS", 60.0, low + 5, 180)
 
 
@@ -479,18 +489,24 @@ def hype_review(directory, media, duration, url=None, *, transcribe_ranges, prox
     transcript = transcribe_ranges(media, [(c["start"], c["end"]) for c in shortlist])
     asr_seconds = time.monotonic() - started
 
-    judged = hype_judge.prefilter(shortlist, transcript,
-                                  _count_setting("HYPE_JUDGE_CANDIDATES", 12, 1, candidate_review.MAX_CANDIDATES))
+    max_candidates = candidate_review.MAX_CANDIDATES
+    target = _count_setting("CLIP_TARGET_MAX", max_candidates, 1, max_candidates)
+    preferred_count = _count_setting("CLIP_TARGET_MIN", 0, 0, target)
+    judge_limit = _count_setting("HYPE_JUDGE_CANDIDATES", max(12, preferred_count), 1, max_candidates)
+    judged = hype_judge.prefilter(shortlist, transcript, judge_limit)
     dropped = len(shortlist) - len(judged)
     started = time.monotonic()
     key = os.environ.get("GEMINI_API_KEY")
     if not key:
         print("   No Gemini key for the clip judge: candidates are ranked by hype for manual review.")
-    shorts, costs = hype_judge.review(
-        judged, transcript, duration, proxy=proxy, cache_dir=str(workspace(directory) / "judge"),
-        gameplay=gameplay, min_secs=min_secs, max_secs=max_secs, api_key=key, need_proxy=need_proxy,
-        # The streamer's own title and channel: what game this is, who is playing.
-        context=" — ".join(str(v) for v in ((metadata or {}).get("title"), (metadata or {}).get("channel")) if v))
+    try:
+        shorts, costs = hype_judge.review(
+            judged, transcript, duration, proxy=proxy, cache_dir=str(workspace(directory) / "judge"),
+            gameplay=gameplay, min_secs=min_secs, max_secs=max_secs, api_key=key, need_proxy=need_proxy,
+            # The streamer's own title and channel: what game this is, who is playing.
+            context=" — ".join(str(v) for v in ((metadata or {}).get("title"), (metadata or {}).get("channel")) if v))
+    except hype_judge.PreviewUnavailable as exc:
+        raise DiscoveryUnavailable("Could not prepare candidate previews. Retry or use full-source review.") from exc
     judge_seconds = time.monotonic() - started
     print(f"Clip judge kept {len(shorts)} of {len(judged)} moment(s)"
           + (f"; {dropped} alert or overflow window(s) skipped." if dropped else "."))
@@ -500,7 +516,7 @@ def hype_review(directory, media, duration, url=None, *, transcribe_ranges, prox
     signals.update({"engine": "hype", "voice": found["markers"]["voice"],
                     "hype_curve": found["curve"], "chat_lag": found["lag"]})
     write_json_atomic(workspace(directory) / "signals.json", signals)
-    return {"shorts": shorts[:candidate_review.MAX_CANDIDATES], "transcript": transcript,
+    return {"shorts": shorts[:target], "transcript": transcript,
             "signals": signals, "cost_analysis": _sum_costs(costs),
             "hype_timings": {"scan_seconds": round(scan_seconds, 2),
                              "transcription_seconds": round(asr_seconds, 2),
@@ -635,14 +651,22 @@ def _staged_proxy(source, directory, transfers):
     range of the window (kept for the review page) and the judge's copy."""
     import hype_judge
 
+    use_judge = bool(os.environ.get("GEMINI_API_KEY"))
+
     def proxy(index, cand):
         start, end = cand["start"], cand["end"]
         span, size = source.section(directory, index, start, end, preview=True)
         transfers.append(size)
         dest = preview_file(directory, index)
         make_preview(span, dest, start, end)
-        return hype_judge.judge_proxy(dest, workspace(directory) / f"judge-{index}.mp4",
-                                      start, end, origin=start)
+        judge_path = None
+        if use_judge:
+            try:
+                judge_path = hype_judge.judge_proxy(dest, workspace(directory) / f"judge-{index}.mp4",
+                                                    start, end, origin=start)
+            except (OSError, subprocess.SubprocessError) as exc:
+                print(f"   ⚠️ Could not prepare the judge's copy for candidate {index} ({type(exc).__name__}).")
+        return hype_judge.StagedPreview(judge_path)
     return proxy
 
 

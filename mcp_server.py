@@ -383,12 +383,23 @@ TOOLS = [
         },
     },
     {
+        "name": "list_pinterest_boards",
+        "title": "List Pinterest publishing boards",
+        "description": "List the connected Pinterest account's boards and their publishing IDs.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "profile": {"type": "string", "description": "The Upload-Post profile on a self-hosted instance."},
+            },
+        },
+    },
+    {
         "name": "publish_clip",
         "title": "Publish a clip to social platforms",
         "description": (
             "Post one clip to the user's connected accounts: TikTok (lands as a "
-            "draft in the app), Instagram, YouTube, Facebook, LinkedIn, Threads "
-            "or Bluesky, which publish directly. Requires "
+            "draft in the app), Instagram, YouTube, Facebook, LinkedIn, Threads, "
+            "Bluesky, X and Pinterest. Requires "
             "a connected social profile (cloud) or an Upload-Post key (self-host). "
             "Optionally schedule with an ISO-8601 scheduled_date."
         ),
@@ -405,6 +416,9 @@ TOOLS = [
                 "description": {"type": "string"},
                 "scheduled_date": {"type": "string", "description": "ISO-8601; omit to post now."},
                 "timezone": {"type": "string"},
+                "profile": {"type": "string", "description": "The Upload-Post profile on a self-hosted instance."},
+                "pinterest_board_id": {"type": "string", "pattern": social_platforms.PINTEREST_BOARD_ID,
+                                       "description": "Required for Pinterest. Use list_pinterest_boards."},
             },
             "required": ["job_id", "clip_index", "platforms"],
         },
@@ -426,6 +440,7 @@ _ANNOTATIONS = {
     "add_subtitles": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
     # Replaces the clip's current render with the new cut.
     "recut_clip": {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False},
+    "list_pinterest_boards": {**_READ, "openWorldHint": True},
     "publish_clip": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
 }
 for _tool in TOOLS:
@@ -577,8 +592,9 @@ def _clip_summaries(job_id, result):
     out = []
     for i, clip in enumerate(result.get("clips") or []):
         rel = clip.get("video_url") or ""
+        index = clip.get("clip_index")
         out.append({
-            "index": i,
+            "index": index if type(index) is int else i,
             "title": clip.get("title") or clip.get("video_title_for_youtube_short"),
             "duration_seconds": (round(clip["end"] - clip["start"], 1)
                                  if isinstance(clip.get("start"), (int, float))
@@ -669,12 +685,22 @@ async def _tool_recut_clip(client, args):
     return _with_download_url(resp.json()), False
 
 
+async def _tool_list_pinterest_boards(client, args):
+    params = {"user": args["profile"]} if args.get("profile") else {}
+    response = await client.get("/api/social/pinterest-boards", params=params)
+    if response.status_code >= 400:
+        return _api_error(response), True
+    return response.json(), False
+
+
 async def _tool_publish_clip(client, args):
     body = {"job_id": args["job_id"], "clip_index": args["clip_index"],
             "platforms": args["platforms"]}
-    for k in ("title", "description", "scheduled_date", "timezone"):
+    for k in ("title", "description", "scheduled_date", "timezone", "pinterest_board_id"):
         if args.get(k) is not None:
             body[k] = args[k]
+    if args.get("profile"):
+        body["user_id"] = args["profile"]
     resp = await _job_call(client, "POST", "/api/social/post", args["job_id"], json=body)
     if resp.status_code >= 400:
         return _api_error(resp), True
@@ -691,6 +717,7 @@ _TOOL_IMPLS = {
     "list_jobs": _tool_list_jobs,
     "add_subtitles": _tool_add_subtitles,
     "recut_clip": _tool_recut_clip,
+    "list_pinterest_boards": _tool_list_pinterest_boards,
     "publish_clip": _tool_publish_clip,
 }
 

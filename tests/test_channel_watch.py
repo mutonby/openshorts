@@ -1,4 +1,6 @@
 """The channel watcher: new finished VODs are queued once, live ones wait."""
+from urllib.error import URLError
+
 import pytest
 
 import channel_watch as cw
@@ -91,6 +93,44 @@ def test_a_refused_submission_is_retried_next_pass(tmp_path):
     assert _check(state, fakes, 800) == []
     fakes.sender = Fakes().sender
     assert _check(state, fakes, 900) == ["job1"]
+
+
+def test_connection_refusal_keeps_watcher_running_and_retries_the_vod(tmp_path):
+    state, fakes = cw.State(str(tmp_path / "w.sqlite3")), Fakes()
+    assert _check(state, fakes, 0) == []
+    fakes.vods = [_vod(7), _vod(8)]
+    fakes.durations = {vod["url"]: 3000.0 for vod in fakes.vods}
+
+    def sender(api, body):
+        if body["url"] == _vod(7)["url"]:
+            raise URLError(ConnectionRefusedError("fixture refused the connection"))
+        return Fakes.sender(fakes, api, body)
+
+    fakes.sender = sender
+    assert _check(state, fakes, 100, settle=0) == ["job1"]
+    assert state.get(_vod(7)["id"])["job_id"] is None
+    del fakes.sender
+    assert _check(state, fakes, 200, settle=0) == ["job2"]
+    assert [body["url"] for body in fakes.sent] == [_vod(8)["url"], _vod(7)["url"]]
+
+
+def test_timeout_keeps_one_unconfirmed_submission_across_restart(tmp_path):
+    path, fakes = str(tmp_path / "w.sqlite3"), Fakes()
+    state = cw.State(path)
+    assert _check(state, fakes, 0) == []
+    fakes.vods = [_vod(7)]
+    fakes.durations = {_vod(7)["url"]: 3000.0}
+
+    def sender(api, body):
+        Fakes.sender(fakes, api, body)
+        raise TimeoutError("fixture lost the server response")
+
+    fakes.sender = sender
+    assert _check(state, fakes, 100, settle=0) == []
+    assert state.get(_vod(7)["id"])["job_id"] == cw.UNCONFIRMED
+    state.db.close()
+    assert _check(cw.State(path), fakes, 200, settle=0) == []
+    assert len(fakes.sent) == 1
 
 
 def test_acknowledge_is_required():

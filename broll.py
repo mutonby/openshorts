@@ -46,16 +46,20 @@ def _probe(path, *, demuxer=None):
     command = ["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe"]
     if demuxer:
         command += ["-f", demuxer]
-    command += ["-select_streams", "v:0", "-show_entries", "stream=width,height,duration:format=duration",
+    command += ["-select_streams", "v:0", "-show_entries",
+                "stream=width,height,duration,start_time:format=duration,start_time",
                 "-of", "json", str(path)]
     try:
         data = json.loads(subprocess.check_output(command, stderr=subprocess.DEVNULL, timeout=20))
         stream = data["streams"][0]
+        container = data["format"]
         width, height = int(stream["width"]), int(stream["height"])
-        seconds = float(stream.get("duration") or data["format"]["duration"])
-        if min(width, height) < 2 or not math.isfinite(seconds) or seconds <= 0:
+        # FFmpeg subtracts the container's start time under its default input clock.
+        start = max(0.0, float(stream.get("start_time", 0)) - float(container.get("start_time", 0)))
+        seconds = float(stream["duration"]) if "duration" in stream else float(container["duration"]) - start
+        if min(width, height) < 2 or not math.isfinite(start + seconds) or seconds <= 0:
             raise ValueError
-        return width, height, seconds
+        return width, height, seconds, start
     except (IndexError, KeyError, TypeError, ValueError, OSError, subprocess.SubprocessError) as exc:
         raise BrollError("The video could not be read.") from exc
 
@@ -65,7 +69,7 @@ def prepare_asset(raw_path, filename, directory):
     demuxer = input_format(filename)
     if not demuxer:
         raise BrollError("Upload a video in MP4, MOV, or WebM format.")
-    width, height, duration = _probe(raw_path, demuxer=demuxer)
+    width, height, duration, _ = _probe(raw_path, demuxer=demuxer)
     if not MIN_LAYER_SECONDS <= duration <= MAX_ASSET_SECONDS:
         raise BrollError(f"B-roll video must be between {MIN_LAYER_SECONDS:g}s and {MAX_ASSET_SECONDS:g}s.")
     if max(width, height) > 4096:
@@ -83,7 +87,7 @@ def prepare_asset(raw_path, filename, directory):
     ]
     try:
         subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=180)
-        _, _, actual_duration = _probe(work)
+        _, _, actual_duration, _ = _probe(work)
         if work.stat().st_size > MAX_UPLOAD_BYTES or actual_duration < MIN_LAYER_SECONDS:
             raise BrollError("The processed B-roll video is too large or too short.")
         label = Path(filename.replace("\\", "/")).name.strip()[:120] or "B-roll video"
@@ -174,10 +178,10 @@ def active_layers(layers, segments):
 
 def render(path, layers):
     """Replace picture only for each active span and keep the clip's audio."""
-    width, height, _ = _probe(path)
+    width, height, _, _ = _probe(path)
     command = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-filter_complex_threads", "1",
                "-protocol_whitelist", "file,pipe", "-i", str(path)]
-    filters = ["[0:v]setpts=PTS-STARTPTS[base0]"]
+    filters = ["[0:v]null[base0]"]
     directory = Path(path).parent
     for index, layer in enumerate(layers, 1):
         video, _ = asset_files(directory, layer["asset_id"])
@@ -193,7 +197,7 @@ def render(path, layers):
 
 def render_bottom_video(path, asset_id):
     """Fit the main picture above a looping, silent secondary video."""
-    width, height, duration = _probe(path)
+    width, height, duration, start = _probe(path)
     upper = height // 4 * 2
     lower = height - upper
     if upper < 2 or width % 2 or lower % 2:
@@ -204,19 +208,19 @@ def render_bottom_video(path, asset_id):
                "-protocol_whitelist", "file,pipe", "-i", str(path),
                "-stream_loop", "-1", "-protocol_whitelist", "file,pipe", "-i", str(video)]
     filters = [
-        "[0:v]setpts=PTS-STARTPTS,split[main][backdrop]",
+        "[0:v]split[main][backdrop]",
         f"[main]scale={width}:{upper}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
         "setsar=1[foreground]",
         f"[backdrop]scale={width}:{upper}:force_original_aspect_ratio=increase:force_divisible_by=2,"
         f"crop={width}:{upper},gblur=sigma=14,setsar=1[blur]",
         f"[blur][foreground]overlay=(W-w)/2:(H-h)/2:shortest=1,pad={width}:{height}:0:0[top]",
-        f"[1:v]setpts=PTS-STARTPTS,scale={width}:{lower}:force_original_aspect_ratio=increase:force_divisible_by=2,"
+        f"[1:v]setpts=PTS-STARTPTS+{start:.6f}/TB,scale={width}:{lower}:force_original_aspect_ratio=increase:force_divisible_by=2,"
         f"crop={width}:{lower},setsar=1[bottom]",
         f"[top][bottom]overlay=0:{upper}:shortest=1[out]",
     ]
     _replace_picture(path, command, filters, "out", "The looping bottom video could not be rendered.")
     seam = upper / height
-    layout_ranges.write(str(path), [(0, duration, "stack", None, {"seam": seam, "caption_y": seam})])
+    layout_ranges.write(str(path), [(start, start + duration, "stack", None, {"seam": seam, "caption_y": seam})])
 
 
 def _replace_picture(path, command, filters, output_label, error):

@@ -16,6 +16,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { renderInBrowser } from '../lib/renderInBrowser';
 import { captionStylePayload } from '../lib/captionStyle';
 import SourceCredit from './SourceCredit';
+import PinterestBoardSelect from './PinterestBoardSelect';
 
 const QUIET_BTN = 'group flex flex-col items-center justify-center gap-1 py-2.5 sm:py-2 px-1 rounded-input border border-rule hover:bg-paper3 text-[11px] lowercase text-ink2 whitespace-nowrap transition-colors disabled:opacity-45 disabled:cursor-not-allowed';
 
@@ -88,6 +89,7 @@ const reviewReasons = (reasons) => (reasons || []).map((r) => REVIEW_REASONS[r] 
 export default function ResultCard({ clip, index, jobId, durable, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress, initialState = null, onStateChange, connectedPlatforms = null, onConnectSocials, onEditClip = null, onReframeClip = null, onModeChanged = null, onUpgrade = null }) {
     const [showModal, setShowModal] = useState(false);
     const [sourceCredit, setSourceCredit] = useState(undefined);
+    const [pinterestBoardId, setPinterestBoardId] = useState('');
     // The "why" line is clamped to two lines so cards in a row stay level;
     // when it overflows, a hover (desktop) or tap (touch) shows the whole
     // sentence in a popover that floats over the card instead of growing it.
@@ -438,9 +440,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             setIsScheduling(false);
             setScheduleDate("");
             setPostResult(null);
-            // Only preselect connected platforms. X is selected explicitly.
             if (knownConnections) {
-                setPlatforms(flagsFromList(connectedPlatforms.filter((platform) => platform !== 'x')));
+                setPlatforms(flagsFromList(connectedPlatforms.filter((platform) => !['x', 'pinterest'].includes(platform))));
             }
         }
         // Reset only when the modal opens for a clip; connection changes while
@@ -733,6 +734,11 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             return;
         }
 
+        if (platforms.pinterest && !pinterestBoardId) {
+            setPostResult({ success: false, msg: "Choose a Pinterest board." });
+            return;
+        }
+
         if (isScheduling && !scheduleDate) {
             setPostResult({ success: false, msg: "Please select a date and time." });
             return;
@@ -752,6 +758,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 description: postDescription
             };
             if (sourceCredit !== undefined) payload.source_credit_url = sourceCredit.trim() || null;
+            if (platforms.pinterest) payload.pinterest_board_id = pinterestBoardId;
 
             if (isScheduling && scheduleDate) {
                 // Convert to ISO-8601
@@ -1120,7 +1127,11 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     </button>
 
                     <button
-                        onClick={() => setShowModal(true)}
+                        onClick={() => {
+                            setSourceCredit(undefined);
+                            setPinterestBoardId('');
+                            setShowModal(true);
+                        }}
                         className="btn-primary flex-col gap-1 py-2.5 sm:py-2 px-1 text-[11px] leading-none rounded-input whitespace-nowrap"
                     >
                         <Share2 size={16} className="shrink-0" /> post
@@ -1194,7 +1205,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     ) : (
                         <button
                             onClick={handlePost}
-                            disabled={posting || !canPost}
+                            disabled={posting || !canPost || (platforms.pinterest && !pinterestBoardId)}
                             className="btn-primary w-full"
                         >
                             {posting ? <><Loader2 size={16} className="animate-spin" /> {isScheduling ? 'scheduling…' : 'publishing…'}</> : <><Share2 size={16} /> {isScheduling ? 'schedule post' : 'publish now'}</>}
@@ -1272,7 +1283,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         )}
                     </div>
 
-                    <SourceCredit jobId={jobId} open={showModal} value={sourceCredit} onChange={setSourceCredit} />
+                    <SourceCredit jobId={jobId} value={sourceCredit} onChange={setSourceCredit} includesX={platforms.x} />
 
                     {/* Platforms */}
                     <div>
@@ -1285,6 +1296,10 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                             onChange={(arr) => setPlatforms(flagsFromList(arr))}
                         />
                     </div>
+                    {platforms.pinterest && (
+                        <PinterestBoardSelect value={pinterestBoardId} onChange={setPinterestBoardId}
+                            isManaged={isManaged} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} disabled={posting} />
+                    )}
 
                     {postResult && (
                         <div className={postResult.success ? 'badge-ok' : 'badge-danger'}>

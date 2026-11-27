@@ -402,7 +402,7 @@ class TestRestoreSkipsTheSource:
         finally:
             app.jobs.pop(JOB, None)
         assert _src_key() not in r2.downloads
-        assert sorted(os.listdir(tmp_path / JOB)) == [".owner", "x_clip_1.mp4", "x_metadata.json"]
+        assert sorted(os.listdir(tmp_path / JOB)) == [".owner", ".restored-metadata.json", "x_clip_1.mp4", "x_metadata.json"]
 
 
 class TestOnDemand:

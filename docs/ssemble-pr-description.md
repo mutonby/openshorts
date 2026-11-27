@@ -47,7 +47,9 @@ The editor's saved state now includes picture layers, audio layers, timed effect
 - Persist media asset references in managed projects and prevent deletion of assets still used by saved layers.
 - Configure an Autopilot minimum score from 0 to 100. Leave unscored or lower-scoring clips for review when the threshold is active.
 - Save an explicit source-credit URL per project and optionally on Autopilot. Append it to immediate and scheduled post descriptions.
-- Add X to the dashboard's supported publishing choices using the existing connected-profile provider.
+- Add X to the dashboard's supported publishing choices using the existing connected-profile provider. Explain the account requirement for source links.
+- Discover and validate Pinterest boards for the resolved profile, and carry the selected board through manual posts, weekly scheduling, Autopilot, CLI, and MCP.
+- Preserve canonical clip IDs across filtered results, edits, batch publishing, downloads, and agent summaries so a failed neighboring render cannot redirect an action.
 - View upcoming scheduled posts in a content calendar and reschedule or cancel them through owner-checked provider calls.
 - Delete a project from results or managed history. Restrict deletion to its owner and reject active/busy projects.
 - Use shared filesystem leases, deletion markers, and a managed tombstone so deletion can recover after a partial purge and does not race active file requests or archives.
@@ -59,12 +61,14 @@ The editor's saved state now includes picture layers, audio layers, timed effect
 
 ## 3. Validation, installation, and remaining work
 
-The final upstream-integrated regression run passed **3,050 tests with 63 skips and one deselected test**. That long synthetic render passed separately, giving **3,051 passing tests**. The skipped checks require optional environment capabilities. It covered end-card and media renders, exact ranges, captions and exports, custom hook designs, source languages, sports decisions, cue remapping, rerender contracts, project deletion, snapshot archives, Autopilot, publishing ownership, remote settings, MCP transport, and CLI flags. Tests use synthetic media and mocked external providers where appropriate. They do not establish live delivery to a social network or comparative AI quality.
+The final full audit run passed **3,145 tests with 32 skips**, including the long synthetic render and the disposable PostgreSQL checks. `docs/creator-workflow-audit.md` records the reproduced failures and fixes. The skipped checks require optional environment capabilities. It covered end-card and media renders, exact ranges, captions and exports, custom hook designs, source languages, sports decisions, cue remapping, rerender contracts, project deletion, snapshot archives, Autopilot, publishing ownership, remote settings, MCP transport, and CLI flags. Tests use synthetic media and mocked external providers where appropriate. They do not establish live delivery to a social network or comparative AI quality.
 
 - Real FFmpeg fixtures verify body/delivery durations, animated card artwork, audio/video offsets, and silent body audio when an input audio stream starts after the visible video ends.
 - End-card endpoint checks apply a card, replace captions and hooks, remove captions, and clear the card while keeping exactly one tail.
 - Archive fault tests verify that missing editable bodies or storage failures cannot publish pointers, that a captured snapshot remains stable after the shared JSON path changes, and that a stale revision cannot repoint newer history.
-- Restore checks include two versioned metadata objects with the same basename and confirm that only the recorded revision is loaded.
+- Restore checks cover same-basename revisions, clean served pointers after upgrade, pending local edits, asset deletion tombstones, drained partial downloads, and filtered clip IDs. A completed-session browser refresh fetches the latest server result and guards against overwriting an intervening local edit.
+- Disposable PostgreSQL checks exercise concurrent first archives, monotonic revision publication, browser-state preservation, owner-scoped deletion, retryability, and retained Autopilot deduplication.
+- The audit corrects media-clock drift, early music cutoff, teaser-first canonical recuts, saved short-range compatibility, missing preview URLs, watcher retry/deduplication, selected-range chat alignment, pinned-format resume, and overlapping metadata saves. The audit document lists the reproduced failures and fixes.
 - Project deletion checks cover sibling isolation, ownership, active work, held leases, and retryable partial cleanup.
 - Provider tests verify attribution, ID-based imports, redirect restrictions, download limits, source-credit handling, and profile ownership for scheduling.
 - Dashboard lint and the production build pass. The build reports the existing bundle-size and optional analytics-environment notices.
@@ -72,7 +76,7 @@ The final upstream-integrated regression run passed **3,050 tests with 63 skips 
 - The local backend and dashboard were restarted with the update. The desktop dashboard bundle and CLI were refreshed, with the prior dashboard bundle retained.
 - A live synthetic source export selected seconds 1.25–4.25, produced a three-second body plus a two-second chime card, and completed without composition warnings. A second live rerender combined B-roll, a looping bottom panel, ducked music, timed effects, and an animated card. FFprobe and sampled decoding verified a 5.000 second 1080×1920 delivery with audio. CamoFox checks inspected the result card, loaded editor controls, effect catalog, playback metadata, and rendered artwork.
 
-Optional stock search still needs a Pexels key. Live publishing and calendar delivery need configured test profiles. Managed storage behavior has fault-injection coverage; a production storage exercise remains separate. These features should report unavailable configuration clearly and should not silently substitute a provider.
+Optional stock search still needs a Pexels key. Live publishing and calendar delivery need configured test profiles. Managed storage behavior has fault-injection and disposable PostgreSQL coverage; a production storage exercise remains separate. These features should report unavailable configuration clearly and should not silently substitute a provider.
 
 Remaining product work includes applying saved custom hook designs through generation/automation presets, image cards in channel automation, per-caption visibility and free placement, stock music and meme-intro catalogs, user-uploaded cue sounds, additional transitions, public-channel URL scheduling, and generated-template automation. A funded rewards marketplace also needs campaign policy, authorized platform metrics, moderation, accounting, payment-provider onboarding, and reconciliation. No payout flow is represented as complete.
 

@@ -28,6 +28,8 @@ import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel
@@ -37,6 +39,17 @@ from jsonfile import write_json_atomic
 PROMPT_VERSION = "hype-judge-2"
 DEFAULT_JUDGE_MODEL = "gemini-3.7-flash"
 RATINGS = ("hook", "visual_action", "reaction", "clarity", "payoff")
+
+
+class PreviewUnavailable(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class StagedPreview:
+    """A playable staged preview with an optional copy for the judge."""
+
+    judge_path: Path | None
 
 # Sub, gift, bits, donation and raid alerts, and the streamer thanking for
 # them: loud, excited, and never a clip.
@@ -348,15 +361,21 @@ def _reasons(cand):
 def _trim(cand, verdict, words, duration, min_secs, max_secs):
     from clip_selection import snap_clip_to_words
 
-    start, end = cand["start"], cand["end"]
+    first, last = cand["start"], min(cand["end"], duration)
+    start, end = first, last
+    minimum = min(min_secs, last - first)
     if verdict:
         a, b = float(verdict["best_start"]), float(verdict["best_end"])
-        span = end - start
-        if (math.isfinite(a) and math.isfinite(b) and 0 <= a < b <= span + 0.5
-                and b - a >= min(min_secs, span) - 1):
-            start, end = start + a, min(end, start + b)
-    return snap_clip_to_words(start, end, words, duration,
-                              min_duration=min(min_secs, end - start), max_duration=max_secs)
+        if math.isfinite(a) and math.isfinite(b) and 0 <= a < b <= last - first + 0.5:
+            proposed_start, proposed_end = first + a, min(last, first + b)
+            if proposed_end - proposed_start + 1e-6 >= minimum:
+                start, end = proposed_start, proposed_end
+    # The transcript includes padding that the judge and staged preview never see.
+    snapped_start, snapped_end = snap_clip_to_words(start, end, words, last,
+                                                     min_duration=minimum, max_duration=max_secs)
+    snapped_start, snapped_end = max(first, snapped_start), min(last, snapped_end)
+    return ((snapped_start, snapped_end) if snapped_end - snapped_start + 1e-6 >= minimum
+            else (start, end))
 
 
 def to_short(cand, verdict, transcript, duration, *, gameplay, min_secs, max_secs):
@@ -478,10 +497,13 @@ def review(candidates, transcript, duration, *, proxy, cache_dir, gameplay, min_
         verdict, cost = None, None
         if api_key or need_proxy:
             try:
-                path = proxy(index, cand)
+                prepared = proxy(index, cand)
             except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
                 print(f"   ⚠️ Could not prepare candidate {index} for the judge ({type(exc).__name__}).")
-                path = None
+                prepared = None
+            if need_proxy and not prepared:
+                return None, None
+            path = prepared.judge_path if isinstance(prepared, StagedPreview) else prepared
             if path and api_key and not refused["key"]:
                 try:
                     verdict, cost = judged(path, cand)
@@ -499,6 +521,9 @@ def review(candidates, transcript, duration, *, proxy, cache_dir, gameplay, min_
 
     with ThreadPoolExecutor(max_workers=max(1, min(workers, len(candidates) or 1))) as pool:
         results = list(pool.map(one, enumerate(candidates, 1)))
-    shorts = [s for s, _ in results if s["assessment"]["verdict"] != "weak"]
+    prepared = [short for short, _ in results if short is not None]
+    if need_proxy and results and not prepared:
+        raise PreviewUnavailable("None of the candidate previews could be prepared.")
+    shorts = [short for short in prepared if short["assessment"]["verdict"] != "weak"]
     costs = [c for _, c in results if c]
     return rank(shorts), costs

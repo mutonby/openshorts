@@ -187,15 +187,16 @@ def records(channel, start, end, directory=None):
         day += timedelta(days=1)
 
 
-def attach(channel, vod_start, duration, dest, directory=None):
+def attach(channel, vod_start, duration, dest, directory=None, *, source_start=0.0):
     """Write the recorded chat a VOD covers as a VOD-relative CSV at ``dest``
     (time_seconds,author_id,text). Returns the number of messages, 0 when
     nothing was recorded (no file is written then)."""
     channel = channel_name(channel)
     if not channel or not vod_start or not duration:
         return 0
+    start = vod_start + source_start
     rows = [(round(float(r["ts"]) - vod_start, 3), str(r.get("author_id") or ""), str(r.get("text") or ""))
-            for r in records(channel, vod_start, vod_start + duration + 60, directory)]
+            for r in records(channel, start, start + duration + 60, directory)]
     if not rows:
         return 0
     dest = Path(dest)

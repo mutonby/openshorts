@@ -28,6 +28,7 @@ import re
 import subprocess
 
 import layout_ranges
+from recut import MIN_SEGMENT_SECONDS
 
 TEASER_BEFORE, TEASER_AFTER = 0.7, 1.4      # around the peak
 MIN_SETUP = 6.0           # a cold open only pays off with this much lead-in
@@ -104,11 +105,15 @@ def dead_air(words, start, end, peak=None):
     gaps = []
     for (_, prev_end), (next_start, _) in zip(inside, inside[1:]):
         a, b = prev_end + DEAD_AIR_KEEP, next_start - DEAD_AIR_KEEP
-        if next_start - prev_end < DEAD_AIR_GAP or b - a < 0.3:
+        if next_start - prev_end < DEAD_AIR_GAP:
             continue
         if peak is not None and a < peak + PEAK_GUARD[1] and b > peak - PEAK_GUARD[0]:
             continue
-        gaps.append((max(a, start), min(b, end)))
+        # Allow the editor to keep either side of the cut, even if the first
+        # or last spoken word is very close to the selected clip boundary.
+        a, b = max(a, start + MIN_SEGMENT_SECONDS), min(b, end - MIN_SEGMENT_SECONDS)
+        if b - a >= 0.3:
+            gaps.append((a, b))
     budget = DEAD_AIR_MAX_SHARE * (end - start)
     cuts = []
     for a, b in sorted(gaps, key=lambda g: g[0] - g[1]):

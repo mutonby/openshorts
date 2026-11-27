@@ -12,6 +12,8 @@ export OPENSHORTS_API_KEY=osk_...   # from your account page at openshorts.app
 openshorts process "https://youtube.com/watch?v=..." --wait
 openshorts clips <job_id>
 openshorts publish <job_id> 0 --platforms tiktok,youtube
+openshorts pinterest-boards
+openshorts publish <job_id> 0 --platforms pinterest --pinterest-board-id <board_id>
 openshorts quota
 ```
 
@@ -21,6 +23,9 @@ Self-hosted instance? Point it at your own machine and skip the key:
 export OPENSHORTS_API_URL=http://localhost:8000
 openshorts process "https://youtube.com/watch?v=..." --wait
 ```
+
+On a self-hosted server with an Upload-Post key configured, pass `--profile`
+to `publish` and `pinterest-boards`.
 
 For pipelines, prefer the webhook to `--wait`: pass `--webhook` and
 `--webhook-secret` and OpenShorts POSTs once (HMAC-signed,

@@ -3670,16 +3670,17 @@ if __name__ == '__main__':
             if args.highlight_discovery and args.review_candidates and livestream.hype_enabled():
                 import hype_judge
                 judge_dir = livestream.workspace(output_dir)
+                source_offset = float(os.environ.get("SOURCE_START_SECONDS", "0") or 0)
                 if args.url:
                     # Live chat this machine recorded for a Twitch VOD (chat_recorder.py).
-                    livestream.recorded_chat_for_url(args.url, output_dir, duration)
+                    livestream.recorded_chat_for_url(args.url, output_dir, duration, start=source_offset)
                 hyped = livestream.hype_review(
                     output_dir, input_video, duration, args.url,
                     transcribe_ranges=transcribe_ranges_job,
                     proxy=lambda i, cand: hype_judge.judge_proxy(
                         input_video, judge_dir / f"judge-{i}.mp4", cand["start"], cand["end"]),
                     gameplay=framing.gameplay_like(framing_method),
-                    start=float(os.environ.get("SOURCE_START_SECONDS", "0") or 0),
+                    start=source_offset,
                     metadata={"title": video_title, "duration": duration}, viewer_clips=viewer_clips)
             if hyped is not None:
                 transcript = hyped["transcript"]
@@ -3912,6 +3913,7 @@ if __name__ == '__main__':
                         if edited:
                             clip["viral_edit"] = {key: edited[key] for key in (
                                 "layout", "teaser", "peak", "peak_out", "cuts", "emoji", "sfx", "duration")}
+                            clip["viral_edit"]["segments"] = [segment.copy() for segment in edited["segments"]]
                             clip["composition"] = edited.get("composition")
                             if edited["teaser"] or edited["cuts"]:
                                 # The editor opens the edited timeline like a recut.

@@ -7,6 +7,7 @@ import { apiJson, openQuotaWall, QuotaError } from '../lib/api';
 import { PLATFORM_VALUES, platformLabel } from '../lib/socialPlatforms';
 import { track } from '../lib/analytics';
 import { connectNotice } from '../lib/connectReturn';
+import PinterestBoardSelect from './PinterestBoardSelect';
 
 // Autopilot: every new video on the user's connected YouTube channel is turned
 // into shorts automatically, and optionally the best ones are scheduled on
@@ -83,6 +84,7 @@ function StatusBadge({ run }) {
         <CheckCircle2 size={11} /> {run.clips_count || 0} clips
         {run.posted_count ? ` · ${run.posted_count} scheduled` : ''}
         {run.reason === 'publish_score_not_met' ? ' · none met the minimum score' : ''}
+        {run.reason === 'pinterest_board_unavailable' ? ' · Pinterest board unavailable' : ''}
       </span>
     );
   }
@@ -398,11 +400,11 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
                 {limits.platforms.map((p) => {
                   const connected = !!accounts[p];
                   const on = (s.publish_platforms || []).includes(p);
-                  return connected ? (
+                  return connected || (p === 'pinterest' && on) ? (
                     <button
                       key={p}
                       onClick={() => togglePlatform(p)}
-                      disabled={saving}
+                      disabled={saving || (p === 'pinterest' && !on && !s.pinterest_board_id)}
                       aria-pressed={on}
                       className={`px-4 py-2 rounded-full text-sm lowercase border transition-colors ${on ? 'border-brass bg-brass/10 text-ink' : 'border-rule2 text-muted hover:text-ink2'}`}
                     >
@@ -420,6 +422,18 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
               )}
               {(s.publish_platforms || []).includes('tiktok') && (
                 <p className="text-muted text-xs mt-3">TikTok clips arrive as drafts in your TikTok inbox: open the app to post them.</p>
+              )}
+              {accounts.pinterest && (
+                <div className="mt-4 max-w-sm">
+                  <PinterestBoardSelect isManaged disabled={saving} value={s.pinterest_board_id}
+                    onChange={(board) => save(board ? { pinterest_board_id: board } : {
+                      pinterest_board_id: null,
+                      publish_platforms: (s.publish_platforms || []).filter((p) => p !== 'pinterest'),
+                    })} />
+                  {!s.pinterest_board_id && (
+                    <p className="mt-2 text-xs text-muted">Choose a board to enable Pinterest autopublishing.</p>
+                  )}
+                </div>
               )}
             </div>
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-5">
@@ -479,6 +493,9 @@ export default function AutopilotTab({ onOpenProject, onUpgrade, justConnected }
               if (value !== (s.source_credit_url || null)) save({ source_credit_url: value });
             }} />
           <span className="block mt-2 text-xs text-muted">Include this link in descriptions of future automatic posts.</span>
+          {(s.publish_platforms || []).includes('x') && (
+            <span className="block mt-2 text-xs text-muted">Source links on X require Upload-Post's X Links add-on.</span>
+          )}
         </label>
       )}
 

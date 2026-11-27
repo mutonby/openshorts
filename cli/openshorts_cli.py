@@ -97,8 +97,11 @@ def _print_clips(result):
         print("no clips in result")
         return
     for i, clip in enumerate(clips):
-        title = clip.get("title") or clip.get("video_title_for_youtube_short") or f"clip {i}"
-        print(f"[{i}] {title}")
+        index = clip.get("clip_index")
+        if type(index) is not int:
+            index = i
+        title = clip.get("title") or clip.get("video_title_for_youtube_short") or f"clip {index}"
+        print(f"[{index}] {title}")
         # Cloud: download_url is signed and opens without the API key.
         print(f"    {clip.get('download_url') or _absolutize(clip.get('video_url') or '')}")
 
@@ -249,10 +252,26 @@ def cmd_publish(args):
         body["scheduled_date"] = args.schedule
     if args.timezone:
         body["timezone"] = args.timezone
+    if args.profile:
+        body["user_id"] = args.profile
+    if args.pinterest_board_id:
+        body["pinterest_board_id"] = args.pinterest_board_id
     status, payload = _request("POST", "/api/social/post", body)
     if status >= 400:
         _die(status, payload)
     print(json.dumps(payload) if args.json else f"publishing: {payload}")
+
+
+def cmd_pinterest_boards(args):
+    query = "?" + urllib.parse.urlencode({"user": args.profile}) if args.profile else ""
+    status, payload = _request("GET", "/api/social/pinterest-boards" + query)
+    if status >= 400:
+        _die(status, payload)
+    if args.json:
+        print(json.dumps(payload))
+    else:
+        for board in payload.get("boards", []):
+            print(f"{board['id']}\t{board['name']}")
 
 
 def _regional_code(value):
@@ -560,7 +579,13 @@ def main(argv=None):
     p.add_argument("--title")
     p.add_argument("--schedule", help="ISO datetime for scheduled posting")
     p.add_argument("--timezone", help="IANA timezone for --schedule")
+    p.add_argument("--profile", help="Upload-Post profile on a self-hosted instance")
+    p.add_argument("--pinterest-board-id", help="required when posting to Pinterest")
     p.set_defaults(func=cmd_publish)
+
+    p = sub.add_parser("pinterest-boards", help="list boards for Pinterest publishing")
+    p.add_argument("--profile", help="Upload-Post profile on a self-hosted instance")
+    p.set_defaults(func=cmd_pinterest_boards)
 
     p = sub.add_parser("trends", help="discover regional searches or recent YouTube short-video references")
     p.add_argument("--region", type=_regional_code, default="US", help="country code (default: US)")

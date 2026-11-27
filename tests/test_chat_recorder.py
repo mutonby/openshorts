@@ -71,6 +71,7 @@ def test_attach_without_recordings_writes_nothing(tmp_path):
 
 def test_discovery_attaches_recorded_chat_for_a_twitch_vod(tmp_path, monkeypatch):
     monkeypatch.setenv("CHAT_RECORDINGS_DIR", str(tmp_path / "rec"))
+    monkeypatch.delenv("HIGHLIGHT_CHAT_OFFSET", raising=False)
     writer = cr._Writer(tmp_path / "rec")
     writer.write("somestreamer", {"ts": 1795223830 + 42.0, "author_id": "9", "text": "Pog"})
     writer.close()
@@ -79,6 +80,29 @@ def test_discovery_attaches_recorded_chat_for_a_twitch_vod(tmp_path, monkeypatch
     assert livestream.imported_chat(tmp_path / "job").name == "imported-chat.csv"
     # An uploaded replay always wins: nothing is attached over it.
     assert livestream.attach_recorded_chat(info, tmp_path / "job", 27395) == 0
+
+
+def test_recorded_chat_for_a_selected_range_keeps_vod_relative_times(tmp_path, monkeypatch):
+    from hype_engine import chat_curve
+
+    vod_start = 1795223830
+    recordings = tmp_path / "recordings"
+    monkeypatch.setenv("CHAT_RECORDINGS_DIR", str(recordings))
+    monkeypatch.setenv("HIGHLIGHT_CHAT_OFFSET", "3")
+    writer = cr._Writer(recordings)
+    for seconds in (20, 298, 330):
+        writer.write("somestreamer", {"ts": vod_start + seconds, "author_id": "9", "text": "Pog"})
+    writer.close()
+
+    info = {"uploader_id": "somestreamer", "timestamp": vod_start}
+    directory = tmp_path / "job"
+    assert livestream.attach_recorded_chat(info, directory, 60, start=300) == 2
+
+    messages = list(chat_hype.read_messages(livestream.imported_chat(directory)))
+    assert [message.seconds for message in messages] == [298, 330]
+    shifted = chat_curve(messages, 60, offset=3 - 300)
+    assert shifted["accepted"] == 2
+    assert [i for i, count in enumerate(shifted["messages"]) if count] == [1, 33]
 
 
 def test_run_refuses_no_channels():

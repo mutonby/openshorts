@@ -86,6 +86,16 @@ def test_the_edit_becomes_the_clips_file(job, editor):
     assert not [f for f in os.listdir(job["dir"]) if f.startswith("temp_")]
 
 
+def test_edit_updates_correct_live_clip_after_a_failed_render(job, editor):
+    live = app_module.jobs[JOB_ID]["result"]["clips"]
+    live[1]["clip_index"] = 1
+    live.pop(0)
+    resp = _request({"job_id": JOB_ID, "clip_index": 1})
+    assert resp.status_code == 200, resp.text
+    assert live[0]["video_url"] == resp.json()["new_video_url"]
+    assert (job["dir"] / os.path.basename(live[0]["video_url"])).read_bytes() == b"edited:clip2"
+
+
 def test_two_clips_of_a_job_never_share_temp_files(job, editor):
     """With one temp name per job, edits running at once overwrote each
     other's input and moved each other's result."""

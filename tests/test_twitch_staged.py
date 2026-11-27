@@ -102,6 +102,25 @@ def test_inspect_twitch_refuses_a_live_or_changed_vod(monkeypatch):
                                    "height": 720, "audio_format": "Audio Only"})
 
 
+def test_twitch_approval_uses_the_pinned_variant_when_a_higher_one_appears(monkeypatch):
+    url = "https://www.twitch.tv/videos/1234567890"
+    initial = {**VOD_INFO, "formats": [f for f in VOD_INFO["formats"] if f.get("height") != 1080]}
+    _stub_ydl(monkeypatch, initial)
+    saved = livestream.inspect_source(url).summary
+    assert saved["video_format"] == "720p60"
+
+    _stub_ydl(monkeypatch, VOD_INFO)
+    assert livestream.inspect_source(url).best["format_id"] == "1080p60"
+    approved = livestream.inspect_source(url, saved)
+    assert approved.best["format_id"] == "720p60"
+    assert approved.best["height"] == 720
+
+    missing = {**VOD_INFO, "formats": [f for f in VOD_INFO["formats"] if f.get("format_id") != "720p60"]}
+    _stub_ydl(monkeypatch, missing)
+    with pytest.raises(livestream.DiscoveryUnavailable, match="approved source formats"):
+        livestream.inspect_source(url, saved)
+
+
 def test_inspect_twitch_without_audio_only_uses_the_smallest_variant(monkeypatch):
     info = {**VOD_INFO, "formats": [f for f in VOD_INFO["formats"] if f["format_id"] != "Audio Only"]}
     _stub_ydl(monkeypatch, info)
@@ -151,8 +170,10 @@ def test_fetch_hls_cuts_on_the_packet_clock_with_a_tight_whitelist(tmp_path, mon
 
 def test_inspect_with_a_base_reports_source_seconds(tmp_path, monkeypatch):
     probe = {"format": {"start_time": "3054.033", "duration": "3093.083"},
-             "streams": [{"codec_type": "video", "start_time": "3054.033", "width": 1920, "height": 1080},
-                         {"codec_type": "audio", "start_time": "3054.059"}]}
+             "streams": [{"codec_type": "video", "start_time": "3054.033", "width": 1920, "height": 1080,
+                          "tags": {"DURATION": "00:51:33.083000000"}},
+                         {"codec_type": "audio", "start_time": "3054.059",
+                          "tags": {"DURATION": "00:51:33.100000000"}}]}
     monkeypatch.setattr(range_media.subprocess, "run",
                         lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=json.dumps(probe).encode()))
     span = range_media.inspect(tmp_path / "r.mkv", 3000.0, 3030.0, height=1080, base=62.033)

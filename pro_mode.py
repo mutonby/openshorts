@@ -1018,7 +1018,7 @@ def convert(base_path, clean_name, clip, transcript, wait=0.0, api_key=None,
     kept = [{"start": a, "end": b} for a, b in result["keep"]]
     new_segments = source_segments(result["keep"], segments)
     new_ranges = layout_ranges.write(out_path, [
-        (r["start"], r["end"], r["layout"], r.get("content"))
+        (r["start"], r["end"], r["layout"], r.get("content"), r)
         for r in layout_ranges.remap(ranges, kept)])
     new_recipe = {"v": 1, "segments": new_segments,
                   "canonical_range": recipe.get("canonical_range") or dict(whole)}

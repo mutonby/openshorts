@@ -282,11 +282,15 @@ const readableError = (raw) => {
 // poll, which clears the saved session (see lib/jobPoll.js).
 const SESSION_MAX_AGE = 86400000; // 24 hours
 
-const pollJob = async (jobId) => {
-  const res = await apiFetch(`/api/status/${jobId}`);
+const pollJob = async (jobId, options) => {
+  const res = await apiFetch(`/api/status/${jobId}`, options);
   if (!res.ok) throw new JobPollError(res.status);
   return res.json();
 };
+
+function clipIndexAt(clip, position) {
+  return Number.isInteger(clip.clip_index) ? clip.clip_index : position;
+}
 
 function App() {
   // Cloud auth/billing session (inert when billing is disabled).
@@ -380,16 +384,13 @@ function App() {
   // buries the strongest one wherever it happens to fall in the video — and
   // the first card is the one people actually watch and publish.
   //
-  // The ORIGINAL array position travels with each clip and is what gets passed
-  // down as `index`: it is the clip's identity everywhere else (clip_index on
-  // /api/subtitle, /api/edit and publishing, the clip-N.mp4 download name, the
-  // saved per-clip project state). Sorting the array itself would silently
-  // repoint all of that at the wrong clip.
+  // The clip_index in project metadata survives missing renders and sorting.
+  // Older results use the clip's original array position.
   const rankedClips = useMemo(() => {
     const clips = results?.clips;
     if (!Array.isArray(clips)) return [];
     return clips
-      .map((clip, index) => ({ clip, index: Number.isInteger(clip.clip_index) ? clip.clip_index : index }))
+      .map((clip, index) => ({ clip, index: clipIndexAt(clip, index) }))
       .sort((a, b) => {
         if (a.clip?.assessment && b.clip?.assessment) return 0;
         const sa = Number.isFinite(a.clip?.predicted_score) ? a.clip.predicted_score : -1;
@@ -428,6 +429,7 @@ function App() {
   const [noSource, setNoSource] = useState(false);
 
   const [sessionRecovered, setSessionRecovered] = useState(false);
+  const restoredCompletion = useRef(null);
   // The job a restored session was polling is no longer on the server.
   const [jobGone, setJobGone] = useState(false);
   const [showScheduleWeek, setShowScheduleWeek] = useState(false);
@@ -436,6 +438,8 @@ function App() {
   // Clip editor overlay: index of the clip being edited, or null.
   const [editingClip, setEditingClip] = useState(null);
   const [reframingClip, setReframingClip] = useState(null);
+  const editingClipData = results?.clips?.find((clip, position) => clipIndexAt(clip, position) === editingClip);
+  const reframingClipData = results?.clips?.find((clip, position) => clipIndexAt(clip, position) === reframingClip);
 
   // Silent-success "saved" states for the settings key inputs (design.md: no alert popups)
   const [elevenLabsSaved, setElevenLabsSaved] = useState(false);
@@ -591,6 +595,16 @@ function App() {
   };
 
   const handleClipStateChange = (index, state) => {
+    const restored = restoredCompletion.current;
+    if (restored?.jobId === jobId) {
+      // Cards normalize their saved layers on mount (a baked end card clears
+      // them). Compare later reports with that baseline, not the saved objects.
+      const mounted = restored.cardStates || (restored.cardStates = Object.create(null));
+      const value = JSON.stringify([state.serverVideoFile,
+        ...['subtitles', 'hook', 'effects'].map((layer) => state.activeLayers?.[layer] ?? null)]);
+      if (!Object.hasOwn(mounted, index)) mounted[index] = value;
+      else if (mounted[index] !== value) restoredCompletion.current = null;
+    }
     if (!isManaged || !jobId) return;
     const s = clipStateSync.current;
     if (s.jobId !== jobId) { s.pending = {}; s.files = {}; s.jobId = jobId; }
@@ -614,17 +628,19 @@ function App() {
   const handleClipRerendered = (index, data) => {
     const newFile = (data.new_video_url || '').split('/').pop();
     setResults((prev) => {
-      if (!prev?.clips?.[index]) return prev;
+      const position = prev?.clips?.findIndex((clip, i) => clipIndexAt(clip, i) === index);
+      if (position == null || position < 0) return prev;
       const clips = prev.clips.slice();
-      clips[index] = {
-        ...clips[index],
+      clips[position] = {
+        ...clips[position],
         video_url: data.new_video_url,
         start: data.start,
         end: data.end,
-        recipe: data.recipe,
-        mode: data.mode ?? clips[index].mode,
-        auto_hook: data.burned_hook,
+        ...(Object.hasOwn(data, 'recipe') ? { recipe: data.recipe } : {}),
+        mode: data.mode ?? clips[position].mode,
+        ...(Object.hasOwn(data, 'burned_hook') ? { auto_hook: data.burned_hook } : {}),
         ...(Object.hasOwn(data, 'endcard') ? { endcard: data.endcard } : {}),
+        ...(Object.hasOwn(data, 'export_duration') ? { export_duration: data.export_duration } : {}),
       };
       return { ...prev, clips };
     });
@@ -719,7 +735,7 @@ function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             job_id: jobId,
-            clip_index: clips[i].clip_index ?? i,
+            clip_index: clipIndexAt(clips[i], i),
             ...captionStylePayload(options),
             // Chain from the clip's current server file (its video_url basename).
             input_filename: (clips[i].video_url || '').split('/').pop(),
@@ -772,8 +788,14 @@ function App() {
         return;
       }
       if (session.jobId && session.status && session.status !== 'idle') {
+        const restoredStatus = session.status === 'review' ? 'processing'
+          : session.status === 'completed' ? 'complete' : session.status;
+        const restoredResults = session.results || null;
+        if (restoredStatus === 'complete') {
+          restoredCompletion.current = { jobId: session.jobId, results: restoredResults };
+        }
         setJobId(session.jobId);
-        setResults(session.results || null);
+        setResults(restoredResults);
         // Restore the source preview. Older sessions (or uploads) saved no
         // media, so fall back to the backend-served source for this job —
         // except for reopened projects, whose source was never persisted.
@@ -782,8 +804,7 @@ function App() {
         if (session.noSource) setNoSource(true);
         if (session.projectState) setProjectState(session.projectState);
         if (session.activeTab) setActiveTab(session.activeTab);
-        // If was processing, resume polling; if complete/error, just show results
-        setStatus(session.status === 'review' ? 'processing' : session.status);
+        setStatus(restoredStatus);
         setSessionRecovered(true);
         setTimeout(() => setSessionRecovered(false), 5000);
       }
@@ -791,6 +812,25 @@ function App() {
       localStorage.removeItem(SESSION_KEY);
     }
   }, []);
+
+  // Show the saved results immediately and check once for newer server edits.
+  useEffect(() => {
+    const restored = restoredCompletion.current;
+    if (!restored || restored.jobId !== jobId || status !== 'complete'
+        || authLoading || (billingEnabled && !isSignedIn)) return;
+    const controller = new AbortController();
+    pollJob(jobId, { signal: controller.signal, cache: 'no-store' }).then((data) => {
+      if (controller.signal.aborted || restoredCompletion.current !== restored) return;
+      if (data.status === 'completed' && Array.isArray(data.result?.clips)) {
+        setResults((current) => current === restored.results ? data.result : current);
+      }
+    }).catch(() => {
+      // An expired server copy may still have playable clips in the library.
+    }).finally(() => {
+      if (!controller.signal.aborted && restoredCompletion.current === restored) restoredCompletion.current = null;
+    });
+    return () => controller.abort();
+  }, [authLoading, billingEnabled, isSignedIn, jobId, status]);
 
   // Session Recovery: Save state changes
   useEffect(() => {
@@ -1246,6 +1286,7 @@ function App() {
       return;
     }
     // Past every gate, so this request is really running: nothing left to resume.
+    restoredCompletion.current = null;
     clearPendingJob();
     setStatus('processing');
     setJobError('');
@@ -1479,6 +1520,7 @@ function App() {
   }, [billingEnabled, isSignedIn]);
 
   const handleReset = () => {
+    restoredCompletion.current = null;
     setJobGone(false);
     // Flush any pending edit-state sync before dropping the project: the clips
     // themselves are already archived to R2 as they were edited.
@@ -2752,7 +2794,8 @@ function App() {
                           onReframeClip={(index) => setReframingClip(index)}
                           onModeChanged={status === 'processing' ? null : handleClipRerendered}
                           onUpgrade={isManaged ? openUpsell : null}
-                          initialState={projectState?.clips?.find((c) => c.index === i) || null}
+                          initialState={projectState?.clips?.find((c) => c.index === i
+                            && (!c.server_file || clip.video_url?.endsWith(`/${c.server_file}`))) || null}
                           onStateChange={handleClipStateChange}
                           durable={durableClips[i]}
                           uploadPostKey={uploadPostKey}
@@ -2954,20 +2997,20 @@ function App() {
       )}
 
 
-      {editingClip !== null && results?.clips?.[editingClip] && (
+      {editingClipData && (
         <ClipEditor
           jobId={jobId}
           clipIndex={editingClip}
-          clipTitle={results.clips[editingClip].video_title_for_youtube_short || ''}
+          clipTitle={editingClipData.video_title_for_youtube_short || ''}
           onClose={() => setEditingClip(null)}
           onRerendered={handleClipRerendered}
         />
       )}
-      {reframingClip !== null && results?.clips?.[reframingClip] && (
+      {reframingClipData && (
         <ReframeEditor
           jobId={jobId}
           clipIndex={reframingClip}
-          clipTitle={results.clips[reframingClip].video_title_for_youtube_short || ''}
+          clipTitle={reframingClipData.video_title_for_youtube_short || ''}
           onClose={() => setReframingClip(null)}
           onReframed={handleClipRerendered}
         />

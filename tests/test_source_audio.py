@@ -3,6 +3,8 @@ from copy import deepcopy
 from pathlib import Path
 import shutil
 import subprocess
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -48,13 +50,7 @@ def test_audio_language_inventory_excludes_silent_formats_and_rejects_unavailabl
         youtube_io.select_audio_language(info, "fr")
 
 
-def test_audio_first_review_keeps_the_requested_track(monkeypatch):
-    import livestream
-
-    yt_dlp = pytest.importorskip("yt_dlp")
-    urls = [f"https://fixture.googlevideo.com/{kind}" for kind in ("v", "en", "pt")]
-    info = {"id": "12345678901", "duration": 90, "formats": _formats(urls)}
-
+def _stub_audio_first_source(monkeypatch, info):
     class FixtureDownloader:
         def __init__(self, _opts):
             pass
@@ -68,13 +64,53 @@ def test_audio_first_review_keeps_the_requested_track(monkeypatch):
         def extract_info(self, *_args, **_kwargs):
             return deepcopy(info)
 
-    monkeypatch.setattr(yt_dlp, "YoutubeDL", FixtureDownloader)
+    monkeypatch.setitem(sys.modules, "yt_dlp", SimpleNamespace(YoutubeDL=FixtureDownloader))
+
+
+def test_audio_first_review_keeps_the_requested_track(monkeypatch):
+    import livestream
+
+    urls = [f"https://fixture.googlevideo.com/{kind}" for kind in ("v", "en", "pt")]
+    info = {"id": "12345678901", "duration": 90, "formats": _formats(urls)}
+    _stub_audio_first_source(monkeypatch, info)
     assert livestream.inspect_source(URL).audio["format_id"] == "english"
     reviewed = livestream.inspect_source(URL, audio_language="pt-br")
     assert reviewed.summary["audio_language"] == "pt-br"
     assert livestream.inspect_source(URL, reviewed.summary).audio["format_id"] == "portuguese"
     with pytest.raises(livestream.DiscoveryUnavailable, match="fr audio track"):
         livestream.inspect_source(URL, audio_language="fr")
+
+
+@pytest.mark.parametrize("extension", ["mp4", "webm"])
+def test_youtube_approval_keeps_pinned_video_and_audio_when_variants_change(monkeypatch, extension):
+    import livestream
+
+    urls = [f"https://fixture.googlevideo.com/{kind}" for kind in ("v", "en", "pt")]
+    formats = _formats(urls)
+    formats[0]["height"] = 720
+    info = {"id": "12345678901", "duration": 90, "formats": formats}
+    _stub_audio_first_source(monkeypatch, info)
+    saved = livestream.inspect_source(URL, audio_language="pt-br").summary
+
+    formats.extend([
+        {**formats[0], "format_id": "new-1080", "height": 1080, "ext": extension},
+        {**formats[2], "format_id": "new-portuguese", "language_preference": 10},
+    ])
+    approved = livestream.inspect_source(URL, saved)
+    assert (approved.best["format_id"], approved.best["height"]) == ("video", 720)
+    assert approved.audio["format_id"] == "portuguese"
+    assert approved.requested_audio_language == "pt-br"
+
+    if extension == "mp4":
+        fresh = livestream.inspect_source(URL, audio_language="pt-br")
+        assert (fresh.best["format_id"], fresh.audio["format_id"]) == ("new-1080", "new-portuguese")
+    else:
+        with pytest.raises(livestream.DiscoveryUnavailable, match="best source is not seekable"):
+            livestream.inspect_source(URL, audio_language="pt-br")
+
+    formats[:] = [track for track in formats if track["format_id"] != "portuguese"]
+    with pytest.raises(livestream.DiscoveryUnavailable, match="approved source formats"):
+        livestream.inspect_source(URL, saved)
 
 
 def test_requested_audio_language_is_queued_and_metadata_only_is_discoverable(monkeypatch, tmp_path):

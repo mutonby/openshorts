@@ -10,6 +10,7 @@ import pytest
 import facecam
 import framing
 import layout_ranges
+import recut
 import sfx
 import subtitles
 import viral_edit as ve
@@ -59,6 +60,15 @@ def test_dead_air_needs_words_and_respects_its_budget():
     cuts = ve.dead_air(words, 0, 60, None)
     assert sum(b - a for a, b in cuts) <= ve.DEAD_AIR_MAX_SHARE * 60 + 1e-6
     assert len(cuts) == 1
+
+
+def test_dead_air_keeps_editor_sized_segments_at_both_clip_edges():
+    words = _words((10, 10.08), (12.4, 12.7), (27.3, 27.6), (29.92, 30))
+    plan = ve.plan(10, 30, peak=20, words=words)
+    assert plan["cuts"] == [(10.5, 12.05), (27.95, 29.5)]
+    assert plan["segments"] == [(19.3, 21.4), (10, 10.5), (12.05, 27.95), (29.5, 30)]
+    segments = [{"start": start, "end": end} for start, end in plan["segments"]]
+    assert recut.normalize_segments(segments) == segments
 
 
 def test_find_peak_prefers_the_hype_engines_peak_inside_the_clip():

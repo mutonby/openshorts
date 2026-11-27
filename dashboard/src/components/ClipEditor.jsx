@@ -19,6 +19,7 @@ import { brollSpans } from '../lib/brollTimeline';
 
 const MIN_SEGMENT_SECONDS = 0.5;
 const SNAP_WINDOW_SECONDS = 0.35;
+const round3 = (t) => Math.round(t * 1000) / 1000;
 
 // Hiding the source is a working preference, not a per-clip one, so it sticks.
 const HIDE_SOURCE_KEY = 'openshorts_editor_hide_source';
@@ -133,6 +134,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
 
     const [snapToWords, setSnapToWords] = useState(true);
     const [reapplyCaptions, setReapplyCaptions] = useState(true);
+    const [renderedCaptions, setRenderedCaptions] = useState(true);
     // Framing override: 'auto' (classifier) | 'full' (whole frame) | 'track'.
     const [framing, setFraming] = useState('auto');
     const [renderedFraming, setRenderedFraming] = useState('auto');
@@ -232,7 +234,8 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                 setRenderedSegments(data.segments.map((s) => ({ ...s })));
                 setFraming(data.framing || 'auto');
                 setRenderedFraming(data.framing || 'auto');
-                setReapplyCaptions(true);
+                setReapplyCaptions(data.has_captions ?? true);
+                setRenderedCaptions(data.has_captions ?? true);
                 setPreviewUrl(getApiUrl(`/videos/${jobId}/${data.current_file}`));
             } catch (e) {
                 if (!cancelled) setLoadError(e.detail || e.message || 'could not load the clip recipe');
@@ -261,12 +264,14 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
         if (!renderedSegments) return false;
         return JSON.stringify(segments) !== JSON.stringify(renderedSegments)
             || framing !== renderedFraming || colorFilter !== renderedFilter
+            || reapplyCaptions !== renderedCaptions
             || bottomVideoAssetId !== renderedBottomVideo
             || JSON.stringify(endcard) !== JSON.stringify(renderedEndcard)
             || JSON.stringify(cueEffects) !== JSON.stringify(renderedCueEffects)
             || JSON.stringify(music) !== JSON.stringify(renderedMusic)
             || JSON.stringify(broll) !== JSON.stringify(renderedBroll);
-    }, [segments, renderedSegments, framing, renderedFraming, broll, renderedBroll, colorFilter, renderedFilter,
+    }, [segments, renderedSegments, framing, renderedFraming, reapplyCaptions, renderedCaptions,
+        broll, renderedBroll, colorFilter, renderedFilter,
         music, renderedMusic, bottomVideoAssetId, renderedBottomVideo, endcard, renderedEndcard, cueEffects, renderedCueEffects]);
 
     // Trim bounds: with the source gone, cuts must stay inside the range the
@@ -284,7 +289,9 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
     const invalidSegments = segments.some(outOfRange);
     const overCaps = segments.length > limits.max_segments || total > limits.max_total_seconds;
     const canRender = !rendering && segments.length > 0 && !invalidSegments && !overCaps
-        && segments.every((s) => s.end - s.start >= minSeg)
+        && segments.every((s) => round3(s.end - s.start) >= minSeg
+            || (s.end > s.start && renderedSegments?.some((saved) =>
+                round3(saved.start) === round3(s.start) && round3(saved.end) === round3(s.end))))
         && (framing === 'auto' || canReframe);
 
     // ---- helpers ------------------------------------------------------------
@@ -666,6 +673,15 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
         return last ? last.end : 0;
     }, [segments]);
 
+    const sourceToClip = useCallback((time) => {
+        let offset = 0;
+        for (const segment of segments) {
+            if (time >= segment.start && time < segment.end) return offset + time - segment.start;
+            offset += segment.end - segment.start;
+        }
+        return null;
+    }, [segments]);
+
     // Which coverage span the rendered file is playing through.
     const playSpanRef = useRef(0);
 
@@ -804,7 +820,6 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
     };
 
     // ---- three-point editing: mark in/out, then send to the clip ------------
-    const round3 = (t) => Math.round(t * 1000) / 1000;
 
     // The marks come off the monitor's own playhead, so "what I am looking at"
     // and "where the cut lands" are the same instant by construction.
@@ -929,6 +944,8 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
             setRenderedSegments(data.recipe.segments.map((s) => ({ ...s })));
             setRenderedFraming(data.framing || 'auto');
             setFraming(data.framing || 'auto');
+            setReapplyCaptions(data.has_captions ?? reapplyCaptions);
+            setRenderedCaptions(data.has_captions ?? reapplyCaptions);
             dispatch({ type: 'init', segments: data.recipe.segments.map((s) => ({ ...s })), broll: data.broll,
                 colorFilter: data.color_filter, music: data.music, bottomVideoAssetId: data.bottom_video_asset_id,
                 endcard: data.endcard, cueEffects: data.cue_effects });
@@ -1048,8 +1065,17 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
     // Stable identity keeps every untouched chunk out of the re-render.
     const pickWord = useCallback((w) => {
         setSelectedWord((prev) => (prev && prev.s === w.s && prev.e === w.e ? null : w));
-        seekSource(w.s);
-    }, [seekSource]);
+        if (sourceOpen) {
+            seekSource(w.s);
+        } else {
+            const time = sourceToClip(w.s);
+            if (time !== null) {
+                setPlayhead(time);
+                const rendered = clipToRendered(time);
+                if (rendered !== null && videoRef.current) videoRef.current.currentTime = rendered;
+            }
+        }
+    }, [sourceOpen, seekSource, sourceToClip, clipToRendered]);
 
     // ---- render -------------------------------------------------------------
     if (loadError) {
@@ -1252,8 +1278,9 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
             <div className="flex-1 min-h-0 flex flex-col xl:flex-row gap-4 px-4 sm:px-6 py-4 overflow-y-auto xl:overflow-hidden select-none">
 
                 {/* ---- column 1 · source ---- */}
-                {sourceOpen && (
+                {(sourceOpen || words.length > 0) && (
                     <div className="flex-1 min-w-0 flex flex-col min-h-0 gap-2">
+                        {sourceOpen && (<>
                         <p className="eyebrow shrink-0">Source</p>
                         {/* The black hugs the picture instead of the column: a wide
                             box around a short 16:9 frame is exactly the dead space
@@ -1325,8 +1352,10 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                             </div>
                         </div>
 
+                        </>)}
+
                         {/* transcript of the whole source */}
-                        <div className="shrink-0 h-[30%] min-h-[9rem] flex flex-col">
+                        <div className={`min-h-[9rem] flex flex-col ${sourceOpen ? 'shrink-0 h-[30%]' : 'flex-1'}`}>
                             <div className="flex items-center justify-between mb-1.5 gap-2 shrink-0">
                                 <p className="eyebrow">Transcript · full source</p>
                                 {/* Boundary actions live HERE, above the words they

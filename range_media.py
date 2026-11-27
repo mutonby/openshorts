@@ -109,6 +109,16 @@ class Span:
         return max(0.0, seconds - self.offset)
 
 
+def _stream_stop(stream):
+    duration = stream.get("duration")
+    if duration not in (None, "N/A"):
+        return float(stream["start_time"]) + float(duration)
+    # The Matroska muxer writes each stream's last packet end as an absolute
+    # timestamp. The container duration is only the latest of those ends.
+    hours, minutes, seconds = stream["tags"]["DURATION"].split(":")
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+
 def inspect(path, start, end, *, height=None, base=0.0):
     """Matroska duration includes the copied source PTS offset. ``base``: the
     source's own first timestamp (an HLS playlist rarely starts at 0), so the
@@ -119,15 +129,17 @@ def inspect(path, start, end, *, height=None, base=0.0):
             check=True, capture_output=True, timeout=15)
         data = json.loads(probe.stdout)
         origin = float(data["format"]["start_time"]) - base
-        stop = float(data["format"]["duration"]) - base
+        container_stop = float(data["format"]["duration"]) - base
         video = next(s for s in data["streams"] if s["codec_type"] == "video")
         audio = next(s for s in data["streams"] if s["codec_type"] == "audio")
-        limits = (origin, stop, float(video["start_time"]) - base, float(audio["start_time"]) - base)
+        starts = (float(video["start_time"]) - base, float(audio["start_time"]) - base)
+        stops = (container_stop, _stream_stop(video) - base, _stream_stop(audio) - base)
+        stop = min(stops)
         width, pixels = int(video["width"]), int(video["height"])
-    except (OSError, subprocess.SubprocessError, ValueError, KeyError, StopIteration) as exc:
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, StopIteration) as exc:
         raise RangeUnavailable("The downloaded source range could not be read.") from exc
-    if (not all(math.isfinite(v) for v in limits) or origin > start + 0.08
-            or origin < start - 25 or max(limits[2:]) > start + 0.12
+    if (not all(math.isfinite(v) for v in (origin, *starts, *stops)) or origin > start + 0.08
+            or origin < start - 25 or max(starts) > start + 0.12
             or stop < end - 0.12 or width < 2 or pixels < 2 or (height and pixels != height)):
         raise RangeUnavailable("The downloaded range did not match the expected source timeline or quality.")
     return Span(Path(path), origin, stop, width, pixels)

@@ -8,6 +8,7 @@ import uuid
 import pytest
 
 import broll
+import export_quality
 import layout_ranges
 import recut
 import video_looks
@@ -55,13 +56,38 @@ def test_bottom_video_loops_and_keeps_audio_geometry_and_caption_seam(videos):
     asset = broll.prepare_asset(secondary, "secondary.mp4", primary.parent)
     broll.render_bottom_video(primary, asset["id"])
 
-    assert broll._probe(primary) == pytest.approx((160, 284, 2.5), abs=0.05)
+    assert broll._probe(primary) == pytest.approx((160, 284, 2.5, 0), abs=0.05)
     assert _audio_hash(primary) == audio
     for time in (0.2, 0.7, 1.2, 1.7, 2.2):
         assert _color_at(primary, time, y=70) == 2
         expected_bottom = 0 if time % 1 < 0.5 else 1
         assert _color_at(primary, time, y=210) == expected_bottom
     assert layout_ranges.caption_anchors(layout_ranges.read(str(primary))) == [(0.0, 2.5, 0.5)]
+
+
+@pytest.mark.parametrize("mode", ["broll", "bottom"])
+def test_video_overlay_preserves_a_delayed_main_picture(videos, mode):
+    primary, secondary = videos
+    delayed = primary.with_name("delayed.mp4")
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y", "-itsoffset", "0.5", "-i", str(primary), "-i", str(primary),
+        "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", str(delayed),
+    ], check=True, timeout=15)
+    audio = _audio_hash(delayed)
+    asset = broll.prepare_asset(secondary, secondary.name, primary.parent)
+    if mode == "bottom":
+        broll.render_bottom_video(delayed, asset["id"])
+        assert layout_ranges.caption_anchors(layout_ranges.read(str(delayed))) == [(0.5, 3.0, 0.5)]
+        assert _color_at(delayed, 0.7, y=210) == 0
+        assert _color_at(delayed, 1.2, y=210) == 1
+    else:
+        broll.render(delayed, [{"asset_id": asset["id"], "offset": 0, "start": 1, "duration": 0.35}])
+        assert _color_at(delayed, 1.15, y=210) == 0
+    streams = {stream["codec_type"]: stream for stream in export_quality.inspect(delayed)["streams"]}
+    assert float(streams["video"]["start_time"]) == pytest.approx(0.5, abs=0.05)
+    assert float(streams["video"]["duration"]) == pytest.approx(2.5, abs=0.05)
+    assert float(streams["audio"]["start_time"]) == pytest.approx(0, abs=0.05)
+    assert _audio_hash(delayed) == audio
 
 
 def test_bottom_video_edit_round_trips_and_keeps_asset_until_disabled(videos, monkeypatch, tmp_path):

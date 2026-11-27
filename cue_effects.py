@@ -145,10 +145,10 @@ def _write_sound_track(placed, duration, target):
 def _sound_graph(duration, has_audio):
     seconds = f"{duration:.6f}"
     source = (
-        "[0:a:0]aresample=48000,aformat=channel_layouts=stereo,apad"
+        "[0:a:0]aresample=48000:async=1:first_pts=0,aformat=channel_layouts=stereo,apad"
         if has_audio else "anullsrc=r=48000:cl=stereo"
     )
-    return (f"{source},atrim=duration={seconds},asetpts=PTS-STARTPTS[body];"
+    return (f"{source},atrim=duration={seconds},asetpts=N/SR/TB[body];"
             "[1:a]pan=stereo|c0=c0|c1=c0[effects];"
             "[body][effects]amix=inputs=2:duration=first:normalize=0,"
             "alimiter=limit=0.95:level=0:latency=1[a]")

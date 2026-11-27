@@ -1,4 +1,5 @@
 """The editor's uploaded media must survive saves and leave timing and audio intact."""
+from array import array
 import json
 import shutil
 import subprocess
@@ -47,6 +48,25 @@ def test_picture_and_music_render_keep_audio_and_timing(media):
     pixels = subprocess.check_output(["ffmpeg", "-v", "error", "-ss", "0.8", "-i", str(source),
                                       "-frames:v", "1", "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
     assert pixels[0] > pixels[2] + 100
+
+
+@pytest.mark.parametrize("ducking", [False, True])
+def test_music_keeps_playing_after_source_audio_ends(media, ducking):
+    source, _insert, track = media
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=blue:s=160x284:r=24:d=3",
+        "-f", "lavfi", "-i", "sine=frequency=440:d=0.75", "-map", "0:v", "-map", "1:a",
+        "-c:v", "libx264", "-c:a", "aac", str(source),
+    ], check=True, timeout=15)
+    bed = music.prepare(track, track.name, source.parent)
+    music.render(source, {"asset_id": bed["id"], "volume": 0.3, "offset": 0, "ducking": ducking})
+    result = export_quality.inspect(source)
+    assert all(float(stream["duration"]) == pytest.approx(3, abs=0.05) for stream in result["streams"])
+    tail = subprocess.check_output([
+        "ffmpeg", "-v", "error", "-ss", "2", "-i", str(source), "-t", "0.4", "-map", "0:a:0",
+        "-ac", "1", "-f", "s16le", "-",
+    ], timeout=15)
+    assert max(abs(sample) for sample in array("h", tail)) > 400
 
 
 def test_broll_anchor_follows_reordered_cut_and_is_removed_when_cut_away():

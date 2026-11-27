@@ -15,13 +15,17 @@ What each network shows of a clip:
 - Bluesky: the caption only; Upload-Post cuts it to the 300-character limit.
 - X: the caption as the post text (``x_title``), with platform limits
   handled by Upload-Post.
-- Pinterest: a title and the caption as the pin description; with several
-  boards Upload-Post pins to the profile's default board.
+- Pinterest: a title, pin description, and the selected board ID.
 """
+import re
 from typing import Iterable, List
+
+import httpx
 
 PLATFORMS = ("tiktok", "instagram", "youtube", "facebook", "linkedin",
              "threads", "bluesky", "x", "pinterest")
+PINTEREST_BOARD_ID = r"^[0-9]{1,32}$"
+PINTEREST_BOARDS_URL = "https://api.upload-post.com/api/uploadposts/pinterest/boards"
 
 LABELS = {
     "tiktok": "TikTok",
@@ -65,11 +69,19 @@ def unknown(values: Iterable[str]) -> List[str]:
 
 
 def upload_fields(platforms: Iterable[str], *, title: str, description: str,
-                  yt_title: str = None, tiktok_post_mode: str = "MEDIA_UPLOAD") -> dict:
+                  yt_title: str = None, tiktok_post_mode: str = "MEDIA_UPLOAD",
+                  pinterest_board_id: str = None, source_credit_url: str = None) -> dict:
     """The per-network form fields of one video upload to ``platforms``."""
     ps = set(platforms or [])
     title = title or ""
     description = description or title
+    x_text = description
+    if source_credit_url:
+        description = description.rstrip()
+        # X's provider removes links for accounts without its X Links add-on.
+        # Keep the URL on its own line so no empty attribution label is left.
+        x_text = f"{description}\n\n{source_credit_url}"
+        description = f"{description}\n\nSource: {source_credit_url}"
     data = {}
     if "tiktok" in ps:
         data["tiktok_title"] = description
@@ -94,13 +106,60 @@ def upload_fields(platforms: Iterable[str], *, title: str, description: str,
         data["bluesky_title"] = title
         data["bluesky_description"] = description
     if "x" in ps:
-        data["x_title"] = description
+        data["x_title"] = x_text
     if "pinterest" in ps:
-        # A pin has a title and a description; with several boards Upload-Post
-        # uses the profile's default board, as Facebook uses its default Page.
-        data["pinterest_title"] = title
+        if not isinstance(pinterest_board_id, str) or not re.fullmatch(PINTEREST_BOARD_ID, pinterest_board_id):
+            raise ValueError("Choose a Pinterest board.")
+        data["pinterest_board_id"] = pinterest_board_id
+        data["pinterest_title"] = title[:100]
         data["pinterest_description"] = description
     return data
+
+
+class PinterestBoardError(ValueError):
+    def __init__(self, message, status_code):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+async def pinterest_boards(api_key, profile):
+    """List eligible boards from one explicit Upload-Post profile."""
+    if not api_key or not profile:
+        raise PinterestBoardError("Connect Pinterest for this publishing profile.", 409)
+    try:
+        async with upload_post_client(20.0) as client:
+            response = await client.get(PINTEREST_BOARDS_URL, headers={"Authorization": f"Apikey {api_key}"},
+                                        params={"profile": profile})
+        if response.status_code in (401, 403, 404):
+            raise PinterestBoardError("Connect or reconnect Pinterest for this publishing profile.", 409)
+        if response.status_code == 429:
+            raise PinterestBoardError("Pinterest board lookup is rate limited. Try again shortly.", 429)
+        response.raise_for_status()
+        boards = response.json()["boards"]
+        if not isinstance(boards, list):
+            raise ValueError
+    except PinterestBoardError:
+        raise
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+        raise PinterestBoardError("Could not load Pinterest boards. Try again shortly.", 502) from exc
+
+    eligible = {}
+    for board in boards:
+        if not isinstance(board, dict) or str(board.get("privacy") or "").upper() == "SECRET":
+            continue
+        board_id = str(board.get("id") or "")
+        name = board.get("name")
+        if re.fullmatch(PINTEREST_BOARD_ID, board_id) and isinstance(name, str) and name.strip():
+            eligible[board_id] = {"id": board_id, "name": name.strip()}
+    return list(eligible.values())
+
+
+async def validate_pinterest_board(api_key, profile, board_id):
+    if not board_id:
+        raise PinterestBoardError("Choose a Pinterest board.", 400)
+    boards = await pinterest_boards(api_key, profile)
+    if not any(board["id"] == board_id for board in boards):
+        raise PinterestBoardError("Choose an available Pinterest board for this publishing profile.", 400)
 
 
 # A connection to Upload-Post that does not open in a few seconds is retried
@@ -113,7 +172,6 @@ UPLOAD_POST_CONNECT_RETRIES = 2
 
 
 def upload_post_client(timeout: float):
-    import httpx
     return httpx.AsyncClient(
         timeout=httpx.Timeout(timeout, connect=UPLOAD_POST_CONNECT_TIMEOUT),
         transport=httpx.AsyncHTTPTransport(retries=UPLOAD_POST_CONNECT_RETRIES))

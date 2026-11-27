@@ -23,14 +23,17 @@ import argparse
 import json
 import os
 import re
+import socket
 import sqlite3
 import sys
 import time
 import urllib.error
 import urllib.request
+from http.client import HTTPException
 
 SETTLE_SECONDS = 600
 RECENT = 5
+UNCONFIRMED = "unconfirmed"
 
 
 def listing(channel):
@@ -139,6 +142,16 @@ class State:
         with self.db:
             self.db.execute("UPDATE vods SET job_id=?, submitted=? WHERE id=?", (job_id, now, vod))
 
+    def claim_submission(self, vod, now):
+        with self.db:
+            return self.db.execute("UPDATE vods SET job_id=?, submitted=? WHERE id=? AND job_id IS NULL",
+                                   (UNCONFIRMED, now, vod)).rowcount == 1
+
+    def retry_submission(self, vod):
+        with self.db:
+            self.db.execute("UPDATE vods SET job_id=NULL, submitted=NULL WHERE id=? AND job_id=?",
+                            (vod, UNCONFIRMED))
+
     def known_channel(self, channel):
         return self.db.execute("SELECT 1 FROM channels WHERE channel=?", (channel,)).fetchone() is not None
 
@@ -210,13 +223,30 @@ def check(state, channels, *, api, settle=SETTLE_SECONDS, backfill=0, now=None,
             stable_since = state.seen(vod["id"], channel, duration, now)
             if duration is None or (vod["id"] not in backfilled and now - stable_since < settle):
                 continue
-            status, payload = sender(api, body(vod["url"]))
+            payload = body(vod["url"])
+            # Claim before sending. A lost response can mean the API already
+            # queued the job, so an ambiguous result keeps its claim.
+            if not state.claim_submission(vod["id"], now):
+                continue
+            try:
+                status, payload = sender(api, payload)
+            except (OSError, HTTPException, ValueError) as exc:
+                cause = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+                if isinstance(cause, (ConnectionRefusedError, socket.gaierror)):
+                    state.retry_submission(vod["id"])
+                    print(f"[watch] {vod['url']}: could not connect ({type(cause).__name__}); will retry.", flush=True)
+                else:
+                    print(f"[watch] {vod['url']}: submission unconfirmed ({type(cause).__name__}); check job history.", flush=True)
+                continue
             job_id = payload.get("job_id") if isinstance(payload, dict) else None
-            if status < 300 and job_id:
+            if status < 300 and isinstance(job_id, str) and job_id:
                 state.submitted(vod["id"], job_id, now)
                 jobs.append(job_id)
                 print(f"[watch] queued {vod['url']} as job {job_id}", flush=True)
+            elif status < 300:
+                print(f"[watch] {vod['url']}: response had no job ID; check job history.", flush=True)
             else:
+                state.retry_submission(vod["id"])
                 detail = payload.get("detail") if isinstance(payload, dict) else payload
                 print(f"[watch] {vod['url']}: the API refused it ({status}: {str(detail)[:200]})", flush=True)
     return jobs

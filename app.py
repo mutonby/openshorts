@@ -1596,6 +1596,12 @@ def _canonical_clip_file(output_dir, base_name, index):
     return os.path.basename(max(derived, key=os.path.getmtime))
 
 
+def _result_clip(job, clip_index):
+    """Find a source clip ID in a result that may omit failed renders."""
+    return next((clip for position, clip in enumerate(((job or {}).get("result") or {}).get("clips") or [])
+                 if clip.get("clip_index", position) == clip_index), None)
+
+
 def _clips_actually_rendered(job_id, output_dir, base_name, clips):
     """Keep only the clips whose file is really on disk. Returns (kept, missing).
 
@@ -1626,7 +1632,10 @@ def _clips_actually_rendered(job_id, output_dir, base_name, clips):
     for i, clip in enumerate(clips):
         if (clip.get("quality") or {}).get("valid") is False:
             continue
-        clip_filename = (ready_files.get(i)
+        saved_url = clip.get("video_url") or ""
+        saved_name = saved_url.rsplit("/", 1)[-1] if saved_url.startswith(f"/videos/{job_id}/") else ""
+        clip_filename = (saved_name
+                         or ready_files.get(i)
                          or _canonical_clip_file(output_dir, base_name, i))
         clip_path = os.path.join(output_dir, clip_filename)
         try:
@@ -1786,9 +1795,9 @@ def _unmark_local_job(job_id, clip_index, clean_filename):
     job_dir = os.path.join(OUTPUT_DIR, job_id)
     url = f"/videos/{job_id}/{clean_filename}"
     job = jobs.get(job_id)
-    mem_clips = ((job or {}).get('result') or {}).get('clips') or []
-    if clip_index < len(mem_clips):
-        mem_clips[clip_index]['video_url'] = url
+    mem_clip = _result_clip(job, clip_index)
+    if mem_clip is not None:
+        mem_clip['video_url'] = url
     ready = (job or {}).get('ready_files')
     if isinstance(ready, dict) and clip_index in ready:
         ready[clip_index] = clean_filename
@@ -1828,7 +1837,9 @@ async def _render_clean_twin(user_id, proj, clean_filename):
     job_id = str(proj.job_id)
     job_dir = os.path.join(OUTPUT_DIR, job_id)
     clean_filename = os.path.basename(clean_filename)
+    lease = None
     try:
+        lease = _project_lease(job_id)
         if not clean_twin.available(job_dir, clean_filename):
             recipe = os.path.basename(clean_twin.recipe_paths(job_dir, clean_filename)[0])
             key = cloud_storage.job_key(user_id, job_id, recipe)
@@ -1845,6 +1856,9 @@ async def _render_clean_twin(user_id, proj, clean_filename):
     except Exception as e:
         print(f"⚠️ Clean twin {clean_filename} of {job_id} not made: {e}")
         return False
+    finally:
+        if lease is not None:
+            lease.close()
 
 
 def _reapply_captions(job_id, clip_index, video_path, *, metadata=None):
@@ -4033,6 +4047,10 @@ def _archive_clip_edit_bg(job_id: str, clip_index: int, filename: str):
                 user_id, job_id, clip_index, output_dir, filename,
                 metadata_name=metadata_name, metadata_snapshot=metadata_snapshot,
                 revision=revision)
+            # A payment may have removed the local mark while this older
+            # snapshot was uploading. Reconcile the durable pointer too.
+            if watermarked.is_marked(filename) and str(user_id) in await _owner_live_plans([str(user_id)]):
+                await cloud.videos.unmark_user_library(user_id, job_id=job_id)
         except Exception as e:
             print(f"⚠️  R2 edit archive error for {job_id}: {e}")
         finally:
@@ -4041,6 +4059,17 @@ def _archive_clip_edit_bg(job_id: str, clip_index: int, filename: str):
                 lease.close()
 
     asyncio.create_task(_run())
+
+
+def _archive_metadata_edit_bg(job_id, data):
+    """Advance the same immutable snapshot for edits that keep the video."""
+    current = (((jobs.get(job_id) or {}).get("result") or {}).get("clips") or [])
+    for index, clip in enumerate(data.get("shorts", [])):
+        url = clip.get("video_url") or next((item.get("video_url") for position, item in enumerate(current)
+            if item.get("clip_index", position) == index), None)
+        if url and (clip.get("quality") or {}).get("valid") is not False:
+            _archive_clip_edit_bg(job_id, index, os.path.basename(url))
+            break
 
 
 async def _autopilot_job_finished(job_id, job):
@@ -5429,7 +5458,7 @@ def _finish_job(job_id, returncode, output_dir):
         manifest["stage"] = candidate_review.STATUS
         write_json_atomic(_manifest_path(job_id), manifest)
         job["status"] = candidate_review.STATUS
-        job["result"] = candidate_review.public_result(plan)
+        job["result"] = candidate_review.public_result(plan, directory=output_dir)
         _learn(lambda: learning.record_review(job_id, plan["shorts"]))
         return
     if returncode == 0:
@@ -7091,7 +7120,7 @@ def _job_view_from_disk(job_id):
             return None
         return {"status": candidate_review.STATUS, "user_id": None,
                 "logs": _TimedLog(["Candidate review ready."]),
-                "result": candidate_review.public_result(plan), "partial": m.get("partial")}
+                "result": candidate_review.public_result(plan, directory=job_path), "partial": m.get("partial")}
     if m is None and os.path.exists(os.path.join(job_path, _EXPIRED_MARKER)):
         owner = None
         try:
@@ -7849,8 +7878,7 @@ async def download_all_clips(job_id: str, request: Request):
         if (clip.get("quality") or {}).get("valid") is False:
             continue
         url = None
-        if i < len(mem_clips):
-            url = (mem_clips[i] or {}).get('video_url')
+        url = (_result_clip(jobs.get(job_id), i) or {}).get('video_url')
         url = url or clip.get('video_url')
         filename = (os.path.basename(url.split('/')[-1]) if url
                     else _canonical_clip_file(output_dir, base_name, i))
@@ -7993,8 +8021,18 @@ async def _restore_project_files(job_id: str, proj, user_id: str) -> bool:
     pulled = False
     # Per-job lock: a double click must not download the project twice.
     lock = _restore_locks.setdefault(job_id, asyncio.Lock())
-    async with lock:
+    async with lock, _rerender_locks.setdefault(job_id, asyncio.Lock()):
         job_dir = os.path.join(OUTPUT_DIR, job_id)
+        metadata_path = Path(job_dir, os.path.basename(proj.metadata_r2_key))
+        stamp_path = Path(job_dir, ".restored-metadata.json")
+        stamp = {}
+        unchanged_restore = False
+        try:
+            stamp = json.loads(stamp_path.read_text())
+            unchanged_restore = stamp.get("sha256") == hashlib.sha256(metadata_path.read_bytes()).hexdigest()
+        except (OSError, ValueError, AttributeError):
+            stamp = {}
+        stale_metadata = unchanged_restore and stamp.get("key") != proj.metadata_r2_key
 
         # Idempotent fast path: everything the project needs is already on disk.
         needed = {os.path.basename(proj.metadata_r2_key)}
@@ -8002,7 +8040,7 @@ async def _restore_project_files(job_id: str, proj, user_id: str) -> bool:
             for k in ("original_file", "server_file"):
                 if c.get(k):
                     needed.add(c[k])
-        if os.path.isdir(job_dir) and all(
+        if not stale_metadata and os.path.isdir(job_dir) and all(
             os.path.exists(os.path.join(job_dir, f)) for f in needed
         ):
             os.utime(job_dir, None)  # restart the retention clock
@@ -8034,11 +8072,19 @@ async def _restore_project_files(job_id: str, proj, user_id: str) -> bool:
                     await asyncio.to_thread(
                         cloud_storage.download_file, key, os.path.join(tmp_dir, fname))
 
+            downloads = asyncio.gather(*(_download(k) for k in keys), return_exceptions=True)
             try:
-                await asyncio.gather(*(_download(k) for k in keys))
-            except Exception as e:
+                results = await asyncio.shield(downloads)
+            except asyncio.CancelledError:
+                # to_thread downloads cannot be cancelled. Drain them before
+                # removing their directory or releasing the restore lock.
+                await downloads
                 shutil.rmtree(tmp_dir, ignore_errors=True)
-                raise HTTPException(status_code=502, detail=f"Restore download failed: {e}")
+                raise
+            failures = [result for result in results if isinstance(result, BaseException)]
+            if failures:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                raise HTTPException(status_code=502, detail="Project download failed. Please try again.") from failures[0]
             def _settle():
                 # Owner sidecar keeps the multi-tenant guard after a server restart.
                 with open(os.path.join(tmp_dir, ".owner"), "w") as f:
@@ -8061,16 +8107,44 @@ async def _restore_project_files(job_id: str, proj, user_id: str) -> bool:
             raise HTTPException(status_code=502, detail="Project metadata missing")
         with open(json_files[0], 'r') as f:
             data = json.load(f)
+        # Older snapshots retain their assets for concurrent readers. The
+        # current snapshot records removals so restoring it cannot resurrect
+        # assets the editor deleted.
+        for name in data.get("deleted_editor_assets", []):
+            if isinstance(name, str) and re.fullmatch(r"(?:broll|music|endcard)_asset_[a-f0-9]{32}\.(?:mp4|m4a|png|json)", name):
+                Path(job_dir, name).unlink(missing_ok=True)
         base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
         clips = data.get('shorts', [])
+        # Upgrades can advance the served pointer without changing the frozen
+        # metadata snapshot. Apply that pointer on restore, but preserve newer
+        # local edits while their archive is still in flight.
+        authoritative = pulled or (unchanged_restore and stamp.get("key") == proj.metadata_r2_key)
+        served = {entry.get("index"): entry.get("server_file")
+                  for entry in (proj.state or {}).get("clips", [])} if authoritative else {}
+        changed = False
         for i, clip in enumerate(clips):
+            name = served.get(i)
+            if (isinstance(name, str) and name == os.path.basename(name)
+                    and name.endswith(f"{base_name}_clip_{i + 1}.mp4")
+                    and os.path.isfile(os.path.join(job_dir, name))):
+                current_url = f"/videos/{job_id}/{name}"
+                changed = changed or clip.get("video_url") != current_url
+                clip["video_url"] = current_url
             if not clip.get('video_url'):
                 clip['video_url'] = (
                     f"/videos/{job_id}/"
                     f"{_canonical_clip_file(job_dir, base_name, i)}")
+        if changed:
+            write_json_atomic(json_files[0], data)
+        if authoritative:
+            write_json_atomic(stamp_path, {"key": proj.metadata_r2_key,
+                "sha256": hashlib.sha256(Path(json_files[0]).read_bytes()).hexdigest()})
         if any(watermarked.is_marked(c.get("server_file") or "")
                for c in (proj.state or {}).get("clips", [])):
             watermarked.mark_job(job_dir)
+        elif authoritative and (proj.state or {}).get("clips"):
+            watermarked.unmark_job(job_dir)
+        clips, _missing = _clips_actually_rendered(job_id, job_dir, base_name, clips)
         jobs[job_id] = {
             'status': 'completed',
             'logs': _TimedLog(["♻️ Project restored from your library."]),
@@ -8176,6 +8250,12 @@ async def edit_clip(
 
     job = jobs[req.job_id]
     await _assert_job_owner(request, job)
+    lock = _rerender_locks.setdefault(req.job_id, asyncio.Lock())
+    async with lock:
+        return await _edit_clip_locked(req, request, job, body_key, final_api_key)
+
+
+async def _edit_clip_locked(req, request, job, body_key, final_api_key):
     if 'result' not in job or 'clips' not in job['result']:
         raise HTTPException(status_code=400, detail="Job result not available")
     current_clip = next((clip for index, clip in enumerate(job['result']['clips'])
@@ -8202,6 +8282,8 @@ async def edit_clip(
             input_path = os.path.join(OUTPUT_DIR, req.job_id, filename)
         filename = _clip_edit_body(os.path.join(OUTPUT_DIR, req.job_id), filename)
         input_path = os.path.join(OUTPUT_DIR, req.job_id, filename)
+        if not os.path.isfile(input_path) and clean_twin.available(os.path.dirname(input_path), filename):
+            await asyncio.to_thread(clean_twin.materialize, os.path.dirname(input_path), filename)
         
         if not os.path.exists(input_path):
              raise HTTPException(status_code=404, detail=f"Video file not found: {input_path}")
@@ -8316,8 +8398,8 @@ async def edit_clip(
 
         # Persist the new current file like /api/subtitle does: in-memory job
         # result + metadata.json, so reload/recovery/re-archive see this version.
-        if req.clip_index < len(job['result']['clips']):
-            job['result']['clips'][req.clip_index]['video_url'] = new_video_url
+        if (view_clip := _result_clip(job, req.clip_index)) is not None:
+            view_clip['video_url'] = new_video_url
         try:
             meta_files = glob.glob(os.path.join(OUTPUT_DIR, req.job_id, "*_metadata.json"))
             if meta_files:
@@ -8900,18 +8982,17 @@ async def delete_editor_asset(job_id: str, clip_index: int, kind: Literal["broll
         if asset_id not in module.assets(directory):
             raise HTTPException(status_code=404, detail="Asset not found")
         meta = next(directory.glob("*_metadata.json"))
-        clips = json.loads(meta.read_text()).get("shorts", [])
+        data = json.loads(meta.read_text())
+        clips = data.get("shorts", [])
         for clip in clips:
             references = (clip.get(kind) or []) if kind == "broll" else [clip.get(kind) or {}]
             used_as_bottom_video = kind == "broll" and clip.get("bottom_video_asset_id") == asset_id
             if used_as_bottom_video or any(item.get("asset_id") == asset_id for item in references):
                 raise HTTPException(status_code=409, detail="Remove this asset from saved clips before deleting it.")
         paths = asset_paths(directory, asset_id)
-        if BILLING_ENABLED and job.get("user_id") and cloud.settings.r2_configured:
-            from cloud import storage as cloud_storage
-            for path in paths:
-                key = cloud_storage.job_key(job["user_id"], job_id, path.name)
-                await asyncio.to_thread(cloud_storage.delete_key, key)
+        data["deleted_editor_assets"] = sorted(set(data.get("deleted_editor_assets", [])) | {path.name for path in paths})
+        write_json_atomic(meta, data, indent=2)
+        _archive_metadata_edit_bg(job_id, data)
         for path in paths:
             path.unlink(missing_ok=True)
     return {"deleted": True}
@@ -9171,7 +9252,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
     try:
         segments = recut.normalize_segments(
             [{"start": s.start, "end": s.end} for s in req.segments],
-            source_duration)
+            source_duration, allowed_short_segments=previous_segments)
         if req.snap_to_words:
             snap_bound = source_duration or max(s['end'] for s in segments)
             segments = recut.snap_segments(segments, transcript, snap_bound)
@@ -9187,7 +9268,8 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
             # canonical range clamps to an inverted (end < start) window, and
             # snapping can stretch the total past the cap. Without this it
             # reaches ffmpeg and dies as a 500 instead of a clean 400.
-            segments = recut.normalize_segments(segments, source_duration)
+            segments = recut.normalize_segments(segments, source_duration,
+                                                allowed_short_segments=previous_segments)
     except recut.RecutError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -9217,13 +9299,34 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
         overrides = {int(key): value for key, value in (clip.get("crop_overrides") or {}).items()
                      if str(key).isdigit()} or None
 
+    # The gameplay canonical may already contain a teaser and reordered cuts.
+    # Map the requested source EDL onto that file's own clock before reusing it.
+    viral = clip.get("viral_edit") or {}
+    canonical_segments = viral.get("segments")
+    if not canonical_segments and (viral.get("teaser") or viral.get("cuts")):
+        canonical_segments = recut.legacy_canonical_segments(canonical_range, viral)
+        # Older initial renders kept the map only in the recipe. Once a recut
+        # replaced that recipe it is ambiguous; use the source in that case.
+        served_body = endcard.body_name(watermarked.clean_name(os.path.basename(clip.get("video_url") or "")))
+        try:
+            legacy_duration = float(viral.get("duration") or 0)
+        except (TypeError, ValueError):
+            legacy_duration = 0
+        if not canonical_segments and "recut_" not in served_body and abs(recut.total_duration(previous_segments) - legacy_duration) < 0.05:
+            canonical_segments = previous_segments
+    elif not canonical_segments:
+        canonical_segments = [canonical_range]
+    canonical_cut = recut.remap_canonical_segments(segments, canonical_segments) if canonical_segments else None
+    if not viral:
+        canonical_cut = (recut.rebase_segments(segments, canonical_range['start'], canonical_range['end'])
+                         if recut.within_range(segments, canonical_range['start'], canonical_range['end']) else None)
+
     # A trim can reuse the canonical file when its baked framing matches.
     canonical_framing = _canonical_framing(data)
     fast = (framing == canonical_framing
             and not overrides
             and os.path.exists(canonical_path)
-            and recut.within_range(segments, canonical_range['start'],
-                                   canonical_range['end']))
+            and canonical_cut is not None)
     if not fast and not source_path and archived is not None:
         source_path = await _locate_or_fetch_source(req.job_id)
     if not fast and not source_path:
@@ -9252,8 +9355,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
         if fast:
             return recut.perform_recut(
                 input_path=canonical_path,
-                segments=recut.rebase_segments(
-                    segments, canonical_range['start'], canonical_range['end']),
+                segments=canonical_cut,
                 output_dir=output_dir, clean_name=clean_name,
                 reframe=False, captions_transcript=v_transcript,
                 captioner=_recut_captioner(clip), text_overlay=text_overlay, picture_layers=picture_layers)
@@ -9303,6 +9405,8 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
                    # path, which never reframes): captions follow them.
                    'layout_ranges': layout_ranges.read(
                        os.path.join(output_dir, _clean_recut_name))}
+        if viral and canonical_segments and not viral.get("segments"):
+            updates["viral_edit"] = {**viral, "segments": [dict(segment) for segment in canonical_segments]}
         # Per-scene manual framing is keyed by scene indices of a specific cut;
         # this render neither applied it nor can it survive a changed cut, so
         # clear it rather than let /scenes serve stale overrides against the
@@ -9345,6 +9449,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
             "end": new_end,
             "duration": total,
             "export_duration": export_duration,
+            "has_captions": bool(re.match(r"^subtitled_\d+_", endcard.body_name(watermarked.clean_name(served_name)))),
             "broll": broll_layers,
             "bottom_video_asset_id": bottom_video_asset_id,
             "color_filter": color_filter,
@@ -9388,8 +9493,7 @@ def _served_clip_file(job, output_dir, base_name, clip, index, asked=None):
     caller, the job's in-memory result, the metadata, the newest derived file
     on disk. Each has to exist; the clean reframe is the last resort."""
     clean = f"{base_name}_clip_{index + 1}.mp4"
-    mem_clips = (job.get('result') or {}).get('clips') or []
-    mem = mem_clips[index] if index < len(mem_clips) else {}
+    mem = _result_clip(job, index) or {}
     # What the caller names has to be a file of THIS clip: every derivation
     # keeps the clean name as its tail.
     asked = os.path.basename(str(asked or ''))
@@ -10171,7 +10275,9 @@ async def generate_effects_config(
             safe_name = os.path.basename(req.input_filename)
             input_path = os.path.join(OUTPUT_DIR, req.job_id, safe_name)
         else:
-            clip = job['result']['clips'][req.clip_index]
+            clip = _result_clip(job, req.clip_index)
+            if clip is None:
+                raise HTTPException(status_code=404, detail="Clip not found")
             filename = clip['video_url'].split('/')[-1]
             input_path = os.path.join(OUTPUT_DIR, req.job_id, filename)
 
@@ -10182,7 +10288,7 @@ async def generate_effects_config(
             editor = VideoEditor(api_key=final_api_key)
 
             # Create safe ASCII filename to avoid encoding issues
-            safe_filename = f"temp_effects_{req.job_id}.mp4"
+            safe_filename = f"temp_effects_{req.job_id}_{uuid.uuid4().hex[:12]}.mp4"
             safe_input_path = os.path.join(OUTPUT_DIR, req.job_id, safe_filename)
             shutil.copy(input_path, safe_input_path)
 
@@ -10549,8 +10655,8 @@ async def _remove_subtitles_locked(req, request, job):
     filename = await _append_endcard(output_dir, filename, clips[req.clip_index].get("endcard"))
     filename = await _deliver(request, req.job_id, filename)
     new_url = f"/videos/{req.job_id}/{filename}"
-    if req.clip_index < len(job.get('result', {}).get('clips', [])):
-        job['result']['clips'][req.clip_index]['video_url'] = new_url
+    if (view_clip := _result_clip(job, req.clip_index)) is not None:
+        view_clip['video_url'] = new_url
     try:
         clips[req.clip_index]['video_url'] = new_url
         data['shorts'] = clips
@@ -10834,6 +10940,12 @@ async def translate_clip(
 
     job = jobs[req.job_id]
     await _assert_job_owner(request, job)
+    lock = _rerender_locks.setdefault(req.job_id, asyncio.Lock())
+    async with lock:
+        return await _translate_clip_locked(req, request, job, x_elevenlabs_key)
+
+
+async def _translate_clip_locked(req, request, job, x_elevenlabs_key):
     output_dir = os.path.join(OUTPUT_DIR, req.job_id)
     json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
 
@@ -10858,15 +10970,13 @@ async def translate_clip(
              base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
              filename = f"{base_name}_clip_{req.clip_index+1}.mp4"
 
-    input_path = os.path.join(output_dir, filename)
-    if not os.path.exists(input_path):
-        raise HTTPException(status_code=404, detail=f"Video file not found: {input_path}")
-
     # The validated language and unique token keep dubbed exports immutable.
     filename = _clip_edit_body(output_dir, filename)
     input_path = os.path.join(output_dir, filename)
     if not os.path.isfile(input_path) and clean_twin.available(output_dir, filename):
         await asyncio.to_thread(clean_twin.materialize, output_dir, filename)
+    if not os.path.isfile(input_path):
+        raise HTTPException(status_code=404, detail="Video file not found")
     base, ext = os.path.splitext(filename)
     safe_lang = os.path.basename(req.target_language)
     output_filename = f"translated_{safe_lang}_{uuid.uuid4().hex[:12]}_{base}{ext}"
@@ -10905,8 +11015,8 @@ async def translate_clip(
         None, lambda: mark_ai_generated(os.path.join(output_dir, output_filename), "AI voice dubbing"))
 
     # Update InMemory Jobs
-    if req.clip_index < len(job['result']['clips']):
-         job['result']['clips'][req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
+    if (view_clip := _result_clip(job, req.clip_index)) is not None:
+        view_clip['video_url'] = f"/videos/{req.job_id}/{output_filename}"
 
     # Update Metadata on Disk
     try:
@@ -10959,11 +11069,11 @@ async def save_publishing_settings(job_id: str, req: PublishingSettings, request
         settings = req.model_dump(mode="json")
         data["publishing"] = settings
         write_json_atomic(path, data, indent=2)
-        if BILLING_ENABLED and job.get("user_id") and cloud.settings.r2_configured:
-            from cloud import storage as cloud_storage
-            key = cloud_storage.job_key(job["user_id"], job_id, path.name)
-            await asyncio.to_thread(cloud_storage.upload_file, str(path), key, "application/json")
+        _archive_metadata_edit_bg(job_id, data)
     return settings
+
+
+import social_platforms
 
 
 class SocialPostRequest(BaseModel):
@@ -10978,6 +11088,7 @@ class SocialPostRequest(BaseModel):
     scheduled_date: Optional[str] = None # ISO-8601 string
     timezone: Optional[str] = "UTC"
     source_credit_url: Optional[HttpUrl] = None
+    pinterest_board_id: Optional[str] = Field(default=None, pattern=social_platforms.PINTEREST_BOARD_ID)
 
 import httpx
 
@@ -10991,7 +11102,6 @@ def _post_video_blocking(url, headers, data, file_path, filename, timeout):
         return client.post(url, headers=headers, data=data, files=files)
 
 
-import social_platforms
 from social_platforms import YOUTUBE_TITLE_MAX, youtube_title  # noqa: F401  (re-exported)
 
 
@@ -11124,6 +11234,11 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
         if meta:
             credit_url = (json.loads(meta.read_text()).get("publishing") or {}).get("source_credit_url")
     await _check_social_post_rate(request)
+    if "pinterest" in req.platforms:
+        try:
+            await social_platforms.validate_pinterest_board(upload_key, post_user, req.pinterest_board_id)
+        except social_platforms.PinterestBoardError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
     if BILLING_ENABLED and forced_profile:
         stale = await _platforms_needing_reconnect(post_user, req.platforms)
@@ -11164,8 +11279,6 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
         # Fallbacks
         final_title = req.title or clip.get('title', 'Viral Short')
         final_description = req.description or clip.get('video_description_for_instagram') or clip.get('video_description_for_tiktok') or "Check this out!"
-        if credit_url:
-            final_description = f"{final_description.rstrip()}\n\nSource: {credit_url}"
         
         # Prepare form data
         url = "https://api.upload-post.com/api/upload"
@@ -11190,6 +11303,7 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
         data_payload.update(social_platforms.upload_fields(
             req.platforms, title=final_title, description=final_description,
             yt_title=req.title or clip.get('video_title_for_youtube_short', final_title),
+            pinterest_board_id=req.pinterest_board_id, source_credit_url=credit_url,
             tiktok_post_mode=TIKTOK_POST_MODE))
 
         # The upload is a blocking multipart POST of the whole clip (tens of
@@ -11214,6 +11328,9 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
             out["free_posts_left"] = free_left
         return out
 
+    except HTTPException:
+        await _give_back_free_post(free_claim)
+        raise
     except Exception as e:
         await _give_back_free_post(free_claim)
         print(f"❌ Social Post Exception: {e}")
@@ -11418,6 +11535,16 @@ async def _upload_post_get(api_key: str, url: str, params: dict):
     if resp.status_code != 200:
         raise HTTPException(status_code=resp.status_code, detail=f"Vendor API Error: {resp.text}")
     return resp.json()
+
+
+@app.get("/api/social/pinterest-boards")
+async def social_pinterest_boards(request: Request, user: Optional[str] = None):
+    api_key, profile = await _social_analytics_auth(request, user)
+    try:
+        boards = await social_platforms.pinterest_boards(api_key, profile)
+    except social_platforms.PinterestBoardError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return {"boards": boards}
 
 
 @app.get("/api/social/analytics")

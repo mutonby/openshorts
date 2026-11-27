@@ -417,6 +417,7 @@ class AutopilotSettings(Base):
     clips_to_publish = Column(Integer, nullable=False, default=3)
     min_publish_score = Column(Integer, nullable=True)    # NULL publishes by rank alone
     source_credit_url = Column(Text, nullable=True)
+    pinterest_board_id = Column(String(32), nullable=True)
     max_minutes = Column(Integer, nullable=False, default=30)
     # Autopublish slot: one clip a day at this local hour, in this IANA zone.
     publish_hour = Column(Integer, nullable=False, default=17)

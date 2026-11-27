@@ -2,6 +2,7 @@ import asyncio
 from io import BytesIO
 import shutil
 import subprocess
+from types import SimpleNamespace
 import uuid
 
 import pytest
@@ -73,6 +74,11 @@ def test_staged_preview_and_approval_are_keyed_by_candidate_not_file_path(tmp_pa
     async def call():
         async with AsyncClient(transport=ASGITransport(app=app.app), base_url="http://test") as client:
             base = f"/api/jobs/{job_id}"
+            status = await client.get(f"/api/status/{job_id}")
+            assert status.status_code == 200, status.text
+            assert [(item["id"], item["preview"]) for item in status.json()["result"]["candidates"]] == [
+                (1, False), (2, True),
+            ]
             assert (await client.get(base + "/candidate-preview/1")).status_code == 404
             assert (await client.get(base + "/candidate-preview/3")).status_code == 404
             assert (await client.get(base + "/candidate-preview/2")).content == b"private preview"
@@ -124,6 +130,20 @@ def test_packet_range_preserves_original_clock_and_decoded_frame(tmp_path):
         ], timeout=15)
 
     assert frame(src, 18.5) == frame(dest, span.local(18.5))
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="Needs FFmpeg")
+@pytest.mark.parametrize("video_seconds,audio_seconds", [(2, 5), (5, 2)])
+def test_packet_range_requires_audio_and_video_to_cover_its_end(tmp_path, video_seconds, audio_seconds):
+    path = tmp_path / "uneven.mkv"
+    subprocess.run([
+        "ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", f"testsrc2=s=160x90:r=24:d={video_seconds}",
+        "-f", "lavfi", "-i", f"sine=frequency=440:duration={audio_seconds}",
+        "-c:v", "libx264", "-threads", "1", "-c:a", "aac", str(path),
+    ], check=True, timeout=20)
+    assert 1.8 <= range_media.inspect(path, 0, 1.8).end < 2.2
+    with pytest.raises(range_media.RangeUnavailable, match="timeline"):
+        range_media.inspect(path, 0, 4)
 
 
 def test_pause_and_resume_preserve_checkpoint_and_do_not_dispatch_twice(tmp_path, monkeypatch):
@@ -230,6 +250,55 @@ def test_hype_review_falls_back_when_nothing_stands_out(tmp_path, monkeypatch):
     monkeypatch.setattr(hype_engine, "scan", lambda *a, **k: _fake_scan([]))
     assert livestream.hype_review(tmp_path, "a.m4a", 600.0, None, transcribe_ranges=None,
                                   proxy=None, gameplay=False) is None
+
+
+def test_staged_candidate_keeps_playable_preview_when_the_judge_copy_fails(tmp_path, monkeypatch):
+    import hype_judge
+
+    monkeypatch.setenv("GEMINI_API_KEY", "fixture")
+    livestream.workspace(tmp_path)
+    source = SimpleNamespace(section=lambda *_args, **_kwargs: (object(), 700))
+    transfers = []
+    proxy = livestream._staged_proxy(source, tmp_path, transfers)
+    monkeypatch.setattr(livestream, "make_preview", lambda _span, dest, *_: dest.write_bytes(b"preview"))
+
+    def fail_encode(*_args, **_kwargs):
+        raise subprocess.CalledProcessError(1, "ffmpeg")
+
+    monkeypatch.setattr(hype_judge, "judge_proxy", fail_encode)
+    monkeypatch.setattr(hype_judge, "judge", lambda *_a, **_k: pytest.fail("No judge copy to submit"))
+    candidate = {"start": 30, "end": 60, "hype": 0.8}
+    shorts, costs = hype_judge.review([candidate], {"segments": []}, 120, proxy=proxy,
+                                    cache_dir=str(tmp_path), gameplay=False, min_secs=30, max_secs=60,
+                                    api_key="fixture", need_proxy=True)
+
+    assert len(shorts) == 1 and shorts[0]["hype_slot"] == 1
+    assert shorts[0]["assessment"]["verdict"] == "review" and costs == []
+    assert livestream.preview_file(tmp_path, 1).read_bytes() == b"preview"
+    assert transfers == [700]
+
+
+@pytest.mark.parametrize("minimum,maximum", [(5, 10), (175, 180)])
+def test_hype_review_honors_generation_count_and_duration_bounds(tmp_path, monkeypatch, minimum, maximum):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("CLIP_MIN_SECONDS", str(minimum))
+    monkeypatch.setenv("CLIP_MAX_SECONDS", str(maximum))
+    monkeypatch.setenv("CLIP_TARGET_MIN", "1")
+    monkeypatch.setenv("CLIP_TARGET_MAX", "1")
+
+    def scan(*_args, min_secs, max_secs, **_kwargs):
+        assert (min_secs, max_secs) == (minimum, maximum)
+        return _fake_scan([
+            {"start": at, "end": at + min_secs + 1, "peak": at + 2,
+             "hype": score, "area": 3, "signals": {}}
+            for at, score in ((10, 0.7), (220, 0.9))
+        ])
+
+    monkeypatch.setattr("hype_engine.scan", scan)
+    result = livestream.hype_review(
+        tmp_path, "audio.m4a", 500, transcribe_ranges=lambda *_: {"segments": []},
+        proxy=None, gameplay=False)
+    assert [(item["start"], item["end"]) for item in result["shorts"]] == [(220, 220 + minimum + 1)]
 
 
 def test_replay_reach_reads_the_last_offset(tmp_path):

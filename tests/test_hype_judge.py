@@ -127,6 +127,14 @@ def test_an_absurd_trim_is_ignored():
     assert (short["start"], short["end"]) == (100, 140)
 
 
+@pytest.mark.parametrize("verdict", [None, _verdict(best_start=0.8, best_end=30)])
+def test_a_candidate_stays_inside_its_preview_and_requested_band(verdict):
+    transcript = _transcript((29.8, 30.2, "first"), (59.6, 60.4, "last"))
+    short = hj.to_short(_cand(30, 60), verdict, transcript, 120,
+                        gameplay=False, min_secs=30, max_secs=60)
+    assert (short["start"], short["end"]) == (30, 60)
+
+
 def test_without_a_judge_the_window_goes_to_review():
     short = hj.to_short(_cand(100, 140, chat={"peak_chatters_per_second": 40, "normal_chatters_per_second": 4,
                                               "reactions": ["laughter"], "clip_requests": 2}),
@@ -198,6 +206,23 @@ def test_review_drops_weak_and_calls_the_proxy_only_when_needed(tmp_path, monkey
     shorts, _ = hj.review(cands, _transcript(), 600, proxy=proxy, cache_dir=str(tmp_path / "c3"),
                           gameplay=False, min_secs=30, max_secs=60, api_key=None, need_proxy=True)
     assert sorted(proxies) == [1, 2]
+
+
+def test_failed_required_preview_is_omitted_from_review(tmp_path):
+    def proxy(index, _candidate):
+        if index == 1:
+            raise OSError("fixture preview failed")
+        path = tmp_path / "preview-2.mp4"
+        path.write_bytes(b"preview")
+        return path
+
+    options = {"proxy": proxy, "cache_dir": str(tmp_path / "cache"), "gameplay": False,
+               "min_secs": 30, "max_secs": 60, "need_proxy": True}
+    first, second = _cand(10, 50), _cand(100, 140)
+    shorts, _ = hj.review([first, second], _transcript(), 600, **options)
+    assert [short["hype_slot"] for short in shorts] == [2]
+    with pytest.raises(hj.PreviewUnavailable):
+        hj.review([first], _transcript(), 600, **options)
 
 
 # --- the review the page reads ---------------------------------------------------

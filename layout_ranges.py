@@ -176,6 +176,7 @@ def remap(ranges, segments):
     have is the canonical clip's, seen through the new cut."""
     out = []
     offset = 0.0
+    ranges = normalise(ranges)
     for seg in segments or []:
         try:
             seg_s, seg_e = float(seg["start"]), float(seg["end"])
@@ -183,14 +184,10 @@ def remap(ranges, segments):
             continue
         if seg_e <= seg_s:
             continue
-        for r in normalise(ranges):
+        for r in ranges:
             s, e = max(r["start"], seg_s), min(r["end"], seg_e)
             if e > s:
-                moved = {"start": round(s - seg_s + offset, 3),
-                         "end": round(e - seg_s + offset, 3),
-                         "layout": r["layout"]}
-                if "content" in r:
-                    moved["content"] = r["content"]
-                out.append(moved)
+                out.append({**r, "start": round(s - seg_s + offset, 3),
+                            "end": round(e - seg_s + offset, 3)})
         offset += seg_e - seg_s
     return out

@@ -77,6 +77,29 @@ def test_ffmpeg_timings_sound_volume_and_video_dip(tmp_path, monkeypatch, origin
     assert not list(tmp_path.glob("temp_cue_*"))
 
 
+def test_sound_mix_preserves_delayed_source_audio(tmp_path, monkeypatch):
+    np = pytest.importorskip("numpy")
+    if not shutil.which("ffmpeg"):
+        pytest.skip("FFmpeg is required")
+    monkeypatch.setenv("SFX_CACHE_DIR", str(tmp_path / "sfx"))
+    path = tmp_path / "delayed.mp4"
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=red:s=160x284:r=24",
+        "-itsoffset", "0.5", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+        "-t", "2", "-c:v", "libx264", "-c:a", "aac", str(path),
+    ], check=True)
+    source_audio = next(s for s in export_quality.inspect(path)["streams"] if s["codec_type"] == "audio")
+    assert float(source_audio["start_time"]) == pytest.approx(0.5, abs=0.05)
+
+    cue_effects.render(path, [{"kind": "hit", "start": 1.4, "duration": 0.3, "volume": 0.7}])
+    samples = np.frombuffer(subprocess.check_output([
+        "ffmpeg", "-v", "error", "-i", str(path), "-map", "0:a:0", "-ar", "48000",
+        "-ac", "1", "-f", "f32le", "pipe:1",
+    ]), dtype="<f4")
+    assert np.max(np.abs(samples[4800:14400])) < 0.003
+    assert np.max(np.abs(samples[28800:38400])) > 0.04
+
+
 def test_api_saves_and_reapplies_cues_until_explicitly_cleared(tmp_path, monkeypatch):
     import app as api
 

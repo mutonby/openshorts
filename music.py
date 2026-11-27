@@ -78,14 +78,18 @@ def render(path, config):
     filters = [f"[1:a]atrim=duration={duration:.6f},asetpts=PTS-STARTPTS,volume={config['volume']},"
                f"afade=t=in:d={fade:.6f},afade=t=out:st={duration-fade:.6f}:d={fade:.6f}[music]"]
     if has_audio:
-        filters.append("[0:a]asplit[voice][control]")
+        # The voice can start late or finish before the picture. Keep its
+        # timestamps and give the mixer a full-length silence-padded track.
+        voice = ("[0:a:0]aresample=48000:async=1:first_pts=0,apad,"
+                 f"atrim=duration={duration:.6f},asetpts=N/SR/TB")
         if config["ducking"]:
+            filters.append(f"{voice},asplit[voice][control]")
             filters.append("[music][control]sidechaincompress=threshold=0.02:ratio=8:attack=15:release=300[bed]")
         else:
-            filters.extend(["[control]anullsink", "[music]anull[bed]"])
-        filters.append("[voice][bed]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95:level=0[a]")
+            filters.extend([f"{voice}[voice]", "[music]anull[bed]"])
+        filters.append("[voice][bed]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95:level=0:latency=1[a]")
     else:
-        filters.append("[music]alimiter=limit=0.95:level=0[a]")
+        filters.append("[music]alimiter=limit=0.95:level=0:latency=1[a]")
     command = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(path), "-stream_loop", "-1",
                "-ss", str(config["offset"]), "-i", str(asset), "-filter_complex", ";".join(filters),
                "-map", "0:v:0", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",

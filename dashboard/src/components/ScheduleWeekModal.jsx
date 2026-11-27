@@ -5,6 +5,7 @@ import { platformOptions, defaultPlatformFlags, flagsFromList } from '../lib/soc
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
 import TikTokDraftNotice from './TikTokDraftNotice';
+import PinterestBoardSelect from './PinterestBoardSelect';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -74,6 +75,7 @@ export default function ScheduleWeekModal({ isOpen, onClose, onViewCalendar, cli
     const [time, setTime] = useState('12:00');
     const [timezone, setTimezone] = useState(detectTimezone);
     const [platforms, setPlatforms] = useState(defaultPlatformFlags);
+    const [pinterestBoardId, setPinterestBoardId] = useState('');
     const [startOffset, setStartOffset] = useState(1);
 
     const schedule = useMemo(() => {
@@ -97,6 +99,7 @@ export default function ScheduleWeekModal({ isOpen, onClose, onViewCalendar, cli
             setScheduling(false);
             setDone(false);
             setProgress({ current: 0, total: 0, results: [] });
+            setPinterestBoardId('');
         }
         prevOpen.current = isOpen;
     }, [isOpen]);
@@ -110,7 +113,7 @@ export default function ScheduleWeekModal({ isOpen, onClose, onViewCalendar, cli
 
     const handleScheduleAll = async () => {
         if (!canPost) return;
-        if (selectedPlatforms.length === 0) return;
+        if (selectedPlatforms.length === 0 || (platforms.pinterest && !pinterestBoardId)) return;
 
         setScheduling(true);
         setDone(false);
@@ -119,7 +122,7 @@ export default function ScheduleWeekModal({ isOpen, onClose, onViewCalendar, cli
 
         const results = [];
         for (let i = 0; i < schedule.length; i++) {
-            const { clip, index, date } = schedule[i];
+            const { clip, date } = schedule[i];
 
             // Build local datetime string: "2026-04-06T12:00:00"
             // Upload-Post accepts this + timezone IANA parameter
@@ -128,7 +131,7 @@ export default function ScheduleWeekModal({ isOpen, onClose, onViewCalendar, cli
 
             const payload = {
                 job_id: jobId,
-                clip_index: index,
+                clip_index: Number.isInteger(clip.clip_index) ? clip.clip_index : i,
                 api_key: uploadPostKey,
                 user_id: uploadUserId,
                 platforms: selectedPlatforms,
@@ -137,6 +140,7 @@ export default function ScheduleWeekModal({ isOpen, onClose, onViewCalendar, cli
                 scheduled_date: scheduledDate,
                 timezone
             };
+            if (platforms.pinterest) payload.pinterest_board_id = pinterestBoardId;
 
             try {
                 const res = await apiFetch('/api/social/post', {
@@ -186,7 +190,7 @@ export default function ScheduleWeekModal({ isOpen, onClose, onViewCalendar, cli
             {!done ? (
                 <button
                     onClick={handleScheduleAll}
-                    disabled={scheduling || !canPost || selectedPlatforms.length === 0}
+                    disabled={scheduling || !canPost || selectedPlatforms.length === 0 || (platforms.pinterest && !pinterestBoardId)}
                     className="btn-primary flex-1"
                 >
                     {scheduling ? (
@@ -332,6 +336,15 @@ export default function ScheduleWeekModal({ isOpen, onClose, onViewCalendar, cli
                     onChange={(arr) => setPlatforms(flagsFromList(arr))}
                 />
             </div>
+            {platforms.pinterest && !done && (
+                <div className="mb-4">
+                    <PinterestBoardSelect value={pinterestBoardId} onChange={setPinterestBoardId}
+                        isManaged={isManaged} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} disabled={scheduling} />
+                </div>
+            )}
+            {platforms.x && !done && (
+                <p className="mb-4 text-xs text-muted">Source links on X require Upload-Post's X Links add-on.</p>
+            )}
 
             {/* A whole week of tiktok posts is a whole week of silent drafts:
                 this modal writes no captions of its own either (it sends the

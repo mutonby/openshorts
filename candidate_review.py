@@ -64,8 +64,17 @@ def _gameplay_like(method):
     return framing.gameplay_like(method) if isinstance(method, str) else False
 
 
-def public_result(data):
+def public_result(data, *, directory=None):
     """Expose candidate descriptions and timestamps without the full transcript."""
+    from livestream import preview_file
+
+    deferred = bool(data.get("deferred"))
+
+    def preview_available(clip):
+        slot = clip.get("preview_slot")
+        return (deferred and type(slot) is int and 1 <= slot <= MAX_CANDIDATES
+                and (directory is None or preview_file(directory, slot).is_file()))
+
     return {
         "candidates": [
             {"id": i, "start": clip["start"], "end": clip["end"],
@@ -73,7 +82,7 @@ def public_result(data):
              "assessment": clip.get("assessment") or {},
              "signals": clip.get("supporting_signals") or {},
              "hype": clip.get("hype") if isinstance(clip.get("hype"), dict) else None,
-             "preview": bool(data.get("deferred") and clip.get("preview_slot")),
+             "preview": preview_available(clip),
              # A judged clip can start after the window its preview file
              # begins at: the page seeks the preview by this much.
              "preview_offset": _preview_offset(clip)}
@@ -81,7 +90,7 @@ def public_result(data):
         ],
         "source_duration": data["source_duration"],
         "source_offset": data.get("source_offset", 0),
-        "deferred": bool(data.get("deferred")),
+        "deferred": deferred,
         # A game framing gets a still of the vertical composition per
         # candidate (/api/jobs/{id}/candidate-layout/{n}).
         "layout_preview": bool(_gameplay_like(data.get("framing_method"))

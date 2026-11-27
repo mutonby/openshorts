@@ -367,3 +367,45 @@ class TestMcpTool:
         names = [t["name"] for t in mcp_server.TOOLS]
         assert "recut_clip" in names
         assert "recut_clip" in mcp_server._TOOL_IMPLS
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_gameplay_overlay_save_maps_canonical_teaser_clock(job, fake_recut, legacy):
+    meta = json.loads(job["meta_path"].read_text())
+    segments = [{"start": 38, "end": 40}, {"start": 10, "end": 13}]
+    viral = {"duration": 5, "teaser": True, "cuts": [[13, 40]]}
+    if not legacy:
+        viral["segments"] = segments
+    meta["shorts"][0].update(viral_edit=viral, recipe={"segments": segments,
+        "canonical_range": {"start": 10, "end": 40}})
+    job["meta_path"].write_text(json.dumps(meta))
+    (job["dir"] / "src.mp4").unlink()
+    request = {"job_id": JOB_ID, "clip_index": 0, "segments": segments, "reapply_captions": False,
+        "snap_to_words": False, "color_filter": "original"}
+    response = _request("POST", "/api/clip/rerender", request)
+    assert response.status_code == 200, response.text
+    assert response.json()["render_path"] == "fast"
+    assert fake_recut[-1]["segments"] == [{"start": 0, "end": 5}]
+    # The immutable mapping survives the editable recipe changing on save.
+    request["segments"] = [{"start": 10, "end": 12}]
+    response = _request("POST", "/api/clip/rerender", request)
+    assert response.status_code == 200, response.text
+    assert fake_recut[-1]["segments"] == [{"start": 2, "end": 4}]
+    request["segments"] = [{"start": 20, "end": 22}]
+    response = _request("POST", "/api/clip/rerender", request)
+    assert response.status_code == 409, response.text
+
+
+def test_existing_short_gameplay_segment_can_save_without_accepting_new_short_cut(job, fake_recut):
+    meta = json.loads(job["meta_path"].read_text())
+    segments = [{"start": 38, "end": 40}, {"start": 10, "end": 10.43}, {"start": 12.05, "end": 30}]
+    meta["shorts"][0].update(viral_edit={"duration": 20.38, "segments": segments},
+        recipe={"segments": segments, "canonical_range": {"start": 10, "end": 40}})
+    job["meta_path"].write_text(json.dumps(meta))
+    request = {"job_id": JOB_ID, "clip_index": 0, "segments": segments, "reapply_captions": False}
+    response = _request("POST", "/api/clip/rerender", request)
+    assert response.status_code == 200, response.text
+    assert fake_recut[-1]["segments"] == [{"start": 0, "end": 20.38}]
+    request["segments"] = [{"start": 10.05, "end": 10.43}]
+    response = _request("POST", "/api/clip/rerender", request)
+    assert response.status_code == 400, response.text

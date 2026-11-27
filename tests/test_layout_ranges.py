@@ -113,16 +113,21 @@ class TestRemapAcrossCut:
         import recut
         src = tmp_path / "canon.mp4"
         src.write_bytes(b"x")
-        layout_ranges.write(str(src), [(0, 4, "SPLIT"), (4, 8, "TRACK")])
+        layout_ranges.write(str(src), [
+            (0, 4, "STACK", None, {"seam": 0.31, "caption_y": 0.48}), (4, 8, "TRACK"),
+        ])
         # Stand in for ffmpeg: the "cut" is a copy.
         monkeypatch.setattr(recut, "run_cut_concat",
                             lambda i, segs, out, wd, runner=None: shutil.copy(i, out))
         served, clean = recut.perform_recut(
             input_path=str(src), segments=[{"start": 2, "end": 6}],
             output_dir=str(tmp_path), clean_name="c.mp4", reframe=False)
-        assert layout_ranges.read(str(tmp_path / clean)) == [
-            {"start": 0.0, "end": 2.0, "layout": "split"},
+        ranges = layout_ranges.read(str(tmp_path / clean))
+        assert ranges == [
+            {"start": 0.0, "end": 2.0, "layout": "stack", "seam": 0.31, "caption_y": 0.48},
             {"start": 2.0, "end": 4.0, "layout": "track"}]
+        assert layout_ranges.seam_of(ranges, 1) == 0.31
+        assert layout_ranges.caption_anchors(ranges) == [(0.0, 2.0, 0.48)]
 
 
 class TestLayoutEnvNone:
