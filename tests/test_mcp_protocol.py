@@ -131,6 +131,31 @@ class TestExpiredJobs:
         assert calls == [("GET", "/api/status/j"), ("POST", "/api/projects/j/restore"),
                          ("GET", "/api/status/j")]
 
+    def test_a_failed_restore_is_reported_not_hidden_as_job_not_found(self):
+        import httpx
+        from mcp_server import _tool_get_job_status
+
+        def handler(req):
+            if req.url.path.endswith("/restore"):
+                return httpx.Response(502, json={"detail": "Restore download failed: x"})
+            return httpx.Response(404, json={"detail": "Job not found"})
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://api")
+        out, is_error = asyncio.run(_tool_get_job_status(client, {"job_id": "j"}))
+        assert is_error and out["http_status"] == 502
+        assert out["error"].startswith("Restore download failed")
+
+    def test_a_job_nobody_archived_stays_not_found(self):
+        import httpx
+        from mcp_server import _tool_get_job_status
+
+        def handler(req):
+            if req.url.path.endswith("/restore"):
+                return httpx.Response(404, json={"detail": "Project not found"})
+            return httpx.Response(404, json={"detail": "Job not found"})
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://api")
+        out, is_error = asyncio.run(_tool_get_job_status(client, {"job_id": "j"}))
+        assert is_error and out["error"] == "Job not found"
+
     def test_a_live_job_is_not_restored(self):
         from mcp_server import _tool_get_job_status
         client, calls = self._client([True])

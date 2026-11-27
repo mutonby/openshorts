@@ -245,3 +245,55 @@ class TestSettleWithoutEntry:
         job = {"status": "processing", "reservation_id": "res-1"}
         asyncio.run(app_module._settle_reservation("gone", job))
         assert calls == [("release", "res-1")]
+
+
+class TestRestoreSurvivesTheSizeCap:
+    """16-nov-2026: with the disk over OUTPUT_MAX_GB every sweep purged every
+    finished dir, a library restore included: mid-download ("Restore download
+    failed: No such file or directory") and right after it, so the
+    connector's get_job_status answered "Job not found" for a job the
+    customer had in their library."""
+
+    JOB = "8741b47a-ab74-43bd-ab88-ba4167d8fc4c"
+
+    @pytest.fixture
+    def r2(self, disk, monkeypatch):
+        storage = pytest.importorskip("cloud.storage")
+        out, _ = disk
+        keys = [f"users/u/{self.JOB}/{n}" for n in ("v_metadata.json", "v_clip_0.mp4")]
+        monkeypatch.setattr(app_module, "OUTPUT_MAX_GB", 1 / 1024 ** 3)  # always over
+        monkeypatch.setattr(app_module, "_restore_locks", {})
+        monkeypatch.setattr(app_module, "_restored_at", {})
+        monkeypatch.setattr(storage, "list_keys", lambda prefix: keys)
+
+        def download(key, local_path):
+            # The cleanup task runs while the restore waits on R2.
+            app_module._enforce_output_size_cap()
+            body = (b'{"shorts": [{"start": 0, "end": 30}]}'
+                    if key.endswith(".json") else b"x" * 4096)
+            with open(local_path, "wb") as f:
+                f.write(body)
+        monkeypatch.setattr(storage, "download_file", download)
+        return out
+
+    def _restore(self):
+        proj = types.SimpleNamespace(
+            metadata_r2_key=f"users/u/{self.JOB}/v_metadata.json",
+            state={"clips": [{"index": 0, "server_file": "v_clip_0.mp4"}]})
+        return asyncio.run(app_module._restore_job_files(self.JOB, proj, "u"))
+
+    def test_a_restore_is_not_purged_while_it_downloads_nor_right_after(self, r2):
+        other = _job_dir(r2, "finished-long-ago")
+        (other / "clip.mp4").write_bytes(b"x" * 2048)
+        assert self._restore() is True
+        job_dir = r2 / self.JOB
+        assert (job_dir / "v_clip_0.mp4").exists()
+        app_module._enforce_output_size_cap()      # the next sweep
+        assert job_dir.exists() and app_module.jobs[self.JOB]["status"] == "completed"
+        assert not other.exists()                  # the cap still trims the rest
+
+    def test_after_the_grace_the_restored_dir_goes_like_any_other(self, r2):
+        self._restore()
+        app_module._restored_at[self.JOB] -= app_module.RESTORE_GRACE_SECONDS + 1
+        app_module._enforce_output_size_cap()
+        assert not (r2 / self.JOB).exists() and self.JOB not in app_module.jobs
