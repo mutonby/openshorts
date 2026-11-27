@@ -6287,6 +6287,7 @@ async def process_endpoint(
     target_clips: Optional[str] = Form(None),
     clip_min_seconds: Optional[str] = Form(None),
     clip_max_seconds: Optional[str] = Form(None),
+    audience: Optional[str] = Form(None),
     auto_hook: Optional[str] = Form(None),
     auto_hook_style: Optional[str] = Form(None),
     thumbnail_session_id: Optional[str] = Form(None),
@@ -6327,6 +6328,7 @@ async def process_endpoint(
         target_clips = body.get("target_clips")
         clip_min_seconds = body.get("clip_min_seconds")
         clip_max_seconds = body.get("clip_max_seconds")
+        audience = body.get("audience")
         auto_hook = body.get("auto_hook")
         auto_hook_style = body.get("auto_hook_style")
         thumbnail_session_id = body.get("thumbnail_session_id")
@@ -6478,6 +6480,13 @@ async def process_endpoint(
         env["CLIP_MAX_SECONDS"] = str(max_secs)
     if n_clips is not None or min_secs is not None or max_secs is not None:
         print(f"[gen-controls] job={job_id} clips={n_clips} band={min_secs}-{max_secs}")
+
+    audience_mode = str(audience or "").strip().lower()
+    if audience_mode and audience_mode not in ("kids", "general"):
+        raise HTTPException(status_code=400, detail="audience must be kids or general")
+    if audience_mode == "kids":
+        env["AUDIENCE_MODE"] = "kids"
+        print(f"[audience] job={job_id} mode=kids")
 
     # captions=false: the source already carries burned-in subtitles (or the
     # caller adds its own later), so skip the free auto-caption pass instead
@@ -10913,6 +10922,7 @@ async def thumbnail_publish_status(publish_id: str, request: Request):
 from saasshorts import (
     scrape_website,
     research_saas_online,
+    research_brainrot_trends,
     analyze_saas,
     generate_scripts,
     generate_full_video,
@@ -10928,6 +10938,7 @@ saas_jobs: Dict[str, Dict] = {}
 class SaaSAnalyzeRequest(BaseModel):
     url: Optional[str] = None
     description: Optional[str] = None  # Manual product/business description
+    brainrot_mode: bool = False
     num_scripts: int = 3
     style: str = "ugc"
     language: str = "en"
@@ -10944,7 +10955,7 @@ async def saasshorts_analyze(
     if not gemini_key:
         raise gemini_missing_error()
 
-    if not req.url and not req.description:
+    if not req.url and not req.description and not req.brainrot_mode:
         raise HTTPException(status_code=400, detail="Provide a URL or a product description")
     max_scripts = _cloud_cfg().SAAS_MAX_SCRIPTS
     if not 1 <= int(req.num_scripts) <= max_scripts:
@@ -10962,7 +10973,22 @@ async def saasshorts_analyze(
         def run_analysis():
             web_research = None
 
-            if req.url and req.url.strip():
+            if req.brainrot_mode:
+                web_research = research_brainrot_trends(gemini_key, req.description or "")
+                web_research["creator_context"] = req.description or ""
+                analysis = {
+                    "product_name": "Kids Brainrot Shorts",
+                    "one_liner": "Fresh trend research turned into original, child-friendly mascot stories.",
+                    "industry": "kids entertainment",
+                    "target_audience": ["children and families"],
+                    "pain_points": [],
+                    "emotional_hooks": [
+                        "A new silly mascot in every story",
+                        "Playful, kind endings with a tiny surprise",
+                    ],
+                    "key_features": ["current trend research", "original mascot concepts", "kid-safe short scripts"],
+                }
+            elif req.url and req.url.strip():
                 # URL provided: full scrape + research pipeline
                 scraped = scrape_website(req.url)
                 web_research = research_saas_online(req.url, gemini_key)
@@ -10979,7 +11005,10 @@ async def saasshorts_analyze(
                     "tone": "casual and authentic",
                 }
 
-            scripts = generate_scripts(analysis, gemini_key, req.num_scripts, req.style, req.language, req.actor_gender)
+            scripts = generate_scripts(
+                analysis, gemini_key, req.num_scripts, req.style, req.language,
+                req.actor_gender, brainrot_mode=req.brainrot_mode,
+                trend_research=web_research if req.brainrot_mode else None)
             return {
                 "analysis": analysis,
                 "scripts": scripts,

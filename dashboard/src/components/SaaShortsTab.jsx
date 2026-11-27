@@ -33,10 +33,10 @@ function loadCache() {
   } catch { return null; }
 }
 
-function saveCache(url, analysis, webResearch, scripts) {
+function saveCache(url, analysis, webResearch, scripts, brainrotMode) {
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify({
-      url, analysis, webResearch, scripts, timestamp: Date.now(),
+      url, analysis, webResearch, scripts, brainrotMode, timestamp: Date.now(),
     }));
   } catch { /* localStorage full */ }
 }
@@ -56,6 +56,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   const [url, setUrl] = useState(() => loadCache()?.url || '');
   const [videoMode, setVideoMode] = useState('lowcost'); // "lowcost" or "premium"
   const [description, setDescription] = useState('');
+  const [brainrotMode, setBrainrotMode] = useState(() => !!loadCache()?.brainrotMode);
   const [style, setStyle] = useState('ugc');
   const [language, setLanguage] = useState('en');
   const [actorGender, setActorGender] = useState('female');
@@ -200,7 +201,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   };
 
   const handleAnalyze = async () => {
-    if (!url.trim() && !description.trim()) return;
+    if (!brainrotMode && !url.trim() && !description.trim()) return;
     if (needsGeminiKey) {
       setAnalyzeError('Gemini API key required. Set it in Settings.');
       return;
@@ -219,6 +220,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
         body: JSON.stringify({
           url: url.trim() || undefined,
           description: description.trim() || undefined,
+          brainrot_mode: brainrotMode,
           num_scripts: numScripts,
           style,
           language,
@@ -240,7 +242,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
       setFromCache(false);
 
       // Cache results
-      saveCache(url.trim(), data.analysis, data.web_research, data.scripts);
+      saveCache(url.trim(), data.analysis, data.web_research, data.scripts, brainrotMode);
 
       // Pre-fill actor description and narration from first script
       if (data.scripts.length > 0) {
@@ -377,6 +379,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   const handleReset = () => {
     setStep(0);
     setUrl('');
+    setBrainrotMode(false);
     setAnalyzeError('');
     setAnalysis(null);
     setWebResearch(null);
@@ -423,6 +426,26 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
         {step === 0 && (
           <div className="animate-fade space-y-6">
             <div className="card p-4 sm:p-8 space-y-6">
+              <label className="flex items-start gap-3 rounded-input border border-rule2 p-4 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={brainrotMode}
+                  onChange={(e) => {
+                    setBrainrotMode(e.target.checked);
+                    if (e.target.checked) {
+                      setUrl('');
+                      setDescription('');
+                    }
+                  }}
+                  className="mt-1 h-4 w-4 accent-[var(--color-accent)]"
+                />
+                <span>
+                  <span className="block text-sm font-medium text-ink">Kids-safe brainrot trend</span>
+                  <span className="mt-1 block text-xs text-muted leading-relaxed">
+                    Research recent trends, then make an original mascot and child-friendly short. Existing characters, catchphrases, and songs are not copied.
+                  </span>
+                </span>
+              </label>
               {/* Video Mode Selector */}
               <div>
                 <label className="eyebrow block mb-3">Video Mode</label>
@@ -456,7 +479,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                 </div>
               </div>
 
-              <div>
+              {!brainrotMode && <div>
                 <label className="eyebrow block mb-2">Website URL <span className="opacity-60">(optional)</span></label>
                 <div className="flex gap-3">
                   <div className="relative flex-1">
@@ -472,18 +495,18 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                   </div>
                 </div>
                 <p className="text-xs lowercase text-muted mt-1.5">If provided, we&apos;ll scrape and research your site automatically</p>
-              </div>
+              </div>}
 
               <div>
                 <label className="eyebrow block mb-2">
-                  {url.trim() ? 'Extra context' : 'Describe your product/business'} <span className="opacity-60">{url.trim() ? '(optional)' : '(required if no URL)'}</span>
+                  {brainrotMode ? 'Optional topic or theme' : url.trim() ? 'Extra context' : 'Describe your product/business'} <span className="opacity-60">{brainrotMode || url.trim() ? '(optional)' : '(required if no URL)'}</span>
                 </label>
                 <textarea
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   rows={2}
                   className="input-field resize-none text-sm"
-                  placeholder="e.g. artisan pizzeria in Madrid, productivity coach, sportswear store, meditation app..."
+                  placeholder={brainrotMode ? 'e.g. space, ocean animals, silly rhymes...' : 'e.g. artisan pizzeria in Madrid, productivity coach, sportswear store, meditation app...'}
                 />
               </div>
 
@@ -500,7 +523,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                   />
                 </div>
 
-                <label className="eyebrow block mb-3">Actor</label>
+                {!brainrotMode && <><label className="eyebrow block mb-3">Actor</label>
                 <div className="mb-6">
                   <SegmentedControl
                     options={[
@@ -518,7 +541,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                   value={style}
                   onChange={setStyle}
                   columns={5}
-                />
+                /></>}
               </div>
 
               <div>
@@ -540,18 +563,18 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
 
               <button
                 onClick={handleAnalyze}
-                disabled={analyzing || (!url.trim() && !description.trim())}
+                disabled={analyzing || (!brainrotMode && !url.trim() && !description.trim())}
                 className="btn-primary w-full"
               >
                 {analyzing ? (
                   <>
                     <Loader2 size={16} className="animate-spin" />
-                    {url.trim() ? 'Scraping + researching web + generating scripts... (45-90s)' : 'Generating scripts... (20-40s)'}
+                    {brainrotMode ? 'Finding recent trends + creating original scripts...' : url.trim() ? 'Scraping + researching web + generating scripts... (45-90s)' : 'Generating scripts... (20-40s)'}
                   </>
                 ) : (
                   <>
                     <Sparkles size={16} className="hidden sm:block" />
-                    {url.trim() ? 'research & generate scripts' : 'generate scripts'}
+                    {brainrotMode ? 'find trends & make scripts' : url.trim() ? 'research & generate scripts' : 'generate scripts'}
                   </>
                 )}
               </button>
@@ -560,16 +583,16 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
             {/* Info cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="card p-4">
-                <h3 className="eyebrow">Deep Research</h3>
-                <p className="text-xs text-muted mt-2">AI analyzes your product via URL scraping + web research, or generates directly from your description.</p>
+                <h3 className="eyebrow">{brainrotMode ? 'Trend Research' : 'Deep Research'}</h3>
+                <p className="text-xs text-muted mt-2">{brainrotMode ? 'Search-grounded recent character trends, with source links and recency notes.' : 'AI analyzes your product via URL scraping + web research, or generates directly from your description.'}</p>
               </div>
               <div className="card p-4">
-                <h3 className="eyebrow">Pain Point Scripts</h3>
-                <p className="text-xs text-muted mt-2">Generates hook-problem-solution scripts targeting your audience&apos;s real pain points.</p>
+                <h3 className="eyebrow">{brainrotMode ? 'Original Mascots' : 'Pain Point Scripts'}</h3>
+                <p className="text-xs text-muted mt-2">{brainrotMode ? 'Fresh, playful mascot ideas and kind, child-friendly story endings.' : 'Generates hook-problem-solution scripts targeting your audience&apos;s real pain points.'}</p>
               </div>
               <div className="card p-4">
-                <h3 className="eyebrow">AI Actor Videos</h3>
-                <p className="text-xs text-muted mt-2">Realistic AI-generated actors with lip-sync, b-roll, and viral subtitles. From ~$0.50/video.</p>
+                <h3 className="eyebrow">{brainrotMode ? 'AI Mascot Videos' : 'AI Actor Videos'}</h3>
+                <p className="text-xs text-muted mt-2">{brainrotMode ? 'Original animated mascots with narration, b-roll, and subtitles.' : 'Realistic AI-generated actors with lip-sync, b-roll, and viral subtitles. From ~$0.50/video.'}</p>
               </div>
             </div>
           </div>
@@ -643,13 +666,33 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
             {webResearch && (
               <div className="card p-6">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="eyebrow">Web Research</h3>
+                  <h3 className="eyebrow">{webResearch.trends ? 'Current Trend Research' : 'Web Research'}</h3>
                   {webResearch.grounding_sources && (
                     <span className="readout">
                       {webResearch.grounding_sources.length} sources
                     </span>
                   )}
                 </div>
+
+                {webResearch.trends && (
+                  <div className="mb-4">
+                    <h4 className="eyebrow mb-2">Recent character trends</h4>
+                    <div className="space-y-2">
+                      {webResearch.trends.map((trend, i) => (
+                        <div key={`${trend.name}-${i}`} className="rounded-input border border-rule bg-paper p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-sm text-ink2">{trend.name}</span>
+                            <span className="readout">{[trend.date, trend.region, trend.confidence].filter(Boolean).join(' · ')}</span>
+                          </div>
+                          {trend.evidence && <p className="mt-1 text-xs leading-relaxed text-muted">{trend.evidence}</p>}
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mt-2 text-[11px] leading-relaxed text-muted">
+                      Trend names are research context only. Generated stories use original mascots, not copies of existing characters.
+                    </p>
+                  </div>
+                )}
 
                 {/* Real user reviews */}
                 {webResearch.real_reviews && webResearch.real_reviews.length > 0 && (

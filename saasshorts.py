@@ -46,6 +46,109 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL_SAAS") or os.environ.get("GEMINI_MOD
 # Phase 1: Website Scraping, Web Research & Analysis
 # ═══════════════════════════════════════════════════════════════════════
 
+def research_brainrot_trends(gemini_key: str, context: str = "") -> dict:
+    """Find recent brainrot character trends with grounded web search."""
+    from datetime import date
+    from google import genai
+    from google.genai import types
+
+    today = date.today().isoformat()
+    prompt = f"""Research current short-form "brainrot" character trends as of {today}.
+Search the web for recent evidence, prioritizing posts or reports from the last
+30 days. Consider broad global trends, and note the language/region where each
+trend is popular. Do not treat old evergreen characters as new trends.
+{f"Creator context: {context}" if context else ""}
+
+Return JSON with a "trends" array of up to five entries:
+{{"name":"public trend/character name","evidence":"what recent evidence says",
+  "date":"date of evidence or unknown","region":"region/language if known",
+  "confidence":"high/medium/low"}}
+Only include names and claims supported by current search results. If you cannot
+verify any recent character trends, return an empty array. Do not invent
+citations; the response's Google Search grounding sources are returned separately."""
+
+    client = genai.Client(api_key=gemini_key)
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[prompt],
+        config=types.GenerateContentConfig(
+            tools=[types.Tool(google_search=types.GoogleSearch())],
+        ),
+    )
+    sources = []
+    try:
+        metadata = response.candidates[0].grounding_metadata
+        if metadata and metadata.grounding_chunks:
+            for chunk in metadata.grounding_chunks:
+                if chunk.web and chunk.web.uri:
+                    sources.append({"title": chunk.web.title, "url": chunk.web.uri})
+    except (AttributeError, IndexError, TypeError):
+        pass
+
+    raw = response.text
+    if not raw:
+        raise ValueError("Trend research returned no results. Please retry.")
+    text = raw.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\n?", "", text)
+        text = re.sub(r"\n?```$", "", text)
+    start, end = text.find("{"), text.rfind("}")
+    if start >= 0 and end > start:
+        text = text[start:end + 1]
+    try:
+        research = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Trend research returned unreadable results. Please retry.") from exc
+
+    trends = research.get("trends")
+    if isinstance(trends, list):
+        trends = [trend for trend in trends
+                  if isinstance(trend, dict) and trend.get("name") and trend.get("evidence")]
+    if not trends or not sources:
+        raise ValueError("Could not verify a recent brainrot character trend from web sources.")
+    research["trends"] = trends[:5]
+    research["grounding_sources"] = sources
+    return research
+
+
+def _brainrot_script_prompt(trend_research: dict, num_scripts: int, language: str) -> str:
+    lang_name = "Spanish" if language == "es" else "English"
+    return f"""Create {num_scripts} original, playful short-video scripts for children,
+inspired only by broad patterns in recent brainrot trends.
+Trend research (use only as high-level context; do not copy any named character):
+{json.dumps(trend_research.get("trends", []), ensure_ascii=False, indent=2)}
+Optional creator theme: {trend_research.get("creator_context", "")}
+
+NON-NEGOTIABLE ORIGINALITY:
+- Invent a completely new mascot for each script. Do not use any existing
+  character's name, recognizable design, catchphrase, lore, song, or signature
+  combination of traits. Do not mention the researched character names.
+- Use only broad ideas such as absurd object-animal mashups, playful repetition,
+  unexpected rhymes, or silly transformations. Make each mascot distinctly original.
+- No copyrighted music, logos, frightening imagery, violence, insults, unsafe
+  challenges, unhealthy behavior, or manipulative requests to children.
+- Keep the action calm enough to follow, kind, educational or imaginative, and
+  suitable for a general child audience. Do not feature or imitate a real child.
+
+Write all narration, subtitles, captions, and hashtags in {lang_name}. Make
+each short exactly 22 seconds and use the exact five segments below, preserving the
+JSON keys and actor/b-roll visual pattern used by the video renderer:
+1. hook, 0-4s, actor_talking
+2. playful_setup, 4-8s, broll, with a specific broll_prompt
+3. discovery, 8-14s, actor_talking
+4. payoff, 14-18s, broll, with a specific broll_prompt
+5. kind_ending, 18-22s, actor_talking
+
+Return only a JSON array of script objects with: title, style, duration_seconds,
+target_platform, hook_text, segments (type/start/end/narration/visual/broll_prompt/
+emotion/subtitle_text), full_narration, actor_description, hashtags, and caption.
+Set actor_description to an English visual description prefixed exactly
+"ORIGINAL_MASCOT:" followed by the new mascot's distinctive appearance. The
+mascot must be a friendly, original animated creature or object, not a human.
+Use original names only. Do not include an advertising CTA or tell children to
+follow, subscribe, share, buy, or click anything. """
+
+
 def research_saas_online(url: str, gemini_key: str) -> dict:
     """
     Use Gemini with Google Search grounding to deeply research a SaaS product
@@ -403,6 +506,8 @@ def generate_scripts(
     style: str = "ugc",
     language: str = "en",
     actor_gender: str = "female",
+    brainrot_mode: bool = False,
+    trend_research: dict = None,
 ) -> list:
     """Generate video scripts based on SaaS analysis."""
     from google import genai
@@ -435,7 +540,12 @@ Use natural casual American English like a real person on TikTok. Contractions, 
 Examples of English UGC hooks: "Okay so I just found this tool and...", "Stop doing this manually, there's a better way", "I can't believe nobody told me about this sooner..."
 """
 
-    prompt = f"""You are a viral short-form video scriptwriter for TikTok/Instagram Reels.
+    if brainrot_mode:
+        if not trend_research:
+            raise ValueError("Brainrot scripts require verified trend research.")
+        prompt = _brainrot_script_prompt(trend_research, num_scripts, language)
+    else:
+        prompt = f"""You are a viral short-form video scriptwriter for TikTok/Instagram Reels.
 Generate {num_scripts} video scripts to promote this product/business.
 {lang_instructions}
 PRODUCT ANALYSIS:
@@ -719,7 +829,10 @@ def generate_actor_images(
     import random
     img_num = random.randint(1000, 9999)
 
-    if product_description:
+    if clean_desc.startswith("ORIGINAL_MASCOT:"):
+        mascot_desc = clean_desc.split(":", 1)[1].strip()
+        prompt = _original_mascot_image_prompt(mascot_desc)
+    elif product_description:
         prompt = f"""IMG_{img_num}.jpg Raw candid selfie of {clean_desc}, casually holding {product_description}, showing it to the camera with a natural smile. Product clearly visible in hand. Casual and real, not an ad. Low quality front camera, soft room lighting. Reddit selfie."""
     else:
         prompt = f"""IMG_{img_num}.jpg Raw candid selfie of {clean_desc}, sitting at their desk at home, looking at camera with a relaxed natural smile. Headphones around neck, monitor glow behind them. Not posed, casual and real. Low quality front camera, soft room lighting. Reddit selfie."""
@@ -758,6 +871,13 @@ def generate_actor_images(
             paths.append(future.result())
 
     return sorted(paths)
+
+
+def _original_mascot_image_prompt(description: str) -> str:
+    return f"""Create an original, friendly 3D animated mascot: {description}.
+Full character portrait, expressive face, simple bright pastel background, playful
+and polished family animation style. Make the design distinct and not similar to
+any known character. No text, logo, watermark, human child, or scary detail."""
 
     paths = []
     for i, img in enumerate(result.get("images", [])):
