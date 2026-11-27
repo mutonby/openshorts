@@ -396,10 +396,37 @@ async def stripe_webhook(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid signature")
 
+    if not await apply_event(event):
+        return {"ok": True, "dedup": True}
+    return {"ok": True}
+
+
+# One application per event in this process at a time: the webhook and the
+# catch-up below can hold the same event (Stripe's retry lands while the
+# catch-up applies it), and the second caller waits for the first one's result
+# instead of running the handlers (alerts, revenue) a second time.
+_applying: dict = {}
+
+
+async def apply_event(event) -> bool:
+    """Apply a verified Stripe event once: False if it was already recorded.
+    Raises when a handler fails, so the event stays unrecorded and is retried
+    (Stripe's own retry, or the catch-up)."""
+    event_id = event["id"]
+    task = _applying.get(event_id)
+    if task is None:
+        task = asyncio.ensure_future(_apply_event_once(event))
+        _applying[event_id] = task
+        task.add_done_callback(lambda _t: _applying.pop(event_id, None))
+    # Shielded: a delivery Stripe gives up on does not cut the application.
+    return await asyncio.shield(task)
+
+
+async def _apply_event_once(event) -> bool:
     # Dedupe: if we've already recorded this event, ack and skip.
     async with database.session() as s:
         if await s.get(StripeEvent, event["id"]):
-            return {"ok": True, "dedup": True}
+            return False
 
     await handle_event(event)
     # A plan or a top-up may have changed: nobody's remembered snapshot stands.
@@ -412,7 +439,93 @@ async def stripe_webhook(request: Request):
             await s.execute(pg_insert(StripeEvent).values(
                 id=event["id"], type=event["type"], created=_ts(event["created"]),
             ).on_conflict_do_nothing(index_elements=["id"]))
-    return {"ok": True}
+    return True
+
+
+# --------------------------------------------------------------------------- #
+# Webhook catch-up
+# --------------------------------------------------------------------------- #
+# A delivery that fails (the API stalled past Stripe's ~20 s timeout, a 502/503
+# while it restarts or is saturated) is retried by Stripe only 30 min to a few
+# hours later, and until then a customer who has paid stays on the free plan.
+# Stripe lists the events whose delivery has not succeeded yet
+# (``delivery_success=false``): the engine asks for them every minute and
+# applies the ones nobody recorded, through the same idempotent path as the
+# webhook. Stripe's own retry then finds them recorded and gets its 200.
+HANDLED_EVENT_TYPES = (
+    "checkout.session.completed", "checkout.session.async_payment_succeeded",
+    "checkout.session.expired", "customer.subscription.created",
+    "customer.subscription.updated", "customer.subscription.deleted",
+    "invoice.paid", "invoice.payment_failed", "charge.refunded",
+)
+# 0 turns the catch-up off.
+RECONCILE_INTERVAL_S = config._env_int("STRIPE_RECONCILE_SECONDS", 60)
+# Leave the live delivery its chance first (Stripe waits ~20 s for an answer).
+RECONCILE_MIN_AGE_S = 90
+# Older failures are Stripe's retry schedule's business (it keeps going 3 days).
+RECONCILE_LOOKBACK_S = 24 * 3600
+RECONCILE_MAX_EVENTS = 300
+
+
+def _list_undelivered(now: float) -> list:
+    """Worker thread: events of the handled types created in the window whose
+    delivery has not succeeded yet, oldest first (handlers are order-safe, but
+    applying in order avoids skipping a step for nothing)."""
+    page = stripe.Event.list(
+        delivery_success=False, types=list(HANDLED_EVENT_TYPES), limit=100,
+        created={"gte": int(now - RECONCILE_LOOKBACK_S), "lte": int(now - RECONCILE_MIN_AGE_S)},
+    )
+    events = []
+    for ev in page.auto_paging_iter():
+        events.append(ev)
+        if len(events) >= RECONCILE_MAX_EVENTS:
+            break
+    return sorted(events, key=lambda e: e["created"])
+
+
+async def reconcile_undelivered_events(now: float | None = None) -> int:
+    """Apply the undelivered events nobody has recorded. Returns how many were
+    applied. One failing event does not stop the others."""
+    import time as _time
+    now = _time.time() if now is None else now
+    events = await asyncio.to_thread(_list_undelivered, now)
+    if not events:
+        return 0
+    async with database.session() as s:
+        recorded = set((await s.execute(
+            select(StripeEvent.id).where(StripeEvent.id.in_([e["id"] for e in events]))
+        )).scalars().all())
+    applied = 0
+    for ev in events:
+        if ev["id"] in recorded:
+            continue
+        try:
+            if await apply_event(ev):
+                applied += 1
+                print(f"🔁 Stripe event {ev['id']} ({ev['type']}) applied by the "
+                      f"catch-up: its webhook delivery had failed.")
+        except Exception as e:
+            print(f"⚠️  Catch-up could not apply Stripe event {ev['id']}: {e}")
+    return applied
+
+
+async def _reconcile_loop(is_active=None):
+    while True:
+        await asyncio.sleep(RECONCILE_INTERVAL_S)
+        if is_active is not None and not is_active():
+            continue
+        try:
+            await reconcile_undelivered_events()
+        except Exception as e:
+            print(f"⚠️  Stripe webhook catch-up failed: {e}")
+
+
+def start_reconciler(is_active=None):
+    """Engine only (one process applies). ``is_active`` is False while the
+    instance drains, so the two containers of a deploy do not both run it."""
+    if RECONCILE_INTERVAL_S <= 0 or not settings.stripe_secret_key:
+        return None
+    return asyncio.create_task(_reconcile_loop(is_active))
 
 
 async def handle_event(event: dict):
