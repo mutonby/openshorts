@@ -313,6 +313,30 @@ know:
   back to the plain face-tracking crop, and a silent video fails with a
   message that says so. Add a key alongside `LLM_BASE_URL` and you get both.
 
+### 7. Faster transcription: two-pass ASR (optional)
+
+Long videos spend most of their time in word-level ASR, while only the clips
+that ship need word timings. With `ASR_CLIP_WORDS=1`:
+
+- the source gets a text-only transcript (or its existing YouTube captions)
+  for moment picking and titles;
+- each selected clip is transcribed once with word timings, stored as
+  `caption_words` and used for burned captions, re-styling and the clip
+  preview.
+
+```bash
+# .env
+ASR_CLIP_WORDS=1
+USE_SOURCE_CAPTIONS=1        # YouTube: reuse captions instead of ASR
+SOURCE_CAPTIONS_LANG=ru      # optional; force a track when metadata is wrong
+```
+
+The editor's word-level source track then covers the chosen clips; the rest of
+the source stays segment-level. A silent source still needs Gemini. On a
+reasoning-capable server, `LLM_SCORE_REASONING_EFFORT=low` keeps the ranking
+pass cheap while `LLM_DETAIL_REASONING_EFFORT=high` keeps the final clip and
+title selection strong.
+
 ## Technical Pipeline
 
 ### Clip Generator

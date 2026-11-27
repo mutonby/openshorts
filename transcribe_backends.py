@@ -376,8 +376,10 @@ def run_whisper_transcription(media_path, **params):
         return _run_whisper_once(media_path, **params)
 
 
-def _transcribe_with_whisper(media_path):
-    segments, info = run_whisper_transcription(media_path, **WHISPER_TRANSCRIBE_PARAMS)
+def _transcribe_with_whisper(media_path, word_timestamps=True):
+    params = dict(WHISPER_TRANSCRIBE_PARAMS)
+    params["word_timestamps"] = bool(word_timestamps)
+    segments, info = run_whisper_transcription(media_path, **params)
 
     out_segments = []
     text_parts = []
@@ -1039,8 +1041,14 @@ def _parakeet_gets_another_try(error):
     return wait_for_card(PARAKEET_CARD_MB)
 
 
-def transcribe_media(media_path):
-    """Transcribe with the configured backend, falling back to whisper."""
+def transcribe_media(media_path, word_timestamps=True):
+    """Transcribe with the configured backend, falling back to whisper.
+
+    ``word_timestamps=False`` is the two-pass mode (ASR_CLIP_WORDS): the full
+    source only needs text for moment picking, and the selected clips are
+    refined separately with word timings. Whisper skips its word alignment
+    pass; parakeet's token words are dropped after the validation.
+    """
     # Silent videos (AI-generated clips, muted screen recordings) have no audio
     # stream; every ASR backend then crashes deep inside libav with an opaque
     # "tuple index out of range". Detect it up front and fail with a clear,
@@ -1060,6 +1068,8 @@ def transcribe_media(media_path):
                 if reason is None:
                     print(f"🎙️ [ASR] parakeet ok: lang={transcript['language']} "
                           f"segments={len(transcript['segments'])}")
+                    if not word_timestamps:
+                        _drop_words(transcript)
                     return transcript
                 print(f"⚠️ [ASR] parakeet result rejected ({reason}) — "
                       f"falling back to whisper")
@@ -1079,4 +1089,15 @@ def transcribe_media(media_path):
         except Exception as e:
             print(f"⚠️ [ASR] could not release parakeet ({type(e).__name__}: {e})")
 
-    return _transcribe_with_whisper(media_path)
+    if word_timestamps:
+        # Keep the historical one-argument call: tests and callers monkeypatch
+        # _transcribe_with_whisper with a media_path-only lambda.
+        return _transcribe_with_whisper(media_path)
+    return _transcribe_with_whisper(media_path, word_timestamps=False)
+
+
+def _drop_words(transcript):
+    """Coarse transcript: keep segments, remove the per-word timings."""
+    for segment in transcript.get("segments", []):
+        segment.pop("words", None)
+    return transcript

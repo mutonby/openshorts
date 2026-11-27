@@ -933,3 +933,35 @@ def test_a_source_parakeet_covers_goes_to_it_as_before(monkeypatch, tmp_path, fa
     monkeypatch.setattr(tb, "_repair_script_drift", lambda t, w: 0)
     transcript = tb._transcribe_with_parakeet("x.mp4")
     assert transcript["segments"]
+
+
+# --- two-pass ASR: coarse source pass, per-clip word pass ------------------
+
+def test_drop_words_keeps_segments_and_text():
+    transcript = {
+        "text": " hello",
+        "language": "en",
+        "segments": [{"start": 0.0, "end": 1.0, "text": " hello",
+                      "words": [{"word": " hello", "start": 0.0, "end": 1.0}]}],
+    }
+    out = tb._drop_words(transcript)
+    assert out is transcript
+    assert "words" not in transcript["segments"][0]
+    assert transcript["segments"][0]["text"] == " hello"
+
+
+def test_transcribe_media_passes_word_timestamps_off(monkeypatch):
+    seen = {}
+
+    def fake_whisper(path, word_timestamps=True):
+        seen["word_timestamps"] = word_timestamps
+        return {"text": "", "language": "en", "segments": []}
+
+    monkeypatch.delenv("TRANSCRIBE_BACKEND", raising=False)
+    monkeypatch.setattr(tb, "_has_audio_stream", lambda path: True)
+    monkeypatch.setattr(tb, "_transcribe_with_whisper", fake_whisper)
+
+    result = tb.transcribe_media("video.mp4", word_timestamps=False)
+
+    assert seen["word_timestamps"] is False
+    assert result["segments"] == []

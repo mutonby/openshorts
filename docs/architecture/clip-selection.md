@@ -92,3 +92,30 @@ silently). Self-host `/api/process` then accepts a request without
 `X-Gemini-Key` and `/api/config.localLlm` tells the dashboard not to demand one.
 Frame-based stages (`layout_picker`, `screencast_layout`, `get_visual_clips`)
 stay on Gemini. Never wired in cloud mode: `BILLING_ENABLED` ignores it.
+
+
+## Two-pass ASR (`ASR_CLIP_WORDS`, `USE_SOURCE_CAPTIONS`)
+
+`ASR_CLIP_WORDS=1` makes `transcribe_video` ask for a text-only transcript
+(`transcribe_media(..., word_timestamps=False)`); the moment picker reads
+segment text and `get_viral_clips` snaps proposed cuts to segment boundaries
+when no words exist. After the clip list is fixed, `_process_one_clip` takes
+one word-level pass over the cut clip, serialized by `_CLIP_ASR_LOCK` and
+inside a host ASR slot, and stores `clip["caption_words"]`. Captions, hook
+grounding, `/api/subtitle`, `_reapply_captions` and the Remotion preview burn
+from a clip-relative transcript built from those words. The full source
+transcript stays segment-level, so the editor's word-level source track covers
+the chosen clips only. Pro mode needs source-wide words and is skipped when
+the coarse transcript has none.
+
+For a YouTube URL, `USE_SOURCE_CAPTIONS=1` first tries
+`source_captions.source_captions_transcript`: `youtube_captions.fetch_transcript`
+(the same reader the public transcript tool uses through `free_tools`) reads
+the manual/auto json3 captions and the helper converts them to the coarse
+shape. `SOURCE_CAPTIONS_LANG=ru` forces a track; if the served track is a
+different language the helper returns `None` so the job transcribes instead of
+feeding a translated transcript to the model. Early-audio transcription is
+disabled in this combination (it would duplicate the work). Coarse transcripts
+are not stored in `source_cache`; a checkpoint without words is rejected when
+the mode is off, so a later word-level job re-transcribes rather than silently
+shipping uncaptioned clips.

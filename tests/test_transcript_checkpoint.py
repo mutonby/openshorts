@@ -15,7 +15,8 @@ import pytest
 main = pytest.importorskip("main")  # needs cv2/mediapipe, absent in minimal CI
 
 TRANSCRIPT = {"text": "hola", "language": "es",
-              "segments": [{"start": 0.0, "end": 1.0, "text": "hola", "words": []}]}
+              "segments": [{"start": 0.0, "end": 1.0, "text": "hola",
+                            "words": [{"word": " hola", "start": 0.0, "end": 1.0}]}]}
 SRC = "/app/output/job1/video.mp4"
 DUR = 58.64
 
@@ -110,9 +111,10 @@ class TestPrepareOnly:
         monkeypatch.setattr(transcribe_backends, "_gpu_only", False)
         calls = []
 
-        def transcribe(path, slot_timeout=None):
+        def transcribe(path, slot_timeout=None, word_timestamps=None):
             calls.append(path)
             assert slot_timeout == 45.0          # never waits for a slot for ever
+            assert word_timestamps is True       # a remote renderer needs words
             return TRANSCRIPT
         monkeypatch.setattr(main, "transcribe_video", transcribe)
         import source_cache
@@ -141,14 +143,14 @@ class TestPrepareOnly:
         assert calls == [] and stored == [] and _load(tmp_path) == TRANSCRIPT
 
     def test_a_failure_never_fails_the_prepare(self, tmp_path, prep, monkeypatch):
-        def boom(path, slot_timeout=None):
+        def boom(path, slot_timeout=None, word_timestamps=None):
             raise RuntimeError("no card")
         monkeypatch.setattr(main, "transcribe_video", boom)
         assert not main.prepare_transcript(SRC, str(tmp_path), None, "1")
         assert _load(tmp_path) is None
 
     def test_busy_slots_leave_it_to_the_renderer(self, tmp_path, prep, monkeypatch):
-        def busy(path, slot_timeout=None):
+        def busy(path, slot_timeout=None, word_timestamps=None):
             raise TimeoutError("no free transcription slot")
         monkeypatch.setattr(main, "transcribe_video", busy)
         assert not main.prepare_transcript(SRC, str(tmp_path), "https://youtu.be/x", "1")
@@ -157,7 +159,7 @@ class TestPrepareOnly:
     def test_it_transcribes_on_the_gpu_or_leaves_it(self, tmp_path, prep, monkeypatch):
         import transcribe_backends as tb
 
-        def off_the_card(path, slot_timeout=None):
+        def off_the_card(path, slot_timeout=None, word_timestamps=None):
             assert tb._gpu_only                  # pinned before transcribing
             raise tb.GpuUnavailable("whisper GPU failed (CUDA out of memory)")
         monkeypatch.setattr(main, "transcribe_video", off_the_card)

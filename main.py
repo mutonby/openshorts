@@ -47,6 +47,9 @@ from clip_selection import (build_transcript_windows, clip_count_targets,
                             score_batches, shortlist_target,
                             snap_clip_to_words, trim_to_best,
                             vision_segments)
+from source_captions import is_youtube_url, source_captions_transcript
+from transcript_utils import (has_words as transcript_has_words,
+                             words_transcript as clip_words_transcript)
 from ffmpeg_utils import (video_encode_args, audio_encode_args, cut_clip, QUALITY,
                           QUALITY_FAST, METADATA_SCRUB)
 from dotenv import load_dotenv
@@ -58,6 +61,20 @@ warnings.filterwarnings("ignore", category=UserWarning, module='google.protobuf'
 
 # Load environment variables
 load_dotenv()
+
+# --- Two-pass ASR (ASR_CLIP_WORDS) -----------------------------------------
+# The full source only needs text + segment times to pick moments and write
+# hooks/titles. Word-level timings are needed only for the few selected clips
+# (karaoke captions, editor words), so with this on the source is transcribed
+# once without words and every chosen clip gets its own word-level pass.
+ASR_CLIP_WORDS = os.environ.get("ASR_CLIP_WORDS", "0").strip().lower() in (
+    "1", "true", "yes")
+# For a YouTube source, read the captions the video already has instead of
+# running ASR over the whole file. Only meaningful with ASR_CLIP_WORDS: the
+# selected clips still get their own word-level pass.
+USE_SOURCE_CAPTIONS = os.environ.get("USE_SOURCE_CAPTIONS", "0").strip().lower() in (
+    "1", "true", "yes")
+_CLIP_ASR_LOCK = threading.Lock()
 
 # --- Constants ---
 ASPECT_RATIO = 9 / 16
@@ -2435,12 +2452,19 @@ def prepare_transcript(input_video, output_dir, url, mode):
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         cap.release()
         duration = frame_count / fps
-        if load_transcript_checkpoint(output_dir, input_video, duration) is not None:
-            return True
+        checkpoint = load_transcript_checkpoint(output_dir, input_video, duration)
+        if checkpoint is not None:
+            # A remote renderer needs word timings; a coarse two-pass
+            # checkpoint cannot feed it.
+            if transcript_has_words(checkpoint):
+                return True
+            return False
         transcript, from_cache = None, False
         if url:
             import source_cache
             transcript = source_cache.fetch_transcript(url, duration)
+            if transcript is not None and not transcript_has_words(transcript):
+                transcript = None
             from_cache = transcript is not None
         if transcript is None and mode == "1":
             from transcribe_backends import NoAudioError, GpuUnavailable, require_gpu
@@ -2451,7 +2475,8 @@ def prepare_transcript(input_video, output_dir, url, mode):
             except ValueError:
                 wait = 45.0
             try:
-                transcript = transcribe_video(input_video, slot_timeout=max(0.0, wait))
+                transcript = transcribe_video(input_video, slot_timeout=max(0.0, wait),
+                                               word_timestamps=True)
             except NoAudioError:
                 return False
             except TimeoutError:
@@ -2463,7 +2488,7 @@ def prepare_transcript(input_video, output_dir, url, mode):
         if transcript is None or not transcript.get("segments"):
             return False
         save_transcript_checkpoint(output_dir, transcript, input_video, duration)
-        if url and not from_cache:
+        if url and not from_cache and transcript_has_words(transcript):
             import source_cache
             source_cache.store_transcript(url, duration, transcript, input_video)
         return True
@@ -2566,12 +2591,17 @@ def _free_gpu_cache():
         pass
 
 
-def transcribe_video(video_path, slot_timeout=None):
+def transcribe_video(video_path, slot_timeout=None, word_timestamps=None):
     """``slot_timeout``: seconds to wait for a host transcription slot before
-    giving up with TimeoutError (None waits for as long as it takes)."""
+    giving up with TimeoutError (None waits for as long as it takes).
+
+    ``word_timestamps``: None follows ASR_CLIP_WORDS (the two-pass mode); the
+    remote-worker preparation passes True because its renderer needs words."""
     print("🎙️  Transcribing video...")
     from transcribe_backends import (transcribe_media, release_models, host_asr_slot,
                                      media_seconds)
+    if word_timestamps is None:
+        word_timestamps = not ASR_CLIP_WORDS
 
     # At most ASR_HOST_SLOTS jobs transcribe on the GPU at once, host-wide.
     # Inside the slot, the model's VRAM is handed back before the long render
@@ -2585,7 +2615,7 @@ def transcribe_video(video_path, slot_timeout=None):
     # the card until the process exits.
     with host_asr_slot(timeout=slot_timeout, media_seconds=media_seconds(video_path)):
         try:
-            transcript = transcribe_media(video_path)
+            transcript = transcribe_media(video_path, word_timestamps=word_timestamps)
         finally:
             try:
                 release_models()
@@ -2600,7 +2630,8 @@ def transcribe_video(video_path, slot_timeout=None):
 
     return transcript
 
-def _run_gemini_stage(client, model_name, prompt, schema):
+
+def _run_gemini_stage(client, model_name, prompt, schema, reasoning_effort=None):
     """One schema-enforced model call with transient-error backoff.
     Returns (parsed_dict, cost_analysis).
 
@@ -2618,7 +2649,10 @@ def _run_gemini_stage(client, model_name, prompt, schema):
     for attempt in range(1, max_attempts + 1):
         try:
             if use_local:
-                return llm_backend.generate_json(prompt, schema, model=model_name)
+                kwargs = {"model": model_name}
+                if reasoning_effort is not None:
+                    kwargs["reasoning_effort"] = reasoning_effort
+                return llm_backend.generate_json(prompt, schema, **kwargs)
             response = client.models.generate_content(model=model_name, contents=prompt, config=config)
             # Policy blocks are deterministic — retrying only burns quota and
             # time, and the user deserves the real reason instead of a generic
@@ -2656,7 +2690,8 @@ def _run_gemini_stage(client, model_name, prompt, schema):
             time.sleep(wait)
 
 
-def _run_stage_split(client, model_name, items, build_prompt, schema, key, costs, label):
+def _run_stage_split(client, model_name, items, build_prompt, schema, key, costs, label,
+                     reasoning_effort=None):
     """Run a Gemini stage over ``items``; on a policy block, bisect.
 
     Google's prompt filter (PROHIBITED_CONTENT) fires on some COMBINATIONS of
@@ -2670,7 +2705,10 @@ def _run_stage_split(client, model_name, items, build_prompt, schema, key, costs
         return []
     prompt = build_prompt(items)
     try:
-        parsed, cost = _run_gemini_stage(client, model_name, prompt, schema)
+        kwargs = {}
+        if reasoning_effort is not None:
+            kwargs["reasoning_effort"] = reasoning_effort
+        parsed, cost = _run_gemini_stage(client, model_name, prompt, schema, **kwargs)
         if cost:
             costs.append(cost)
         return list(parsed.get(key) or [])
@@ -2680,8 +2718,10 @@ def _run_stage_split(client, model_name, items, build_prompt, schema, key, costs
             return []
         mid = len(items) // 2
         print(f"   🚫 {label}: Gemini blocked a batch of {len(items)}; retrying as {mid} + {len(items) - mid}")
-        return (_run_stage_split(client, model_name, items[:mid], build_prompt, schema, key, costs, label)
-                + _run_stage_split(client, model_name, items[mid:], build_prompt, schema, key, costs, label))
+        return (_run_stage_split(client, model_name, items[:mid], build_prompt, schema, key, costs, label,
+                                 reasoning_effort=reasoning_effort)
+                + _run_stage_split(client, model_name, items[mid:], build_prompt, schema, key, costs, label,
+                                   reasoning_effort=reasoning_effort))
 
 
 def score_batch_size():
@@ -2725,11 +2765,27 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
         model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
     print(f"\U0001f916  Model: {model_name} | language: {language}")
 
-    # Full word list — ground truth for snapping cut points.
+    # Ranking windows is mechanical: low effort is enough and much faster.
+    # The detail pass writes the actual clips, titles and hooks — keep its
+    # reasoning at high so the selection quality does not drop.
+    score_effort = (os.environ.get("LLM_SCORE_REASONING_EFFORT") or "").strip() or None
+    detail_effort = (os.environ.get("LLM_DETAIL_REASONING_EFFORT") or "").strip() or None
+
+    # Full word list — ground truth for snapping cut points. In the two-pass
+    # mode the source transcript has no words: segment boundaries are the
+    # finest ground truth available, and they still keep cuts out of sentences.
     words = []
     for segment in transcript_result['segments']:
         for word in segment.get('words', []):
             words.append({'w': word['word'], 's': word['start'], 'e': word['end']})
+    if not words:
+        words = [
+            {'w': str(segment.get('text') or ''),
+             's': float(segment.get('start', 0)),
+             'e': float(segment.get('end', 0))}
+            for segment in transcript_result.get('segments', [])
+            if str(segment.get('text') or '').strip()
+        ]
 
     try:
         # Scoring windows must be able to CONTAIN a max-length clip (the detail
@@ -2779,7 +2835,8 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
         for batch in score_batches(windows, SCORE_BATCH):
             scored.extend(_run_stage_split(
                 client, model_name, batch, _score_prompt,
-                gemini_worker.ScoreResponse, "windows", costs, "score"))
+                gemini_worker.ScoreResponse, "windows", costs, "score",
+                reasoning_effort=score_effort))
 
         # Shortlist the top windows; scale with duration so long videos surface
         # more candidates without exploding the detail call.
@@ -2822,7 +2879,8 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
         for group, (lo, hi) in zip(groups, bands):
             shorts.extend(_run_stage_split(client, model_name, group,
                                            _detail_prompt_for(lo, hi),
-                                           gemini_worker.DetailResponse, "shorts", costs, "detail"))
+                                           gemini_worker.DetailResponse, "shorts", costs, "detail",
+                                           reasoning_effort=detail_effort))
         if len(groups) > 1:
             shorts.sort(key=lambda s: float(s.get("start") or 0))
 
@@ -2842,7 +2900,8 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
                 extra = _run_stage_split(
                     client, model_name, spare,
                     _detail_prompt_for(missing, max(missing, len(spare))),
-                    gemini_worker.DetailResponse, "shorts", costs, "detail-floor")
+                    gemini_worker.DetailResponse, "shorts", costs, "detail-floor",
+                    reasoning_effort=detail_effort)
                 if extra:
                     shorts = sorted(shorts + extra,
                                     key=lambda s: float(s.get("start") or 0))
@@ -3285,6 +3344,12 @@ if __name__ == '__main__':
         use_early = (not args.skip_analysis and not args.transcript
                      and not args.prepare_only
                      and os.environ.get("EARLY_AUDIO", "1").strip() != "0"
+                     # With the two-pass mode + source captions the full ASR is
+                     # skipped entirely, so an early transcription would only
+                     # burn CPU while the captions are fetched. Other sites
+                     # still have no captions to reuse, so they keep it.
+                     and not (ASR_CLIP_WORDS and USE_SOURCE_CAPTIONS
+                              and is_youtube_url(args.url))
                      and not os.environ.get("MAX_SOURCE_MINUTES", "").strip()
                      and not os.path.exists(os.path.join(output_dir, TRANSCRIPT_CHECKPOINT)))
         input_video, video_title = download_youtube_video(
@@ -3417,6 +3482,8 @@ if __name__ == '__main__':
                     transcript = json.load(f)
                 if not transcript.get('segments'):
                     raise ValueError("transcript has no segments")
+                if not ASR_CLIP_WORDS and not transcript_has_words(transcript):
+                    raise ValueError("transcript has no word timings")
                 print(f"⏩ Reusing precomputed transcript "
                       f"({len(transcript['segments'])} segments) — skipping transcription.")
             except Exception as e:
@@ -3436,6 +3503,9 @@ if __name__ == '__main__':
                     save_transcript_checkpoint(output_dir, transcript, input_video, duration)
         if transcript is None:
             transcript = load_transcript_checkpoint(output_dir, input_video, duration)
+            if transcript is not None and not ASR_CLIP_WORDS and not transcript_has_words(transcript):
+                print("⚠️ Checkpoint has no word timings — transcribing again.")
+                transcript = None
             if transcript is not None:
                 print(f"♻️ Reusing the transcript from the interrupted run "
                       f"({len(transcript['segments'])} segments) — skipping transcription.")
@@ -3444,8 +3514,15 @@ if __name__ == '__main__':
         if transcript is None and args.url:
             import source_cache
             transcript = source_cache.fetch_transcript(args.url, duration)
+            if transcript is not None and not ASR_CLIP_WORDS and not transcript_has_words(transcript):
+                print("⚠️ Cached transcript has no word timings — transcribing again.")
+                transcript = None
             if transcript is not None:
                 transcript_from_cache = True
+                save_transcript_checkpoint(output_dir, transcript, input_video, duration)
+        if transcript is None and ASR_CLIP_WORDS and USE_SOURCE_CAPTIONS and args.url:
+            transcript = source_captions_transcript(args.url)
+            if transcript is not None:
                 save_transcript_checkpoint(output_dir, transcript, input_video, duration)
         if transcript is None:
             try:
@@ -3453,7 +3530,8 @@ if __name__ == '__main__':
                 save_transcript_checkpoint(output_dir, transcript, input_video, duration)
             except NoAudioError as e:
                 print(f"🔇 {e} — switching to visual analysis.")
-        if transcript is not None and args.url and not transcript_from_cache:
+        if transcript is not None and args.url and not transcript_from_cache \
+                and transcript_has_words(transcript):
             # Kept only when this job's source is the cached file, uncut.
             import source_cache
             source_cache.store_transcript(args.url, duration, transcript, input_video)
@@ -3525,6 +3603,47 @@ if __name__ == '__main__':
                     import scene_detection
                     scene_detection.register_clip(clip_temp_path, start)
 
+                    # Two-pass ASR: the source transcript above has no words in
+                    # this mode. A clip gets its words from the source when a
+                    # cached word-level transcript is in hand (free), otherwise
+                    # from one word-level pass over this cut clip alone.
+                    caption_transcript, caption_start, caption_end = transcript, start, end
+                    if ASR_CLIP_WORDS:
+                        clip_words = [
+                            {"word": w.get("word", ""),
+                             "start": max(0.0, float(w["start"]) - start),
+                             "end": min(float(end - start), float(w["end"]) - start)}
+                            for segment in transcript.get("segments", [])
+                            for w in (segment.get("words") or [])
+                            if float(w.get("end", 0)) > start and float(w.get("start", 0)) < end
+                        ]
+                        if not clip_words:
+                            try:
+                                from transcribe_backends import (transcribe_media, host_asr_slot,
+                                                                 media_seconds)
+                                print(f"   🎙️ [ASR] word-level pass on clip {i+1}...")
+                                with _CLIP_ASR_LOCK:
+                                    with host_asr_slot(media_seconds=media_seconds(clip_temp_path)):
+                                        clip_transcript = transcribe_media(clip_temp_path)
+                                clip_words = [
+                                    {"word": w.get("word", ""),
+                                     "start": float(w["start"]), "end": float(w["end"])}
+                                    for segment in clip_transcript.get("segments", [])
+                                    for w in (segment.get("words") or [])
+                                ]
+                                if clip_words:
+                                    print(f"   🎙️ [ASR] clip {i+1}: {len(clip_words)} word(s)")
+                                else:
+                                    print(f"   ⚠️ [ASR] clip {i+1}: no words — captions fall back")
+                            except Exception as e:
+                                print(f"   ⚠️ [ASR] clip {i+1} failed ({type(e).__name__}: {e}); captions fall back")
+                        if clip_words:
+                            clip["caption_words"] = clip_words
+                            caption_transcript = clip_words_transcript(
+                                clip_words, transcript.get("language", "en"))
+                            caption_start = 0.0
+                            caption_end = caption_transcript["segments"][0]["end"]
+
                     # Layer order: the canonical reframe stays CLEAN, the hook
                     # is a derived hooked_ file, captions go last on top of
                     # whichever is current, and on the free plan the served
@@ -3546,13 +3665,18 @@ if __name__ == '__main__':
                     # render put this clip's meaning on the screen, rewrite hook
                     # and title from three of its frames BEFORE burning them.
                     if success and hook_grounding.wanted(clip['layout_ranges'], end - start):
-                        hook_grounding.reground(clip_final_path, clip, transcript, start, end)
+                        hook_grounding.reground(clip_final_path, clip, caption_transcript,
+                                                caption_start, caption_end)
                     captioned = None
                     # Pro mode replaces the file the hook and the captions go
                     # on, and the timeline they are laid on (its cuts); the
                     # canonical reframe stays, it is the clip's normal mode.
-                    base_path, words, w_start, w_end = clip_final_path, transcript, start, end
-                    pro = pro_clip(clip_final_path, clip, transcript) if success else None
+                    base_path, words, w_start, w_end = (clip_final_path, caption_transcript,
+                                                        caption_start, caption_end)
+                    # Pro mode needs the full transcript's words; in the coarse
+                    # two-pass mode it is skipped rather than fed a wordless one.
+                    pro = (pro_clip(clip_final_path, clip, transcript)
+                           if success and transcript_has_words(transcript) else None)
                     cap_style = None
                     if pro:
                         deliver_path = base_path = pro[0]
@@ -3640,7 +3764,7 @@ if __name__ == '__main__':
             # Persist per-clip render results added by the workers (auto_hook)
             # so the editor can see what is already burned into each clip.
             if any('auto_hook' in c or 'hook_grounding' in c or 'pro_suggested' in c
-                   for c in shorts):
+                   or 'caption_words' in c for c in shorts):
                 # Atomic: the dashboard is already reading this file for the
                 # clips announced above (CLIP_READY).
                 write_json_atomic(metadata_file, clips_data, indent=2)
