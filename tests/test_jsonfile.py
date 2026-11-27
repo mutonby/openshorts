@@ -69,6 +69,7 @@ def test_temp_file_is_invisible_to_metadata_globs(tmp_path, monkeypatch):
     assert matches == [[]]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix file mode bits are not enforced on Windows")
 def test_keeps_the_existing_file_mode(tmp_path):
     path = tmp_path / "job_metadata.json"
     path.write_text("{}")
