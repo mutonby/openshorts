@@ -189,6 +189,72 @@ def cmd_publish(args):
     print(json.dumps(payload) if args.json else f"publishing: {payload}")
 
 
+def cmd_subtitle(args):
+    body = {"job_id": args.job_id, "clip_index": args.clip_index}
+    if args.preset:
+        body["preset"] = args.preset
+    if args.style:
+        body["style"] = args.style
+    if args.position:
+        body["position"] = args.position
+    if args.font_size:
+        body["font_size"] = args.font_size
+    if args.font_name:
+        body["font_name"] = args.font_name
+    if args.font_color:
+        body["font_color"] = args.font_color
+    if args.highlight_color:
+        body["highlight_color"] = args.highlight_color
+    status, payload = _request("POST", "/api/subtitle", body)
+    if status >= 400:
+        _die(status, payload)
+    if args.json:
+        print(json.dumps(payload))
+        return
+    url = payload.get("download_url") or _absolutize(payload.get("new_video_url") or "")
+    print(f"subtitles applied: {url}")
+
+
+def cmd_translate(args):
+    body = {
+        "job_id": args.job_id,
+        "clip_index": args.clip_index,
+        "target_language": args.language,
+    }
+    if args.source_language:
+        body["source_language"] = args.source_language
+    headers_extra = {}
+    key = args.elevenlabs_key or os.environ.get("ELEVENLABS_API_KEY")
+    if key:
+        headers_extra["X-ElevenLabs-Key"] = key
+    # _request doesn't accept extra headers directly; patch the request inline.
+    import urllib.request as _url_req
+    base = _base()
+    data = json.dumps(body).encode()
+    hdrs = {"Accept": "application/json", "Content-Type": "application/json"}
+    api_key = os.environ.get("OPENSHORTS_API_KEY")
+    if api_key:
+        hdrs["Authorization"] = f"Bearer {api_key}"
+    hdrs.update(headers_extra)
+    req = _url_req.Request(base + "/api/translate", data=data, headers=hdrs, method="POST")
+    try:
+        import urllib.error as _url_err
+        with _url_req.urlopen(req, timeout=600) as resp:
+            status, payload = resp.status, json.loads(resp.read().decode() or "{}")
+    except _url_err.HTTPError as exc:
+        try:
+            payload = json.loads(exc.read().decode() or "{}")
+        except Exception:
+            payload = {"detail": str(exc.reason)}
+        _die(exc.code, payload)
+        return
+    if args.json:
+        print(json.dumps(payload))
+        return
+    url = payload.get("download_url") or _absolutize(payload.get("video_url") or "")
+    print(f"dubbed clip: {url}")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="openshorts",
@@ -226,6 +292,27 @@ def main(argv=None):
     p.add_argument("--schedule", help="ISO datetime for scheduled posting")
     p.add_argument("--timezone", help="IANA timezone for --schedule")
     p.set_defaults(func=cmd_publish)
+
+    p = sub.add_parser("subtitle", help="re-style captions on a finished clip")
+    p.add_argument("job_id")
+    p.add_argument("clip_index", type=int)
+    p.add_argument("--preset", help="caption preset: default, hormozi, pill, lime, oneword, clean")
+    p.add_argument("--style", help="karaoke or classic")
+    p.add_argument("--position", help="top, middle, or bottom")
+    p.add_argument("--font-size", dest="font_size", type=int, help="font size in points (default 44)")
+    p.add_argument("--font-name", dest="font_name", help="font name, e.g. Anton, Montserrat ExtraBold")
+    p.add_argument("--font-color", dest="font_color", help="hex color, e.g. #FFFFFF")
+    p.add_argument("--highlight-color", dest="highlight_color", help="active word color, e.g. #FFE500")
+    p.set_defaults(func=cmd_subtitle)
+
+    p = sub.add_parser("translate", help="dub a clip into another language using ElevenLabs AI voice")
+    p.add_argument("job_id")
+    p.add_argument("clip_index", type=int)
+    p.add_argument("language", help="target language code, e.g. es, fr, de, pt, ja")
+    p.add_argument("--source-language", dest="source_language", help="source language code (auto-detected if omitted)")
+    p.add_argument("--elevenlabs-key", dest="elevenlabs_key",
+                   help="ElevenLabs API key (falls back to ELEVENLABS_API_KEY env var)")
+    p.set_defaults(func=cmd_translate)
 
     args = parser.parse_args(argv)
     args.func(args)
