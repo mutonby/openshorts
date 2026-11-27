@@ -13,10 +13,14 @@ What each network shows of a clip:
 - Threads: the caption only (Upload-Post posts ``threads_title`` when set and
   splits text over 500 characters into a thread).
 - Bluesky: the caption only; Upload-Post cuts it to the 300-character limit.
+- X: the caption as the post text (``x_title``), cut to X's limit.
+- Pinterest: a title and the caption as the pin description; with several
+  boards Upload-Post pins to the profile's default board.
 """
 from typing import Iterable, List
 
-PLATFORMS = ("tiktok", "instagram", "youtube", "facebook", "linkedin", "threads", "bluesky")
+PLATFORMS = ("tiktok", "instagram", "youtube", "facebook", "linkedin",
+             "threads", "bluesky", "x", "pinterest")
 
 LABELS = {
     "tiktok": "TikTok",
@@ -26,6 +30,8 @@ LABELS = {
     "linkedin": "LinkedIn",
     "threads": "Threads",
     "bluesky": "Bluesky",
+    "x": "X",
+    "pinterest": "Pinterest",
 }
 
 # YouTube refuses a title over 100 characters; the Gemini title is not bounded.
@@ -86,6 +92,14 @@ def upload_fields(platforms: Iterable[str], *, title: str, description: str,
     if "bluesky" in ps:
         data["bluesky_title"] = title
         data["bluesky_description"] = description
+    if "x" in ps:
+        # The post text; Upload-Post cuts it to X's character limit.
+        data["x_title"] = description
+    if "pinterest" in ps:
+        # A pin has a title and a description; with several boards Upload-Post
+        # uses the profile's default board, as Facebook uses its default Page.
+        data["pinterest_title"] = title
+        data["pinterest_description"] = description
     return data
 
 

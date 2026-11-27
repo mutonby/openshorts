@@ -6958,6 +6958,46 @@ async def get_status(job_id: str, request: Request):
     }
 
 
+@app.get("/api/jobs")
+async def list_jobs(request: Request, limit: int = 50):
+    """This caller's live jobs, most recent first.
+
+    Self-host keeps no project history (that lives in the cloud DB behind
+    BILLING_ENABLED, served by /api/projects and /api/history), so an agent or
+    CLI that lost a job_id mid-session had no way to recover it. Lists the
+    in-memory job registry — owner-filtered exactly like /api/status, so a
+    cloud caller only ever sees their own jobs.
+    """
+    try:
+        limit = max(1, min(int(limit), 200))
+    except (TypeError, ValueError):
+        limit = 50
+    # One owner lookup for the whole listing (it holds a pooled connection).
+    caller = await _owner_id_from_request(request) if BILLING_ENABLED else None
+    out = []
+    for job_id in reversed(list(jobs.keys())):
+        job = jobs.get(job_id)
+        if not isinstance(job, dict):
+            continue
+        if BILLING_ENABLED:
+            # Cloud: only an authenticated caller's own jobs. list_jobs
+            # enumerates, so (unlike the per-id guard) it can't lean on UUID
+            # unguessability — never list an ownerless job, and never to an
+            # anonymous caller.
+            owner = job.get("user_id")
+            if caller is None or owner is None or str(owner) != str(caller):
+                continue
+        out.append({
+            "job_id": job_id,
+            "status": _presented_status(job_id, job),
+            "clips": len((job.get("result") or {}).get("clips") or []),
+            "partial": job.get("partial"),
+        })
+        if len(out) >= limit:
+            break
+    return {"jobs": out, "count": len(out)}
+
+
 def _locate_source(job_id: str):
     """Find a job's source video on disk, or None.
 
@@ -7731,6 +7771,81 @@ async def get_clip_transcript(job_id: str, clip_index: int, request: Request):
         "durationSec": duration_sec,
         "language": transcript.get('language', 'en'),
     }
+
+
+@app.post("/api/clip/{job_id}/{clip_index}/translate-captions")
+async def translate_clip_captions(job_id: str, clip_index: int, request: Request):
+    """Translate one clip's captions into another language and return them as an
+    SRT file. This is TEXT, not dubbing: the audio is untouched and each caption
+    line keeps its timing. Body: ``{"target_lang": "es"}`` (an ISO code from
+    translate.SUPPORTED_LANGUAGES). A far cheaper, far more common ask than a
+    full re-dub, and it reuses the clip pipeline's existing Gemini key.
+    """
+    import translate as _translate
+    import subtitles as _subs
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    target = str((body or {}).get("target_lang") or (body or {}).get("lang") or "").strip().lower()
+    if target not in _translate.SUPPORTED_LANGUAGES:
+        raise HTTPException(status_code=400,
+                            detail="Unsupported target_lang; see translate.SUPPORTED_LANGUAGES")
+
+    api_key = await resolve_gemini(request)
+    if not api_key:
+        raise gemini_missing_error()
+
+    await _ensure_job_files(job_id, request)
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    await _assert_job_owner(request, jobs[job_id])
+
+    output_dir = os.path.join(OUTPUT_DIR, job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+    with open(json_files[0], 'r') as f:
+        data = json.load(f)
+    transcript = data.get('transcript')
+    if not transcript:
+        raise HTTPException(status_code=400, detail="Transcript not found in metadata")
+    clips = data.get('shorts', [])
+    if clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip not found")
+    clip_data = clips[clip_index]
+
+    recipe_segments = (clip_data.get('recipe') or {}).get('segments')
+    if recipe_segments:
+        transcript = recut.virtual_transcript(transcript, recipe_segments)
+        clip_start, clip_end = 0.0, recut.total_duration(recipe_segments)
+    else:
+        clip_start = clip_data.get('start', 0)
+        clip_end = clip_data.get('end', 0)
+
+    blocks = _subs._collect_word_blocks(transcript, clip_start, clip_end)
+    lines = [" ".join(w['word'] for w in block).strip() for block in blocks]
+    if not lines:
+        raise HTTPException(status_code=400, detail="This clip has no caption text")
+
+    def _call_model(prompt):
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        model = os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite")
+        resp = client.models.generate_content(model=model, contents=prompt)
+        return getattr(resp, "text", "") or ""
+
+    translated = await asyncio.to_thread(
+        _translate.translate_caption_lines, lines,
+        _translate.SUPPORTED_LANGUAGES[target], _call_model)
+
+    srt = "".join(
+        _subs.format_srt_block(i, block[0]['start'], block[-1]['end'], text)
+        for i, (block, text) in enumerate(zip(blocks, translated), 1))
+    filename = f"{job_id}_clip_{clip_index + 1:02d}.{target}.srt"
+    return Response(content=srt, media_type="application/x-subrip; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 # --- Clip editor: EDL + re-render ---

@@ -32,6 +32,7 @@ _MCP_ROUTES = tuple((method, re.compile(pattern)) for method, pattern in (
     ("PUT", rf"/api/uploads/{_ID}"),
     ("DELETE", rf"/api/uploads/{_ID}"),
     ("GET", rf"/api/status/{_ID}"),
+    ("GET", r"/api/jobs"),
     ("POST", rf"/api/projects/{_ID}/restore"),
     ("GET", r"/api/me"),
     ("POST", r"/api/subtitle"),
