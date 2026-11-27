@@ -293,14 +293,16 @@ SAFE_MARGIN_V = 43
 # Yellow because it is the one colour that almost never occurs in footage, so
 # the active word reads instantly on any background; the base text stays fully
 # opaque (dimming it tested worse over bright scenes). Size and outline came
-# down from 44 / 4 to 40 / 2 (17-nov-2026): at 44 a line held one or two words
-# and the outline ate the letter shapes. This is a starting point, not a cage:
-# the subtitle modal still overrides every field.
+# down from 44 / 4 to 40 / 2 (17-nov-2026), then to 20 / 2 (25-nov-2026): at
+# 44 a line held one or two words and the outline ate the letter shapes, and
+# at 40 a Cyrillic line was still a headline that clipped on a phone. This is
+# a starting point, not a cage: the subtitle modal still overrides every
+# field.
 AUTO_CAPTION_STYLE = {
     "style": "karaoke",
     "alignment": "bottom",
     "font_name": "Anton",
-    "font_size": 40,
+    "font_size": 20,
     "font_color": "#FFFFFF",
     "highlight_color": "#FFE500",
     "border_color": "#000000",
@@ -312,6 +314,13 @@ AUTO_CAPTION_STYLE = {
     "max_duration": 1.4,
 }
 
+# Cyrillic glyphs can fall back to a wider face in libass (fontconfig picks the
+# next family), and the measured Anton/Montserrat line is then too optimistic.
+# A shorter line is the safe upper bound for those languages; the active-word
+# pop still handles a lone long word by narrowing it.
+_CYRILLIC_LANGUAGES = {"ru", "uk", "be", "bg", "sr", "mk", "kk"}
+_CYRILLIC_MAX_CHARS = 10
+
 
 # Named looks for /api/subtitle `preset` (and the MCP add_subtitles tool), in
 # request-field names. Mirrors the dashboard's CAPTION_PRESETS in
@@ -321,7 +330,7 @@ _PRESET_BASE = {"style": "karaoke", "font_color": "#FFFFFF", "bg_opacity": 0.0,
                 "base_opacity": 1.0, "reveal": False, "shadow": 0,
                 "max_duration": 1.4}
 CAPTION_PRESETS = {
-    "default": {**_PRESET_BASE, "font_name": "Anton", "font_size": 40,
+    "default": {**_PRESET_BASE, "font_name": "Anton", "font_size": 20,
                 "highlight_color": "#FFE500", "border_width": 2, "effect": "pop",
                 "uppercase": True, "max_chars": 18},
     # Words appear as they are spoken, yellow active word, shadow.
@@ -355,8 +364,9 @@ CAPTION_PRESETS = {
 }
 
 # Characters per line at font size 44, per font (Anton is condensed,
-# Montserrat wide). Mirrors lineBudget in SubtitleModal.jsx.
-_LINE_CHARS = {"Anton": 16, "Montserrat ExtraBold": 9, "Impact": 16}
+# Montserrat wide). Measured on the shipped font files: 14 Anton characters
+# fit at 44, 8.5 Montserrat. Mirrors lineBudget in SubtitleModal.jsx.
+_LINE_CHARS = {"Anton": 14, "Montserrat ExtraBold": 9, "Impact": 14}
 
 
 def line_budget(font_name, font_size):
@@ -523,6 +533,9 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     max_chars=1 puts one word on screen at a time.
     """
     # Match the SRT burn path: PlayResY 288 keeps font sizes consistent.
+    lang = str((transcript or {}).get("language") or "").split("-")[0].lower()
+    if lang in _CYRILLIC_LANGUAGES and max_chars > _CYRILLIC_MAX_CHARS:
+        max_chars = _CYRILLIC_MAX_CHARS
     final_fontsize = int(_clamp_number(fontsize, 10, 200, 16) * 0.85)
     if final_fontsize < 10:
         final_fontsize = 10

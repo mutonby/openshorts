@@ -49,26 +49,33 @@ const ANIMATION_OPTIONS = [
 const ANIMATION_TO_EFFECT = { pop: 'pop', 'word-highlight': 'glow', karaoke: 'highlight', none: 'none' };
 const EFFECT_TO_ANIMATION = { pop: 'pop', glow: 'word-highlight', highlight: 'karaoke', box: 'karaoke', none: 'none' };
 
-// Font size in the units /api/subtitle takes. S is what every clip ships
-// with (subtitles.AUTO_CAPTION_STYLE font_size 40), so opening the modal and
+// Font size in the units /api/subtitle takes. M is what every clip ships
+// with (subtitles.AUTO_CAPTION_STYLE font_size 20), so opening the modal and
 // applying never resizes the captions.
 const SIZE_OPTIONS = [
-    { value: 40, label: 'S' },
-    { value: 44, label: 'M' },
-    { value: 56, label: 'L' },
-    { value: 70, label: 'XL' },
+    { value: 16, label: 'S' },
+    { value: 20, label: 'M' },
+    { value: 26, label: 'L' },
+    { value: 34, label: 'XL' },
 ];
 
-// Characters per line at size 44 (M), per font: Anton is condensed, Montserrat
-// wide. Bigger text gets proportionally fewer. The server also measures the
-// real width (subtitles.line_fitter), so a block is always one line.
-const LINE_CHARS = { Anton: 16, 'Montserrat ExtraBold': 9, Impact: 16 };
+// Characters per line at size 44, per font: Anton is condensed, Montserrat
+// wide. Bigger text gets proportionally fewer. Measured against the shipped
+// font files (subtitles._LINE_CHARS holds the same numbers): 14 Anton chars
+// fit at 44, 8.5 Montserrat chars do. The server also measures the real width
+// (subtitles.line_fitter), so a block is always one line.
+const LINE_CHARS = { Anton: 14, 'Montserrat ExtraBold': 9, Impact: 14 };
 const lineBudget = (fontName, fontSize, oneWord) =>
     oneWord ? 1 : Math.max(6, Math.round((LINE_CHARS[fontName] || 14) * 44 / fontSize));
 
-// libass sizes text against PlayResY 288 (subtitles.generate_ass): one unit
-// there is ~3.85 CSS px in the 1080x1920 preview, measured on burned frames.
-const PREVIEW_PX_PER_UNIT = 3.85;
+// libass sizes text against PlayResY 288 (subtitles.generate_ass) and the
+// server burns at 0.85 of the requested size. The Remotion preview composes
+// at 1080x1920, so one PlayRes unit is 1920/288 = 6.67 px there. The old
+// 3.85 factor was measured in CSS pixels of a scaled-down player and made the
+// preview show text at ~58% of its burned size: a size that clipped looked
+// fine in the modal.
+const PREVIEW_PX_PER_UNIT = 1920 / 288;
+const PREVIEW_FONT_SCALE = 0.85 * PREVIEW_PX_PER_UNIT;
 
 const POSITION_OPTIONS = [
     { value: 'top', label: 'top' },
@@ -80,7 +87,7 @@ const POSITION_OPTIONS = [
 // dimmed base text + strong active word, optional glow/pop/box effect.
 const CAPTION_PRESETS = [
     // What every clip ships with (subtitles.AUTO_CAPTION_STYLE).
-    { id: 'default', label: 'Default',  style: 'karaoke', effect: 'pop',       highlightColor: '#FFE500', baseOpacity: 1.0, uppercase: true,  fontName: 'Anton', borderWidth: 2, fontSize: 40 },
+    { id: 'default', label: 'Default',  style: 'karaoke', effect: 'pop',       highlightColor: '#FFE500', baseOpacity: 1.0, uppercase: true,  fontName: 'Anton', borderWidth: 2, fontSize: 20 },
     // Trending short-form looks (2026): word-by-word build-up, a box behind
     // the active word, one big word at a time, and the clean shadow-only look.
     { id: 'hormozi', label: 'Hormozi',  style: 'karaoke', effect: 'pop',       highlightColor: '#FFE500', baseOpacity: 1.0, uppercase: true,  fontName: 'Montserrat ExtraBold', borderWidth: 4, shadow: 2, reveal: true, fontSize: 44 },
@@ -119,7 +126,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     // Opens on the look the clip already has (the Default preset), so
     // "apply" without touching anything changes nothing.
     const [position, setPosition] = useState('bottom');
-    const [fontSize, setFontSize] = useState(40);
+    const [fontSize, setFontSize] = useState(20);
     const [fontName, setFontName] = useState('Anton');
     const [fontColor, setFontColor] = useState('#FFFFFF');
     const [highlightColor, setHighlightColor] = useState('#FFE500');
@@ -163,7 +170,14 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
         setAnimationState(p.style === 'karaoke' ? (EFFECT_TO_ANIMATION[p.effect] || 'none') : 'none');
     };
 
-    const maxChars = lineBudget(fontName, fontSize, oneWord);
+    // The burn clamps Cyrillic to 10 characters per block: libass falls back
+    // to a wider face for those glyphs, so the measured Anton line is too
+    // optimistic (subtitles._CYRILLIC_MAX_CHARS). Mirror the clamp here or the
+    // preview groups words the renderer will never put on one line.
+    const cyrillic = captions.some((c) => /[\u0400-\u04FF]/.test(c.text));
+    const maxChars = cyrillic
+        ? Math.min(lineBudget(fontName, fontSize, oneWord), 10)
+        : lineBudget(fontName, fontSize, oneWord);
     // Same block duration as the auto captions (AUTO_CAPTION_STYLE).
     const maxDuration = 1.4;
 
@@ -229,11 +243,11 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
         maxDurationMs: maxDuration * 1000,
         style: {
             fontFamily: fontName,
-            fontSize: Math.round(fontSize * 0.85 * PREVIEW_PX_PER_UNIT),
+            fontSize: Math.round(fontSize * PREVIEW_FONT_SCALE),
             fontColor,
             highlightColor,
             borderColor,
-            borderWidth: borderWidth * 1.5,
+            borderWidth: borderWidth * PREVIEW_PX_PER_UNIT,
             bgColor,
             bgOpacity,
             animation,
