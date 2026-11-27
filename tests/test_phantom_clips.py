@@ -37,6 +37,18 @@ def _write(job_dir, name, size=1024):
 class TestPhantomClips:
     """_clips_actually_rendered is the gate between 'promised' and 'delivered'."""
 
+    def test_saved_edit_wins_when_another_clip_is_repaired(self, tmp_path, monkeypatch):
+        job = "repair-existing-edit"
+        original = "MKG_clip_1.mp4"
+        edited = "edited_deadbeef_MKG_clip_1.mp4"
+        _write(str(tmp_path), original)
+        _write(str(tmp_path), edited)
+        monkeypatch.setitem(app.jobs, job, {"ready_files": {0: original}})
+        clip = {**_clip("saved"), "video_url": f"/videos/{job}/{edited}"}
+        kept, missing = app._clips_actually_rendered(job, str(tmp_path), "MKG", [clip])
+        assert missing == 0
+        assert kept[0]["video_url"].endswith("/" + edited)
+
     def test_drops_clips_whose_file_was_never_written(self, tmp_path):
         job_dir = str(tmp_path)
         _write(job_dir, "MKG_clip_1.mp4")  # only clip 1 rendered

@@ -1,6 +1,7 @@
 """The download cache: a YouTube video downloaded whole is reused by the next
 jobs that ask for it instead of spending a YouTube account request again."""
 import os
+from pathlib import Path
 import threading
 import time
 
@@ -84,6 +85,23 @@ def test_a_job_replacing_its_source_leaves_the_cache_whole(tmp_path):
     other.mkdir()
     got, _ = source_cache.fetch(URL, str(other))
     assert os.path.getsize(got) == 1000
+
+
+def test_requested_audio_variants_isolate_media_and_transcripts(tmp_path):
+    _, default = _download(tmp_path)
+    _, portuguese = _download(tmp_path, name="pt", data=b"portuguese" * 100)
+    assert source_cache.store(URL, default, "Some Title")
+    assert source_cache.store(URL, portuguese, "Some Title Audio", audio_language="pt-br")
+    assert source_cache.store_transcript(URL, 60, TRANSCRIPT, default)
+    assert source_cache.fetch_transcript(URL, 60, audio_language="PT-BR") is None
+    dubbed_words = {**TRANSCRIPT, "language": "pt"}
+    assert source_cache.store_transcript(URL, 60, dubbed_words, portuguese, audio_language="pt-br")
+    assert source_cache.fetch_transcript(URL, 60, audio_language="pt-br") == dubbed_words
+    assert source_cache.fetch_transcript(URL, 60) == TRANSCRIPT
+    target = tmp_path / "render"
+    target.mkdir()
+    assert Path(source_cache.fetch(URL, str(target), audio_language="pt-br")[0]).read_bytes() == b"portuguese" * 100
+    assert Path(source_cache.fetch(URL, str(target))[0]).read_bytes() == b"x" * 1000
 
 
 def test_a_deleted_job_dir_keeps_the_cached_file(tmp_path):

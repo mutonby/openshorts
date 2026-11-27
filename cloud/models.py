@@ -266,6 +266,16 @@ class Project(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class ProjectDeletion(Base):
+    """An owner's deletion request, retained so an interrupted purge can resume."""
+    __tablename__ = "project_deletions"
+    job_id = Column(Text, primary_key=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
+                     nullable=False, index=True)
+    completed = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class StripeEvent(Base):
     __tablename__ = "stripe_events"
     id = Column(Text, primary_key=True)  # Stripe event.id — dedupe key
@@ -405,6 +415,9 @@ class AutopilotSettings(Base):
     autopublish = Column(Boolean, nullable=False, default=False)
     publish_platforms = Column(JSONB, nullable=True)      # ["tiktok", "instagram", "youtube"]
     clips_to_publish = Column(Integer, nullable=False, default=3)
+    min_publish_score = Column(Integer, nullable=True)    # NULL publishes by rank alone
+    source_credit_url = Column(Text, nullable=True)
+    pinterest_board_id = Column(String(32), nullable=True)
     max_minutes = Column(Integer, nullable=False, default=30)
     # Autopublish slot: one clip a day at this local hour, in this IANA zone.
     publish_hour = Column(Integer, nullable=False, default=17)

@@ -131,3 +131,16 @@ def test_an_unmeasured_font_keeps_the_old_wrapping(tmp_path):
     from subtitles import line_fitter
     assert line_fitter("Some Font Nobody Ships", 27) is None
     assert "WrapStyle: 0" in _default_ass(tmp_path, "one two three four", font_name="Verdana")
+
+
+def test_word_limit_groups_srt_and_saved_edits_without_changing_word_times(tmp_path):
+    from subtitles import _collect_word_blocks, generate_srt
+    words = [{"word": f" word{index}", "start": index / 10, "end": index / 10 + 0.08}
+             for index in range(7)]
+    transcript = {"segments": [{"words": words}]}
+    groups = _collect_word_blocks(transcript, 0, 1, max_chars=100, max_duration=5, max_words=3)
+    assert [len(group) for group in groups] == [3, 3, 1]
+    assert groups[1][0]["start"] == 0.3
+    target = tmp_path / "captions.srt"
+    assert generate_srt(transcript, 0, 1, str(target), 100, 5, max_words=3)
+    assert "word0 word1 word2\n" in target.read_text()

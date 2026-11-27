@@ -6,6 +6,8 @@ torchvision==0.26.0
 tqdm==4.67.3
 yt-dlp
 faster-whisper==1.2.1
+# hype_engine: peak finding and rolling baselines of the hype curve
+scipy==1.17.1
 py3langid==0.3.0
 google-genai==1.75.0
 python-dotenv==1.2.2

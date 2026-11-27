@@ -167,23 +167,9 @@ def detect_faces_full_res(frame):
     the same frames detect fine. Six samples per scene, so the cost is paid on
     screencast candidates only.
     """
-    import cv2
     import main as m
 
-    h, w, _ = frame.shape
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    with m.DETECT_LOCK:
-        results = m.face_detection.process(rgb)
-    if not results.detections:
-        return []
-
-    out = []
-    for detection in results.detections:
-        b = detection.location_data.relative_bounding_box
-        box = [int(b.xmin * w), int(b.ymin * h),
-               int(b.width * w), int(b.height * h)]
-        out.append({'box': box, 'score': box[2] * box[3]})
-    return out
+    return m.detect_face_candidates(frame, full_resolution=True)
 
 
 def _face_centre(candidates, frame_w):
@@ -208,15 +194,22 @@ def presenter_cam(scene_start, scene_end, ranges):
 
     The sixth element of a range (``presenter_cam``). Ranges without it (the
     fallback, a caller that pinned its own) answer False: the per-scene inset
-    detector only runs where the model said a presenter is laid over the
-    screen, because a small still face on a screen is just as often a photo on
-    a slide, cover art or a game character (6-oct-2026 corpus run).
+    viewer should see the embedded presenter at its existing size.
     """
     for r in ranges:
         if len(r) > 5 and r[5] and \
                 min(scene_end, r[1]) - max(scene_start, r[0]) > MIN_OVERLAP_SECONDS:
             return True
     return False
+
+
+def gameplay_scene(scene_start, scene_end, ranges):
+    """Whether the shot check identified gameplay across most of the shot."""
+    return any(
+        kind == "gameplay" and min(scene_end, end) - max(scene_start, start)
+        >= (scene_end - scene_start) / 2
+        for start, end, kind, *_ in ranges
+    )
 
 
 def overlapping_range(scene_start, scene_end, ranges):
@@ -257,7 +250,7 @@ def overlapping_range(scene_start, scene_end, ranges):
 # Kinds the shot prompt may answer, and the width each one routes as. A screen
 # fills the frame, so it lands past STACK_MAX_WIDTH_FRACTION (WIDE or INSET); a
 # chart beside a person sits between the two gates (SCREENCAST stacking).
-KIND_WIDTH = {"screen": 1.0, "beside": 0.7}
+KIND_WIDTH = {"screen": 1.0, "beside": 0.7, "gameplay": 1.0}
 
 # Stills per clip. One per shot; past this the longest shots are asked and the
 # rest borrow the answer of the nearest asked shot.
@@ -293,7 +286,7 @@ def _parse_shots(raw, n):
             cam = item.get("presenter_cam") is True
         except (AttributeError, TypeError, ValueError):
             continue
-        if not 0 <= idx < n or kind not in ("screen", "beside", "camera"):
+        if not 0 <= idx < n or kind not in (*KIND_WIDTH, "camera"):
             continue
         left, right = max(0.0, min(left, 1.0)), max(0.0, min(right, 1.0))
         out[idx] = (kind, (left, right) if right - left >= 0.05 else None,
@@ -669,7 +662,10 @@ def detect_screencast_scenes(video_path, scenes, strategies, ranges, samples=6):
     try:
         for i, (start, end) in enumerate(scenes):
             s_f, e_f = start.get_frames(), end.get_frames()
-            width, focus = overlapping_range(s_f / fps, e_f / fps, ranges)
+            start_s, end_s = s_f / fps, e_f / fps
+            if gameplay_scene(start_s, end_s, ranges) or presenter_cam(start_s, end_s, ranges):
+                continue  # Full-frame gameplay is handled before any face routing.
+            width, focus = overlapping_range(start_s, end_s, ranges)
             if not width:
                 continue
 
@@ -734,11 +730,11 @@ def detect_screencast_scenes(video_path, scenes, strategies, ranges, samples=6):
                 continue
 
             content = content_side(
-                frame_w, float(np.median([e[0] for e in extents])),
-                float(np.median([e[1] for e in extents])))
+                frame_w, min(e[0] for e in extents), max(e[1] for e in extents))
             if content is None:
-                # The person takes the frame: nothing beside them to stack.
-                # The face classifier's verdict stands.
+                # A median box could show the presenter in both panels when
+                # they move. Keep the picture whole when no safe side remains.
+                found[i] = ("GAMEPLAY", None)
                 continue
             found[i] = ('SCREENCAST',
                         ((float(np.median([c[0] for c in centres])),

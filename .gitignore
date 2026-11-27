@@ -52,3 +52,6 @@ CLAUDE.local.md
 
 # Rust build output
 osrender/target/
+
+# Local Python packaging output
+cli/build/

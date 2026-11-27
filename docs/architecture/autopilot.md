@@ -27,8 +27,11 @@ day. Paid plans only (it spends minutes unattended).
 - **Completion**: `run_job_wrapper` calls `on_job_finished` after the R2 archive.
   A guarded UPDATE (`status='processing'` → final) makes it once-only; it sends
   the Autopilot email (replacing the generic clips-ready one) and, with
-  autopublish on, uploads the top `clips_to_publish` clips by `predicted_score`
-  to Upload-Post in a background task (any of `social_platforms.PLATFORMS` the
+  autopublish on, uploads up to `clips_to_publish` clips by `predicted_score`.
+  An optional `min_publish_score` from 0 to 100 holds clips below the minimum
+  and unscored clips for manual review. The default is any score. If no clip
+  qualifies, the run stays completed and its review count remains available.
+  Scheduling runs in an Upload-Post background task (any of `social_platforms.PLATFORMS` the
   user picked; per-network fields from `social_platforms.upload_fields`), scheduled one a day at `publish_hour` in
   the user's IANA `timezone`. Runs stuck in processing for 6 h are marked
   `timeout`.

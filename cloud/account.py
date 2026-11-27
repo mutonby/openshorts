@@ -41,7 +41,7 @@ from . import database, email_policy, storage
 from .models import (
     User, Subscription, CreditTopup, UsageLedger, MagicLinkToken,
     SignupAttribution, ApiKey, UploadPostProfile, UserVideo, ClipExpiryWarning,
-    Project, AccountDeletion, OAuthCode, OAuthRefreshToken, AutopilotRun, AutopilotSettings,
+    Project, ProjectDeletion, AccountDeletion, OAuthCode, OAuthRefreshToken, AutopilotRun, AutopilotSettings,
     LifecycleEmail, CancellationFeedback, OnboardingSurvey, LoginCode, EvidenceEvent,
 )
 
@@ -55,7 +55,7 @@ from .models import (
 # the database. Trusting the cascade would mean the difference shows up as a
 # foreign-key violation the first time a real user tries to leave.
 USER_OWNED_TABLES = (
-    ClipExpiryWarning, UserVideo, Project, UsageLedger, CreditTopup,
+    ClipExpiryWarning, UserVideo, Project, ProjectDeletion, UsageLedger, CreditTopup,
     Subscription, OAuthRefreshToken, ApiKey, SignupAttribution, UploadPostProfile, OAuthCode,
     AutopilotRun, AutopilotSettings, LifecycleEmail, CancellationFeedback,
     OnboardingSurvey, LoginCode, EvidenceEvent,

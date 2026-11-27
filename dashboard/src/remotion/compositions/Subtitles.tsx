@@ -31,7 +31,8 @@ export const Subtitles: React.FC<SubtitlesProps> = ({ config }) => {
   const blocks = groupCaptionsIntoBlocks(
     config.captions,
     config.maxChars ?? 20,
-    config.maxDurationMs ?? 2000
+    config.maxDurationMs ?? 2000,
+    config.maxWords
   );
 
   return (

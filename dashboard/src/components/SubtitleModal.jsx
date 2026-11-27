@@ -4,6 +4,8 @@ import { apiFetch } from '../lib/api';
 import RemotionPreview from './RemotionPreview';
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
+import { useAuth } from '../contexts/AuthContext';
+import { captionStyleOptions, captionStylePayload } from '../lib/captionStyle';
 
 const FONT_OPTIONS = [
     { value: 'Anton', label: 'Anton' },
@@ -115,38 +117,51 @@ const swatchClass = (selected) =>
         ? 'ring-2 ring-[color:var(--color-accent)] ring-offset-2 ring-offset-[color:var(--color-paper-2)]'
         : 'ring-1 ring-[color:var(--color-rule-2)] hover:ring-[color:var(--color-accent)]'}`;
 
-export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll, onRemove, isProcessing, videoUrl, jobId, clipIndex, existingHook, bulkCount = 0, bulkProgress }) {
-    // Opens on the look the clip already has (the Default preset), so
-    // "apply" without touching anything changes nothing.
-    const [position, setPosition] = useState('bottom');
-    const [fontSize, setFontSize] = useState(40);
-    const [fontName, setFontName] = useState('Anton');
-    const [fontColor, setFontColor] = useState('#FFFFFF');
-    const [highlightColor, setHighlightColor] = useState('#FFE500');
-    const [borderColor, setBorderColor] = useState('#000000');
-    const [borderWidth, setBorderWidth] = useState(2);
-    const [bgColor, setBgColor] = useState('#000000');
-    const [bgOpacity, setBgOpacity] = useState(0.0);
-    const [animation, setAnimationState] = useState('pop');
+export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll, onRemove, isProcessing, videoUrl, jobId, clipIndex, existingHook, existingStyle, bulkCount = 0, bulkProgress }) {
+    const { user } = useAuth();
+    const storageKey = `os_caption_styles:${user?.id || 'local'}`;
+    const [savedStyles, setSavedStyles] = useState(() => {
+        try {
+            const saved = JSON.parse(localStorage.getItem(storageKey) || '[]');
+            return Array.isArray(saved) ? saved.filter((item) => typeof item?.name === 'string' && item.style) : [];
+        } catch { return []; }
+    });
+    const [styleName, setStyleName] = useState('');
+    const [styleError, setStyleError] = useState('');
+    const current = { ...CAPTION_PRESETS[0], ...captionStyleOptions(existingStyle) };
+    const [position, setPosition] = useState(current.position || 'bottom');
+    const [fontSize, setFontSize] = useState(current.fontSize);
+    const [fontName, setFontName] = useState(current.fontName);
+    const [fontColor, setFontColor] = useState(current.fontColor || '#FFFFFF');
+    const [highlightColor, setHighlightColor] = useState(current.highlightColor);
+    const [borderColor, setBorderColor] = useState(current.borderColor || '#000000');
+    const [borderWidth, setBorderWidth] = useState(current.borderWidth);
+    const [bgColor, setBgColor] = useState(current.bgColor || '#000000');
+    const [bgOpacity, setBgOpacity] = useState(current.bgOpacity ?? 0);
+    const [animation, setAnimationState] = useState(current.style === 'karaoke' ? EFFECT_TO_ANIMATION[current.effect] || 'none' : 'none');
     const [showTextEditor, setShowTextEditor] = useState(false);
 
     // Karaoke (server-side ASS burn) state
-    const [style, setStyle] = useState('karaoke'); // classic | karaoke
-    const [effect, setEffect] = useState('pop'); // none | glow | pop | box | highlight
-    const [baseOpacity, setBaseOpacity] = useState(1.0);
-    const [uppercase, setUppercase] = useState(true);
-    const [reveal, setReveal] = useState(false);
-    const [shadow, setShadow] = useState(0);
-    const [oneWord, setOneWord] = useState(false);
-    const [activePreset, setActivePreset] = useState('default');
+    const [style, setStyle] = useState(current.style);
+    const [effect, setEffect] = useState(current.effect);
+    const [baseOpacity, setBaseOpacity] = useState(current.baseOpacity);
+    const [uppercase, setUppercase] = useState(current.uppercase);
+    const [reveal, setReveal] = useState(!!current.reveal);
+    const [shadow, setShadow] = useState(current.shadow || 0);
+    const [oneWord, setOneWord] = useState(current.maxChars === 1);
+    const [activePreset, setActivePreset] = useState(existingStyle ? '' : 'default');
+    const [maxDuration, setMaxDuration] = useState(current.maxDuration ?? 1.4);
+    const [lineLimit, setLineLimit] = useState(current.maxChars ?? null);
+    const [maxWords, setMaxWords] = useState(current.maxWords ?? null);
 
     const setAnimation = (value) => {
         setAnimationState(value);
         if (style === 'karaoke') setEffect(ANIMATION_TO_EFFECT[value] || 'none');
     };
 
-    const applyPreset = (p) => {
-        setActivePreset(p.id);
+    const applyPreset = (options, id) => {
+        const p = { ...CAPTION_PRESETS[0], ...options };
+        setActivePreset(id);
         setStyle(p.style);
         setEffect(p.effect);
         setHighlightColor(p.highlightColor);
@@ -154,18 +169,50 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
         setUppercase(p.uppercase);
         setFontName(p.fontName);
         setBorderWidth(p.borderWidth);
-        setFontColor('#FFFFFF');
-        setBgOpacity(0);
+        setFontColor(p.fontColor || '#FFFFFF');
+        setPosition(p.position || 'bottom');
+        setBorderColor(p.borderColor || '#000000');
+        setBgColor(p.bgColor || '#000000');
+        setBgOpacity(p.bgOpacity ?? 0);
         setReveal(!!p.reveal);
         setShadow(p.shadow || 0);
-        setOneWord(!!p.oneWord);
-        if (p.fontSize) setFontSize(p.fontSize);
+        setOneWord(!!p.oneWord || p.maxChars === 1);
+        setFontSize(p.fontSize);
+        setMaxDuration(p.maxDuration ?? 1.4);
+        setLineLimit(p.maxChars ?? null);
+        setMaxWords(p.maxWords ?? null);
         setAnimationState(p.style === 'karaoke' ? (EFFECT_TO_ANIMATION[p.effect] || 'none') : 'none');
     };
 
-    const maxChars = lineBudget(fontName, fontSize, oneWord);
-    // Same block duration as the auto captions (AUTO_CAPTION_STYLE).
-    const maxDuration = 1.4;
+    const maxChars = lineLimit ?? lineBudget(fontName, fontSize, oneWord);
+    const look = {
+        position, fontSize, fontName, fontColor, borderColor, borderWidth, bgColor, bgOpacity,
+        style, effect, baseOpacity, uppercase, highlightColor, reveal: !oneWord && reveal,
+        shadow, maxChars, maxDuration, maxWords,
+    };
+    const writeStyles = (next) => {
+        try {
+            localStorage.setItem(storageKey, JSON.stringify(next));
+            setSavedStyles(next);
+            setStyleError('');
+            return true;
+        } catch {
+            setStyleError('Could not save styles in this browser.');
+            return false;
+        }
+    };
+    const saveStyle = () => {
+        const name = styleName.trim();
+        if (!name) return;
+        if (savedStyles.some((item) => item.name.toLowerCase() === name.toLowerCase())) {
+            setStyleError('A style with that name already exists.');
+            return;
+        }
+        if (writeStyles([...savedStyles, { name, style: captionStylePayload(look) }])) {
+            setStyleName('');
+            setActivePreset(`saved:${name}`);
+        }
+    };
 
     // Remotion preview state
     const [captions, setCaptions] = useState([]);
@@ -219,6 +266,15 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
         setCaptions(newCaptions);
     };
 
+    const editWord = (index, fields) => {
+        const updated = captions.map((caption, i) => i === index ? { ...caption, ...fields } : caption);
+        setCaptions(updated);
+        setEditableText(updated.map((caption) => caption.text).join(' '));
+    };
+    const invalidWords = useRemotionPreview && (!captions.length || captions.some((caption) =>
+        !caption.text.trim() || caption.startMs < 0 || caption.endMs <= caption.startMs
+        || caption.endMs > Math.ceil(durationSec * 1000)));
+
     if (!isOpen) return null;
 
     // Build subtitle config for Remotion
@@ -226,6 +282,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
         captions,
         position,
         maxChars,
+        maxWords: maxWords ?? undefined,
         maxDurationMs: maxDuration * 1000,
         style: {
             fontFamily: fontName,
@@ -319,7 +376,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                 {CAPTION_PRESETS.map((p) => (
                                     <button
                                         key={p.id}
-                                        onClick={() => applyPreset(p)}
+                                        onClick={() => applyPreset(p, p.id)}
                                         className={`px-2 py-1.5 rounded-input border text-xs transition-colors flex items-center gap-1.5 justify-center
                                             ${activePreset === p.id
                                                 ? 'border-[color:var(--color-accent)] text-ink'
@@ -329,6 +386,29 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                         <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: p.highlightColor }} />
                                         {p.label}
                                     </button>
+                                ))}
+                            </div>
+                            <div className="mt-3 space-y-2 border-t border-rule pt-3">
+                                <label className="eyebrow block" htmlFor={`caption-style-${clipIndex}`}>Save a caption style</label>
+                                <div className="flex gap-2">
+                                    <input id={`caption-style-${clipIndex}`} className="input-field min-w-0 flex-1 text-sm"
+                                        value={styleName} onChange={(e) => { setStyleName(e.target.value); setStyleError(''); }}
+                                        placeholder="Style name" maxLength={60} />
+                                    <button type="button" className="btn-ghost" onClick={saveStyle} disabled={!styleName.trim()}>Save</button>
+                                </div>
+                                {styleError && <p className="text-xs text-danger" role="alert">{styleError}</p>}
+                                {savedStyles.map(({ name, style: savedStyle }) => (
+                                    <div key={name} className="flex items-center gap-2">
+                                        <button type="button" className={`btn-ghost min-w-0 flex-1 justify-start ${activePreset === `saved:${name}` ? 'text-brass' : ''}`}
+                                            aria-pressed={activePreset === `saved:${name}`}
+                                            onClick={() => applyPreset(captionStyleOptions(savedStyle), `saved:${name}`)}>
+                                            <span className="truncate">{name}</span>
+                                        </button>
+                                        <button type="button" className="text-xs text-muted hover:text-danger" aria-label={`Delete ${name}`}
+                                            onClick={() => {
+                                                if (writeStyles(savedStyles.filter((item) => item.name !== name)) && activePreset === `saved:${name}`) setActivePreset('');
+                                            }}>Delete</button>
+                                    </div>
                                 ))}
                             </div>
                             {style === 'karaoke' && (
@@ -375,7 +455,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                             <SegmentedControl
                                 options={SIZE_OPTIONS}
                                 value={fontSize}
-                                onChange={setFontSize}
+                                onChange={(size) => { setFontSize(size); setLineLimit(null); }}
                                 size="sm"
                             />
                         </div>
@@ -385,7 +465,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                 <div className="flex items-center justify-between">
                                     <span className="readout">One word at a time</span>
                                     <label className="relative inline-flex items-center cursor-pointer">
-                                        <input type="checkbox" checked={oneWord} onChange={(e) => setOneWord(e.target.checked)} className="sr-only peer" />
+                                        <input type="checkbox" checked={oneWord} onChange={(e) => { setOneWord(e.target.checked); setLineLimit(null); }} className="sr-only peer" />
                                         <div className="w-8 h-4 rounded-full bg-paper3 peer-checked:bg-brass transition-colors after:content-[''] after:absolute after:top-0 after:left-0 after:h-4 after:w-4 after:rounded-full after:bg-ink after:transition-all peer-checked:after:translate-x-full"></div>
                                     </label>
                                 </div>
@@ -425,6 +505,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                     <span className={`text-muted transition-transform ${showTextEditor ? 'rotate-180' : ''}`}>▾</span>
                                 </button>
                                 {showTextEditor && (
+                                    <div className="space-y-2">
                                     <textarea
                                         value={editableText}
                                         onChange={(e) => handleTextEdit(e.target.value)}
@@ -433,16 +514,55 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                         className="input-field resize-none leading-relaxed animate-fade"
                                         placeholder="Edit subtitle text..."
                                     />
+                                    <div className="max-h-64 overflow-y-auto space-y-2">
+                                        {captions.map((caption, index) => (
+                                            <div key={index} className="rounded-input border border-rule p-2 space-y-1">
+                                                <label className="block text-xs text-muted">Word {index + 1}
+                                                    <input className="input-field mt-1" value={caption.text} dir="auto"
+                                                        onChange={(e) => editWord(index, { text: e.target.value })} />
+                                                </label>
+                                                <div className="grid grid-cols-2 gap-2">
+                                                    <label className="text-xs text-muted">Start (s)
+                                                        <input type="number" step="0.001" min="0" className="input-field"
+                                                            value={caption.startMs / 1000}
+                                                            onChange={(e) => editWord(index, { startMs: Math.round(Number(e.target.value) * 1000) })} />
+                                                    </label>
+                                                    <label className="text-xs text-muted">End (s)
+                                                        <input type="number" step="0.001" min="0" max={durationSec} className="input-field"
+                                                            value={caption.endMs / 1000}
+                                                            onChange={(e) => editWord(index, { endMs: Math.round(Number(e.target.value) * 1000) })} />
+                                                    </label>
+                                                </div>
+                                                <button type="button" className="text-xs text-muted hover:text-danger"
+                                                    disabled={captions.length <= 1} onClick={() => {
+                                                        const updated = captions.filter((_, i) => i !== index);
+                                                        setCaptions(updated);
+                                                        setEditableText(updated.map((word) => word.text).join(' '));
+                                                    }}>Remove word</button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    </div>
                                 )}
+                                {invalidWords && <p role="alert" className="text-xs text-danger mt-2">Give each word text and a valid start and end within the clip.</p>}
                             </div>
                         )}
+
+                        <label className="block">
+                            <span className="eyebrow block mb-2">Maximum words per caption</span>
+                            <select className="input-field" value={maxWords ?? ''}
+                                onChange={(e) => setMaxWords(e.target.value ? Number(e.target.value) : null)}>
+                                <option value="">Automatic</option>
+                                {Array.from({ length: 12 }, (_, i) => i + 1).map((count) => <option key={count} value={count}>{count}</option>)}
+                            </select>
+                        </label>
 
                         {/* Font Family */}
                         <div>
                             <p className="eyebrow mb-2">Font</p>
                             <select
                                 value={fontName}
-                                onChange={(e) => setFontName(e.target.value)}
+                                onChange={(e) => { setFontName(e.target.value); setLineLimit(null); }}
                                 className="input-field"
                             >
                                 {FONT_OPTIONS.map((f) => (
@@ -554,14 +674,11 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                             // (issue #69): send the edited words whenever the text
                             // differs from what the transcript produced.
                             const textEdited = originalCaptions.length > 0
-                                && editableText.trim() !== originalCaptions.map((c) => c.text).join(' ').trim();
+                                && JSON.stringify(captions) !== JSON.stringify(originalCaptions);
                             const styleOptions = {
-                                position, fontSize, fontName, fontColor, borderColor, borderWidth, bgColor, bgOpacity,
-                                // Karaoke burn (server-side ASS render)
-                                style, effect, baseOpacity, uppercase, highlightColor,
-                                reveal: !oneWord && reveal, shadow, maxChars, maxDuration,
+                                ...look,
                                 // Remotion data
-                                remotion: useRemotionPreview ? subtitleConfig : null,
+                                remotion: useRemotionPreview && !activePreset.startsWith('saved:') ? subtitleConfig : null,
                                 captions: textEdited ? captions : null,
                             };
                             const bulkRunning = bulkProgress?.running;
@@ -573,7 +690,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                         </button>
                                         <button
                                             onClick={() => onGenerate(styleOptions)}
-                                            disabled={isProcessing}
+                                            disabled={isProcessing || invalidWords}
                                             className="btn-primary flex-1"
                                         >
                                             {(isProcessing && !bulkRunning) && <Loader2 size={16} className="animate-spin text-brassink" />}

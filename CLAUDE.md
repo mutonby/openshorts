@@ -30,6 +30,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 - `main.py`: core processing (transcription, scene detection, clip extraction, reframing). Runs as a child process per job.
 - `app.py`: FastAPI server, job queue, REST endpoints, deploy handover/drain.
 - `clip_selection.py`, `layout_picker.py`, `reframe_v2.py`, `split_layout.py`, `screencast_layout.py`, `camera_inset.py`: moment picking and layouts.
+- `composition.py` (facecam size, game crop, caption seam for stream/game clips), `facecam.py` (webcam overlay detection), `composition_check.py` (pre-delivery layout check).
 - `editor.py` (Gemini FFmpeg effects), `pro_mode.py` (talking-head re-edit), `hooks.py` (hook overlays), `subtitles.py` (SRT/ASS, burning), `translate.py` (ElevenLabs dubbing), `thumbnail.py`.
 - `mcp_server.py`, `mcp_stdio.py`: MCP over HTTP and stdio.
 - `cloud/`: auth, API keys, metering, billing, lifecycle emails, account erasure, autopilot, proxy ledger, alerts, queue watch.
@@ -40,6 +41,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 - SEO pages, free tools, attribution → `docs/architecture/seo-and-tools.md`
 - Layout picker, reframing modes, hook grounding → `docs/architecture/layouts-and-reframing.md`
 - Clip count, silent-footage fallback, local LLM → `docs/architecture/clip-selection.md`
+- Stream highlights from chat and streamer hype, the clip judge, Twitch ranges → `docs/architecture/hype-engine.md`
 - Thumbnail Studio → `docs/architecture/thumbnails.md`
 - Pro mode (talking-head re-edit, per-clip switch) → `docs/architecture/pro-mode.md`
 - API endpoints, API keys, MCP, OAuth, webhooks → `docs/architecture/agent-access.md`
@@ -69,6 +71,7 @@ Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detectio
 - SPLIT captions need ASS with `{\an5}` per word event on the seam; SRT cannot do per-stretch alignment. Preserve `layout_ranges` through recut (`layout_ranges.remap`).
 - Mouth activity is normalised per speaker before comparing (`normalise_activity`).
 - The reframe render runs in one GPU pass (`gpu_render` + `osrender/`) built from the scenes' own filtergraphs: a layout graph that `gpu_render.layers_from_graph` cannot read silently renders through ffmpeg, so keep new layouts to crop/scale/gblur/overlay/vstack/pad and run `tests/test_gpu_render_equivalence.py` on a GPU. After editing `osrender/src/kernels.cu`, regenerate `kernels.ptx` (see `osrender/README.md`).
+- The streamer appears once: a stack needs a confident overlay (`facecam.detect`), the game crop never overlaps the webcam's `avoid` region, and legacy presenter layouts on a stream go through `reframe_v2.stream_scenes`. Facecam size comes from `composition.py`'s profiles (face share bounds, `FACECAM_MAX_UPSCALE`), never a fixed band; no layout enlarges a webcam past the cap to fill the width.
 - The hook + captions (+ `wm_`) burn runs on the card (`gpu_burn` + `osrender burn`) and its pictures must stay byte-identical to the ffmpeg graph it replaces: a change to the hook overlay, the `ass` caption filter, `main.watermark_filter` or the burn kernels runs `tests/test_gpu_burn_equivalence.py` on a GPU. A filter `gpu_burn` cannot read burns with ffmpeg.
 - Pro mode (`pro_mode.py`) renders frame by frame on the CPU: always through `pro_mode.run` (own process, host slot), never inside the API or a job thread, and `PRO_MODE=auto` stays opt-in. The pro file is a `recut_` with its `recipe`; never a new filename prefix.
 - Canonical files are always clean; the free-plan mark exists only on the served `wm_` copy (`main.mark_delivery` / `app._deliver`). While a job has `.marked`, `/videos` refuses its clean deliverables. On this host's free jobs the clean captioned twin may be only a recipe (`clean_twin.py`): code that opens a free clip's clean twin calls `clean_twin.materialize` first.

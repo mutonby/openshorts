@@ -7,6 +7,11 @@ import {
 import { getApiUrl, withParam } from '../config';
 import { apiFetch, apiJson, QuotaError, openQuotaWall } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
+import BrollEditor from './BrollEditor';
+import MusicEditor from './MusicEditor';
+import CueEffectsEditor from './CueEffectsEditor';
+import EndCardEditor from './EndCardEditor';
+import { brollSpans } from '../lib/brollTimeline';
 
 // Full-screen clip editor: shows WHICH source segments a clip was cut from,
 // lets the user trim/extend/split/reorder them (word-snapped), and re-renders
@@ -14,12 +19,14 @@ import { useAuth } from '../contexts/AuthContext';
 
 const MIN_SEGMENT_SECONDS = 0.5;
 const SNAP_WINDOW_SECONDS = 0.35;
+const round3 = (t) => Math.round(t * 1000) / 1000;
 
 // Hiding the source is a working preference, not a per-clip one, so it sticks.
 const HIDE_SOURCE_KEY = 'openshorts_editor_hide_source';
 
 // Words per memoised transcript slice. See TranscriptChunk for why this exists.
 const CHUNK_WORDS = 50;
+const INITIAL_CAPTION_EXPORT = { pending: false, message: '', error: '' };
 
 // Segment edges round-trip through 3 decimals, so coverage arithmetic needs a
 // hair of tolerance before it calls a millisecond sliver "not rendered".
@@ -45,22 +52,35 @@ function totalOf(segments) {
     return segments.reduce((acc, s) => acc + (s.end - s.start), 0);
 }
 
+function editorSnapshot({ segments, broll, colorFilter, music, bottomVideoAssetId, endcard, cueEffects }) {
+    return { segments, broll, colorFilter, music, bottomVideoAssetId, endcard, cueEffects };
+}
+
 function editorReducer(state, action) {
     switch (action.type) {
         case 'init':
-            return { segments: action.segments, selected: 0, past: [], future: [], pendingBase: null };
+            return { segments: action.segments, broll: action.broll || [], colorFilter: action.colorFilter || 'original', music: action.music || null,
+                bottomVideoAssetId: action.bottomVideoAssetId || null, endcard: action.endcard || null,
+                cueEffects: action.cueEffects || [], selected: 0, past: [], future: [], pendingBase: null };
         case 'select':
             return { ...state, selected: action.index };
         // Live drag feedback: replaces segments without touching history; the
         // pre-drag snapshot is kept so the whole drag undoes as ONE step.
         case 'preview':
-            return { ...state, segments: action.segments, pendingBase: state.pendingBase || state.segments };
+            return { ...state, segments: action.segments, pendingBase: state.pendingBase || editorSnapshot(state) };
         case 'commit': {
-            const base = state.pendingBase || state.segments;
+            const base = state.pendingBase || editorSnapshot(state);
+            const next = action.segments || state.segments;
             return {
                 ...state,
-                segments: action.segments,
-                selected: Math.min(action.select ?? state.selected, action.segments.length - 1),
+                segments: next,
+                broll: action.broll ?? state.broll,
+                colorFilter: action.colorFilter ?? state.colorFilter,
+                music: 'music' in action ? action.music : state.music,
+                bottomVideoAssetId: 'bottomVideoAssetId' in action ? action.bottomVideoAssetId : state.bottomVideoAssetId,
+                endcard: 'endcard' in action ? action.endcard : state.endcard,
+                cueEffects: action.cueEffects ?? state.cueEffects,
+                selected: Math.min(action.select ?? state.selected, next.length - 1),
                 past: [...state.past, base],
                 future: [],
                 pendingBase: null,
@@ -71,10 +91,10 @@ function editorReducer(state, action) {
             const prev = state.past[state.past.length - 1];
             return {
                 ...state,
-                segments: prev,
-                selected: Math.min(state.selected, prev.length - 1),
+                ...prev,
+                selected: Math.min(state.selected, prev.segments.length - 1),
                 past: state.past.slice(0, -1),
-                future: [state.segments, ...state.future],
+                future: [editorSnapshot(state), ...state.future],
                 pendingBase: null,
             };
         }
@@ -83,9 +103,9 @@ function editorReducer(state, action) {
             const next = state.future[0];
             return {
                 ...state,
-                segments: next,
-                selected: Math.min(state.selected, next.length - 1),
-                past: [...state.past, state.segments],
+                ...next,
+                selected: Math.min(state.selected, next.segments.length - 1),
+                past: [...state.past, editorSnapshot(state)],
                 future: state.future.slice(1),
                 pendingBase: null,
             };
@@ -99,11 +119,22 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
     const { refreshMe } = useAuth();
     const [edl, setEdl] = useState(null);
     const [loadError, setLoadError] = useState(null);
-    const [state, dispatch] = useReducer(editorReducer, { segments: [], selected: 0, past: [], future: [], pendingBase: null });
-    const { segments, selected } = state;
+    const [state, dispatch] = useReducer(editorReducer, { segments: [], broll: [], colorFilter: 'original', music: null,
+        bottomVideoAssetId: null, endcard: null, cueEffects: [], selected: 0, past: [], future: [], pendingBase: null });
+    const { segments, selected, broll, colorFilter, music, bottomVideoAssetId, endcard, cueEffects } = state;
+    const [brollAssets, setBrollAssets] = useState([]);
+    const [renderedBroll, setRenderedBroll] = useState([]);
+    const [renderedFilter, setRenderedFilter] = useState('original');
+    const [musicAssets, setMusicAssets] = useState([]);
+    const [renderedMusic, setRenderedMusic] = useState(null);
+    const [renderedBottomVideo, setRenderedBottomVideo] = useState(null);
+    const [endcardAssets, setEndcardAssets] = useState([]);
+    const [renderedEndcard, setRenderedEndcard] = useState(null);
+    const [renderedCueEffects, setRenderedCueEffects] = useState([]);
 
     const [snapToWords, setSnapToWords] = useState(true);
     const [reapplyCaptions, setReapplyCaptions] = useState(true);
+    const [renderedCaptions, setRenderedCaptions] = useState(true);
     // Framing override: 'auto' (classifier) | 'full' (whole frame) | 'track'.
     const [framing, setFraming] = useState('auto');
     const [renderedFraming, setRenderedFraming] = useState('auto');
@@ -113,6 +144,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
     const [rendering, setRendering] = useState(false);
     const [renderSeconds, setRenderSeconds] = useState(0);
     const [renderError, setRenderError] = useState(null);
+    const [captionExport, setCaptionExport] = useState(INITIAL_CAPTION_EXPORT);
     const [confirmClose, setConfirmClose] = useState(false);
     const [selectedWord, setSelectedWord] = useState(null);
     const [playhead, setPlayhead] = useState(0);
@@ -128,6 +160,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
     const [markOut, setMarkOut] = useState(null);
 
     const videoRef = useRef(null);
+    const endcardPreviewRef = useRef(false);
     const sourceRef = useRef(null);
     const clipTrackRef = useRef(null);
     const sourceTrackRef = useRef(null);
@@ -186,11 +219,23 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                 const data = await apiJson(`/api/clip/${jobId}/${clipIndex}/edl`);
                 if (cancelled) return;
                 setEdl(data);
-                dispatch({ type: 'init', segments: data.segments.map((s) => ({ ...s })) });
+                dispatch({ type: 'init', segments: data.segments.map((s) => ({ ...s })), broll: data.broll,
+                    colorFilter: data.color_filter, music: data.music, bottomVideoAssetId: data.bottom_video_asset_id,
+                    endcard: data.endcard, cueEffects: data.cue_effects });
+                setBrollAssets(data.broll_assets || []);
+                setMusicAssets(data.music_assets || []);
+                setRenderedMusic(data.music || null);
+                setRenderedBottomVideo(data.bottom_video_asset_id || null);
+                setRenderedEndcard(data.endcard || null);
+                setRenderedCueEffects(data.cue_effects || []);
+                setEndcardAssets(data.endcard_assets || []);
+                setRenderedBroll(data.broll || []);
+                setRenderedFilter(data.color_filter || 'original');
                 setRenderedSegments(data.segments.map((s) => ({ ...s })));
                 setFraming(data.framing || 'auto');
                 setRenderedFraming(data.framing || 'auto');
-                setReapplyCaptions(true);
+                setReapplyCaptions(data.has_captions ?? true);
+                setRenderedCaptions(data.has_captions ?? true);
                 setPreviewUrl(getApiUrl(`/videos/${jobId}/${data.current_file}`));
             } catch (e) {
                 if (!cancelled) setLoadError(e.detail || e.message || 'could not load the clip recipe');
@@ -201,6 +246,8 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
 
     const words = useMemo(() => (edl?.words || []), [edl]);
     const sourceAvailable = !!edl?.source?.available;
+    const retainedRange = edl?.source?.retained_range;
+    const canReframe = sourceAvailable || !!retainedRange;
     const sourceDuration = edl?.source?.duration || 0;
     const canonical = useMemo(() => edl?.canonical_range || { start: 0, end: 0 }, [edl]);
     const limits = edl?.limits || { max_segments: 12, min_segment_seconds: MIN_SEGMENT_SECONDS, max_total_seconds: 180 };
@@ -212,29 +259,40 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
     const sourceOpen = sourceAvailable && showSource;
 
     const total = totalOf(segments);
+    const brollTimeline = useMemo(() => brollSpans(broll, segments, total), [broll, segments, total]);
     const dirty = useMemo(() => {
         if (!renderedSegments) return false;
         return JSON.stringify(segments) !== JSON.stringify(renderedSegments)
-            || framing !== renderedFraming;
-    }, [segments, renderedSegments, framing, renderedFraming]);
+            || framing !== renderedFraming || colorFilter !== renderedFilter
+            || reapplyCaptions !== renderedCaptions
+            || bottomVideoAssetId !== renderedBottomVideo
+            || JSON.stringify(endcard) !== JSON.stringify(renderedEndcard)
+            || JSON.stringify(cueEffects) !== JSON.stringify(renderedCueEffects)
+            || JSON.stringify(music) !== JSON.stringify(renderedMusic)
+            || JSON.stringify(broll) !== JSON.stringify(renderedBroll);
+    }, [segments, renderedSegments, framing, renderedFraming, reapplyCaptions, renderedCaptions,
+        broll, renderedBroll, colorFilter, renderedFilter,
+        music, renderedMusic, bottomVideoAssetId, renderedBottomVideo, endcard, renderedEndcard, cueEffects, renderedCueEffects]);
 
     // Trim bounds: with the source gone, cuts must stay inside the range the
     // canonical file was rendered from.
     const bounds = sourceAvailable
         ? { lo: 0, hi: sourceDuration || Infinity }
-        : { lo: canonical.start, hi: canonical.end };
+        : { lo: retainedRange?.start ?? canonical.start, hi: retainedRange?.end ?? canonical.end };
 
     const outOfRange = useCallback(
-        (seg) => !sourceAvailable && (seg.start < canonical.start - 0.05 || seg.end > canonical.end + 0.05),
-        [sourceAvailable, canonical],
+        (seg) => !sourceAvailable && (seg.start < bounds.lo - 0.05 || seg.end > bounds.hi + 0.05),
+        [sourceAvailable, bounds.lo, bounds.hi],
     );
     const needsSourcePath = framing !== 'auto'
         || segments.some((s) => s.start < canonical.start - 0.05 || s.end > canonical.end + 0.05);
     const invalidSegments = segments.some(outOfRange);
     const overCaps = segments.length > limits.max_segments || total > limits.max_total_seconds;
     const canRender = !rendering && segments.length > 0 && !invalidSegments && !overCaps
-        && segments.every((s) => s.end - s.start >= minSeg)
-        && (framing === 'auto' || sourceAvailable);
+        && segments.every((s) => round3(s.end - s.start) >= minSeg
+            || (s.end > s.start && renderedSegments?.some((saved) =>
+                round3(saved.start) === round3(s.start) && round3(saved.end) === round3(s.end))))
+        && (framing === 'auto' || canReframe);
 
     // ---- helpers ------------------------------------------------------------
     const snapEdge = useCallback((t, kind) => {
@@ -615,6 +673,15 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
         return last ? last.end : 0;
     }, [segments]);
 
+    const sourceToClip = useCallback((time) => {
+        let offset = 0;
+        for (const segment of segments) {
+            if (time >= segment.start && time < segment.end) return offset + time - segment.start;
+            offset += segment.end - segment.start;
+        }
+        return null;
+    }, [segments]);
+
     // Which coverage span the rendered file is playing through.
     const playSpanRef = useRef(0);
 
@@ -624,7 +691,14 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
     // the frame left on screen is the endpoint itself, not the overshoot.
     const stepPlayback = useCallback((v) => {
         if (dragRef.current?.kind === 'scrub') return;   // seeks report a frame late
-        if (!dirty) { setPlayhead(v.currentTime); return; }
+        if (endcardPreviewRef.current) {
+            if (v.currentTime >= totalOf(renderedSegments || segments) - COVERAGE_EPSILON) {
+                setPlayhead(totalOf(segments));
+                return;
+            }
+            endcardPreviewRef.current = false;
+        }
+        if (!dirty) { setPlayhead(Math.min(v.currentTime, totalOf(segments))); return; }
 
         let i = playSpanRef.current;
         let sp = coverage[i];
@@ -651,7 +725,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
         playSpanRef.current = i;
         setPlayhead(next.start);
         try { v.currentTime = next.rendered; } catch { /* not seekable yet */ }
-    }, [coverage, dirty, segments]);
+    }, [coverage, dirty, renderedSegments, segments]);
 
     const onClipTimeUpdate = useCallback((e) => stepPlayback(e.target), [stepPlayback]);
 
@@ -687,7 +761,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
 
     // Refuse to roll from a span the file cannot show — same reason as above.
     const onClipPlay = useCallback((e) => {
-        if (dirty) {
+        if (dirty && !endcardPreviewRef.current) {
             const sp = coverage[playSpanRef.current];
             if (sp && sp.rendered === null) { e.target.pause(); return; }
         }
@@ -746,7 +820,6 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
     };
 
     // ---- three-point editing: mark in/out, then send to the clip ------------
-    const round3 = (t) => Math.round(t * 1000) / 1000;
 
     // The marks come off the monitor's own playhead, so "what I am looking at"
     // and "where the cut lands" are the same instant by construction.
@@ -854,6 +927,12 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                     snap_to_words: false, // boundaries are already word-snapped client-side
                     reapply_captions: reapplyCaptions,
                     framing,
+                    broll,
+                    bottom_video_asset_id: bottomVideoAssetId,
+                    color_filter: colorFilter,
+                    music,
+                    endcard,
+                    cue_effects: cueEffects,
                 }),
             });
             if (!res.ok) {
@@ -865,7 +944,17 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
             setRenderedSegments(data.recipe.segments.map((s) => ({ ...s })));
             setRenderedFraming(data.framing || 'auto');
             setFraming(data.framing || 'auto');
-            dispatch({ type: 'init', segments: data.recipe.segments.map((s) => ({ ...s })) });
+            setReapplyCaptions(data.has_captions ?? reapplyCaptions);
+            setRenderedCaptions(data.has_captions ?? reapplyCaptions);
+            dispatch({ type: 'init', segments: data.recipe.segments.map((s) => ({ ...s })), broll: data.broll,
+                colorFilter: data.color_filter, music: data.music, bottomVideoAssetId: data.bottom_video_asset_id,
+                endcard: data.endcard, cueEffects: data.cue_effects });
+            setRenderedMusic(data.music || null);
+            setRenderedBottomVideo(data.bottom_video_asset_id || null);
+            setRenderedEndcard(data.endcard || null);
+            setRenderedCueEffects(data.cue_effects || []);
+            setRenderedBroll(data.broll || []);
+            setRenderedFilter(data.color_filter || 'original');
             setPreviewUrl(withParam(getApiUrl(data.new_video_url), 't', Date.now()));
             onRerendered?.(clipIndex, data);
             refreshMe();
@@ -881,6 +970,36 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
             setRendering(false);
         }
     };
+
+    async function exportCaptions(format) {
+        if (dirty || rendering || captionExport.pending) return;
+        setCaptionExport({ ...INITIAL_CAPTION_EXPORT, pending: true });
+        try {
+            const response = await apiFetch(`/api/clip/${jobId}/${clipIndex}/captions?format=${format}`);
+            if (!response.ok) {
+                const body = await response.json().catch(() => ({}));
+                const detail = typeof body.detail === 'string' ? body.detail : 'Could not export captions.';
+                throw new Error(detail);
+            }
+            if (format === 'txt') {
+                if (!navigator.clipboard) throw new Error('Clipboard access is unavailable. You can download the SRT.');
+                await navigator.clipboard.writeText(await response.text());
+                setCaptionExport({ ...INITIAL_CAPTION_EXPORT, message: 'Captions copied.' });
+                return;
+            }
+            const url = URL.createObjectURL(await response.blob());
+            const download = document.createElement('a');
+            download.href = url;
+            download.download = `clip-${clipIndex + 1}.srt`;
+            document.body.appendChild(download);
+            download.click();
+            download.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            setCaptionExport({ ...INITIAL_CAPTION_EXPORT, message: 'SRT download started.' });
+        } catch (error) {
+            setCaptionExport({ ...INITIAL_CAPTION_EXPORT, error: error?.message || 'Could not export captions.' });
+        }
+    }
 
     // ---- transcript panel data ---------------------------------------------
     // The panel holds the WHOLE source transcript, not a window around the
@@ -946,8 +1065,17 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
     // Stable identity keeps every untouched chunk out of the re-render.
     const pickWord = useCallback((w) => {
         setSelectedWord((prev) => (prev && prev.s === w.s && prev.e === w.e ? null : w));
-        seekSource(w.s);
-    }, [seekSource]);
+        if (sourceOpen) {
+            seekSource(w.s);
+        } else {
+            const time = sourceToClip(w.s);
+            if (time !== null) {
+                setPlayhead(time);
+                const rendered = clipToRendered(time);
+                if (rendered !== null && videoRef.current) videoRef.current.currentTime = rendered;
+            }
+        }
+    }, [sourceOpen, seekSource, sourceToClip, clipToRendered]);
 
     // ---- render -------------------------------------------------------------
     if (loadError) {
@@ -994,7 +1122,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
             <div className="flex items-center justify-between mb-1.5 gap-3">
                 <p className="readout">
                     SOURCE · {fmt(sourceDuration)}{edl.source.duration_estimated ? ' (EST.)' : ''}
-                    {!sourceAvailable && ' · EXPIRED — TRIMS LIMITED TO THE ORIGINAL RANGE'}
+                    {!sourceAvailable && (retainedRange ? ' · RETAINED SOURCE RANGE' : ' · EXPIRED — TRIMS LIMITED TO THE ORIGINAL RANGE')}
                 </p>
                 {sourceAvailable && (
                     <p className="readout hidden xl:block truncate">
@@ -1150,8 +1278,9 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
             <div className="flex-1 min-h-0 flex flex-col xl:flex-row gap-4 px-4 sm:px-6 py-4 overflow-y-auto xl:overflow-hidden select-none">
 
                 {/* ---- column 1 · source ---- */}
-                {sourceOpen && (
+                {(sourceOpen || words.length > 0) && (
                     <div className="flex-1 min-w-0 flex flex-col min-h-0 gap-2">
+                        {sourceOpen && (<>
                         <p className="eyebrow shrink-0">Source</p>
                         {/* The black hugs the picture instead of the column: a wide
                             box around a short 16:9 frame is exactly the dead space
@@ -1223,8 +1352,10 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                             </div>
                         </div>
 
+                        </>)}
+
                         {/* transcript of the whole source */}
-                        <div className="shrink-0 h-[30%] min-h-[9rem] flex flex-col">
+                        <div className={`min-h-[9rem] flex flex-col ${sourceOpen ? 'shrink-0 h-[30%]' : 'flex-1'}`}>
                             <div className="flex items-center justify-between mb-1.5 gap-2 shrink-0">
                                 <p className="eyebrow">Transcript · full source</p>
                                 {/* Boundary actions live HERE, above the words they
@@ -1291,6 +1422,62 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                     </div>
                 )}
 
+                <div className="xl:w-64 xl:shrink-0 overflow-y-auto space-y-4">
+                    <label className="block text-sm text-ink2">
+                        <span className="eyebrow block mb-2">Visual look</span>
+                        <select className="input-field" value={colorFilter} disabled={rendering}
+                            onChange={(e) => dispatch({ type: 'commit', colorFilter: e.target.value })}>
+                            {(edl.color_filters || [{ id: 'original', label: 'Original' }]).map((look) => (
+                                <option key={look.id} value={look.id}>{look.label}</option>
+                            ))}
+                        </select>
+                    </label>
+                    <BrollEditor jobId={jobId} clipIndex={clipIndex} assets={brollAssets} setAssets={setBrollAssets}
+                        layers={broll} setLayers={(layers) => dispatch({ type: 'commit', broll: layers })}
+                        bottomVideoAssetId={bottomVideoAssetId || renderedBottomVideo}
+                        spans={brollTimeline} segments={segments} total={total} maxLayers={edl.broll_max_layers || 12}
+                        playhead={playhead} selectedWord={selectedWord} seek={(time) => {
+                            setPlayhead(time);
+                            if (videoRef.current) videoRef.current.currentTime = time;
+                        }} disabled={rendering} />
+                    <label className="block space-y-2 border-t border-rule pt-3 text-xs text-ink2">
+                        <span className="eyebrow block">Looping bottom video</span>
+                        <select className="input-field" value={bottomVideoAssetId || ''} disabled={rendering}
+                            onChange={(event) => dispatch({ type: 'commit', bottomVideoAssetId: event.target.value || null })}>
+                            <option value="">Off</option>
+                            {bottomVideoAssetId && !brollAssets.some((asset) => asset.id === bottomVideoAssetId) && (
+                                <option value={bottomVideoAssetId}>Unavailable video</option>
+                            )}
+                            {brollAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
+                        </select>
+                        <span className="block text-muted">{brollAssets.length
+                            ? 'The selected video loops silently below the clip. Re-render to preview the layout.'
+                            : 'Upload a video in B-roll to use it in the bottom panel.'}</span>
+                    </label>
+                    <MusicEditor jobId={jobId} clipIndex={clipIndex} assets={musicAssets} setAssets={setMusicAssets}
+                        value={music} onChange={(config) => dispatch({ type: 'commit', music: config })} disabled={rendering} />
+                    <CueEffectsEditor cues={cueEffects} setCues={(cues) => dispatch({ type: 'commit', cueEffects: cues })}
+                        catalog={edl.cue_effects_catalog} maxCues={edl.cue_max_effects}
+                        segments={segments} playhead={playhead} selectedWord={selectedWord} videoUrl={previewUrl}
+                        getPreviewTime={clipToRendered} seek={(time) => {
+                            setPlayhead(time);
+                            playSpanRef.current = spanIndexAt(time);
+                            const rendered = clipToRendered(time);
+                            if (videoRef.current && rendered !== null) videoRef.current.currentTime = rendered;
+                            if (sourceOpen) seekSource(clipToSource(time));
+                        }} disabled={rendering} />
+                    <EndCardEditor jobId={jobId} clipIndex={clipIndex} assets={endcardAssets} setAssets={setEndcardAssets}
+                        value={endcard} onChange={(config) => dispatch({ type: 'commit', endcard: config })} disabled={rendering}
+                        hasSavedCard={!!renderedEndcard}
+                        preview={() => {
+                            if (videoRef.current && renderedEndcard) {
+                                endcardPreviewRef.current = true;
+                                videoRef.current.currentTime = totalOf(renderedSegments || segments);
+                                videoRef.current.play().catch(() => {});
+                            }
+                        }} />
+                </div>
+
                 {/* ---- column 2 · program ---- */}
                 {/* Sized to the 9:16 preview plus enough track to aim with, rather
                     than an equal share: a wider column here is just black beside a
@@ -1298,8 +1485,18 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                     With the source away it takes everything, which is what gives
                     the clip track its full precision back. */}
                 <div className={`flex flex-col min-h-0 gap-2 ${sourceOpen ? 'xl:w-[26rem] 2xl:w-[30rem] xl:shrink-0' : 'flex-1'}`}>
-                    <div className="flex items-center justify-between gap-2 shrink-0">
+                    <div className="flex flex-wrap items-center justify-between gap-2 shrink-0">
                         <p className="eyebrow">Program</p>
+                        <div className="flex items-center gap-1.5">
+                            <button type="button" className="btn-quiet text-[11px] px-2 py-1 disabled:opacity-45"
+                                onClick={() => exportCaptions('srt')} disabled={dirty || rendering || captionExport.pending}>
+                                Download SRT
+                            </button>
+                            <button type="button" className="btn-quiet text-[11px] px-2 py-1 disabled:opacity-45"
+                                onClick={() => exportCaptions('txt')} disabled={dirty || rendering || captionExport.pending}>
+                                Copy captions
+                            </button>
+                        </div>
                         {dirty && (
                             <span className="badge-warn">
                                 {missingSeconds > COVERAGE_EPSILON
@@ -1308,6 +1505,8 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                             </span>
                         )}
                     </div>
+                    {captionExport.error && <p role="alert" className="text-xs text-danger">{captionExport.error}</p>}
+                    {captionExport.message && <p role="status" className="text-xs text-muted">{captionExport.message}</p>}
                     <div className="flex-1 min-h-0 flex items-center justify-center">
                         <div className="h-full max-h-full aspect-[9/16] bg-black rounded-card border border-rule overflow-hidden">
                             <video
@@ -1463,9 +1662,9 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                             </button>
                             {!sourceAvailable && (
                                 <p className="text-[11px] text-muted mt-2 leading-relaxed">
-                                    the source video is no longer on the server, so cuts are
-                                    limited to the original clip range (extending or reframing
-                                    needs it; newly processed videos keep theirs)
+                                    {retainedRange
+                                        ? 'Cuts and reframing use the downloaded portion of the source.'
+                                        : 'Cuts are limited to the original clip range. Reframing needs the source video.'}
                                 </p>
                             )}
                         </div>
@@ -1473,9 +1672,11 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                         {/* framing override */}
                         <div>
                             <p className="eyebrow mb-2">Framing</p>
-                            <div className="grid grid-cols-3 gap-1.5">
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                                 {[
                                     { value: 'auto', label: 'auto', hint: 'AI decides per scene' },
+                                    { value: 'gameplay', label: 'gameplay', hint: 'whole game and original facecam' },
+                                    { value: 'sports', label: 'sports action', hint: 'follow the ball or clear motion' },
                                     { value: 'full', label: 'full frame', hint: 'whole shot, no side-crop' },
                                     { value: 'track', label: 'track subject', hint: 'crop follows the person' },
                                 ].map((f) => (
@@ -1483,7 +1684,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                                         key={f.value}
                                         type="button"
                                         title={f.hint}
-                                        disabled={f.value !== 'auto' && !sourceAvailable}
+                                        disabled={f.value !== 'auto' && !canReframe}
                                         onClick={() => setFraming(f.value)}
                                         className={`py-1.5 px-2 rounded-input border text-xs lowercase transition-colors
                                             ${framing === f.value
@@ -1495,7 +1696,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                                     </button>
                                 ))}
                             </div>
-                            {!sourceAvailable && (
+                            {!canReframe && (
                                 <p className="text-[11px] text-muted mt-1.5 leading-relaxed">
                                     framing changes need the source video, which is no longer on the server
                                 </p>

@@ -22,8 +22,8 @@ TRANSCRIBE_BACKEND env: "whisper" (default) | "parakeet".
 The parakeet path falls back to whisper automatically when the model errors,
 produces no usable words, or the detected language is outside its 25
 supported European languages (e.g. Japanese/Chinese/Arabic uploads).
-GPU whisper in turn falls back to CPU whisper on CUDA errors (VRAM is shared
-with other models on the host, so loads can OOM under load).
+GPU Whisper retries accelerator failures with multilingual small INT8 on CPU.
+WHISPER_BATCH_SIZE enables an optional batched decoding pass.
 """
 import os
 import re
@@ -34,6 +34,7 @@ import threading
 import time
 
 from subtitles import (
+    DEFAULT_WHISPER_MODEL,
     get_whisper_config,
     WHISPER_TRANSCRIBE_PARAMS,
     merge_continuation_words,
@@ -285,66 +286,149 @@ def _get_whisper_model():
     on GPU would also mean re-allocating a couple of GB of VRAM per job).
     """
     global _whisper_model, _whisper_key
-    cfg = get_whisper_config()
-    if _whisper_force_cpu:
-        cfg["device"] = "cpu"
-        cfg["compute_type"] = "int8"
-    key = (cfg["model_size"], cfg["device"], cfg["compute_type"])
     with _whisper_lock:
+        cfg = get_whisper_config()
+        if _whisper_force_cpu:
+            cfg["device"] = "cpu"
+            cfg["compute_type"] = "int8"
+            cfg["model_size"] = _whisper_cpu_fallback_model()
+        key = (cfg["model_size"], cfg["device"], cfg["compute_type"])
         if _whisper_model is None or _whisper_key != key:
             from faster_whisper import WhisperModel
             kwargs = {"cpu_threads": whisper_cpu_threads()} if key[1] == "cpu" else {}
             _whisper_model = WhisperModel(key[0], device=key[1], compute_type=key[2],
                                           **kwargs)
             _whisper_key = key
-    return _whisper_model, cfg["device"]
+        return _whisper_model, cfg["device"]
 
 
 def _whisper_device():
     return "cpu" if _whisper_force_cpu else get_whisper_config()["device"]
 
 
-def _run_whisper_once(media_path, **params):
-    # A CPU decode keeps the host slot: the process still holds its CUDA
-    # context (~825 MB) until it exits, so the slot still stands for memory
-    # on the card. Handing it back let the next process in, which hit the
-    # same OOM and fell to the CPU too (prod, 18-nov-2026).
-    if _gpu_only and _whisper_device() == "cpu":
+def _whisper_cpu_fallback_model():
+    return os.environ.get("WHISPER_CPU_FALLBACK_MODEL", "").strip() or DEFAULT_WHISPER_MODEL
+
+
+def _whisper_batch_size():
+    try:
+        return max(1, min(8, int(os.environ.get("WHISPER_BATCH_SIZE", "1"))))
+    except ValueError:
+        return 1
+
+
+def _transcribe_backend():
+    return os.environ.get("TRANSCRIBE_BACKEND", "whisper").strip().lower()
+
+
+def uses_gpu_for_transcription():
+    """Whether the configured ASR backend or its fallback can use the card."""
+    return _whisper_device() != "cpu" or (
+        _transcribe_backend() == "parakeet" and onnxruntime_device() == "cuda"
+    )
+
+
+def _decode_whisper_audio(media_path, start=None, duration=None):
+    """Decode the first audio stream to the waveform faster-whisper expects.
+
+    ``start``/``duration`` (seconds) decode only that stretch, which is how a
+    long recording is transcribed in bounded pieces (_transcribe_whisper_chunked)."""
+    import numpy as np
+
+    window = []
+    if start:
+        window += ["-ss", f"{float(start):.3f}"]
+    tail = ["-t", f"{float(duration):.3f}"] if duration else []
+    result = subprocess.run(
+        ["ffmpeg", "-nostdin", "-loglevel", "error", *window, "-i", media_path, *tail,
+         "-map", "0:a:0", "-ac", "1", "-ar", "16000", "-f", "s16le", "-"],
+        capture_output=True, timeout=1800,
+    )
+    if result.returncode:
+        detail = result.stderr.decode(errors="replace").strip()[-500:]
+        raise RuntimeError(f"Could not decode audio with FFmpeg: {detail}")
+    audio = np.frombuffer(result.stdout, dtype="<i2").astype(np.float32)
+    audio /= 32768.0
+    return audio
+
+
+def _run_whisper_once(media_path, *, batch_size=1, progress=None, offset=0.0, **params):
+    """``progress``/``offset``: a shared meter for a chunked transcription,
+    advanced on the whole recording's timeline (one 25 % ladder, not one per
+    piece). Without them the meter covers this call alone."""
+    on_cpu = _whisper_device() == "cpu"
+    if _gpu_only and on_cpu:
         raise GpuUnavailable("whisper is configured for the CPU")
-    gate = _ASR_GATE if _whisper_device() != "cpu" else _NULL_GATE
+    gate = _NULL_GATE if on_cpu else _ASR_GATE
     # The model is fetched inside the gate: release_models() drains the gate
     # before unloading, so a transcription can never start on a model that is
     # being dropped underneath it.
     with gate:
         model, _device = _get_whisper_model()
-        segments, info = model.transcribe(media_path, **params)
-        progress = _TranscribeProgress(getattr(info, "duration", 0))
+        decoder = model
+        if batch_size > 1:
+            from faster_whisper import BatchedInferencePipeline
+            decoder = BatchedInferencePipeline(model)
+            params["batch_size"] = batch_size
+            # Preserve segment cuts and avoid packing many separated utterances
+            # into a single decode window.
+            params.setdefault("without_timestamps", False)
+            params.setdefault("chunk_length", 12)
+        try:
+            segments, info = decoder.transcribe(media_path, **params)
+        except TypeError as e:
+            # Faster-Whisper 1.2.1 uses an av.open argument removed in PyAV 19.
+            if "unexpected keyword argument 'metadata_errors'" not in str(e):
+                raise
+            print("⚠️ [ASR] PyAV audio decode is incompatible, retrying with FFmpeg", flush=True)
+            segments, info = decoder.transcribe(_decode_whisper_audio(media_path), **params)
+        shared = progress is not None
+        if not shared:
+            progress = _TranscribeProgress(getattr(info, "duration", 0))
         materialized = []
         for segment in segments:
             materialized.append(segment)
-            progress.update(segment.end)
+            progress.update(offset + segment.end)
         # VAD trims trailing silence, so the last segment can end short of the
-        # media duration — force the 100% line.
-        progress.update(progress.total)
+        # media duration — force the 100% line (the chunked caller does it
+        # once, after its last piece).
+        if not shared:
+            progress.update(progress.total)
         return materialized, info
 
 
-def run_whisper_transcription(media_path, **params):
+def run_whisper_transcription(media_path, *, batch_size=1, **params):
     """Transcribe and FULLY materialize the segments inside the GPU gate.
 
     faster-whisper returns a lazy generator — decoding happens while
     iterating, so the gate must wrap list(segments), not just transcribe().
     Returns (segments_list, info).
 
-    A CUDA failure (model load OOM or mid-decode) retries once on CPU and
-    pins CPU for the rest of the process — the GPU is shared with other
-    models, so a job must degrade instead of dying when VRAM runs out.
+    A failed batch retries sequentially. GPU initialization and decode
+    failures retry on CPU and pin CPU for the rest of the process.
     """
     global _whisper_model, _whisper_force_cpu
+    if batch_size > 1:
+        try:
+            segments, info = _run_whisper_once(media_path, batch_size=batch_size, **params)
+            voiced_seconds = getattr(info, "duration_after_vad", 0)
+            covered_seconds = sum(max(0, seg.end - seg.start) for seg in segments)
+            if not voiced_seconds or (
+                segments and (voiced_seconds < 12 or covered_seconds >= 0.6 * voiced_seconds)
+            ):
+                return segments, info
+            print("⚠️ [ASR] batched Whisper covered too little voiced audio, "
+                  "retrying sequentially", flush=True)
+        except (RuntimeError, ValueError) as e:
+            print(f"⚠️ [ASR] batched Whisper failed ({e}), retrying sequentially", flush=True)
+
     try:
         return _run_whisper_once(media_path, **params)
     except RuntimeError as e:
-        if _whisper_force_cpu or "cuda" not in str(e).lower():
+        error = str(e).lower()
+        if _whisper_force_cpu or not any(
+            name in error for name in ("cuda", "cublas", "cudnn", "out of memory")
+        ):
             raise
         if _gpu_only:
             with _whisper_lock:
@@ -369,36 +453,183 @@ def run_whisper_transcription(media_path, **params):
                     if "cuda" not in str(again).lower():
                         raise
                     e = again
-        print(f"⚠️ [ASR] whisper GPU failed ({e}) — retrying on CPU", flush=True)
-        _whisper_force_cpu = True
         with _whisper_lock:
-            _whisper_model = None  # drop the GPU model to release its VRAM
-        return _run_whisper_once(media_path, **params)
+            if not _whisper_force_cpu:
+                _whisper_force_cpu = True
+                _whisper_model = None  # drop the GPU model to release its VRAM
+        print(f"⚠️ [ASR] Whisper GPU failed ({e}), retrying with "
+              f"{_whisper_cpu_fallback_model()} INT8 on CPU", flush=True)
+    return _run_whisper_once(media_path, **params)
 
 
-def _transcribe_with_whisper(media_path):
-    segments, info = run_whisper_transcription(media_path, **WHISPER_TRANSCRIBE_PARAMS)
+def whisper_chunk_seconds():
+    """Longest stretch Whisper transcribes in one call (WHISPER_CHUNK_SECONDS,
+    0 = never split). faster-whisper builds the log-mel spectrogram of the
+    whole voiced audio at once (STFT, magnitudes and mel arrays together), on
+    the order of half a megabyte per second of speech: an 11-hour stream asks
+    for ~19 GB and the kernel's OOM killer ends the job with SIGKILL. Pieces of
+    30 minutes keep that near 1 GB whatever the source length."""
+    try:
+        value = float(os.environ.get("WHISPER_CHUNK_SECONDS", "1800"))
+    except ValueError:
+        return 1800.0
+    return 0.0 if value <= 0 else max(300.0, value)
 
-    out_segments = []
-    text_parts = []
+
+# Each piece boundary moves to the quietest 100 ms within this many seconds of
+# its nominal place, so a cut lands between words instead of inside one.
+_CHUNK_SEARCH_SECONDS = 20.0
+
+
+def _quiet_point(media_path, target, lo, hi):
+    """The quietest 100 ms frame of the audio within ±_CHUNK_SEARCH_SECONDS of
+    ``target`` (and inside [lo, hi]); ``target`` itself when it can't be read."""
+    import numpy as np
+
+    start = max(lo, target - _CHUNK_SEARCH_SECONDS)
+    end = min(hi, target + _CHUNK_SEARCH_SECONDS)
+    if end - start < 1.0:
+        return target
+    try:
+        audio = _decode_whisper_audio(media_path, start=start, duration=end - start)
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        return target
+    frame = 1600  # 100 ms at 16 kHz
+    count = len(audio) // frame
+    if count < 3:
+        return target
+    energy = np.square(audio[:count * frame].reshape(count, frame)).mean(axis=1)
+    # A 300 ms average: one quiet frame inside a word is not a pause.
+    smooth = np.convolve(energy, np.ones(3) / 3, mode="same")
+    quietest = int(np.argmin(smooth[1:-1])) + 1
+    return start + (quietest + 0.5) * frame / 16000
+
+
+def chunk_bounds(media_path, total, piece):
+    """[(start, end), ...] covering 0..total in pieces of about ``piece`` s,
+    each inner boundary moved to a nearby pause (_quiet_point)."""
+    bounds, start = [], 0.0
+    while total - start > piece * 1.25:
+        cut = _quiet_point(media_path, start + piece, start + piece * 0.5, total - piece * 0.25)
+        bounds.append((start, cut))
+        start = cut
+    bounds.append((start, total))
+    return bounds
+
+
+def _segment_dicts(segments, offset=0.0):
+    out = []
     for segment in segments:
         words = [
-            {"word": w.word, "start": float(w.start), "end": float(w.end)}
+            {"word": w.word, "start": float(w.start) + offset, "end": float(w.end) + offset}
             for w in (segment.words or [])
         ]
-        out_segments.append({
-            "start": float(segment.start),
-            "end": float(segment.end),
+        out.append({
+            "start": float(segment.start) + offset,
+            "end": float(segment.end) + offset,
             "text": segment.text,
             "words": merge_continuation_words(words),
         })
-        text_parts.append(segment.text.strip())
+    return out
 
+
+def _transcript_from(out_segments, language):
     return {
-        "text": " ".join(part for part in text_parts if part),
-        "language": info.language,
+        "text": " ".join(s["text"].strip() for s in out_segments if s["text"].strip()),
+        "language": language,
         "segments": out_segments,
     }
+
+
+def _transcribe_whisper_chunked(media_path, total, piece):
+    """Whisper over a long recording, one bounded piece at a time.
+
+    Every piece is decoded by FFmpeg on its own (so neither the waveform nor
+    the spectrogram of the whole recording is ever in memory), transcribed,
+    and its times shifted back onto the recording's timeline. The language the
+    first piece detects is kept for the rest, so one recording is never
+    transcribed half in another language."""
+    bounds = chunk_bounds(media_path, total, piece)
+    print(f"🎙️ [ASR] long recording ({total / 3600:.1f} h): transcribing in "
+          f"{len(bounds)} pieces", flush=True)
+    progress = _TranscribeProgress(total)
+    params = dict(WHISPER_TRANSCRIBE_PARAMS)
+    language = params.get("language")
+    out_segments = []
+    for lo, hi in bounds:
+        audio = _decode_whisper_audio(media_path, start=lo, duration=hi - lo)
+        if language:
+            params["language"] = language
+        segments, info = run_whisper_transcription(
+            audio, batch_size=_whisper_batch_size(), progress=progress, offset=lo, **params)
+        del audio
+        language = language or getattr(info, "language", None)
+        # A segment's padding may reach past the piece; it never starts there.
+        out_segments.extend(s for s in _segment_dicts(segments, lo) if s["start"] < hi)
+    progress.update(progress.total)
+    return _transcript_from(out_segments, language)
+
+
+def merge_ranges(ranges, pad=0.0, total=None):
+    """Sorted, padded, overlap-merged [(start, end)] inside [0, total]."""
+    out = []
+    for lo, hi in sorted((float(a) - pad, float(b) + pad) for a, b in ranges):
+        lo = max(0.0, lo)
+        if total:
+            hi = min(float(total), hi)
+        if hi <= lo:
+            continue
+        if out and lo <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], hi))
+        else:
+            out.append((lo, hi))
+    return out
+
+
+def transcribe_ranges(media_path, ranges, *, pad=8.0, total=None):
+    """Whisper over chosen stretches of a recording only (stage 2 of the hype
+    engine): the candidate windows plus ``pad`` seconds either side, so a
+    trim can still find its words. Times are on the recording's timeline.
+
+    The returned transcript says what it covers (``coverage``); everything
+    outside it is unknown, not silent. Same shared progress ladder and
+    first-piece language as a chunked transcription."""
+    bounds = merge_ranges(ranges, pad, total)
+    covered = sum(hi - lo for lo, hi in bounds)
+    print(f"🎙️ [ASR] focused transcription: {len(bounds)} stretch(es), "
+          f"{covered / 60:.1f} min of audio", flush=True)
+    progress = _TranscribeProgress(covered)
+    params = dict(WHISPER_TRANSCRIBE_PARAMS)
+    language = params.get("language")
+    out_segments, done = [], 0.0
+    for lo, hi in bounds:
+        audio = _decode_whisper_audio(media_path, start=lo, duration=hi - lo)
+        if language:
+            params["language"] = language
+        # The progress meter runs on the covered seconds, not the recording.
+        segments, info = run_whisper_transcription(
+            audio, batch_size=_whisper_batch_size(), progress=progress, offset=done, **params)
+        del audio
+        done += hi - lo
+        language = language or getattr(info, "language", None)
+        out_segments.extend(s for s in _segment_dicts(segments, lo) if s["start"] < hi)
+    progress.update(progress.total)
+    transcript = _transcript_from(out_segments, language)
+    transcript["coverage"] = [[round(lo, 3), round(hi, 3)] for lo, hi in bounds]
+    return transcript
+
+
+def _transcribe_with_whisper(media_path):
+    piece = whisper_chunk_seconds()
+    if piece and isinstance(media_path, str):
+        total = media_seconds(media_path)
+        if total and total > piece * 1.25:
+            return _transcribe_whisper_chunked(media_path, total, piece)
+
+    segments, info = run_whisper_transcription(
+        media_path, batch_size=_whisper_batch_size(), **WHISPER_TRANSCRIBE_PARAMS,
+    )
+    return _transcript_from(_segment_dicts(segments), info.language)
 
 
 # --- parakeet ---------------------------------------------------------------
@@ -602,13 +833,16 @@ def release_models():
         _ASR_GATE.acquire()
     try:
         with _whisper_lock:
-            whisper, _whisper_model, _whisper_key = _whisper_model, None, None
+            whisper, whisper_key = _whisper_model, _whisper_key
+            _whisper_model, _whisper_key = None, None
         with _parakeet_lock:
             parakeet, _parakeet_model = _parakeet_model, None
     finally:
         for _ in range(_ASR_SLOTS):
             _ASR_GATE.release()
-    if whisper is not None:
+    # A CPU decoder can still own this instance. Its reference keeps it
+    # alive until it finishes reading the generator.
+    if whisper is not None and (whisper_key is None or whisper_key[1] != "cpu"):
         try:
             # ctranslate2 frees the weights on unload, not on garbage
             # collection: the Python wrapper can outlive the last reference.
@@ -638,11 +872,20 @@ def _extract_wav(media_path):
     fd, wav_path = tempfile.mkstemp(suffix=".wav", prefix="asr_")
     os.close(fd)
     cmd = [
-        "ffmpeg", "-y", "-loglevel", "error", "-i", media_path,
+        "ffmpeg", "-y", "-nostdin", "-loglevel", "error", "-i", media_path,
         "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", wav_path,
     ]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL,
-                   stderr=subprocess.PIPE, timeout=1800)
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.PIPE, timeout=1800, text=True, errors="replace")
+    except (OSError, subprocess.SubprocessError) as e:
+        try:
+            os.remove(wav_path)
+        except OSError:
+            pass
+        if isinstance(e, subprocess.CalledProcessError) and e.stderr:
+            raise RuntimeError(f"Could not decode audio: {e.stderr.strip()[-500:]}") from e
+        raise
     return wav_path
 
 
@@ -883,19 +1126,22 @@ def _segment_drifted(text, language):
     return any(_SCRIPT_RX[s].search(text or "") for s in _FOREIGN_SCRIPTS[expected])
 
 
-def _read_wav_16k(wav_path):
+def _read_wav_span_16k(wav_path, start, end):
     import wave
     import numpy as np
     with wave.open(wav_path, "rb") as w:
-        frames = w.readframes(w.getnframes())
-    return np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+        first = min(w.getnframes(), int(start * 16000))
+        last = min(w.getnframes(), int(end * 16000))
+        w.setpos(first)
+        frames = w.readframes(max(0, last - first))
+    return np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
 
 
 def _whisper_span(audio, language):
     """Whisper words for one short audio span (seconds relative to the span).
 
-    Calls the model directly rather than through run_whisper_transcription so
-    the user-facing progress lines are not printed once per span.
+    Calls the model directly so the Parakeet model can keep its GPU slot
+    and the user-facing progress lines are not printed again for each span.
     """
     params = dict(WHISPER_TRANSCRIBE_PARAMS, language=language, vad_filter=False)
     if _gpu_only and _whisper_device() == "cpu":
@@ -924,23 +1170,20 @@ def _repair_script_drift(transcript, wav_path):
     drifted = [i for i, s in enumerate(segments) if _segment_drifted(s.get("text"), language)]
     if not drifted:
         return 0
-    try:
-        audio = _read_wav_16k(wav_path)
-    except Exception as e:
-        print(f"⚠️ [ASR] script drift repair skipped ({type(e).__name__}: {e})")
-        return 0
-    sr = 16000
     fixed = 0
     for i in drifted:
         seg = segments[i]
         lo = max(0.0, seg["start"] - _DRIFT_PAD)
         hi = seg["end"] + _DRIFT_PAD
         try:
-            text, words = _whisper_span(audio[int(lo * sr):int(hi * sr)], language)
+            audio = _read_wav_span_16k(wav_path, lo, hi)
+            if not len(audio):
+                continue
+            text, words = _whisper_span(audio, language)
         except Exception as e:
             print(f"⚠️ [ASR] script drift repair failed ({type(e).__name__}: {e})")
             break
-        if not words:
+        if not words or not text.strip() or _segment_drifted(text, language):
             continue
         # Keep the transcript chronological: the padded span may reach into
         # the neighbouring segments.
@@ -1001,12 +1244,11 @@ class NoAudioError(Exception):
 
 def _has_audio_stream(media_path) -> bool:
     """True if the file has at least one audio stream (ffprobe)."""
-    import subprocess
     try:
         out = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "a",
              "-show_entries", "stream=index", "-of", "csv=p=0", media_path],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, check=True, timeout=60,
         )
         return bool(out.stdout.strip())
     except Exception:

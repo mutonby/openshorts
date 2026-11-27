@@ -84,7 +84,7 @@ def _fake_reserve(paid_allowed):
     return _reserve
 
 
-async def _no_gate(url, force_low):
+async def _no_gate(url, force_low, probe=None):
     return None
 
 

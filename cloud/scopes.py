@@ -28,15 +28,18 @@ _MCP_ROUTES = tuple((method, re.compile(pattern)) for method, pattern in (
     ("GET", r"/mcp"),
     # The tools (mcp_server._TOOL_IMPLS) and the restore their retry uses.
     ("POST", r"/api/process"),
+    ("POST", r"/api/process/audio-tracks"),
     ("POST", r"/api/uploads"),
     ("PUT", rf"/api/uploads/{_ID}"),
     ("DELETE", rf"/api/uploads/{_ID}"),
     ("GET", rf"/api/status/{_ID}"),
+    ("GET", r"/api/jobs"),
     ("POST", rf"/api/projects/{_ID}/restore"),
     ("GET", r"/api/me"),
     ("POST", r"/api/subtitle"),
     ("POST", r"/api/clip/rerender"),
     ("POST", r"/api/social/post"),
+    ("GET", r"/api/social/pinterest-boards"),
     # Getting the results out.
     ("GET", r"/videos/.+"),
     ("GET", r"/thumbnails/.+"),

@@ -14,7 +14,8 @@ export interface CaptionBlock {
 export function groupCaptionsIntoBlocks(
   captions: CaptionWord[],
   maxChars = 20,
-  maxDurationMs = 2000
+  maxDurationMs = 2000,
+  maxWords?: number
 ): CaptionBlock[] {
   const blocks: CaptionBlock[] = [];
   let currentWords: CaptionWord[] = [];
@@ -35,7 +36,8 @@ export function groupCaptionsIntoBlocks(
 
     if (
       currentTextLen + word.text.length > maxChars ||
-      duration > maxDurationMs
+      duration > maxDurationMs ||
+      (maxWords != null && currentWords.length >= maxWords)
     ) {
       // Finalize current block
       const lastWord = currentWords[currentWords.length - 1];

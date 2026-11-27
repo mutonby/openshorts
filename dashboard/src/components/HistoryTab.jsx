@@ -1,17 +1,19 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Loader2, Download, Film, FolderOpen } from 'lucide-react';
+import { Loader2, Download, Film, FolderOpen, Trash2 } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import { track } from '../lib/analytics';
+import DeleteProjectDialog from './DeleteProjectDialog';
 
 // The signed-in user's saved video library (stored in R2). Private, signed links.
 // Videos are grouped by project (job); re-openable projects get a "reopen"
 // action that restores the whole job for further editing in the Clip Generator.
-export default function HistoryTab({ onReopenProject }) {
+export default function HistoryTab({ onReopenProject, onProjectDeleted }) {
   const [videos, setVideos] = useState(null);
   const [projects, setProjects] = useState({});
   const [reopening, setReopening] = useState(null);
   const [reopenError, setReopenError] = useState('');
   const [error, setError] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   useEffect(() => {
     apiJson('/api/history')
@@ -52,6 +54,17 @@ export default function HistoryTab({ onReopenProject }) {
 
   const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '');
 
+  const handleDeleted = (jobId) => {
+    setVideos((items) => items.filter((video) => video.job_id !== jobId));
+    setProjects((items) => {
+      const next = { ...items };
+      delete next[jobId];
+      return next;
+    });
+    setDeleteTarget(null);
+    onProjectDeleted?.(jobId);
+  };
+
   if (videos === null && !error) {
     return <div className="flex justify-center py-20"><Loader2 className="animate-spin text-brass" /></div>;
   }
@@ -88,18 +101,30 @@ export default function HistoryTab({ onReopenProject }) {
                     {fmtDate(vids[0]?.created_at)} · {vids.length} clip{vids.length === 1 ? '' : 's'}
                   </p>
                 </div>
-                {project && onReopenProject && (
-                  <button
-                    onClick={() => handleReopen(jobId)}
-                    disabled={!!reopening}
-                    className="btn-ghost px-3 py-2 text-xs shrink-0"
-                    title="Restore this project in the Clip Generator to keep editing subtitles, hooks, effects and dubbing"
-                  >
-                    {reopening === jobId
-                      ? <><Loader2 size={14} className="animate-spin" /> reopening…</>
-                      : <><FolderOpen size={14} /> reopen project</>}
-                  </button>
-                )}
+                <div className="flex flex-wrap gap-2">
+                  {project && onReopenProject && (
+                    <button
+                      onClick={() => handleReopen(jobId)}
+                      disabled={!!reopening}
+                      className="btn-ghost px-3 py-2 text-xs shrink-0"
+                      title="Restore this project in the Clip Generator to keep editing subtitles, hooks, effects and dubbing"
+                    >
+                      {reopening === jobId
+                        ? <><Loader2 size={14} className="animate-spin" /> reopening…</>
+                        : <><FolderOpen size={14} /> reopen project</>}
+                    </button>
+                  )}
+                  {vids[0]?.job_id && (
+                    <button
+                      type="button"
+                      onClick={() => setDeleteTarget({ jobId, title: project?.title || vids[0]?.title })}
+                      disabled={!!reopening}
+                      className="btn-quiet px-3 py-2 text-xs shrink-0"
+                    >
+                      <Trash2 size={14} /> delete project
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-5">
                 {vids.map((v) => (
@@ -123,6 +148,9 @@ export default function HistoryTab({ onReopenProject }) {
           );
         })}
       </div>
+      {deleteTarget && (
+        <DeleteProjectDialog project={deleteTarget} onClose={() => setDeleteTarget(null)} onDeleted={handleDeleted} />
+      )}
     </div>
   );
 }

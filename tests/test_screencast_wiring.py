@@ -230,11 +230,6 @@ class TestInsetPerScene:
         assert _centre_inside((40, 540, 120, 120), box, 22)      # face in the bubble
         assert not _centre_inside((900, 300, 200, 200), box, 22)  # someone elsewhere
 
-    def test_inset_is_checked_scene_by_scene(self):
-        import inspect
-        src = inspect.getsource(reframe_v2.render)
-        assert "camera_inset.present_in_scene(" in src
-
     def test_stable_box_needs_agreement(self):
         from camera_inset import stable_box
         still = [(100, 500, 300, 200)] * 3 + [(102, 498, 300, 200)]
@@ -253,34 +248,36 @@ class TestInsetPerScene:
         assert x == 0 and y == 0
 
 
-class TestPresenterCamGate:
-    """The per-scene inset detector enlarged game characters, photos on slides
-    and cover art (6-oct-2026 corpus run). It now runs only on WIDE scenes the
-    shot check flagged with presenter_cam."""
+@pytest.mark.parametrize("evidence", ["flag", "geometry", "gameplay"])
+def test_embedded_webcam_and_gameplay_keep_one_foreground(monkeypatch, fake_main, tmp_path, evidence):
+    monkeypatch.setattr(screencast_layout, "ENABLED", True)
+    kind = "gameplay" if evidence == "gameplay" else "screen"
+    monkeypatch.setattr(screencast_layout, "detect_content_ranges",
+                        lambda *args: [(3.0, 10.0, kind, 1.0, None, evidence == "flag")])
+    monkeypatch.setattr(screencast_layout, "detect_screencast_scenes",
+                        lambda *args: {1: ("WIDE", None)})
+    box = (0, 0, 250, 160) if evidence == "geometry" else None
+    monkeypatch.setattr(reframe_v2.camera_inset, "detect", lambda *args: box)
+    monkeypatch.setattr(reframe_v2.camera_inset, "present_in_scene",
+                        lambda path, box, start, end: start == 90)
+    fake_main.SmoothedCameraman = lambda *args, **kwargs: types.SimpleNamespace(
+        crop_width=608, crop_height=1080)
+    fake_main.SpeakerTracker = lambda **kwargs: None
+    monkeypatch.setattr(reframe_v2, "_analyze_trajectory", lambda *args: [0] * 300)
+    monkeypatch.setattr(reframe_v2.split_layout, "detect_split_scenes", lambda *args: {})
+    monkeypatch.setattr(reframe_v2.punch_in, "ENABLED", False)
 
-    def _render_with(self, monkeypatch, fake_main, cam):
-        monkeypatch.setattr(screencast_layout, "ENABLED", True)
-        monkeypatch.setattr(screencast_layout, "detect_content_ranges",
-                            lambda video, scenes, fps: [
-                                (3.0, 10.0, "screen", 1.0, None, cam)])
-        monkeypatch.setattr(screencast_layout, "detect_screencast_scenes",
-                            lambda video, scenes, strategies, ranges: {1: ("WIDE", None)})
-        monkeypatch.setattr(reframe_v2.camera_inset, "detect", lambda path: None)
-        calls = []
+    def check(_video, specs, *args):
+        assert len(specs) == 2
+        screen = specs[1][2]
+        assert "split=2" in screen
+        assert screen.count("overlay=") == 1
+        assert "[cam]" not in screen
+        # Gameplay Priority: the game zoomed past the 608 px strip (x1.25,
+        # composition.gameplay_zoom), still one foreground with no second webcam.
+        assert "crop=w=1536:h=1080" in screen and "scale=1080:758" in screen
 
-        def in_scene(video, start_f, end_f):
-            calls.append((start_f, end_f))
-            raise _Stop()
-
-        monkeypatch.setattr(reframe_v2.camera_inset, "detect_in_scene", in_scene)
-        # Past the routing render needs the real main (SmoothedCameraman);
-        # the fake one stops it there, which is fine: the gate ran before.
-        with pytest.raises(Exception):
-            reframe_v2.render("clip.mp4", "out.mp4", 9 / 16)
-        return calls
-
-    def test_flagged_screen_looks_for_the_presenter(self, monkeypatch, fake_main):
-        assert self._render_with(monkeypatch, fake_main, True) == [(90, 300)]
-
-    def test_unflagged_screen_never_does(self, monkeypatch, fake_main):
-        assert self._render_with(monkeypatch, fake_main, False) == []
+    monkeypatch.setattr(reframe_v2, "encode_scenes", check)
+    output = str(tmp_path / "out.mp4")
+    assert reframe_v2.render("clip.mp4", output, 9 / 16)
+    assert reframe_v2.layout_ranges.read(output)[1]["layout"] == "gameplay"

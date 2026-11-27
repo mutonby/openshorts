@@ -9,20 +9,21 @@ only on the paths that need it.
 
 Two render paths:
 
-- FAST: every segment falls inside the range the canonical clip was originally
-  cut from, so the recut can be cut straight out of the already-reframed
-  canonical file. No ML, no source video needed, seconds instead of minutes.
-- SOURCE: at least one segment reaches outside that range (or there is no
-  canonical file), so the recut is cut from the source video and re-reframed
+- FAST: the canonical clip covers the requested source segments, so the recut
+  can be cut straight out of the already-reframed file. No ML or source video.
+- SOURCE: the canonical clip cannot supply the requested cut, so it is cut
+  from the source video and re-reframed
   with the same engine the pipeline used.
 """
 
 import json
+import math
 import os
 import shutil
 import subprocess
 import time
 import uuid
+from contextlib import suppress
 
 from ffmpeg_utils import (METADATA_SCRUB, QUALITY_FAST, audio_encode_args,
                           video_encode_args)
@@ -42,16 +43,24 @@ class RecutError(ValueError):
     """Invalid EDL — safe to surface verbatim as a 400 detail."""
 
 
-def normalize_segments(segments, source_duration=None):
+def normalize_segments(segments, source_duration=None, *, allowed_short_segments=()):
     """Validate and clamp an EDL. Returns [{'start': float, 'end': float}, ...].
 
     Order is preserved — the segment order IS the clip order, and reusing a
     source range twice is legal (an echo/replay is a real editing move).
+    Older generated cuts may keep a short range already saved on this clip.
     """
     if not isinstance(segments, (list, tuple)) or not segments:
         raise RecutError("segments must be a non-empty list")
     if len(segments) > MAX_SEGMENTS:
         raise RecutError(f"too many segments (max {MAX_SEGMENTS})")
+
+    saved = set()
+    for segment in allowed_short_segments:
+        try:
+            saved.add((round(float(segment["start"]), 3), round(float(segment["end"]), 3)))
+        except (KeyError, TypeError, ValueError):
+            continue
 
     normalized = []
     for i, seg in enumerate(segments):
@@ -66,10 +75,11 @@ def normalize_segments(segments, source_duration=None):
         if source_duration is not None:
             end = min(float(source_duration), end)
             start = min(start, float(source_duration))
-        if end - start < MIN_SEGMENT_SECONDS:
+        start, end = round(start, 3), round(end, 3)
+        if end <= start or (round(end - start, 3) < MIN_SEGMENT_SECONDS and (start, end) not in saved):
             raise RecutError(
                 f"segment {i + 1} is shorter than {MIN_SEGMENT_SECONDS}s")
-        normalized.append({"start": round(start, 3), "end": round(end, 3)})
+        normalized.append({"start": start, "end": end})
 
     if total_duration(normalized) > MAX_TOTAL_SECONDS:
         raise RecutError(f"clip would exceed {MAX_TOTAL_SECONDS:.0f}s")
@@ -106,6 +116,97 @@ def rebase_segments(segments, range_start, range_end=None):
     return rebased
 
 
+def legacy_canonical_segments(canonical_range, viral_edit):
+    """Recover an older viral edit's original source EDL from its metadata."""
+    # Legacy timestamps were recorded to milliseconds, sometimes before the
+    # individual segment boundaries were rounded.
+    tolerance = 0.002
+    try:
+        start, end = float(canonical_range["start"]), float(canonical_range["end"])
+        duration = float(viral_edit["duration"])
+        cuts, teaser = viral_edit["cuts"], viral_edit["teaser"]
+        if not (0 <= start < end < math.inf and 0 < duration < math.inf):
+            return None
+        if not isinstance(cuts, list) or not isinstance(teaser, bool):
+            return None
+
+        body = []
+        cursor = start
+        for cut in cuts:
+            a, b = float(cut["start"]), float(cut["end"])
+            if not cursor <= a < b <= end:
+                return None
+            if cursor < a:
+                body.append((cursor, a))
+            cursor = b
+        if cursor < end:
+            body.append((cursor, end))
+        if not body:
+            return None
+
+        if teaser:
+            peak = float(viral_edit["peak"])
+            teaser_start = peak - float(viral_edit["peak_out"][0])
+            teaser_end = teaser_start + duration - sum(b - a for a, b in body)
+            if not (start - tolerance <= teaser_start <= peak <= teaser_end <= end + tolerance):
+                return None
+            body.insert(0, (max(start, teaser_start), min(end, teaser_end)))
+    except (IndexError, KeyError, OverflowError, TypeError, ValueError):
+        return None
+
+    segments = [{"start": round(a, 3), "end": round(b, 3)} for a, b in body]
+    if any(s["start"] >= s["end"] for s in segments):
+        return None
+    return segments if math.isclose(total_duration(segments), duration, rel_tol=0, abs_tol=tolerance) else None
+
+
+def remap_canonical_segments(segments, canonical_segments):
+    """Map a source EDL onto a canonical file with its own cut or replay.
+
+    Return None when any requested source time is missing from the file.
+    An unchanged EDL reuses the entire canonical edit, including repeats.
+    """
+    def milliseconds(items):
+        return [(round(float(item["start"]) * 1000), round(float(item["end"]) * 1000))
+                for item in items]
+
+    try:
+        canonical = milliseconds(canonical_segments)
+        requested = milliseconds(segments)
+    except (KeyError, OverflowError, TypeError, ValueError):
+        return None
+    if not canonical or not requested or any(a < 0 or b <= a for a, b in canonical + requested):
+        return None
+
+    spans = []
+    duration = 0
+    for start, end in canonical:
+        spans.append((start, end, duration))
+        duration += end - start
+    if requested == canonical:
+        return [{"start": 0.0, "end": duration / 1000}]
+
+    mapped = []
+    for start, end in requested:
+        while start < end:
+            # Use the longest available stretch. On ties, prefer a continuous
+            # edit and then the first occurrence in the canonical file.
+            candidates = [(offset + start - a, min(end, b) - start)
+                          for a, b, offset in spans if a <= start < b]
+            if not candidates:
+                return None
+            previous_end = mapped[-1][1] if mapped else None
+            out_start, length = max(candidates, key=lambda c: (c[1], c[0] == previous_end))
+            out_end = out_start + length
+            if mapped and mapped[-1][1] == out_start:
+                mapped[-1] = (mapped[-1][0], out_end)
+            else:
+                mapped.append((out_start, out_end))
+            start += length
+
+    return [{"start": start / 1000, "end": end / 1000} for start, end in mapped]
+
+
 def snap_segments(segments, transcript, source_duration):
     """Snap each segment's bounds onto word boundaries (ground truth beats
     millisecond arithmetic — same rationale as the pipeline's snapping)."""
@@ -116,6 +217,9 @@ def snap_segments(segments, transcript, source_duration):
         return segments
     snapped = []
     for seg in segments:
+        if round(seg["end"] - seg["start"], 3) < MIN_SEGMENT_SECONDS:
+            snapped.append(seg)
+            continue
         start, end = snap_clip_to_words(
             seg["start"], seg["end"], words, source_duration,
             min_duration=MIN_SEGMENT_SECONDS, max_duration=MAX_TOTAL_SECONDS)
@@ -266,7 +370,8 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
                   reframe=False, output_format="auto", watermark=False,
                   captions_transcript=None, force_strategy=None,
                   crop_overrides=None, runner=None, renderer=None,
-                  watermarker=None, captioner=None, subtitle_band=None):
+                  watermarker=None, captioner=None, subtitle_band=None,
+                  framing_method=None, text_overlay=None, picture_layers=()):
     """Render a recut clip. Returns (served_filename, clean_filename).
 
     - ``input_path``/``segments``: the file to cut from and the times ON THAT
@@ -279,6 +384,10 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
       ``virtual_transcript``); when given and non-empty, captions are burned
       LAST onto a ``subtitled_<ts>_`` derivative, preserving the invariant
       that the clean file stays clean for later re-styling.
+    - ``text_overlay``: optional renderer for text on the recut timeline,
+      applied to the clean picture before the captions.
+    - ``picture_layers``: ordered in-place picture operations applied to the
+      clean recut before text and captions.
     - ``crop_overrides``: scene index -> crop centre as a fraction of the
       source width, for scenes the user framed by hand. Source path only, for
       the same reason as ``reframe``: the canonical file is already cropped, so
@@ -309,7 +418,8 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
                 def render(i, o, f):
                     return main_render(i, o, f, force_strategy=force_strategy,
                                        crop_overrides=crop_overrides,
-                                       subtitle_band=subtitle_band)
+                                       subtitle_band=subtitle_band,
+                                       framing_method=framing_method)
             if not render(work_path, out_path, output_format):
                 raise RuntimeError("reframe failed on the recut clip")
         else:
@@ -319,16 +429,30 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
             # ranges through the cut instead (empty when the input has none).
             import layout_ranges
             layout_ranges.write(out_path, [
-                (r["start"], r["end"], r["layout"], r.get("content"))
+                (r["start"], r["end"], r["layout"], r.get("content"), r)
                 for r in layout_ranges.remap(layout_ranges.read(input_path), segments)])
+
+        if picture_layers:
+            try:
+                for render_layer in picture_layers:
+                    render_layer(out_path)
+            except BaseException:
+                import layout_ranges
+                for partial in (out_path, layout_ranges.sidecar_path(out_path)):
+                    with suppress(FileNotFoundError):
+                        os.remove(partial)
+                raise
 
         if watermark:
             (watermarker or _main_attr("apply_watermark"))(out_path)
 
-        served_name = out_name
-        if captions_transcript and captions_transcript.get("segments"):
+        has_captions = bool(captions_transcript and captions_transcript.get("segments"))
+        layered_path = (text_overlay(out_path, has_captions=has_captions)
+                        if text_overlay else out_path)
+        served_name = os.path.basename(layered_path)
+        if has_captions:
             caption = captioner or _main_attr("auto_caption_clip")
-            captioned = caption(out_path, captions_transcript,
+            captioned = caption(layered_path, captions_transcript,
                                 0.0, total_duration(segments))
             if captioned:
                 served_name = os.path.basename(captioned)

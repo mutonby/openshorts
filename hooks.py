@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import tempfile
 import re
@@ -7,7 +8,7 @@ import textwrap
 import subprocess
 import urllib.request
 import uuid
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageColor, ImageDraw, ImageFont, ImageFilter
 
 from ffmpeg_utils import video_encode_args, QUALITY, METADATA_SCRUB, finished_before_crash
 import gpu_decode
@@ -38,6 +39,7 @@ HOOK_FONTS = {
     "anton": (os.path.join(FONT_DIR, "Anton-Regular.ttf"), 0.08),
     "serif": (FONT_PATH, 0.05),
 }
+HOOK_SIZE_SCALE = {"S": 0.8, "M": 1.0, "L": 1.3}
 
 # Codepoint ranges NotoSerif has no glyphs for (would render as tofu boxes).
 _EMOJI_RE = re.compile(
@@ -224,16 +226,18 @@ HOOK_STYLES = {
 }
 
 
-def _draw_pills(lines, font, emoji_font, font_size, box_fill, text_fill, output_image_path):
+def _draw_pills(lines, font, emoji_font, font_size, box_fill, text_fill, output_image_path,
+                *, outline=None, corner_radius=None):
     """One rounded box per line, stacked and centred (the "pill" style).
 
     Every box has the same height (from the font's own ascent/descent plus
     accents), so the stack reads as one block whatever the letters are.
     """
     lines = [ln for ln in lines if ln.strip()] or [" "]
-    pad_x = int(font_size * 0.48)
-    pad_y = int(font_size * 0.24)
-    radius = int(font_size * 0.36)
+    outline_padding = outline[1] + 2 if outline else 0
+    pad_x = max(int(font_size * 0.48), outline_padding)
+    pad_y = max(int(font_size * 0.24), outline_padding)
+    radius = int(font_size * 0.36) if corner_radius is None else corner_radius
     probe = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
     top, bottom = probe.textbbox((0, 0), "ÁÉÍÓÚÑgjpqy", font=font)[1::2]
     line_h = (bottom - top) + 2 * pad_y
@@ -249,17 +253,17 @@ def _draw_pills(lines, font, emoji_font, font_size, box_fill, text_fill, output_
         y0 = 20 + i * line_h
         draw.rounded_rectangle([x0, y0, x0 + box_w, y0 + line_h], radius=radius, fill=box_fill)
         _draw_mixed(img, draw, (x0 + pad_x, y0 + pad_y - top), ln, font, emoji_font,
-                    fill=text_fill, outline=None)
-    img.save(output_image_path)
+                    fill=text_fill, outline=outline)
+    img.save(output_image_path, format="PNG")
     return output_image_path, canvas_w, canvas_h
 
 
 def create_hook_image(text, target_width, output_image_path="hook_overlay.png", font_scale=1.0, style="pill",
-                      font=None):
+                      font=None, design=None):
     """
     Generates a hook overlay image using pixel-based wrapping.
     target_width: The max width the box should occupy (e.g. 85% of video)
-    style: one of HOOK_STYLES (pill/classic/dark/yellow/red/outline/outline_yellow)
+    style: a built-in hook style. Optional design fields override its artwork.
     """
     download_font_if_needed()
 
@@ -267,7 +271,6 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
     box_fill = look["box"]
     text_fill = look["text"]
     outline = look["outline"]
-    has_box = box_fill[3] > 0
     draw_shadow = look["shadow"]
     
     # Configuration
@@ -280,12 +283,29 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
     
     # Font Size Calculation (approx 5% of width - tuned to match Noto Serif Bold metrics in browser)
     pills = bool(look.get("pills"))
+    if design:
+        pixels_per_unit = target_width / (1080 * 0.9) * font_scale
+        pills = design["shape"] == "pill"
+        alpha = 0 if design["shape"] == "none" else 255
+        box_fill = (*ImageColor.getrgb(design["background_color"]), alpha)
+        text_fill = ImageColor.getrgb(design["text_color"])
+        stroke = round(design["outline_width"] * pixels_per_unit)
+        outline = (ImageColor.getrgb(design["outline_color"]), stroke) if stroke else None
+        cornerradius = round(design["corner_radius"] * pixels_per_unit)
+        draw_shadow = False
+        if design["text_case"] == "uppercase":
+            text = text.upper()
+    has_box = box_fill[3] > 0
     # A chosen typeface (HOOK_FONTS key) wins; otherwise the style's own
     # (pill -> Montserrat, the rest -> Noto Serif, as they always rendered).
-    default_font = "montserrat" if look.get("font") == PILL_FONT_PATH else "serif"
+    default_font = "montserrat" if pills else "serif"
     font_path, size_factor = HOOK_FONTS.get(font or default_font, HOOK_FONTS[default_font])
     base_font_size = int(target_width * size_factor)
     font_size = int(base_font_size * font_scale)
+    if design:
+        outline_padding = outline[1] + 2 if outline else 0
+        padding_x = max(int(font_size * 0.48) if pills else padding_x, outline_padding)
+        padding_y = max(padding_y, outline_padding)
     
     try:
         font = ImageFont.truetype(font_path, font_size)
@@ -307,6 +327,8 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
     draw = ImageDraw.Draw(dummy_img)
 
     max_text_width = target_width - (2 * padding_x)
+    if design:
+        max_text_width = max(1, max_text_width - 40)
 
     # Handle manual newlines first
     paragraphs = text.split('\n')
@@ -348,7 +370,8 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
 
     if pills:
         return _draw_pills(lines, font, emoji_font, font_size, box_fill, text_fill,
-                           output_image_path)
+                           output_image_path, outline=outline,
+                           corner_radius=cornerradius if design else None)
 
     # Recalculate true width/height
     max_line_width = 0
@@ -426,11 +449,12 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
 
         current_y += line_h + line_spacing
         
-    img.save(output_image_path)
+    img.save(output_image_path, format="PNG")
     return output_image_path, canvas_w, canvas_h
 
 def _auto_place(video_path, text, target_box_width, hook_filename, font_scale, style, font,
-                video_width, video_height, duration, ranges, has_captions, first_dims):
+                video_width, video_height, duration, ranges, has_captions, first_dims,
+                face_aware=True, start=0.0, design=None):
     """position='auto': pick the height (and, only if every height covers a
     face, a smaller text) with hook_placement. Returns {"image": (path, w, h),
     "y_px", "y", "scale"}, or None to fall back to the legacy top spot (no
@@ -438,15 +462,15 @@ def _auto_place(video_path, text, target_box_width, hook_filename, font_scale, s
     import hook_placement
     import layout_ranges as _layouts
 
-    window_end = float(duration) if duration else hook_placement.DEFAULT_WINDOW
+    window_end = start + (float(duration) if duration else hook_placement.DEFAULT_WINDOW)
     if ranges is None:
         ranges = _layouts.read(video_path)
     ranges = _layouts.normalise(ranges)
-    bands = hook_placement.caption_bands(ranges, 0.0, window_end, has_captions)
+    bands = hook_placement.caption_bands(ranges, start, window_end, has_captions)
     # A WIDE picture floats in blur: keep the hook in the blur when it fits,
     # and only fall back to the caption-only rule when it does not.
-    pictures = hook_placement.content_bands(ranges, 0.0, window_end)
-    frames = hook_placement.detect_faces(video_path, 0.0, window_end)
+    pictures = hook_placement.content_bands(ranges, start, window_end)
+    frames = hook_placement.detect_faces(video_path, start, window_end) if face_aware else []
     if frames is None:
         print("   ℹ️ Hook placement: no frames read, keeping the top spot.")
         return None
@@ -456,7 +480,8 @@ def _auto_place(video_path, text, target_box_width, hook_filename, font_scale, s
     def measure(rel):
         if rel not in dims:
             _, w, h = create_hook_image(text, target_box_width, hook_filename,
-                                        font_scale=font_scale * rel, style=style, font=font)
+                                        font_scale=font_scale * rel, style=style, font=font,
+                                        design=design)
             dims[rel] = (w, h)
         w, h = dims[rel]
         return w / video_width, h / video_height
@@ -474,7 +499,8 @@ def _auto_place(video_path, text, target_box_width, hook_filename, font_scale, s
         return None
     # The temp PNG holds the last size measured: render the chosen one again.
     _, w, h = create_hook_image(text, target_box_width, hook_filename,
-                                font_scale=font_scale * rel, style=style, font=font)
+                                font_scale=font_scale * rel, style=style, font=font,
+                                design=design)
     n_faces = sum(len(f) for f in frames)
     print(f"   🎯 Hook placement: y={y:.2f} scale={rel:g} face cover={cost:.2f} "
           f"({n_faces} faces in {len(frames)} frames, bands={bands})")
@@ -482,12 +508,108 @@ def _auto_place(video_path, text, target_box_width, hook_filename, font_scale, s
             "y": round(y, 3), "scale": rel}
 
 
+def seam_hook_y(ranges, video_height, box_h):
+    """Top of the hook on a streamer stack. The seam (composition.py records
+    it in the layout ranges) is over neither the face nor the action; when the
+    captions sit on it too, the hook goes just under them, over the top of the
+    game for its few seconds, never over the streamer's face."""
+    import layout_ranges as _layouts
+    seam = _layouts.seam_of(ranges or [], 0.0)
+    if seam is None:
+        seam = _layouts.STACK_SEAM_DEFAULT
+    caption_y = None
+    for r in _layouts.normalise(ranges or []):
+        if r["layout"] == "stack" and r["start"] <= 0.0 + 1e-6:
+            caption_y = r.get("caption_y", seam)
+    seam_px = int(video_height * seam)
+    if caption_y is not None and abs(caption_y - seam) < 0.02:
+        return min(int(video_height * 0.80) - box_h, seam_px + int(video_height * 0.045))
+    return max(int(video_height * 0.06), seam_px - box_h // 2)
+
+
+def _positioned_image(video_path, text, image_path, width, height, *, position,
+                      font_scale, style, font, duration, layout_ranges,
+                      has_captions, face_aware, start=0.0, design=None):
+    target_width = int(width * 0.9)
+    _, box_w, box_h = create_hook_image(text, target_width, image_path,
+                                        font_scale=font_scale, style=style, font=font,
+                                        design=design)
+    placed = None
+    if position == "auto":
+        placed = _auto_place(video_path, text, target_width, image_path, font_scale,
+                             style, font, width, height, duration, layout_ranges,
+                             has_captions, (box_w, box_h), face_aware, start=start,
+                             design=design)
+        if placed:
+            _, box_w, box_h = placed["image"]
+    if placed:
+        y = placed["y_px"]
+    elif position == "center":
+        y = (height - box_h) // 2
+    elif position == "seam":
+        y = seam_hook_y(layout_ranges, height, box_h)
+    else:
+        y = int(height * (0.70 if position == "bottom" else 0.20))
+    return (width - box_w) // 2, y, box_h, placed
+
+
+def add_hook_and_cta_to_video(video_path, text, output_path, *, cta, position="auto",
+                              font_scale=1.0, duration=None, style="pill", font=None,
+                              layout_ranges=None, has_captions=True, face_aware=True,
+                              design=None):
+    """Burn a closing call to action and an optional opening hook in one encode."""
+    info = json.loads(subprocess.check_output([
+        "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+        "stream=width,height,duration:format=duration", "-of", "json", video_path,
+    ], timeout=30))
+    stream = info["streams"][0]
+    width, height = int(stream["width"]), int(stream["height"])
+    stream_duration = stream.get("duration")
+    if stream_duration in (None, "N/A") or float(stream_duration) <= 0:
+        stream_duration = info["format"]["duration"]
+    clip_duration = float(stream_duration)
+    cta_duration = float(cta["duration_seconds"])
+    if not (math.isfinite(clip_duration) and clip_duration > 0 and
+            math.isfinite(cta_duration) and cta_duration > 0):
+        raise ValueError("Invalid video or call-to-action duration")
+    cta_start = max(0.0, clip_duration - cta_duration)
+    hook_end = min(float(duration), cta_start) if duration is not None else cta_start
+
+    with tempfile.TemporaryDirectory(prefix="openshorts-text-") as temp_dir:
+        shared = dict(style=style, font=font, layout_ranges=layout_ranges,
+                      has_captions=has_captions, face_aware=face_aware, design=design)
+        cta_image = os.path.join(temp_dir, "cta.png")
+        x, y, _, _ = _positioned_image(
+            video_path, cta["text"], cta_image, width, height,
+            position=cta["position"], font_scale=HOOK_SIZE_SCALE[cta["size"]],
+            start=cta_start, duration=clip_duration - cta_start, **shared)
+        inputs = []
+        graph = "[0:v]"
+        if text and hook_end > 0:
+            hook_image = os.path.join(temp_dir, "hook.png")
+            hook_x, hook_y, _, _ = _positioned_image(
+                video_path, text, hook_image, width, height, position=position,
+                font_scale=font_scale, duration=hook_end, **shared)
+            inputs.extend(["-i", hook_image])
+            graph += f"[1:v]overlay={hook_x}:{hook_y}:enable='lt(t,{hook_end:.6f})'[intro];[intro]"
+
+        cta_input = 2 if inputs else 1
+        inputs.extend(["-i", cta_image])
+        graph += f"[{cta_input}:v]overlay={x}:{y}:enable='gte(t,{cta_start:.6f})'[text]"
+        cmd = ["ffmpeg", "-y", "-i", video_path, *inputs, "-filter_complex", graph,
+               "-map", "[text]", "-map", "0:a?", *_encode_tail(), output_path]
+        result = _run_encode(cmd, video_path, [output_path])
+        if result.returncode != 0 and not finished_before_crash(result, [output_path]):
+            raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+
+
 def add_hook_to_video(video_path, text, output_path, position="top", font_scale=1.0, duration=None, style="pill",
                       also=None, font=None, layout_ranges=None, has_captions=True,
-                      mark=None, clean=True):
+                      mark=None, face_aware=True, design=None, clean=True):
     """
     Overlays text hook onto video.
-    position: 'top', 'center', 'bottom', or 'auto' (hook_placement: off the
+    position: 'top', 'center', 'bottom', 'seam' (the streamer stack's
+    facecam/gameplay seam), or 'auto' (hook_placement: off the
       faces in the hook's window and off the caption bands; what the job
       pipeline and an editor left on "auto" use). An explicit top/center/
       bottom is drawn exactly where it always was.
@@ -526,10 +648,6 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
         video_width = 1080
         video_height = 1920
         
-    # 2. Generate Image
-    # Box check: Don't let it be wider than 90% of screen
-    target_box_width = int(video_width * 0.9)
-    
     # Unique per invocation so parallel jobs can't overwrite each other's overlay.
     # The uuid alone guarantees that; the source name rides along only as a
     # debugging hint, so it is trimmed by BYTES (filesystems cap at 255 bytes,
@@ -544,31 +662,13 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
         f"temp_hook_{uuid.uuid4().hex[:8]}_{_truncate_bytes(stem, 80)}.png")
     
     try:
-        img_path, box_w, box_h = create_hook_image(text, target_box_width, hook_filename, font_scale=font_scale, style=style,
-                                                       font=font)
-        placed = None
-        if position == "auto":
-            placed = _auto_place(video_path, text, target_box_width, hook_filename, font_scale,
-                                 style, font, video_width, video_height, duration,
-                                 layout_ranges, has_captions, (box_w, box_h))
-            if placed:
-                img_path, box_w, box_h = placed["image"]
+        img_path = hook_filename
+        overlay_x, overlay_y, box_h, placed = _positioned_image(
+            video_path, text, img_path, video_width, video_height, position=position,
+            font_scale=font_scale, style=style, font=font, duration=duration,
+            layout_ranges=layout_ranges, has_captions=has_captions, face_aware=face_aware,
+            design=design)
 
-        # 3. Calculate Overlay Position
-        overlay_x = (video_width - box_w) // 2
-        
-        if placed:
-            overlay_y = placed["y_px"]
-        elif position == "center":
-            overlay_y = (video_height - box_h) // 2
-        elif position == "bottom":
-             # Bottom 20% mark (approx)
-             overlay_y = int(video_height * 0.70)
-        else:
-             # Top 20% mark
-             overlay_y = int(video_height * 0.20)
-        
-        # 4. FFmpeg Command
         print(f"🎬 Overlaying hook: '{text}' at {overlay_x},{overlay_y}")
         
         overlay = _overlay_graph(overlay_x, overlay_y, duration)

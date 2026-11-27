@@ -16,6 +16,7 @@ WORKDIR /app
 # Copy render service source
 COPY render-service/package.json render-service/package-lock.json ./
 RUN npm ci --no-audit --no-fund
+RUN npm install --no-audit --no-fund --save-exact remotion@4.0.541 @remotion/bundler@4.0.541 @remotion/renderer@4.0.541
 
 COPY render-service/tsconfig.json ./
 COPY render-service/src/ ./src/

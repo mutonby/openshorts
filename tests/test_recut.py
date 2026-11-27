@@ -56,6 +56,17 @@ class TestNormalizeSegments:
     def test_rejects_too_short_segment(self):
         with pytest.raises(recut.RecutError):
             recut.normalize_segments([_seg(10, 10.2)])
+
+    def test_saved_short_segment_can_be_preserved_but_cannot_authorize_a_new_short_cut(self):
+        saved = [_seg(10, 10.43), _seg(12.05, 30)]
+        assert recut.normalize_segments(saved[::-1], allowed_short_segments=saved) == saved[::-1]
+        with pytest.raises(recut.RecutError, match="shorter than 0.5s"):
+            recut.normalize_segments([_seg(10.001, 10.43)], allowed_short_segments=saved)
+
+    def test_minimum_length_is_compared_at_the_editor_timestamp_precision(self):
+        assert recut.normalize_segments([_seg(0.2, 0.7)]) == [_seg(0.2, 0.7)]
+        with pytest.raises(recut.RecutError, match="shorter than 0.5s"):
+            recut.normalize_segments([_seg(10, 10)], allowed_short_segments=[_seg(10, 10)])
         # A clamp can also make it too short — that must fail, not slip by.
         with pytest.raises(recut.RecutError):
             recut.normalize_segments([_seg(99.9, 150)], source_duration=100)
@@ -89,6 +100,53 @@ class TestRangeMath:
     def test_rebase_segments_shifts_by_range_start(self):
         rebased = recut.rebase_segments([_seg(15, 25), _seg(30, 35)], 10)
         assert rebased == [_seg(5.0, 15.0), _seg(20.0, 25.0)]
+
+    def test_remap_keeps_an_unchanged_canonical_edit_including_its_replay(self):
+        canonical = [_seg(8, 9), _seg(0, 3), _seg(7, 10)]
+        assert recut.remap_canonical_segments(canonical, canonical) == [_seg(0, 7)]
+
+    def test_remap_splices_source_adjacent_ranges_across_a_canonical_replay(self):
+        canonical = [_seg(10, 12), _seg(20, 22), _seg(12, 15)]
+        assert recut.remap_canonical_segments([_seg(11, 14), _seg(20, 21)], canonical) == [
+            _seg(1, 2), _seg(4, 6), _seg(2, 3),
+        ]
+
+    def test_remap_prefers_a_contiguous_span_and_retains_requested_repeats(self):
+        canonical = [_seg(8, 9), _seg(0, 10)]
+        assert recut.remap_canonical_segments([_seg(0, 8), _seg(8, 9), _seg(8, 9)], canonical) == [
+            _seg(1, 10), _seg(0, 1),
+        ]
+
+    def test_remap_reports_gaps_and_invalid_canonical_metadata(self):
+        assert recut.remap_canonical_segments([_seg(11, 14)], [_seg(10, 12), _seg(13, 15)]) is None
+        assert recut.remap_canonical_segments([_seg(1, 2)], None) is None
+        assert recut.remap_canonical_segments([_seg(1, 2)], [_seg(0, float("inf"))]) is None
+
+
+class TestLegacyCanonicalSegments:
+    canonical_range = _seg(10, 30)
+    edits = {"cuts": [_seg(12, 14), _seg(18, 20)], "teaser": True,
+             "peak": 25, "peak_out": [0.7, 13.1], "duration": 18.1}
+
+    def test_recovers_the_original_edit_from_saved_teaser_and_removed_intervals(self):
+        assert recut.legacy_canonical_segments(self.canonical_range, self.edits) == [
+            _seg(24.3, 26.4), _seg(10, 12), _seg(14, 18), _seg(20, 30),
+        ]
+
+    def test_recovers_a_cut_without_a_teaser(self):
+        edits = {**self.edits, "teaser": False, "duration": 16}
+        assert recut.legacy_canonical_segments(self.canonical_range, edits) == [
+            _seg(10, 12), _seg(14, 18), _seg(20, 30),
+        ]
+
+    @pytest.mark.parametrize("changes", [
+        {"cuts": [_seg(12, 15), _seg(14, 18)]},
+        {"cuts": [_seg(8, 12)]},
+        {"peak_out": []}, {"peak_out": [-0.1]}, {"peak": float("nan")},
+        {"duration": float("inf")}, {"duration": 9}, {"teaser": False},
+    ])
+    def test_rejects_metadata_which_cannot_describe_the_original_file(self, changes):
+        assert recut.legacy_canonical_segments(self.canonical_range, {**self.edits, **changes}) is None
 
 
 class TestTranscriptWords:
@@ -162,6 +220,10 @@ class TestSnapSegments:
     def test_no_words_returns_input(self):
         segs = [_seg(1, 5)]
         assert recut.snap_segments(segs, {"segments": []}, 60.0) is segs
+
+    def test_snap_does_not_extend_a_saved_short_segment_into_removed_footage(self):
+        segs = [_seg(12.0, 12.43), _seg(48, 52)]
+        assert recut.snap_segments(segs, TRANSCRIPT, 60.0)[0] == segs[0]
 
 
 class TestFfmpegCommands:

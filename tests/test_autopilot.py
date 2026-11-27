@@ -4,7 +4,10 @@ Everything here fires on its own schedule and spends the user's minutes, so
 the pure rules are pinned down: which channel videos get picked, which clips
 get published and when, and how each /api/process answer is recorded.
 """
+import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from cloud import autopilot as ap
 
@@ -66,6 +69,92 @@ class TestRankClips:
     def test_zero(self):
         assert ap.rank_clips([{"predicted_score": 1}], 0) == []
 
+    def test_minimum_keeps_only_valid_scores_at_or_above_the_cutoff(self):
+        clips = [
+            {"predicted_score": 79}, {"predicted_score": "80"},
+            {"predicted_score": 92}, {}, {"predicted_score": "inf"},
+            {"predicted_score": 101}, {"predicted_score": False},
+        ]
+        assert ap.rank_clips(clips, 7, min_score=0) == [2, 1, 0]
+        assert ap.rank_clips(clips, 5, min_score=80) == [2, 1]
+        assert ap.rank_clips(clips, 1, min_score=80) == [2]
+        assert ap.rank_clips(clips, 5, min_score=100) == []
+
+
+def test_publish_minimum_is_saved_applied_and_clearable(monkeypatch, tmp_path):
+    from cloud import auth
+
+    user_id = "user"
+    prefs = ap.AutopilotSettings(
+        user_id=user_id, enabled=True, autopublish=True,
+        clips_to_publish=3, publish_platforms=["youtube"],
+    )
+    published = []
+    updated_runs = []
+
+    class FakeSession:
+        @asynccontextmanager
+        async def begin(self):
+            yield
+
+        async def get(self, model, key):
+            return prefs if model is ap.AutopilotSettings and key == user_id else None
+
+        async def execute(self, statement):
+            return SimpleNamespace(first=lambda: ("run", user_id, "Source title"))
+
+    @asynccontextmanager
+    async def session():
+        yield FakeSession()
+
+    async def current_user(request):
+        return SimpleNamespace(id=user_id)
+
+    async def profile_for(_user_id):
+        return "owner-profile"
+
+    async def publish(_run_id, _profile, items, _platforms, _prefs):
+        published.extend(clip["video_url"] for clip, _path in items)
+
+    async def update_run(_run_id, **values):
+        updated_runs.append(values)
+
+    monkeypatch.setattr(ap.database, "session", session)
+    monkeypatch.setattr(auth, "get_current_user_required", current_user)
+    monkeypatch.setattr(ap, "_profile_for", profile_for)
+    monkeypatch.setattr(ap, "_publish", publish)
+    monkeypatch.setattr(ap, "_update_run", update_run)
+    monkeypatch.setattr(ap, "_bg_tasks", set())
+
+    for name in ("low.mp4", "match.mp4", "unscored.mp4"):
+        (tmp_path / name).touch()
+    clips = [
+        {"video_url": "/videos/job/low.mp4", "predicted_score": 45},
+        {"video_url": "/videos/job/match.mp4", "predicted_score": 80},
+        {"video_url": "/videos/job/unscored.mp4"},
+    ]
+    job = {"status": "completed", "output_dir": str(tmp_path), "result": {"clips": clips}}
+
+    async def run():
+        saved = await ap.put_autopilot(ap.AutopilotUpdate(min_publish_score=80), None)
+        assert saved["settings"]["min_publish_score"] == 80
+        unchanged = await ap.put_autopilot(ap.AutopilotUpdate(publish_hour=15), None)
+        assert unchanged["settings"]["min_publish_score"] == 80
+        await ap.on_job_finished("job", job)
+        await asyncio.gather(*ap._bg_tasks)
+        assert published == ["/videos/job/match.mp4"]
+        assert job["result"]["clips"] == clips
+
+        await ap.put_autopilot(ap.AutopilotUpdate(min_publish_score=90), None)
+        await ap.on_job_finished("next-job", job)
+        assert not ap._bg_tasks
+        assert updated_runs == [{"reason": "publish_score_not_met"}]
+
+        cleared = await ap.put_autopilot(ap.AutopilotUpdate(min_publish_score=None), None)
+        assert cleared["settings"]["min_publish_score"] is None
+
+    asyncio.run(run())
+
 
 class TestScheduleSlots:
     def test_one_a_day_at_the_hour(self):
@@ -118,7 +207,7 @@ class TestOutcomeFromProcess:
 
 class TestSmallRules:
     def test_platforms_are_filtered_and_ordered(self):
-        assert ap.clean_platforms(["YouTube", "facebook", "tiktok", "x"]) == ["tiktok", "youtube", "facebook"]
+        assert ap.clean_platforms(["YouTube", "facebook", "tiktok", "snapchat"]) == ["tiktok", "youtube", "facebook"]
         assert ap.clean_platforms(None) == []
 
     def test_only_paid_plans_are_eligible(self):

@@ -144,3 +144,30 @@ def test_clean_response_is_not_flagged_as_blocked():
         candidates = []
 
     gemini_worker.raise_if_blocked(_Resp())  # must not raise
+
+
+@pytest.mark.parametrize("failure", [429, 503])
+def test_retries_transient_response_code_with_the_job_budget(tmp_path, failure):
+    from analysis_checkpoint import AnalysisCheckpoint
+    from pydantic import BaseModel
+
+    class Result(BaseModel):
+        windows: list[dict]
+
+    class Transient(Exception):
+        status_code = failure
+
+    class Models:
+        calls = 0
+
+        def generate_content(self, **_options):
+            self.calls += 1
+            if self.calls == 1:
+                raise Transient()
+            return _FakeResponse(parsed={"windows": [{"score": 87}]})
+
+    models = Models()
+    budget = AnalysisCheckpoint(tmp_path, "gemini")
+    result, _ = main._run_gemini_stage(_client(models), "m", "prompt", Result, budget)
+    assert result["windows"][0]["score"] == 87
+    assert models.calls == budget.requests == 2

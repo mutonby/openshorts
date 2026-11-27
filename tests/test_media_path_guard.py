@@ -54,25 +54,28 @@ class TestWhatMayLeave:
         assert not media_auth.is_servable(rel)
 
 
-def test_thumbnails_mount_serves_images_only():
+def test_thumbnails_mount_serves_images_only(tmp_path, monkeypatch):
     """/thumbnails was a plain StaticFiles mount: any file a session left in
-    its directory was public. It now shares the /videos allowlist."""
+    its directory was public. It now shares the /videos allowlist.
+
+    Served from a temporary directory: the real output/thumbnails can belong
+    to another user (a Docker volume), and a test must not write there."""
     import os
-    import shutil
     import uuid
     app_module = pytest.importorskip("app")
     from fastapi.testclient import TestClient
 
+    mount = next(r for r in app_module.app.routes if getattr(r, "path", "") == "/thumbnails")
+    monkeypatch.setattr(mount.app, "all_directories", [str(tmp_path)])
+    monkeypatch.setattr(app_module, "THUMBNAILS_DIR", str(tmp_path))
+
     sid = str(uuid.uuid4())
-    d = os.path.join(app_module.THUMBNAILS_DIR, sid)
-    os.makedirs(d)
-    try:
-        for name, body in (("thumb.jpg", b"\xff\xd8jpeg"), ("session.json", b"{}"), (".secret", b"x")):
-            with open(os.path.join(d, name), "wb") as f:
-                f.write(body)
-        c = TestClient(app_module.app)
-        assert c.get(f"/thumbnails/{sid}/thumb.jpg").status_code == 200
-        assert c.get(f"/thumbnails/{sid}/session.json").status_code == 404
-        assert c.get(f"/thumbnails/{sid}/.secret").status_code == 404
-    finally:
-        shutil.rmtree(d, ignore_errors=True)
+    d = tmp_path / sid
+    d.mkdir()
+    for name, body in (("thumb.jpg", b"\xff\xd8jpeg"), ("session.json", b"{}"), (".secret", b"x")):
+        (d / name).write_bytes(body)
+    c = TestClient(app_module.app)
+    assert c.get(f"/thumbnails/{sid}/thumb.jpg").status_code == 200
+    assert c.get(f"/thumbnails/{sid}/session.json").status_code == 404
+    assert c.get(f"/thumbnails/{sid}/.secret").status_code == 404
+    assert os.path.isdir(d)

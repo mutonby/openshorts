@@ -105,7 +105,18 @@ def caption_bands(ranges, window_start, window_end, has_captions=True):
         if e <= s:
             continue
         covered += e - s
-        bands.add(SEAM_CAPTIONS if layout == "split" else BOTTOM_CAPTIONS)
+        if layout == "split":
+            bands.add(SEAM_CAPTIONS)
+        elif layout == "stack":
+            # A streamer stack's captions sit where composition.py put them.
+            y = r.get("caption_y", r.get("seam", 0.40))
+            try:
+                y = float(y)
+            except (TypeError, ValueError):
+                y = 0.40
+            bands.add((round(y - 0.06, 4), round(y + 0.06, 4)))
+        else:
+            bands.add(BOTTOM_CAPTIONS)
     # Any part of the window no range describes keeps the default captions.
     if covered < (window_end - window_start) - 1e-3:
         bands.add(BOTTOM_CAPTIONS)

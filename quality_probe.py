@@ -5,7 +5,7 @@ Run as a short subprocess by app.py BEFORE a job starts, so the user can decide
 to abort (and e.g. refresh cookies) instead of burning 20+ minutes of
 transcription and rendering on a 360p-only source.
 
-Prints JSON to stdout: {"max_height": int, "mode": str, "cookies_invalid": bool}
+Prints JSON to stdout with dimensions, duration and audio language codes.
 Always exits 0 — the caller treats probe failures as "unknown" and starts the
 job anyway (fail-open), where the in-job warning still applies.
 """
@@ -37,7 +37,8 @@ def main() -> int:
     parser.add_argument("--url", required=True)
     args = parser.parse_args()
 
-    result = {"max_height": 0, "mode": None, "cookies_invalid": False, "duration": 0}
+    result = {"max_height": 0, "mode": None, "cookies_invalid": False, "duration": 0,
+              "audio_languages": []}
     # Same gates as the metering probe and the download (app.py also checks
     # before spawning this): a URL on a private / tailnet address, or a
     # YouTube page that is not one video, never reaches yt-dlp. The empty
@@ -77,7 +78,9 @@ def main() -> int:
         # (self-host) when the environment has none.
         session = yt_account.Session()
         cookies_path = session.path or _find_cookies_path()
+        from youtube_io import audio_languages, js_runtime
         base_opts = {
+            'js_runtimes': js_runtime(),
             'quiet': True,
             'no_warnings': False,
             'logger': _CollectLogger(),
@@ -120,6 +123,7 @@ def main() -> int:
                     result["mode"] = mode
                 if not result["duration"]:
                     result["duration"] = int(info.get('duration') or 0)
+                result["audio_languages"] = sorted(set(result["audio_languages"]) | set(audio_languages(info)))
                 if result["max_height"] >= 1080:
                     break
             except Exception as e:

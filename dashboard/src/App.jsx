@@ -1,23 +1,24 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket } from 'lucide-react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket, Trash2 } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
+import CandidateReview from './components/CandidateReview';
 import McpConnectCard from './components/McpConnectCard';
 import ResultCard from './components/ResultCard';
 import ProcessingAnimation from './components/ProcessingAnimation';
-import { clipProgress, FREE_CLIPS_PER_VIDEO, FREE_CLIPS_QUIET, MAX_CLIPS_PER_VIDEO } from './lib/clipProgress';
+import { clipProgress, lastJobError, FREE_CLIPS_PER_VIDEO, FREE_CLIPS_QUIET, MAX_CLIPS_PER_VIDEO } from './lib/clipProgress';
 // import Gallery from './components/Gallery';
 import ThumbnailStudio from './components/ThumbnailStudio';
 import SaaShortsTab from './components/SaaShortsTab';
 import UGCGallery from './components/UGCGallery';
 import ScheduleWeekModal from './components/ScheduleWeekModal';
+import ContentCalendar from './components/ContentCalendar';
 import ClipEditor from './components/ClipEditor';
 import ReframeEditor from './components/ReframeEditor';
 import UsageMeter from './components/UsageMeter';
 import TopUpModal from './components/TopUpModal';
 import WatermarkModal, { watermarkNoticeDismissed } from './components/WatermarkModal';
 import { getApiUrl } from './config';
-import StarBanner from './components/StarBanner';
 import PlanChoiceModal from './components/PlanChoiceModal';
 import ClipTutorial from './components/ClipTutorial';
 import OnboardingSurvey from './components/OnboardingSurvey';
@@ -26,6 +27,7 @@ import LoginModal from './components/LoginModal';
 import TrialGate from './components/TrialGate';
 import AdvancedBanner from './components/AdvancedBanner';
 import HistoryTab from './components/HistoryTab';
+import DeleteProjectDialog from './components/DeleteProjectDialog';
 import AutopilotTab from './components/AutopilotTab';
 import ProfileMenu from './components/ProfileMenu';
 import Modal from './components/ui/Modal';
@@ -36,6 +38,7 @@ import { track } from './lib/analytics';
 import { readConnectReturn, stripConnectReturn } from './lib/connectReturn';
 import { rememberTabAfterLogin } from './lib/tabAfterLogin';
 import { JobPollError, pollFailureAction } from './lib/jobPoll';
+import { captionStylePayload } from './lib/captionStyle';
 
 // Enhanced "Encryption" using XOR + Base64 with a Salt
 // This is better than plain Base64 but still client-side.
@@ -279,11 +282,15 @@ const readableError = (raw) => {
 // poll, which clears the saved session (see lib/jobPoll.js).
 const SESSION_MAX_AGE = 86400000; // 24 hours
 
-const pollJob = async (jobId) => {
-  const res = await apiFetch(`/api/status/${jobId}`);
+const pollJob = async (jobId, options) => {
+  const res = await apiFetch(`/api/status/${jobId}`, options);
   if (!res.ok) throw new JobPollError(res.status);
   return res.json();
 };
+
+function clipIndexAt(clip, position) {
+  return Number.isInteger(clip.clip_index) ? clip.clip_index : position;
+}
 
 function App() {
   // Cloud auth/billing session (inert when billing is disabled).
@@ -368,21 +375,24 @@ function App() {
   const [jobId, setJobId] = useState(null);
   const [status, setStatus] = useState('idle'); // idle, processing, complete, error
   const [results, setResults] = useState(null);
+  const [canPauseDiscovery, setCanPauseDiscovery] = useState(false);
+  const [discoveryAction, setDiscoveryAction] = useState('');
+  const [discoveryActionError, setDiscoveryActionError] = useState('');
+  const [repairingClip, setRepairingClip] = useState(null);
+  const [repairError, setRepairError] = useState('');
   // Best clips first. The backend hands them back in transcript order, which
   // buries the strongest one wherever it happens to fall in the video — and
   // the first card is the one people actually watch and publish.
   //
-  // The ORIGINAL array position travels with each clip and is what gets passed
-  // down as `index`: it is the clip's identity everywhere else (clip_index on
-  // /api/subtitle, /api/edit and publishing, the clip-N.mp4 download name, the
-  // saved per-clip project state). Sorting the array itself would silently
-  // repoint all of that at the wrong clip.
+  // The clip_index in project metadata survives missing renders and sorting.
+  // Older results use the clip's original array position.
   const rankedClips = useMemo(() => {
     const clips = results?.clips;
     if (!Array.isArray(clips)) return [];
     return clips
-      .map((clip, index) => ({ clip, index }))
+      .map((clip, index) => ({ clip, index: clipIndexAt(clip, index) }))
       .sort((a, b) => {
+        if (a.clip?.assessment && b.clip?.assessment) return 0;
         const sa = Number.isFinite(a.clip?.predicted_score) ? a.clip.predicted_score : -1;
         const sb = Number.isFinite(b.clip?.predicted_score) ? b.clip.predicted_score : -1;
         // Ties (and clips with no score at all) keep transcript order.
@@ -419,12 +429,17 @@ function App() {
   const [noSource, setNoSource] = useState(false);
 
   const [sessionRecovered, setSessionRecovered] = useState(false);
+  const restoredCompletion = useRef(null);
   // The job a restored session was polling is no longer on the server.
   const [jobGone, setJobGone] = useState(false);
   const [showScheduleWeek, setShowScheduleWeek] = useState(false);
+  const [showContentCalendar, setShowContentCalendar] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   // Clip editor overlay: index of the clip being edited, or null.
   const [editingClip, setEditingClip] = useState(null);
   const [reframingClip, setReframingClip] = useState(null);
+  const editingClipData = results?.clips?.find((clip, position) => clipIndexAt(clip, position) === editingClip);
+  const reframingClipData = results?.clips?.find((clip, position) => clipIndexAt(clip, position) === reframingClip);
 
   // Silent-success "saved" states for the settings key inputs (design.md: no alert popups)
   const [elevenLabsSaved, setElevenLabsSaved] = useState(false);
@@ -580,6 +595,16 @@ function App() {
   };
 
   const handleClipStateChange = (index, state) => {
+    const restored = restoredCompletion.current;
+    if (restored?.jobId === jobId) {
+      // Cards normalize their saved layers on mount (a baked end card clears
+      // them). Compare later reports with that baseline, not the saved objects.
+      const mounted = restored.cardStates || (restored.cardStates = Object.create(null));
+      const value = JSON.stringify([state.serverVideoFile,
+        ...['subtitles', 'hook', 'effects'].map((layer) => state.activeLayers?.[layer] ?? null)]);
+      if (!Object.hasOwn(mounted, index)) mounted[index] = value;
+      else if (mounted[index] !== value) restoredCompletion.current = null;
+    }
     if (!isManaged || !jobId) return;
     const s = clipStateSync.current;
     if (s.jobId !== jobId) { s.pending = {}; s.files = {}; s.jobId = jobId; }
@@ -603,15 +628,19 @@ function App() {
   const handleClipRerendered = (index, data) => {
     const newFile = (data.new_video_url || '').split('/').pop();
     setResults((prev) => {
-      if (!prev?.clips?.[index]) return prev;
+      const position = prev?.clips?.findIndex((clip, i) => clipIndexAt(clip, i) === index);
+      if (position == null || position < 0) return prev;
       const clips = prev.clips.slice();
-      clips[index] = {
-        ...clips[index],
+      clips[position] = {
+        ...clips[position],
         video_url: data.new_video_url,
         start: data.start,
         end: data.end,
-        recipe: data.recipe,
-        mode: data.mode ?? clips[index].mode,
+        ...(Object.hasOwn(data, 'recipe') ? { recipe: data.recipe } : {}),
+        mode: data.mode ?? clips[position].mode,
+        ...(Object.hasOwn(data, 'burned_hook') ? { auto_hook: data.burned_hook } : {}),
+        ...(Object.hasOwn(data, 'endcard') ? { endcard: data.endcard } : {}),
+        ...(Object.hasOwn(data, 'export_duration') ? { export_duration: data.export_duration } : {}),
       };
       return { ...prev, clips };
     });
@@ -706,24 +735,8 @@ function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             job_id: jobId,
-            clip_index: i,
-            position: options.position,
-            font_size: options.fontSize,
-            font_name: options.fontName,
-            font_color: options.fontColor,
-            border_color: options.borderColor,
-            border_width: options.borderWidth,
-            bg_color: options.bgColor,
-            bg_opacity: options.bgOpacity,
-            style: options.style || 'pill',
-            highlight_color: options.highlightColor || '#FFD700',
-            effect: options.effect || 'none',
-            base_opacity: options.baseOpacity ?? 1.0,
-            uppercase: options.uppercase || false,
-            reveal: options.reveal || false,
-            shadow: options.shadow || 0,
-            max_chars: options.maxChars ?? null,
-            max_duration: options.maxDuration ?? null,
+            clip_index: clipIndexAt(clips[i], i),
+            ...captionStylePayload(options),
             // Chain from the clip's current server file (its video_url basename).
             input_filename: (clips[i].video_url || '').split('/').pop(),
           }),
@@ -775,8 +788,14 @@ function App() {
         return;
       }
       if (session.jobId && session.status && session.status !== 'idle') {
+        const restoredStatus = session.status === 'review' ? 'processing'
+          : session.status === 'completed' ? 'complete' : session.status;
+        const restoredResults = session.results || null;
+        if (restoredStatus === 'complete') {
+          restoredCompletion.current = { jobId: session.jobId, results: restoredResults };
+        }
         setJobId(session.jobId);
-        setResults(session.results || null);
+        setResults(restoredResults);
         // Restore the source preview. Older sessions (or uploads) saved no
         // media, so fall back to the backend-served source for this job —
         // except for reopened projects, whose source was never persisted.
@@ -785,8 +804,7 @@ function App() {
         if (session.noSource) setNoSource(true);
         if (session.projectState) setProjectState(session.projectState);
         if (session.activeTab) setActiveTab(session.activeTab);
-        // If was processing, resume polling; if complete/error, just show results
-        setStatus(session.status === 'processing' ? 'processing' : session.status);
+        setStatus(restoredStatus);
         setSessionRecovered(true);
         setTimeout(() => setSessionRecovered(false), 5000);
       }
@@ -794,6 +812,25 @@ function App() {
       localStorage.removeItem(SESSION_KEY);
     }
   }, []);
+
+  // Show the saved results immediately and check once for newer server edits.
+  useEffect(() => {
+    const restored = restoredCompletion.current;
+    if (!restored || restored.jobId !== jobId || status !== 'complete'
+        || authLoading || (billingEnabled && !isSignedIn)) return;
+    const controller = new AbortController();
+    pollJob(jobId, { signal: controller.signal, cache: 'no-store' }).then((data) => {
+      if (controller.signal.aborted || restoredCompletion.current !== restored) return;
+      if (data.status === 'completed' && Array.isArray(data.result?.clips)) {
+        setResults((current) => current === restored.results ? data.result : current);
+      }
+    }).catch(() => {
+      // An expired server copy may still have playable clips in the library.
+    }).finally(() => {
+      if (!controller.signal.aborted && restoredCompletion.current === restored) restoredCompletion.current = null;
+    });
+    return () => controller.abort();
+  }, [authLoading, billingEnabled, isSignedIn, jobId, status]);
 
   // Session Recovery: Save state changes
   useEffect(() => {
@@ -933,38 +970,43 @@ function App() {
         inFlight = true;
         try {
           const data = await pollJob(jobId);
+          if (stopped) return;
           failures = 0;
-          console.log("Job status:", data);
 
           // Update results if available (real-time)
           if (data.result) {
             setResults(data.result);
           }
 
+          setCanPauseDiscovery(data.can_pause === true);
           if (data.partial) setPartialJob(data.partial);
           setQueueInfo(data.status === 'queued' && data.queue ? data.queue : null);
           nextDelay = data.status === 'queued' ? 5000 : 2000;
+          if (data.logs) {
+            setLogs(data.logs);
+            setLogTimes(data.log_times || []);
+          }
 
           if (data.status === 'completed') {
             setQueueInfo(null);
             setStatus('complete');
             stop();
             refreshMe();
+          } else if (data.status === 'review') {
+            setStatus('review');
+            stop();
+          } else if (data.status === 'paused') {
+            setStatus('paused');
+            setDiscoveryAction('');
+            stop();
           } else if (data.status === 'failed') {
             setStatus('error');
-            const errorMsg = data.error || (data.logs && data.logs.length > 0 ? data.logs[data.logs.length - 1] : "Process failed");
-            setJobError(readableError(errorMsg));
-            setLogs(prev => [...prev, "Error: " + errorMsg]);
+            setJobError(readableError(data.error || lastJobError(data.logs || [])));
             stop();
             refreshMe();
-          } else {
-            // Update logs if available
-            if (data.logs) {
-              setLogs(data.logs);
-              setLogTimes(data.log_times || []);
-            }
           }
         } catch (e) {
+          if (stopped) return;
           console.error("Polling error", e);
           failures += 1;
           if (pollFailureAction(e, failures) === 'gone') {
@@ -1003,10 +1045,9 @@ function App() {
       const data = await res.json();
       if (data.profiles && data.profiles.length > 0) {
         setUserProfiles(data.profiles);
-        // Auto select first if none selected
-        if (!uploadUserId) {
-          setUploadUserId(data.profiles[0].username);
-        }
+        setUploadUserId((selected) => data.profiles.some((profile) => profile.username === selected)
+          ? selected
+          : data.profiles[0].username);
       } else if (!silent) {
         alert("No profiles found for this API Key.");
       }
@@ -1230,18 +1271,6 @@ function App() {
     }
   };
 
-  // Open the Upload-Post white-label page (which includes the scheduling calendar)
-  // in a new tab, for consulting/managing scheduled posts from the dashboard.
-  const handleOpenCalendar = async () => {
-    try {
-      const { access_url } = await apiJson('/api/social/connect', { method: 'POST' });
-      if (access_url) window.open(access_url, '_blank', 'noopener');
-    } catch (e) {
-      if (e instanceof QuotaError) { openQuotaWall(e, 'calendar'); return; }
-      alert('Could not open the calendar. Please try again.');
-    }
-  };
-
   const handleProcess = async (data, forceLowQuality = false) => {
     // Hosted: must be signed in AND on an active plan/trial. Self-host: BYOK keys.
     if (billingEnabled) {
@@ -1252,11 +1281,12 @@ function App() {
       // fall through the same gates.
       if (!isSignedIn) { stashPendingJob(data); setShowLogin(true); return; }
       if (!isManaged) { window.location.hash = '#/pricing'; return; }
-    } else if (keysMissing) {
+    } else if (!geminiOk && !data.exactRange) {
       setShowKeyModal(true);
       return;
     }
     // Past every gate, so this request is really running: nothing left to resume.
+    restoredCompletion.current = null;
     clearPendingJob();
     setStatus('processing');
     setJobError('');
@@ -1281,6 +1311,7 @@ function App() {
       // Advanced generation controls: only sent when the user set them, so the
       // default request stays byte-identical to the pre-feature one.
       const advanced = {
+        exact_range: data.exactRange ? 'true' : null,
         target_clips: data.targetClips || null,
         clip_min_seconds: data.clipMinSeconds || null,
         clip_max_seconds: data.clipMaxSeconds || null,
@@ -1288,6 +1319,17 @@ function App() {
         // but the dashboard always states the user's choice.
         auto_hook: data.autoHook ? '1' : '0',
         auto_hook_style: data.autoHook ? (data.autoHookStyle || 'pill') : null,
+        captions: typeof data.captions === 'boolean' ? String(data.captions) : null,
+        endcard_settings: JSON.stringify(data.endcard || null),
+        framing_method: data.framingMethod || null,
+        source_audio_language: data.sourceAudioLanguage || null,
+        viral_edit: typeof data.viralEdit === 'boolean' ? (data.viralEdit ? '1' : '0') : null,
+        framing_focus: data.framingFocus || null,
+        sound_effects: typeof data.soundEffects === 'boolean' ? (data.soundEffects ? '1' : '0') : null,
+        review_candidates: data.reviewCandidates ? 'true' : null,
+        highlight_discovery: data.highlightDiscovery ? 'true' : null,
+        audio_first: data.audioFirst ? 'true' : null,
+        chat_offset: data.chatOffset ?? null,
         // 'auto' is the server default, so only a deliberate choice travels.
         layouts: data.layout && data.layout !== 'auto' ? data.layout : null,
         // Set when the user took the quota wall's "clip the first N minutes"
@@ -1298,7 +1340,7 @@ function App() {
         source_end: data.sourceEnd ?? null,
       };
 
-      if (data.type === 'url') {
+      if (data.type === 'url' && !data.chatReplay) {
         headers['Content-Type'] = 'application/json';
         body = JSON.stringify({
           url: data.payload,
@@ -1319,7 +1361,10 @@ function App() {
         });
       } else {
         const formData = new FormData();
-        formData.append('file', data.payload);
+        if (data.type === 'url') formData.append('url', data.payload);
+        else formData.append('file', data.payload);
+        if (forceLowQuality) formData.append('force_low_quality', 'true');
+        if (data.chatReplay) formData.append('chat_replay', data.chatReplay);
         formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
         formData.append('output_format', data.outputFormat || 'auto');
         for (const [k, v] of Object.entries(advanced)) {
@@ -1399,6 +1444,60 @@ function App() {
     }
   };
 
+  const setDiscoveryRunning = async (running) => {
+    if (!jobId || discoveryAction) return;
+    setDiscoveryAction(running ? 'resuming' : 'pausing');
+    setDiscoveryActionError('');
+    try {
+      const headers = apiKey ? { 'X-Gemini-Key': apiKey } : {};
+      await apiJson(`/api/jobs/${jobId}/${running ? 'resume' : 'pause'}-discovery`, { method: 'POST', headers });
+      if (running) {
+        setDiscoveryAction('');
+        setStatus('processing');
+      }
+    } catch (error) {
+      setDiscoveryActionError(error.message || 'Could not change discovery status.');
+      setDiscoveryAction('');
+    }
+  };
+
+  const retryCheckedClip = async (clip) => {
+    if (repairingClip != null || !jobId) return;
+    setRepairingClip(clip.index);
+    setRepairError('');
+    try {
+      await apiJson('/api/clip/rerender', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          job_id: jobId,
+          clip_index: clip.index,
+          segments: [{ start: clip.start, end: clip.end }],
+          framing: 'gameplay',
+          reapply_captions: true,
+        }),
+      });
+      const updated = await pollJob(jobId);
+      setResults(updated.result);
+      setStatus(updated.status === 'completed' ? 'complete' : 'error');
+    } catch (error) {
+      setRepairError(error.message || 'Could not render the repaired clip.');
+    } finally {
+      setRepairingClip(null);
+    }
+  };
+
+  const handleApproveCandidates = async (candidateIds) => {
+    await apiJson(`/api/jobs/${jobId}/render-candidates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(apiKey ? { 'X-Gemini-Key': apiKey } : {}) },
+      body: JSON.stringify({ candidate_ids: candidateIds }),
+    });
+    setProcessingMedia({ type: 'server', payload: `/api/source/${jobId}` });
+    setResults(null);
+    setStatus('processing');
+  };
+
   // Resume the job the visitor started before signing in. Runs on the render
   // that first sees isSignedIn true — after a magic link or a Google round trip,
   // i.e. a fresh document — and replays the request through handleProcess, so
@@ -1421,6 +1520,7 @@ function App() {
   }, [billingEnabled, isSignedIn]);
 
   const handleReset = () => {
+    restoredCompletion.current = null;
     setJobGone(false);
     // Flush any pending edit-state sync before dropping the project: the clips
     // themselves are already archived to R2 as they were edited.
@@ -1442,6 +1542,14 @@ function App() {
   useEffect(() => {
     handleResetRef.current = handleReset;
   });
+
+  const handleProjectDeleted = (deletedJobId) => {
+    setDeleteTarget(null);
+    if (deletedJobId !== jobIdRef.current) return;
+    clearTimeout(clipStateSync.current.timer);
+    clipStateSync.current = { jobId: null, pending: {}, files: {}, timer: null };
+    handleReset();
+  };
 
   // --- UI Components ---
 
@@ -1741,17 +1849,17 @@ function App() {
               <button
                 onClick={() => (billingEnabled && !isSignedIn ? setShowLogin(true) : goToTab('settings'))}
                 className="badge-warn hover:brightness-125 transition-all hidden sm:inline-flex"
-                title="Configure API keys or choose a plan"
+                title="Configure connected services"
               >
                 <AlertTriangle size={12} />
                 <span className="hidden md:inline">
                   {!geminiOk && !uploadPostKey
-                    ? 'Gemini & Upload-Post keys missing'
+                    ? 'Connect AI and publishing'
                     : !geminiOk
-                      ? 'Gemini API Key Missing'
-                      : 'Upload-Post API Key Missing'}
+                      ? 'Connect AI selection'
+                      : 'Connect publishing'}
                 </span>
-                <span className="md:hidden">keys missing</span>
+                <span className="md:hidden">connect services</span>
               </button>
             )}
           </div>
@@ -1763,13 +1871,13 @@ function App() {
             <div className="flex items-start sm:items-center gap-2.5 sm:gap-3 text-sm text-ink2 min-w-0 flex-1">
               <KeyRound size={16} className="shrink-0 text-warn mt-0.5 sm:mt-0" />
               <div className="min-w-0">
-                <span className="font-medium text-ink">Required API keys missing.</span>{' '}
+                <span className="font-medium text-ink">Connect services.</span>{' '}
                 <span className="text-muted">
                   {!geminiOk && !uploadPostKey
-                    ? 'Set your Gemini and Upload-Post API keys to use OpenShorts.'
+                    ? 'Add Gemini for automatic highlight selection and Upload-Post for publishing. Single-clip export is available without them.'
                     : !geminiOk
-                      ? 'Set your Gemini API key to use OpenShorts.'
-                      : 'Set your Upload-Post API key to use OpenShorts.'}
+                      ? 'Add Gemini for automatic highlight selection. Single-clip export is available without it.'
+                      : 'Add Upload-Post to publish videos.'}
                 </span>
               </div>
             </div>
@@ -1866,7 +1974,7 @@ function App() {
                     <button onClick={handleConnectSocials} className="btn-primary py-2 px-4 text-sm">
                       <Share2 size={16} /> Connect social accounts
                     </button>
-                    <button onClick={handleOpenCalendar} className="btn-quiet py-2 px-4 text-sm">
+                    <button onClick={() => setShowContentCalendar(true)} className="btn-quiet py-2 px-4 text-sm">
                       <Calendar size={16} /> Content calendar
                     </button>
                   </div>
@@ -1920,6 +2028,11 @@ function App() {
                     <button onClick={fetchUserProfiles} className="btn-quiet py-2 px-4 text-sm">
                       Connect
                     </button>
+                    {uploadPostKey && uploadUserId && (
+                      <button onClick={() => setShowContentCalendar(true)} className="btn-quiet py-2 px-4 text-sm shrink-0">
+                        <Calendar size={16} /> Content calendar
+                      </button>
+                    )}
                   </div>
                   <div className="text-xs text-muted leading-relaxed">
                     Connect your Upload-Post account to enable one-click publishing.
@@ -2234,7 +2347,7 @@ function App() {
                     <button onClick={() => setShowLogin(true)} className="btn-primary">sign in</button>
                   </div>
                 ) : (
-                  <HistoryTab onReopenProject={restoreProject} />
+                  <HistoryTab onReopenProject={restoreProject} onProjectDeleted={handleProjectDeleted} />
                 )}
               </div>
             </div>
@@ -2263,45 +2376,52 @@ function App() {
           {/* View: Dashboard (Idle) */}
           {activeTab === 'dashboard' && status === 'idle' && (
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
-              <div className="min-h-full flex flex-col items-center justify-center px-4 py-5 sm:p-6">
+              <div className="min-h-full flex flex-col items-center px-4 py-6 sm:px-6 sm:py-10">
               {/* On a phone the hero used to fill the fold on its own and push
                   the uploader — the whole point of the screen — below it. The
                   eyebrow, the display size and the gaps all shrink first. */}
-              <div className="max-w-xl w-full text-center space-y-5 sm:space-y-8">
-                <div className="space-y-2.5 sm:space-y-4">
-                  <p className="eyebrow hidden sm:block">01 · CLIP GENERATOR</p>
-                  <h1 className="font-display lowercase text-3xl sm:text-4xl md:text-5xl text-ink">
-                    Create Viral Shorts
+              <div className="max-w-xl w-full space-y-4 sm:space-y-6">
+                <div className="space-y-2">
+                  <h1 className="font-display lowercase text-3xl sm:text-4xl text-ink">
+                    Create shorts
                   </h1>
-                  <p className="text-muted text-[15px] sm:text-lg leading-snug sm:leading-normal max-w-sm sm:max-w-none mx-auto">
-                    Drop your long-form video below to instantly generate viral clips with AI.
+                  <p className="text-muted text-sm leading-relaxed">
+                    Turn a long video into short clips for YouTube, Instagram, and TikTok.
                   </p>
-                  {/* The same pipeline is an MCP server: point people at the
-                      one place that explains how to drive it from an agent. */}
-                  {!tutorialLock && (
-                  <p className="text-xs text-muted">
-                    Or let an agent do it:{' '}
+                </div>
+
+                <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} />
+
+                {!tutorialLock && (
+                  <p className="text-xs text-muted text-center">
                     <a
                       href={billingEnabled ? '#/account' : '#app'}
                       onClick={(e) => { if (!billingEnabled) { e.preventDefault(); goToTab('settings'); } }}
                       className="text-ink2 underline underline-offset-2 hover:text-brass transition-colors"
                     >
-                      connect Claude, ChatGPT or n8n →
+                      Generate clips with Claude, ChatGPT, or n8n
                     </a>
                   </p>
-                  )}
-                </div>
-
-                <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} />
-
-                <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-8 text-muted text-xs sm:text-sm">
-                  <span className="flex items-center gap-2"><Youtube size={16} /> YouTube</span>
-                  <span className="flex items-center gap-2"><Instagram size={16} /> Instagram</span>
-                  <span className="flex items-center gap-2"><TikTokIcon size={16} /> TikTok</span>
-                </div>
+                )}
               </div>
               </div>
             </div>
+          )}
+
+          {activeTab === 'dashboard' && status === 'review' && (
+            <CandidateReview key={jobId} jobId={jobId} results={results} onApprove={handleApproveCandidates} />
+          )}
+
+          {activeTab === 'dashboard' && status === 'paused' && (
+            <section className="p-4 sm:p-6">
+              <div className="card p-4 max-w-lg">
+                <h2 className="text-ink font-medium">Discovery paused</h2>
+                <p className="text-sm text-muted mt-2">Resume from the audio, transcript, and analysis saved so far.</p>
+                {discoveryActionError && <p className="text-xs text-danger mt-2" role="alert">{discoveryActionError}</p>}
+                <button className="btn-primary mt-3" type="button" disabled={!!discoveryAction}
+                    onClick={() => setDiscoveryRunning(true)}>Resume discovery</button>
+              </div>
+            </section>
           )}
 
           {/* View: Processing / Results (Split View) */}
@@ -2313,7 +2433,7 @@ function App() {
                 <div className="mb-4 sm:mb-6 flex items-center justify-between gap-2">
                   <h2 className="text-sm font-medium text-ink lowercase flex items-center gap-2">
                     <Activity className={`text-brass ${status === 'processing' ? 'animate-pulse' : ''}`} size={18} />
-                    Live Analysis
+                    Processing
                   </h2>
                   <span className={status === 'processing' ? 'badge-brass' :
                     status === 'complete' ? 'badge-ok' :
@@ -2322,6 +2442,38 @@ function App() {
                     {status.toUpperCase()}
                   </span>
                 </div>
+
+                {status === 'processing' && canPauseDiscovery && (
+                  <button className="btn-quiet self-start mb-3" type="button" disabled={!!discoveryAction}
+                      onClick={() => setDiscoveryRunning(false)}>{discoveryAction ? 'Pausing…' : 'Pause discovery'}</button>
+                )}
+                {discoveryActionError && <p className="text-xs text-danger mb-2" role="alert">{discoveryActionError}</p>}
+                {status === 'processing' && (
+                  <p role="status" className="flex items-center gap-2 mb-4 text-sm text-ink2">
+                    <Loader2 size={16} className="animate-spin text-brass shrink-0" aria-hidden="true" />
+                    <span>{queueInfo ? 'In queue' : !jobId && processingMedia?.type === 'file' ? 'Uploading source' : progress.stage}</span>
+                  </p>
+                )}
+                {results?.validation_issues?.length > 0 && (
+                  <div className="mb-4 space-y-2 text-sm">
+                    {results.validation_issues.map(clip => (
+                      <div className="rounded-input border border-rule p-3" key={clip.index}>
+                        <p className="text-ink">{clip.title}</p>
+                        <p className="text-xs text-warn mt-1">{clip.issues.join(' ')}</p>
+                        <button className="btn-quiet mt-2 text-xs" type="button" disabled={repairingClip != null}
+                            onClick={() => retryCheckedClip(clip)}>
+                          {repairingClip === clip.index ? 'Rendering…' : 'Retry with Gameplay Priority'}
+                        </button>
+                      </div>
+                    ))}
+                    {repairError && <p className="text-xs text-danger" role="alert">{repairError}</p>}
+                  </div>
+                )}
+                {status === 'error' && (
+                  <p role="alert" className="mb-4 rounded-input border border-rule2 bg-paper px-3 py-2.5 text-sm text-danger break-words">
+                    {jobError || 'Clip generation failed.'}
+                  </p>
+                )}
 
                 {/* Trimmed run: say it while it renders, not only once the
                     clips land, so the shorter result is no surprise. */}
@@ -2378,36 +2530,17 @@ function App() {
                   </div>
                 )}
 
-                {/* Video Preview */}
+                {/* Keep the source monitor distinct from the downloadable render. */}
                 {processingMedia && (
-                  <ProcessingAnimation
-                    media={processingMedia}
-                    isComplete={status === 'complete'}
-                    syncedTime={syncedTime}
-                    isSyncedPlaying={isSyncedPlaying}
-                    syncTrigger={syncTrigger}
-                  />
-                )}
-
-                {/* Phones only. The scan box drops its invented telemetry at
-                    this size and the log terminal below starts collapsed, so
-                    without this the screen would say nothing about what the job
-                    is actually doing. The log tail is the real answer. */}
-                {status === 'processing' && (
-                  <div className="sm:hidden mb-3 flex items-start gap-2 text-xs text-ink2 min-w-0">
-                    <Loader2 size={14} className="animate-spin text-brass shrink-0 mt-px" />
-                    <span className="min-w-0 leading-snug break-words">
-                      {logs.length ? logs[logs.length - 1] : 'starting up…'}
-                    </span>
-                  </div>
-                )}
-
-                {/* The render is dead time: the user is watching a progress bar
-                    with nothing to do, so this is where the one star ask goes. */}
-                {status === 'processing' && (
-                  <div className="my-3">
-                    <StarBanner message="Got a minute while this renders?" />
-                  </div>
+                  <figure>
+                    <figcaption className="text-xs text-muted mb-2">Original source footage</figcaption>
+                    <ProcessingAnimation
+                      media={processingMedia}
+                      syncedTime={syncedTime}
+                      isSyncedPlaying={isSyncedPlaying}
+                      syncTrigger={syncTrigger}
+                    />
+                  </figure>
                 )}
 
                 {/* Logs Terminal */}
@@ -2453,7 +2586,7 @@ function App() {
                     "schedule week" pill under the title on a phone. */}
                 <div className="mb-4 sm:mb-6 shrink-0 space-y-3">
                   <h2 className="font-display lowercase text-lg sm:text-xl text-ink flex flex-wrap items-center gap-2">
-                    <span className="mr-auto">Generated Shorts</span>
+                    <span className="mr-auto">Rendered clips</span>
                     {clipsMaking ? (
                       <span className="readout bg-paper3 px-2.5 py-1 rounded-full text-brass">
                         {progress.ready}/{progress.total} Clips
@@ -2481,19 +2614,28 @@ function App() {
                       />
                     </div>
                   )}
-                  {results?.clips?.length > 0 && status === 'complete' && (
+                  {jobId && (status === 'complete' || status === 'error') && (
                     <div className="flex flex-col sm:flex-row sm:justify-end items-stretch sm:items-center gap-2">
                       <button
-                        onClick={handleDownloadAll}
-                        disabled={downloadingAll}
-                        className="btn-ghost px-3 py-2 text-xs"
-                        title="Download all clips as a ZIP"
+                        type="button"
+                        onClick={() => setDeleteTarget({ jobId, title: results?.clips?.[0]?.video_title_for_youtube_short })}
+                        className="btn-quiet px-3 py-2 text-xs"
                       >
-                        {downloadingAll
-                          ? <><Loader2 size={14} className="animate-spin" />zipping…</>
-                          : <><Download size={14} />download all</>}
+                        <Trash2 size={14} /> delete project
                       </button>
-                      {results.clips.length > 1 && (
+                      {status === 'complete' && results?.clips?.length > 0 && (
+                        <button
+                          onClick={handleDownloadAll}
+                          disabled={downloadingAll}
+                          className="btn-ghost px-3 py-2 text-xs"
+                          title="Download all clips as a ZIP"
+                        >
+                          {downloadingAll
+                            ? <><Loader2 size={14} className="animate-spin" />zipping…</>
+                            : <><Download size={14} />download all</>}
+                        </button>
+                      )}
+                      {status === 'complete' && results?.clips?.length > 1 && (
                         <button
                           onClick={() => setShowScheduleWeek(true)}
                           className="btn-primary px-4 py-2 text-xs"
@@ -2652,7 +2794,8 @@ function App() {
                           onReframeClip={(index) => setReframingClip(index)}
                           onModeChanged={status === 'processing' ? null : handleClipRerendered}
                           onUpgrade={isManaged ? openUpsell : null}
-                          initialState={projectState?.clips?.find((c) => c.index === i) || null}
+                          initialState={projectState?.clips?.find((c) => c.index === i
+                            && (!c.server_file || clip.video_url?.endsWith(`/${c.server_file}`))) || null}
                           onStateChange={handleClipStateChange}
                           durable={durableClips[i]}
                           uploadPostKey={uploadPostKey}
@@ -2675,15 +2818,14 @@ function App() {
                       <div className="h-full min-h-[140px] flex flex-col items-center justify-center text-muted space-y-3 text-center px-4">
                         <Loader2 size={28} className="animate-spin text-brass" />
                         <p className="text-sm lowercase">
-                          {clipsMaking ? `Making ${progress.total} ${progress.total === 1 ? 'clip' : 'clips'}...` : 'Waiting for clips...'}
-                        </p>
-                        <p className="text-xs text-muted/80 max-w-[26ch] leading-snug">
-                          They appear here one by one as each finishes rendering.
+                          Waiting for the first clip
                         </p>
                       </div>
+                    ) : results?.no_highlights ? (
+                      <p className="text-sm text-muted">No moments with a clear payoff were found.</p>
                     ) : status === 'error' ? (
-                      <div className="h-full min-h-[120px] flex flex-col items-center justify-center text-danger space-y-2">
-                        <p>Generation failed.</p>
+                      <div className="h-full min-h-[120px] flex items-center justify-center text-muted text-sm">
+                        <p>No clips available</p>
                       </div>
                     ) : null
                   )}
@@ -2797,12 +2939,36 @@ function App() {
       <ScheduleWeekModal
         isOpen={showScheduleWeek}
         onClose={() => setShowScheduleWeek(false)}
+        onViewCalendar={() => {
+          setShowScheduleWeek(false);
+          setShowContentCalendar(true);
+        }}
         clips={results?.clips || []}
         jobId={jobId}
         uploadPostKey={uploadPostKey}
         uploadUserId={uploadUserId}
         isManaged={isManaged}
       />
+      {showContentCalendar && (
+        <ContentCalendar
+          key={isManaged ? 'managed' : uploadUserId}
+          isManaged={isManaged}
+          uploadPostKey={uploadPostKey}
+          uploadUserId={uploadUserId}
+          onConnect={() => {
+            setShowContentCalendar(false);
+            handleConnectSocials();
+          }}
+          onClose={() => setShowContentCalendar(false)}
+        />
+      )}
+      {deleteTarget && (
+        <DeleteProjectDialog
+          project={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onDeleted={handleProjectDeleted}
+        />
+      )}
 
       {/* Pre-flight quality gate */}
       {qualityGate && (
@@ -2831,20 +2997,20 @@ function App() {
       )}
 
 
-      {editingClip !== null && results?.clips?.[editingClip] && (
+      {editingClipData && (
         <ClipEditor
           jobId={jobId}
           clipIndex={editingClip}
-          clipTitle={results.clips[editingClip].video_title_for_youtube_short || ''}
+          clipTitle={editingClipData.video_title_for_youtube_short || ''}
           onClose={() => setEditingClip(null)}
           onRerendered={handleClipRerendered}
         />
       )}
-      {reframingClip !== null && results?.clips?.[reframingClip] && (
+      {reframingClipData && (
         <ReframeEditor
           jobId={jobId}
           clipIndex={reframingClip}
-          clipTitle={results.clips[reframingClip].video_title_for_youtube_short || ''}
+          clipTitle={reframingClipData.video_title_for_youtube_short || ''}
           onClose={() => setReframingClip(null)}
           onReframed={handleClipRerendered}
         />

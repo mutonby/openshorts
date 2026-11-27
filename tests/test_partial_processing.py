@@ -170,6 +170,22 @@ def test_max_minutes_reaches_the_reservation_and_the_job(dirs, monkeypatch):
     assert manifest["partial"] == partial
 
 
+def test_generation_endcard_is_saved_for_resume_and_invalid_card_is_rejected(dirs, monkeypatch):
+    out_root, _ = dirs
+    _stub_reservation(monkeypatch, None)
+    card = {"text": "Follow 👋", "handle": "@creator", "duration": 3, "sound": "silent"}
+    response = _post_process({"url": "https://www.youtube.com/watch?v=long", "acknowledged": True,
+        "endcard_settings": card})
+    assert response.status_code == 200, response.text
+    job_id = response.json()["job_id"]
+    assert json.loads(app_module.jobs[job_id]["env"]["CLIP_ENDCARD_JSON"]) == card
+    manifest = json.loads((out_root / job_id / app_module._RESUME_FILE).read_text())
+    assert json.loads(manifest["generation_options"]["CLIP_ENDCARD_JSON"]) == card
+    bad = _post_process({"url": "https://www.youtube.com/watch?v=long", "acknowledged": True,
+        "endcard_settings": {"duration": 10}})
+    assert bad.status_code == 400
+
+
 def test_whole_video_job_is_untouched(dirs, monkeypatch):
     _stub_reservation(monkeypatch, None)
     resp = _post_process({"url": "https://www.youtube.com/watch?v=ok", "acknowledged": True})
@@ -178,6 +194,40 @@ def test_whole_video_job_is_untouched(dirs, monkeypatch):
     assert "MAX_SOURCE_MINUTES" not in job["env"]
     assert resp.json()["partial"] is None
     assert job["partial"] is None
+
+
+def test_exact_range_queues_short_fractional_selection_without_ai(dirs, monkeypatch):
+    out_root, _ = dirs
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    async def allow_source(_url):
+        pass
+
+    monkeypatch.setattr(app_module, "_validate_source_url", allow_source)
+    monkeypatch.setattr(app_module, "QUALITY_GATE_MIN_HEIGHT", 0)
+    monkeypatch.setattr(app_module, "MIN_SOURCE_SECONDS", 0)
+
+    async def submit():
+        transport = httpx.ASGITransport(app=app_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            return await client.post("/api/process", json={
+                "url": "https://www.youtube.com/watch?v=test", "acknowledged": True,
+                "exact_range": True, "source_start": 0.375, "source_end": 3.625,
+            })
+
+    resp = asyncio.run(submit())
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["partial"]["start_seconds"] == 0.375
+    assert body["partial"]["end_seconds"] == 3.625
+    job_id = body["job_id"]
+    env = app_module.jobs[job_id]["env"]
+    assert env["CLIP_EXACT_RANGE"] == "1"
+    assert env["SOURCE_START_SECONDS"] == "0.375"
+    assert float(env["MAX_SOURCE_MINUTES"]) * 60 == pytest.approx(3.25)
+    manifest = json.loads((out_root / job_id / app_module._RESUME_FILE).read_text())
+    assert manifest["generation_options"]["CLIP_EXACT_RANGE"] == "1"
 
 
 def test_resumed_partial_job_keeps_its_cut(dirs, monkeypatch):
