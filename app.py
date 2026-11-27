@@ -54,8 +54,15 @@ import source_cache
 import yt_account
 import api_role as _api_role
 from jsonfile import write_json_atomic
+import fdlimit
 
 load_dotenv()
+
+# A soft limit of 1024 descriptors runs out under load (client sockets, job
+# pipes, served files) and uvicorn then refuses every new connection.
+_nofile = fdlimit.raise_nofile_limit()
+if _nofile:
+    print(f"📂 Open-file limit: soft={_nofile[0]} hard={_nofile[1]}")
 
 # Constants
 UPLOAD_DIR = "uploads"
@@ -639,7 +646,7 @@ async def reserve_process_minutes(request, url, input_path, job_id, max_minutes=
     # their entry in `jobs` (probe, reservation, quality gate) count too, or a
     # burst of parallel requests would all pass it.
     limit = _cloud_config.PLAN_JOB_LIMIT.get(user.plan, 2)
-    active = sum(1 for j in jobs.values()
+    active = sum(1 for j in list(jobs.values())
                  if j.get('user_id') == user.id and j.get('status') in ('queued', 'processing'))
     active += _submissions_in_flight(user.id)
     if active >= limit:
@@ -1411,7 +1418,7 @@ async def _raise_users_jobs(priority_by_user: dict) -> int:
     want = {str(u): int(p) for u, p in priority_by_user.items()}
     if not want:
         return 0
-    owner = {jid: str(j.get('user_id')) for jid, j in jobs.items()
+    owner = {jid: str(j.get('user_id')) for jid, j in list(jobs.items())
              if str(j.get('user_id')) in want}
     moved = _raise_queued(lambda jid, _p: want[owner[jid]] if jid in owner else None)
     raised_at = time.time()
@@ -6625,7 +6632,13 @@ async def process_endpoint(
     # Handle JSON body manually for URL payload
     content_type = request.headers.get("content-type", "")
     if "application/json" in content_type:
-        body = await request.json()
+        try:
+            body = await request.json()
+        except ValueError:
+            # Malformed JSON (or undecodable bytes) is the caller's mistake.
+            raise HTTPException(status_code=400, detail="Request body is not valid JSON")
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object")
         url = body.get("url")
         ack_flag = bool(body.get("acknowledged"))
         force_low = bool(body.get("force_low_quality"))
@@ -7846,7 +7859,14 @@ async def get_source_video(job_id: str, request: Request,
                                     headers={"Cache-Control": "no-store",
                                              "Referrer-Policy": "no-referrer"})
         raise HTTPException(status_code=404, detail="Source not found")
-    return FileResponse(source_path, media_type="video/mp4")
+    # The retention sweep can drop the file between _locate_source and the send.
+    # FileResponse stats lazily and raises RuntimeError (a 500) when it is gone,
+    # so stat here and hand the result over: a vanished source is a 404.
+    try:
+        stat_result = os.stat(source_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Source not found")
+    return FileResponse(source_path, media_type="video/mp4", stat_result=stat_result)
 
 
 @app.get("/api/jobs/{job_id}/download-all")
@@ -7907,9 +7927,19 @@ async def download_all_clips(job_id: str, request: Request):
     loop = asyncio.get_event_loop()
     try:
         await loop.run_in_executor(None, build_zip)
+    except FileNotFoundError:
+        # The retention/size sweep removed the job folder while we were
+        # zipping: the clips are gone, which is a 404, not a server error.
+        remove_zip()
+        raise HTTPException(status_code=404, detail="Job files were removed")
     except BaseException:
         remove_zip()
         raise
+
+    if not os.path.exists(zip_path):
+        # Same sweep, just after the ZIP was written: FileResponse would raise
+        # RuntimeError("File at path ... does not exist") and answer 500.
+        raise HTTPException(status_code=404, detail="Job files were removed")
 
     return FileResponse(
         zip_path,
@@ -8256,7 +8286,7 @@ async def edit_clip(
 
 
 async def _edit_clip_locked(req, request, job, body_key, final_api_key):
-    if 'result' not in job or 'clips' not in job['result']:
+    if not isinstance(job.get('result'), dict) or 'clips' not in job['result']:
         raise HTTPException(status_code=400, detail="Job result not available")
     current_clip = next((clip for index, clip in enumerate(job['result']['clips'])
                          if clip.get('clip_index', index) == req.clip_index), None)
@@ -10262,7 +10292,7 @@ async def generate_effects_config(
 
     job = jobs[req.job_id]
     await _assert_job_owner(request, job)
-    if 'result' not in job or 'clips' not in job['result']:
+    if not isinstance(job.get('result'), dict) or 'clips' not in job['result']:
         raise HTTPException(status_code=400, detail="Job result not available")
 
     # Meter the managed Gemini call (no-op for self-host).
@@ -11222,7 +11252,7 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     await _assert_job_owner(request, job)
-    if 'result' not in job or 'clips' not in job['result']:
+    if not isinstance(job.get('result'), dict) or 'clips' not in job['result']:
         raise HTTPException(status_code=400, detail="Job result not available")
     clip = next((item for index, item in enumerate(job['result']['clips'])
                  if item.get('clip_index', index) == req.clip_index), None)
@@ -11926,7 +11956,8 @@ async def _save_thumbnail_upload(file, session_id):
             size += len(chunk)
             if size > limit_bytes:
                 buffer.close()
-                os.remove(video_path)
+                # The uploads sweep may already have taken the partial file.
+                _remove_quietly(video_path)
                 raise HTTPException(status_code=413, detail=f"File too large. Max size {MAX_FILE_SIZE_MB}MB")
             buffer.write(chunk)
     if not BILLING_ENABLED:

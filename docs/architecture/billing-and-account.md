@@ -154,6 +154,19 @@ The offer is worded in money and dates (each renewal's price with and without
 the discount, the day it starts, nothing charged or refunded today), and the
 confirm step says the library stops being permanent once the plan ends.
 
+**What happens to the library** (`cloud/videos.py` sweeps, every 6 h): it is
+kept `VIDEO_RETENTION_GRACE_DAYS` (7) after the plan ends, as the Terms
+(section 13), the privacy policy and the History tab say. An account that
+falls back to the free plan is skipped by `purge_free_expired` (and by the
+"deleted tomorrow" warning) while `metering.in_paid_grace` holds, then follows
+the free 7-days-per-clip expiry like any other; an account that cannot be free
+is emptied by `purge_expired` after the same grace. The end is
+`metering.plan_ended_at`: the webhook that cancelled it or marked it unpaid,
+never later than the paid period; a checkout that never charged
+(`incomplete*`) was never a plan and gets no grace. A change to this period
+changes the Terms, the privacy policy, `docs/compliance/retencion.md` and the
+copy of `HistoryTab.jsx` and `CancelPlanModal.jsx` with it.
+
 The last step leads with a retention offer (`RETENTION_COUPON_ID` env):
 `GET /api/billing/retention-offer` says whether this subscription gets it (live
 monthly plan, no discount on it, never offered before: `retention_offer` in the

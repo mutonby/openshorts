@@ -446,8 +446,8 @@ has a publish button that sends it to the channel with its title and
 description, and <strong>schedule a week</strong> spreads a batch across the
 coming days at the time you choose, which is how most channels use a long
 video: one Short a day pointing back at it. TikTok and Instagram sit on the
-same screen if you post there too. Posting works on the free plan as well, with
-a daily cap.</p>
+same screen if you post there too. Posting to your socials is part of the paid
+plans; on the free plan you download the clips.</p>
 <p>One thing YouTube lets you do that is worth doing by hand: in YouTube Studio
 a Short can link to a related video, which puts a link to the full episode
 under the Short. OpenShorts does not set that field for you.</p>
@@ -748,8 +748,8 @@ January 2025, so you can raise the clip maximum to 180 seconds when a longer
 Reel suits the moment; the default of 15 to 60 seconds is where most moments
 that stand alone end.</p>
 <p>The same screen posts to TikTok and YouTube Shorts, so one recording can
-fill all three. Posting is available on the free plan as well, with a daily
-cap.</p>
+fill all three. Posting is part of the paid plans; on the free plan you
+download the clips.</p>
 
 <h2>Facebook Reels maker: same file, posted by you</h2>
 <p>A Reel made here is the right shape for Facebook: vertical, captioned, with
@@ -834,7 +834,7 @@ const twitchFaq = [
   { q: 'Will my facecam stay in the clip?', a: 'Yes, with the vertical layout on auto. A webcam box composited into a corner is detected by its geometry (small, off centre, still) and the clip renders with the gameplay full width on top and the facecam cropped out and enlarged below.' },
   { q: 'What about gameplay with no commentary?', a: 'When the transcript comes back with under 8 words, or under 5 words a minute, OpenShorts switches to a vision pass where Gemini watches the footage and picks the moments. Those clips have no captions. A long silent VOD is watched in stretches of up to 40 minutes and the best picks of all of them are kept, up to a little over five hours per job.' },
   { q: 'Can I turn Twitch clips into TikToks?', a: 'A Twitch clip of 45 seconds or more can be pasted as a source and comes back reframed to 9:16 with captions. Shorter clips are under the minimum; for those a static crop in the free video to 9:16 converter is the quicker route.' },
-  { q: 'How many clips do I get from a stream?', a: 'Each job returns up to about a dozen: for any source longer than 12 minutes the AI is asked for 6 to 12. A four-hour stream clipped in four one-hour parts gives four times as many candidates as the same stream clipped in one job.' },
+  { q: 'How many clips do I get from a stream?', a: 'It scales with the length. A source between about 12 minutes and half an hour is asked for 6 to 12 clips; a longer one is asked for at least one for every five minutes, up to 60 per job, and fewer come back when fewer moments stand alone.' },
   { q: 'Does it post to TikTok and YouTube Shorts?', a: 'Yes, from the dashboard: YouTube Shorts and Instagram Reels are published directly, and TikTok receives the clip as a draft in your TikTok inbox to finish in the app.' },
   { q: 'Can it clip my new Twitch streams automatically?', a: 'Yes, on the paid plans. Connect Twitch in the Autopilot tab and it checks for new past broadcasts about once an hour, waits until the stream has ended and clips it, one automatic video a day. Instead of the first minutes it clips the stretch your viewers clipped most, up to the per-video cap you set.' },
   { q: 'Does it use the clips my viewers made?', a: 'Yes, as a signal. For a Twitch VOD link it reads the clips viewers made from that broadcast, with their time and views, and makes sure the stretches clipped most reach the final pick. The rest is chosen from the transcript, so a moment nobody clipped can still win.' },
@@ -1022,7 +1022,7 @@ const kickFaq = [
   { q: 'Can it clip a Kick stream while it is live?', a: 'No. It works from the recording after the stream has ended.' },
   { q: 'Does it handle IRL streams?', a: 'Yes. A face in the frame is tracked with a stabiliser that holds the crop still inside a safe zone, so a walking, shaky camera does not turn into a shaky clip. Scenes where nobody is in frame keep the full width over a blurred backdrop. A stream shot vertical on a phone is left as it is.' },
   { q: 'Will the facecam be kept on gaming streams?', a: 'With the vertical layout on auto, a webcam box in a corner is detected and the clip renders with the gameplay across the top and the facecam enlarged underneath.' },
-  { q: 'How many clips does one Kick stream give?', a: 'Each job returns its best 6 to 12 moments for anything longer than about 12 minutes. For a stream of several hours, clip it in parts with "clip only part of it" to get more candidates.' },
+  { q: 'How many clips does one Kick stream give?', a: 'It scales with the length. A stream between about 12 minutes and half an hour gives its best 6 to 12 moments; a longer one is asked for at least one for every five minutes, up to 60 per job. You can still use "clip only part of it" to focus on one stretch.' },
   { q: 'Can I clip a Kick streamer\'s VOD if I am not that streamer?', a: 'With their permission: as their editor, or as part of a clipping programme they run. Clipping someone\'s stream without it and posting the result is a reupload the platforms will take down when the streamer reports it.' },
   { q: 'Can I post Kick clips to TikTok and YouTube?', a: 'Yes, from the dashboard. YouTube Shorts and Instagram Reels are published directly; TikTok receives each clip as a draft in your TikTok inbox, which you finish in the app.' },
   { q: 'How does it compare with Opus Clip or Klap for Kick?', a: `Opus Clip bills a credit per imported minute, from ${COMPETITORS['opus-clip'].entryPrice}; Klap bills clips, from ${COMPETITORS.klap.entryPrice}, and leans on speech detection (both checked ${longDate(COMPETITORS.klap.checked)}). OpenShorts is open source and self-hostable with no meter, and hosted from $${CLOUD.lowPrice}/month.` },
@@ -1328,7 +1328,7 @@ const sermonSteps = [
 const sermonFaq = [
   { q: 'Is this sermon clip maker free?', a: `The hosted free plan clips your first video whole up to ${FIRST_VIDEO_MINUTES} minutes, then ${CLOUD.freeMinutes} minutes a month, with a watermark and no credit card. Marking just the sermon keeps a whole service inside that first video. Paid plans start at $${CLOUD.lowPrice}/month with no watermark; the self-hosted edition is free under MIT.` },
   { q: 'Do the free sermon clips have a watermark?', a: 'Yes, on the hosted free plan. Moving to a paid plan removes it from new clips and from the ones already made. Self-hosted OpenShorts never adds one.' },
-  { q: 'How many clips does one sermon give?', a: 'A sermon longer than about 12 minutes is asked for 6 to 12 clips, enough for one a day through the week, and fewer come back when fewer passages stand alone. You can set an exact number from 1 to 15.' },
+  { q: 'How many clips does one sermon give?', a: 'A sermon between about 12 minutes and half an hour is asked for 6 to 12 clips, enough for one a day through the week; a longer one is asked for more, at least one for every five minutes. Fewer come back when fewer passages stand alone. You can set an exact number from 1 to 15.' },
   { q: 'Can I clip only the sermon and skip the worship set?', a: 'Yes. "Clip only part of it" lets you set a start and an end. Only that stretch is downloaded, analysed and counted against your minutes.' },
   { q: 'Can we post clips of the worship songs?', a: 'Be careful. The songs belong to their writers and publishers, and a licence that covers streaming your service does not necessarily cover cutting a song into a clip and posting it on social media. Check the terms of your licence. Clips of the preaching avoid the question.' },
   { q: 'Does it follow a pastor who walks the stage?', a: 'Yes. The preacher\'s face is tracked, and a stabiliser holds the frame still while they stay inside a safe zone and only moves when they leave it, so the clip looks like a camera operator, not a chase.' },

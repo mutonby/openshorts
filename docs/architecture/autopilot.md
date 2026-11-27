@@ -35,6 +35,15 @@ day. Paid plans only (it spends minutes unattended).
   user picked; per-network fields from `social_platforms.upload_fields`), scheduled one a day at `publish_hour` in
   the user's IANA `timezone`. Runs stuck in processing for 6 h are marked
   `timeout`.
+- **A run that made no clips says why in words**: next to the `reason` code,
+  every run view and the `POST /api/autopilot/run` answer carry a `message`
+  (`REASON_MESSAGES`), which the tab shows on the click, as the badge's tooltip
+  and in the activity list. The channel list cannot tell a Short from a regular
+  video before trying it (the uploads playlist has no duration), and the
+  latest uploads of a channel that posts through us are our own shorts, so the
+  commonest answer to "clip it" is `youtube_short`. When every run so far is
+  one, `GET /api/autopilot` also sends a `notice` for the whole channel
+  (`only_shorts`). A new reason gets its sentence (a test walks the module).
 - `AUTOPILOT_DISABLED=1` turns the poller off without touching the API.
 - Both tables are in `account.USER_OWNED_TABLES`.
 

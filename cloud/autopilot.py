@@ -230,6 +230,49 @@ def outcome_from_process(status_code: int, body) -> dict:
     return {"status": FAILED, "reason": f"http_{status_code}", "job_id": None, "retry": False}
 
 
+# What a run that made no clips says to the person, next to the ``reason``
+# code a program reads. "Skipped" alone looked like Autopilot doing nothing:
+# most first clicks on "clip it" land on a Short (the channel's latest uploads
+# are often the shorts we posted there ourselves).
+REASON_MESSAGES = {
+    "youtube_short": ("This video is already a YouTube Short, so there is nothing to cut. "
+                      "Autopilot makes shorts from your regular, longer videos."),
+    "private_video": ("This video is private on YouTube. Set it to Unlisted or Public "
+                      "and try again."),
+    "out_of_minutes": "You are out of minutes for this period.",
+    "too_short": "This video is too short to clip.",
+    "unavailable": ("YouTube is not serving this video yet (private or still processing). "
+                    "Try again in a while."),
+    "low_quality": "YouTube only offered a low quality copy of this video, so it was not clipped.",
+    "url_ingest_disabled": "Links are disabled on this server.",
+    "still_live": "This broadcast is still live. It is clipped once it ends.",
+    "timeout": "The job did not finish. Try again.",
+    "processing_failed": "Processing failed. Try again.",
+    "publish_partial": "The clips are ready, but some could not be scheduled.",
+    "publish_score_not_met": "The clips are ready for review, but none met your minimum publishing score.",
+    "pinterest_board_unavailable": "Pinterest could not be scheduled. Choose an available board in Autopilot settings.",
+}
+ONLY_SHORTS_MESSAGE = (
+    "The videos tried on this channel so far are all Shorts, and a Short has nothing left "
+    "to cut. Autopilot makes shorts from regular, longer videos. If the channel has none "
+    "yet, paste any video link in the clip generator instead.")
+
+
+def reason_message(reason) -> Optional[str]:
+    """The sentence for a run's ``reason``, or None (clipped, or a code with
+    no sentence of its own)."""
+    return REASON_MESSAGES.get(reason or "")
+
+
+def only_shorts(runs: Iterable) -> bool:
+    """True when every run so far was skipped as a Short: this channel has
+    given Autopilot nothing it can clip, and the page says so in words."""
+    runs = list(runs or [])
+    return bool(runs) and all(
+        getattr(r, "status", None) == SKIPPED and getattr(r, "reason", None) == "youtube_short"
+        for r in runs)
+
+
 def clean_platforms(values) -> List[str]:
     """Keep the platforms Autopilot can publish to, in a stable order."""
     wanted = {str(v).lower() for v in (values or [])}
@@ -850,6 +893,7 @@ def _run_view(r: AutopilotRun) -> dict:
         "trigger": r.trigger,
         "status": r.status,
         "reason": r.reason,
+        "message": reason_message(r.reason),
         "job_id": r.job_id,
         "clips_count": r.clips_count,
         "posted_count": r.posted_count,
@@ -876,6 +920,7 @@ async def get_autopilot(request: Request):
             accounts = await fetch_social_accounts(profile)
         except Exception:
             accounts = {}
+    runs = await _recent_runs(user.id)
     return {
         "eligible": eligible(user),
         "plan": user.plan,
@@ -890,7 +935,9 @@ async def get_autopilot(request: Request):
             "max_clips_to_publish": MAX_CLIPS_TO_PUBLISH,
             "platforms": list(PUBLISH_PLATFORMS),
         },
-        "runs": [_run_view(r) for r in await _recent_runs(user.id)],
+        "runs": [_run_view(r) for r in runs],
+        # Said once for the channel, not only on each skipped row.
+        "notice": ONLY_SHORTS_MESSAGE if only_shorts(runs) else None,
     }
 
 
@@ -1038,4 +1085,5 @@ async def run_now(payload: ManualRun, request: Request):
         raise HTTPException(status_code=429, detail=(
             "You already have the maximum number of jobs running. Try again in a few minutes."
             if result.get("reason") == "busy" else "Could not start the job. Try again shortly."))
-    return {"status": result["status"], "reason": result.get("reason"), "job_id": result.get("job_id")}
+    return {"status": result["status"], "reason": result.get("reason"),
+            "message": reason_message(result.get("reason")), "job_id": result.get("job_id")}

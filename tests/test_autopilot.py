@@ -227,6 +227,114 @@ class TestSmallRules:
         assert ap.parse_ts(None) is None
 
 
+class TestASkipSaysWhy:
+    """A channel that only has Shorts gets every video skipped. "Skipped" with
+    a three-word badge read as Autopilot doing nothing (most runs so far ended
+    this way), so the API carries a sentence and says it once for the channel."""
+
+    def test_every_reason_the_code_gives_has_a_sentence(self):
+        import inspect
+        import re
+        src = inspect.getsource(ap)
+        given = set(re.findall(r'"reason": "([a-z_]+)"', src))
+        given |= set(re.findall(r'reason="([a-z_]+)"', src))
+        # Not shown to anyone: retried on a later tick, or answered as an error.
+        given -= {"busy", "server_error", "already_picked", "no_job_id"}
+        assert "youtube_short" in given and "private_video" in given
+        assert given <= set(ap.REASON_MESSAGES), given - set(ap.REASON_MESSAGES)
+
+    def test_a_short_is_explained_not_just_named(self):
+        text = ap.reason_message("youtube_short")
+        assert "already a YouTube Short" in text and "longer videos" in text
+        assert ap.reason_message(None) is None
+        assert ap.reason_message("http_418") is None     # no sentence: the page falls back
+
+    def test_the_run_a_page_lists_carries_the_sentence(self):
+        from types import SimpleNamespace
+        run = SimpleNamespace(
+            id="r1", video_id="v1", video_url="u", video_title="t", thumbnail_url=None,
+            published_at=None, trigger="manual", status="skipped", reason="youtube_short",
+            job_id=None, clips_count=None, posted_count=None, created_at=None)
+        view = ap._run_view(run)
+        assert view["reason"] == "youtube_short"
+        assert view["message"] == ap.REASON_MESSAGES["youtube_short"]
+        run.status, run.reason = "completed", None
+        assert ap._run_view(run)["message"] is None
+
+    def test_a_channel_of_only_shorts_is_told_once(self):
+        from types import SimpleNamespace as R
+        short = R(status="skipped", reason="youtube_short")
+        assert ap.only_shorts([short, short])
+        assert not ap.only_shorts([])
+        assert not ap.only_shorts([short, R(status="completed", reason=None)])
+        assert not ap.only_shorts([short, R(status="skipped", reason="out_of_minutes")])
+
+    def test_clip_it_on_a_short_answers_with_the_reason_in_words(self, monkeypatch):
+        import asyncio
+        from types import SimpleNamespace
+        from cloud import auth
+
+        user = SimpleNamespace(id="u-1", email="a@example.com", plan="creator", entitled=True)
+        updates = []
+
+        async def _user(_request):
+            return user
+
+        async def _none(*_a, **_k):
+            return None
+
+        async def _zero(*_a, **_k):
+            return 0
+
+        async def _profile(_uid):
+            return "os_profile"
+
+        async def _videos(_profile, limit=12, accounts=None):
+            return [{"id": "sh0rt", "source": "youtube",
+                     "permalink": "https://www.youtube.com/watch?v=sh0rt"}]
+
+        async def _claim(_uid, _video, _trigger):
+            return "run-1"
+
+        async def _false(_vid):
+            return False
+
+        async def _true(_vid):
+            return True
+
+        async def _update(run_id, **values):
+            updates.append((run_id, values))
+
+        class _Session:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_exc):
+                return False
+
+            def begin(self):
+                return self
+
+            async def execute(self, *_a, **_k):
+                return None
+
+        monkeypatch.setattr(auth, "get_current_user_required", _user)
+        monkeypatch.setattr(ap, "_get_settings", _none)
+        monkeypatch.setattr(ap, "_count_recent", _zero)
+        monkeypatch.setattr(ap, "_profile_for", _profile)
+        monkeypatch.setattr(ap, "fetch_all_videos", _videos)
+        monkeypatch.setattr(ap, "_claim", _claim)
+        monkeypatch.setattr(ap, "is_youtube_private", _false)
+        monkeypatch.setattr(ap, "is_youtube_short", _true)
+        monkeypatch.setattr(ap, "_update_run", _update)
+        monkeypatch.setattr(ap.database, "session", lambda: _Session())
+
+        answer = asyncio.run(ap.run_now(ap.ManualRun(video_id="sh0rt"), request=None))
+        assert answer == {"status": "skipped", "reason": "youtube_short", "job_id": None,
+                          "message": ap.REASON_MESSAGES["youtube_short"]}
+        assert updates == [("run-1", {"status": "skipped", "reason": "youtube_short"})]
+
+
 def test_connect_return_targets_are_a_closed_list():
     from cloud import social_profiles
     assert set(social_profiles.RETURN_TARGETS) == {"account", "autopilot"}

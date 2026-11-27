@@ -83,6 +83,19 @@ engine drains exactly as before (finishes its jobs, `/health/ready` answers
 engine has exited the fronts are stopped. If either side dies on its own the
 other is stopped and the container exits, so the platform restarts it whole.
 
+## Connections to the engine
+
+A front keeps one pool of connections to the engine's socket
+(`front_proxy.ENGINE_LIMITS`, 1000). A streamed response holds its connection
+until the client has read it or left, and a player that buffers a long video
+reads slowly on purpose, so the pool has to be far larger than the number of
+requests per second suggests. The limits are set on the transport: httpx
+ignores the ones given to a client that is handed a transport and falls back
+to 100, which one viewer seeking through a long source used up, and from then
+on that front answered every proxied request, the health check included, with
+a 503 after its 10 s pool wait. In the log that is
+`Front: engine unreachable (PoolTimeout)`, on one front and not the others.
+
 ## Database connections
 
 A front keeps `FRONT_DB_POOL_SIZE` (3) connections and opens up to

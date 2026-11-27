@@ -51,3 +51,42 @@ def test_same_second_downloads_get_separate_zips(tmp_path, monkeypatch):
     asyncio.run(first.background())
     asyncio.run(second.background())
     assert not list(out.glob("clips_*.zip"))
+
+
+def test_job_folder_swept_during_download_is_404(tmp_path, monkeypatch):
+    """The sweep can remove the job folder mid-request: 404, not a 500."""
+    import shutil
+
+    import pytest
+    from fastapi import HTTPException
+
+    job_id = "job-swept"
+    out = _make_job(tmp_path, job_id)
+    monkeypatch.setattr(app, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(app, "_ensure_job_files", _no_files)
+    real_zip = zipfile.ZipFile
+
+    # Folder vanishes while the ZIP is being written.
+    def boom(*a, **k):
+        raise FileNotFoundError()
+
+    monkeypatch.setattr(app.zipfile, "ZipFile", boom)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(app.download_all_clips(job_id, None))
+    assert exc.value.status_code == 404
+
+    # Folder vanishes right after the ZIP was written.
+    def zip_then_sweep(*a, **k):
+        zf = real_zip(*a, **k)
+        orig_close = zf.close
+
+        def close():
+            orig_close()
+            shutil.rmtree(out, ignore_errors=True)
+        zf.close = close
+        return zf
+
+    monkeypatch.setattr(app.zipfile, "ZipFile", zip_then_sweep)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(app.download_all_clips(job_id, None))
+    assert exc.value.status_code == 404

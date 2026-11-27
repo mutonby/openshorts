@@ -699,6 +699,43 @@ def free_period_end(now: datetime | None = None) -> datetime:
     return datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
 
 
+# A checkout whose first charge never went through: there was no paid plan.
+_NEVER_PAID = ("incomplete", "incomplete_expired")
+
+
+def plan_ended_at(row, now: datetime | None = None) -> datetime | None:
+    """When this subscription row stopped granting its plan, or None: it still
+    does, it is on hold, or it never did (a first charge that failed).
+
+    A canceled or unpaid row ended at the webhook that said so
+    (``last_event_at``), never later than the period it had paid for; a row
+    still marked live whose period is over (a webhook that never came) ended
+    with that period.
+    """
+    if row is None or row.status in _NEVER_PAID or row.status == config.ON_HOLD:
+        return None
+    period_end = row.current_period_end
+    if row.status in ("active", "trialing"):
+        return period_end if period_end and period_end <= (now or _now()) else None
+    ended = row.last_event_at or period_end
+    if ended and period_end and period_end < ended:
+        ended = period_end
+    return ended
+
+
+async def in_paid_grace(session, user_id, days: int, now: datetime | None = None) -> bool:
+    """True while a plan that ended is within ``days`` of its end.
+
+    The Terms keep a paid library "while your subscription is active" and
+    delete it "7 days after it ends". Without this the account read as a plain
+    free one the moment the plan ended, and the free sweep deleted every clip
+    older than a week on its next pass: hours after the end, not 7 days.
+    """
+    now = now or _now()
+    ended = plan_ended_at(await _subscription_row(session, user_id), now)
+    return bool(ended and ended + timedelta(days=days) > now)
+
+
 async def is_free_user(session, user_id) -> bool:
     """User currently on the free tier (no active/trialing sub).
 

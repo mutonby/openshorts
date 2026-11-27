@@ -97,6 +97,14 @@ class TestSelfHostStaysOpen:
         assert _get("/api/source/nobody-home").status_code == 404
 
 
+    def test_source_swept_between_lookup_and_send_is_a_404(self, job, monkeypatch):
+        # _locate_source found it, then the retention sweep removed it: Starlette
+        # would raise RuntimeError("File at path ... does not exist") -> 500.
+        gone = str(job / "swept.mp4")
+        monkeypatch.setattr(app_module, "_locate_source", lambda _jid: gone)
+        assert _get(f"/api/source/{JOB_ID}").status_code == 404
+
+
 class TestSignature:
     def test_binds_the_job_and_the_expiry(self):
         exp = int(time.time()) + 60
