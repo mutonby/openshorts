@@ -5,11 +5,12 @@ usage_ledger) are designed for atomic, restart-safe metering — see cloud/meter
 """
 import uuid
 from sqlalchemy import (
-    Column, String, Integer, Numeric, Boolean, DateTime, ForeignKey, Text, func, Index,
-    UniqueConstraint,
+    Column, String, Integer, BigInteger, Numeric, Boolean, DateTime, ForeignKey, Text,
+    func, Index, UniqueConstraint, text,
 )
 from sqlalchemy.dialects.postgresql import UUID, CITEXT, JSONB
 
+from .config import DEFAULT_TENANT_BRAND, DEFAULT_TENANT_ID
 from .database import Base
 
 
@@ -17,11 +18,26 @@ def _uuid():
     return uuid.uuid4()
 
 
+def _tenant_uuid():
+    return uuid.UUID(DEFAULT_TENANT_ID)
+
+
+def _tenant_column(**kwargs):
+    """Mandatory tenant scope with a safe default for legacy insert sites."""
+    return Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"),
+                  nullable=False, default=_tenant_uuid,
+                  server_default=text(f"'{DEFAULT_TENANT_ID}'"), **kwargs)
+
+
 class User(Base):
     __tablename__ = "users"
     id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     email = Column(CITEXT, unique=True, nullable=False)
     google_sub = Column(Text, unique=True, nullable=True)
+    # Firebase UID from Phase 2's ID-token verification. Kept nullable until an
+    # account has signed in with Firebase; tenant_members stores the same value
+    # so erasure can remove membership rows without an app-level tenant id.
+    firebase_uid = Column(Text, nullable=True)
     stripe_customer_id = Column(Text, unique=True, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_login_at = Column(DateTime(timezone=True), nullable=True)
@@ -50,6 +66,103 @@ class User(Base):
     # cloud/database._ADDITIVE_COLUMNS.
     ban_reason = Column(Text, nullable=True)
     banned_at = Column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (
+        Index("ux_users_firebase_uid", "firebase_uid", unique=True),
+    )
+
+
+class Tenant(Base):
+    """A white-label workspace, resolved from a host/domain or explicit header.
+
+    ``owner_firebase_uid`` is deliberately not a FK to ``users.id``: Phase 2
+    authenticates by Firebase UID, and a tenant may outlive any one member.
+    ``credit_balance`` is in billable minutes, the same unit as UsageLedger.
+    """
+    __tablename__ = "tenants"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_tenant_uuid,
+                server_default=text(f"'{DEFAULT_TENANT_ID}'"))
+    owner_firebase_uid = Column(Text, nullable=True)
+    brand_name = Column(Text, nullable=False, default=DEFAULT_TENANT_BRAND)
+    custom_domain = Column(Text, nullable=True)
+    logo_url = Column(Text, nullable=True)
+    primary_color = Column(String(16), nullable=True)
+    accent_color = Column(String(16), nullable=True)
+    credit_balance = Column(Numeric(12, 2), nullable=False, default=0, server_default="0")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (
+        Index("ix_tenants_custom_domain", "custom_domain", unique=True),
+        Index("ix_tenants_owner_firebase_uid", "owner_firebase_uid"),
+    )
+
+
+class TenantMember(Base):
+    __tablename__ = "tenant_members"
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),
+                       primary_key=True)
+    firebase_uid = Column(Text, primary_key=True)
+    role = Column(String(16), nullable=False, default="viewer", server_default="viewer")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (
+        Index("ix_tenant_members_firebase_uid", "firebase_uid"),
+    )
+
+
+class TenantCreditLedger(Base):
+    """Atomic tenant-minute reservations, refunded on release and trimmed on cut."""
+    __tablename__ = "tenant_credit_ledger"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),
+                       nullable=False)
+    job_id = Column(Text, nullable=False)
+    minutes = Column(Numeric(10, 2), nullable=False)
+    status = Column(String(12), nullable=False, default="reserved", server_default="reserved")
+    balance_after = Column(Numeric(12, 2), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (
+        Index("ix_tenant_credit_job", "job_id"),
+        Index("ix_tenant_credit_status", "tenant_id", "status"),
+    )
+
+
+class TenantJob(Base):
+    """Durable queue row for the decoupled worker (Phase 3).
+
+    No FK to ``users.id``: tenant scope is the isolation boundary. The user id
+    is kept as plain text so account erasure does not have to cascade through
+    a table a render node writes from another process.
+    """
+    __tablename__ = "jobs"
+    job_id = Column(Text, primary_key=True)
+    tenant_id = _tenant_column(index=True)
+    user_id = Column(Text, nullable=True)
+    status = Column(String(24), nullable=False, default="pending", server_default="pending")
+    source_key = Column(Text, nullable=True)
+    source_duration_seconds = Column(Numeric(10, 2), nullable=True)
+    requested_minutes = Column(Numeric(10, 2), nullable=True)
+    reservation_id = Column(Text, nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (
+        Index("ix_jobs_tenant_status", "tenant_id", "status"),
+    )
+
+
+class TenantClip(Base):
+    __tablename__ = "clips"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id = _tenant_column(index=True)
+    job_id = Column(Text, ForeignKey("jobs.job_id", ondelete="CASCADE"), nullable=False)
+    clip_index = Column(Integer, nullable=False)
+    r2_key = Column(Text, nullable=False)
+    title = Column(Text, nullable=True)
+    size_bytes = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "job_id", "clip_index", name="uq_clips_tenant_job_index"),
+        Index("ix_clips_job", "job_id"),
+    )
 
 
 class MagicLinkToken(Base):
@@ -132,6 +245,8 @@ class UsageLedger(Base):
     minutes_from_topup = Column(Numeric(10, 2), nullable=False, default=0)
     # [{topup_id, minutes}] — exact FIFO allocation, so release can refund precisely.
     topup_allocations = Column(JSONB, nullable=True)
+    # Tenant-minute reservation that travelled with this user-minute row.
+    tenant_reservation_id = Column(Text, nullable=True)
     status = Column(String(12), nullable=False, default="reserved")  # reserved | committed | released
     period_end = Column(DateTime(timezone=True), nullable=True)   # sub period this counts against
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -201,6 +316,7 @@ class UploadPostProfile(Base):
     __tablename__ = "upload_post_profiles"
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
                      primary_key=True)
+    tenant_id = _tenant_column(index=True)
     profile_username = Column(Text, unique=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -210,6 +326,7 @@ class UserVideo(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
                      nullable=False, index=True)
+    tenant_id = _tenant_column(index=True)
     job_id = Column(Text, nullable=False)
     clip_index = Column(Integer, nullable=True)
     r2_key = Column(Text, nullable=False)
@@ -257,6 +374,7 @@ class Project(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
                      nullable=False, index=True)
+    tenant_id = _tenant_column(index=True)
     job_id = Column(Text, unique=True, nullable=False)
     title = Column(Text, nullable=True)
     metadata_r2_key = Column(Text, nullable=False)

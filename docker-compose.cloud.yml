@@ -10,8 +10,10 @@ services:
     container_name: openshorts-db
     environment:
       - POSTGRES_USER=openshorts
-      # Fail the deploy loudly if unset, rather than silently using a weak default.
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set for cloud mode}
+      # Local-db fallback only: when DATABASE_URL points at Neon this container
+      # still boots, but with a throwaway password the backend never uses. A
+      # local-db deploy with no password fails loudly instead of a weak default.
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-${DATABASE_URL:+external-database}}
       - POSTGRES_DB=openshorts
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -28,7 +30,9 @@ services:
         condition: service_healthy
     environment:
       - BILLING_ENABLED=true
-      - DATABASE_URL=postgresql+asyncpg://openshorts:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set for cloud mode}@db:5432/openshorts
+      # Export DATABASE_URL for Neon/serverless Postgres; the app adds TLS for
+      # *.neon.tech automatically. The local db service is the fallback.
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://openshorts:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set for cloud mode}@db:5432/openshorts}
       - JWT_SECRET=${JWT_SECRET}
       - FRONTEND_URL=${FRONTEND_URL:-https://openshorts.app}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://openshorts.app}
