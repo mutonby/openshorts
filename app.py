@@ -171,7 +171,7 @@ DEBUG_LOGS = os.environ.get("DEBUG_LOGS", "").lower() in ("1", "true", "yes")
 if BILLING_ENABLED:
     import cloud
     from cloud import managed_keys, metering as _metering, config as _cloud_config, alerts as _alerts
-    from cloud import source_archive as _source_archive
+    from cloud import source_archive as _source_archive, tenants as _tenants
     from cloud.auth import get_current_user_optional
 else:
     cloud = None
@@ -180,6 +180,7 @@ else:
     _cloud_config = None
     _alerts = None
     _source_archive = None
+    _tenants = None
 
     async def get_current_user_optional(request: Request):
         # No-op dependency in self-host mode: every request is anonymous / BYOK.
@@ -197,6 +198,66 @@ def _saturation_on() -> bool:
 async def _user_from_request(request: Request):
     """Load the authenticated cloud user (or None). Cheap indexed lookup."""
     return await get_current_user_optional(request)
+
+
+class _NoQuotaError(Exception):
+    """Sentinel for metering doubles that don't expose QuotaExceeded."""
+
+
+def _is_tenant_quota(error) -> bool:
+    return BILLING_ENABLED and _tenants is not None and \
+        isinstance(error, _tenants.TenantQuotaExceeded)
+
+
+def _quota_exceptions():
+    user_quota = getattr(_metering, "QuotaExceeded", _NoQuotaError)
+    if BILLING_ENABLED and _tenants is not None:
+        return (user_quota, _tenants.TenantQuotaExceeded)
+    return (user_quota,)
+
+
+async def _reserve_user_minutes(user_id, minutes, job_id, tenant_id=None):
+    """Reserve user minutes, charging a tenant only when one was resolved.
+
+    Passing no ``tenant_id`` keeps the legacy call shape for metering doubles
+    (and for existing clouds that never resolved a workspace).
+    """
+    if tenant_id is None:
+        return await _metering.reserve_minutes(user_id, minutes, job_id)
+    return await _metering.reserve_minutes(
+        user_id, minutes, job_id, tenant_id=tenant_id)
+
+
+async def _tenant_for_job(request: Request, user=None) -> Optional[str]:
+    """Resolve the tenant charged for a managed job, if tenant credits are on.
+
+    Returns None for self-host and for legacy clouds without a matching tenant:
+    those keep the existing per-user meter. A broken lookup must not turn every
+    submission into a 500, so it is logged and treated as unresolved.
+    """
+    # Tests (and some embedded deployments) flip BILLING_ENABLED after import;
+    # the optional cloud modules are then still None. Treat that as unresolved.
+    if not BILLING_ENABLED or _tenants is None or not _tenants.enabled():
+        return None
+    try:
+        tenant_id = await _tenants.resolve_tenant_id_from_request(
+            request, firebase_uid=getattr(user, "firebase_uid", None))
+    except Exception as e:
+        print(f"⚠️  Tenant lookup failed: {e}")
+        return None
+    if tenant_id is None:
+        return None
+    try:
+        balance = await _tenants.get_balance(tenant_id)
+    except _tenants.TenantNotFound:
+        return None
+    if balance["remaining"] < 1:
+        raise payment_required(
+            "tenant_quota_exceeded",
+            "This workspace is out of OpenShorts processing minutes.",
+            minutes_required=1, minutes_remaining=balance["remaining"], partial_minutes=0)
+    request.state.tenant_id = str(tenant_id)
+    return str(tenant_id)
 
 
 async def resolve_gemini(request: Request) -> Optional[str]:
@@ -691,6 +752,10 @@ async def _reserve_after_job_limit(request, user, url, input_path, job_id, max_m
             "quota_exceeded", "The user is out of OpenShorts processing minutes for this period.",
             minutes_required=1, minutes_remaining=balance["remaining"], partial_minutes=0)
 
+    # Tenant credits are checked before the duration probe: a workspace at zero
+    # must not spend a paid metadata fetch just to be refused at reserve time.
+    tenant_id = await _tenant_for_job(request, user)
+
     # Free queue lane, then the brake: before the probe, the reservation and
     # the first-video grant, so a refused submission spends none of them.
     priority = _assign_queue_lane(request, user, balance, priority)
@@ -751,12 +816,14 @@ async def _reserve_after_job_limit(request, user, url, input_path, job_id, max_m
         chosen_minutes = _cloud_config.billable_minutes(
             (chosen["end_seconds"] - chosen["start_seconds"]) / 60.0)
         try:
-            reservation_id = await _metering.reserve_minutes(user.id, chosen_minutes, job_id)
-        except _metering.QuotaExceeded as e:
+            reservation_id = await _reserve_user_minutes(
+                user.id, chosen_minutes, job_id, tenant_id)
+        except _quota_exceptions() as e:
             _maybe_send_quota_email(user)
+            who = "workspace" if _is_tenant_quota(e) else "user"
             raise payment_required(
                 "quota_exceeded",
-                f"This part of the video needs {e.required:g} minutes and the user has "
+                f"This part of the video needs {e.required:g} minutes and the {who} has "
                 f"{float(e.remaining):.1f} left.",
                 minutes_required=e.required, minutes_remaining=e.remaining, partial_minutes=0)
         request.state.reserved_minutes = chosen_minutes
@@ -790,7 +857,8 @@ async def _reserve_after_job_limit(request, user, url, input_path, job_id, max_m
     else:
         reserve, partial = plan_partial_minutes(minutes, balance["remaining"], max_minutes)
     try:
-        reservation_id = await _metering.reserve_minutes(user.id, reserve, job_id)
+        reservation_id = await _reserve_user_minutes(
+            user.id, reserve, job_id, tenant_id)
         # Read by process_endpoint for the download's safety cut
         # (SOURCE_CAP_MINUTES); kept off the return tuple on purpose. A video
         # processed whole (granted first video included) is capped at its
@@ -802,11 +870,13 @@ async def _reserve_after_job_limit(request, user, url, input_path, job_id, max_m
                 await _metering.record_first_video(ip_hash, job_id)
             except Exception as e:  # the grant stands; only the IP memory is lost
                 print(f"⚠️  Could not record first-video grant: {e}")
-    except _metering.QuotaExceeded as e:
+    except _quota_exceptions() as e:
         _maybe_send_quota_email(user)
+        who = "workspace" if _is_tenant_quota(e) else "user"
         raise payment_required(
             "quota_exceeded",
-            f"This video needs {e.required:g} minutes and the user has {float(e.remaining):.1f} left.",
+            f"This video needs {e.required:g} minutes and the {who} has "
+            f"{float(e.remaining):.1f} left.",
             minutes_required=e.required, minutes_remaining=e.remaining,
             partial_minutes=partial_offer(e.required, e.remaining))
 
@@ -2460,13 +2530,15 @@ def _install_drain_signal_handler():
 def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, watermark,
                            webhook_url=None, webhook_secret=None, base_url=None,
                            partial=None, source_cap_minutes=None, skip_statics=False,
-                           via_api_key=False, lane=None, submitted_at=None, topup=False):
+                           via_api_key=False, lane=None, submitted_at=None, topup=False,
+                           tenant_id=None):
     try:
         path = os.path.join(OUTPUT_DIR, job_id, _RESUME_FILE)
         # Atomic like every manifest write: the other instance reads them.
         write_json_atomic(path, {
                 "cmd": cmd, "priority": priority,
                 "user_id": None if user_id is None else str(user_id),
+                "tenant_id": None if tenant_id is None else str(tenant_id),
                 "reservation_id": reservation_id,
                 "watermark": bool(watermark), "attempts": 0,
                 # The caller's webhook must survive a redeploy: a pipeline that
@@ -6635,6 +6707,7 @@ async def process_endpoint(
         'output_dir': job_output_dir,
         'attestation': attestation,
         'user_id': user_id,
+        'tenant_id': getattr(request.state, "tenant_id", None),
         'reservation_id': reservation_id,
         'watermark': env.get("WATERMARK") == "1",
         'partial': partial,
@@ -6674,7 +6747,16 @@ async def process_endpoint(
                            source_cap_minutes=source_cap, skip_statics=skip_statics,
                            via_api_key=jobs[job_id]['via_api_key'],
                            lane=jobs[job_id]['lane'], submitted_at=jobs[job_id]['submitted_at'],
-                           topup=jobs[job_id]['topup'])
+                           topup=jobs[job_id]['topup'],
+                           tenant_id=jobs[job_id]['tenant_id'])
+
+    if BILLING_ENABLED and jobs[job_id]['tenant_id']:
+        try:
+            await _tenants.record_job(
+                job_id, jobs[job_id]['tenant_id'], user_id=user_id,
+                minutes=(partial or {}).get("processed_minutes") or request.state.reserved_minutes)
+        except Exception as e:
+            print(f"⚠️  Could not record tenant job for {job_id}: {e}")
 
     _enqueue_job(job_id, priority)
     if _saturation_on():

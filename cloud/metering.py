@@ -890,15 +890,22 @@ def has_topup_credit_sync(remaining: float) -> bool:
 # --------------------------------------------------------------------------- #
 # Reserve / commit / release
 # --------------------------------------------------------------------------- #
-async def reserve_minutes(user_id, minutes: float, job_id: str, job_type: str = "process"):
+async def reserve_minutes(user_id, minutes: float, job_id: str, job_type: str = "process",
+                          tenant_id=None):
     """Atomically reserve ``minutes``. Returns the ledger row id.
 
     Raises ``QuotaExceeded`` if the user lacks the minutes. Consumes plan first,
-    then top-ups FIFO, all under the per-user lock.
+    then top-ups FIFO, all under the per-user lock. A resolved tenant is charged
+    in the same transaction, so neither ledger can half-commit.
     """
     minutes = _D(minutes)
+    tenant_reservation_id = None
     async with database.session() as session:
         async with session.begin():
+            if tenant_id is not None:
+                from . import tenants
+                tenant_reservation_id = await tenants.reserve_tenant_minutes(
+                    session, tenant_id, minutes, job_id)
             # Serialize all of this user's reservations. Selecting the full row
             # (same lock semantics) lets _balance skip a second User lookup.
             locked_user = (await session.execute(
@@ -935,6 +942,7 @@ async def reserve_minutes(user_id, minutes: float, job_id: str, job_type: str = 
                 minutes_from_plan=from_plan,
                 minutes_from_topup=from_topup,
                 topup_allocations=allocations or None,
+                tenant_reservation_id=tenant_reservation_id,
                 status="reserved",
                 period_end=b["period_end"],
             )
@@ -1001,6 +1009,11 @@ async def commit_reservation(ledger_id: str):
             row = await session.get(UsageLedger, ledger_id)
             if row and row.status == "reserved":
                 row.status = "committed"
+                tenant_rid = getattr(row, "tenant_reservation_id", None)
+                if tenant_rid:
+                    from . import tenants
+                    await tenants.settle_tenant_minutes(
+                        session, tenant_rid, "committed")
 
 
 async def reservation_minutes(ledger_id: str):
@@ -1047,6 +1060,10 @@ async def trim_reservation(ledger_id: str, minutes) -> float:
             row.minutes_from_topup = _D(row.minutes_from_topup) - from_topup
             row.minutes_from_plan = _D(row.minutes_from_plan) - (refund - from_topup)
             row.minutes = new
+            tenant_rid = getattr(row, "tenant_reservation_id", None)
+            if refund and tenant_rid:
+                from . import tenants
+                await tenants.trim_tenant_minutes(session, tenant_rid, refund)
             return float(refund)
 
 
@@ -1064,6 +1081,11 @@ async def release_reservation(ledger_id: str):
                 t = await session.get(CreditTopup, alloc["topup_id"])
                 if t is not None:
                     t.minutes_consumed = max(_D(0), _D(t.minutes_consumed) - _D(alloc["minutes"]))
+            tenant_rid = getattr(row, "tenant_reservation_id", None)
+            if tenant_rid:
+                from . import tenants
+                await tenants.settle_tenant_minutes(
+                    session, tenant_rid, "released")
             row.status = "released"
 
 

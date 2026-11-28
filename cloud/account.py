@@ -34,7 +34,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from sqlalchemy import select, delete, func
+from sqlalchemy import select, delete, update, func
 
 from .config import settings, DELETION_LOG_RETENTION_DAYS
 from . import database, email_policy, storage
@@ -43,6 +43,7 @@ from .models import (
     SignupAttribution, ApiKey, UploadPostProfile, UserVideo, ClipExpiryWarning,
     Project, AccountDeletion, OAuthCode, OAuthRefreshToken, AutopilotRun, AutopilotSettings,
     LifecycleEmail, CancellationFeedback, OnboardingSurvey, LoginCode, EvidenceEvent,
+    Tenant, TenantMember,
 )
 
 # Every table that holds rows belonging to a user, child-first (clip_expiry_
@@ -219,7 +220,8 @@ async def _delete_upload_post_profile(user_id):
         print(f"⚠️  Upload-Post profile delete failed for {username}: {e}")
 
 
-async def _erase_rows(user_id, email, stripe_customer_id, plan, r2_deleted, reason) -> bool:
+async def _erase_rows(user_id, email, stripe_customer_id, plan, r2_deleted, reason,
+                      firebase_uid=None) -> bool:
     """Swap the account for its erasure record, in one transaction.
 
     All-or-nothing on purpose: a half-erased account is worse than an un-erased
@@ -245,6 +247,15 @@ async def _erase_rows(user_id, email, stripe_customer_id, plan, r2_deleted, reas
             # Evidence rows also carry the address; catch any without a user_id.
             await session.execute(
                 delete(EvidenceEvent).where(EvidenceEvent.email == email))
+            # Tenant membership is keyed by Firebase UID, not by users.id. Remove
+            # the person's membership and detach any workspace they owned; the
+            # workspace itself may still hold other members' clips.
+            if firebase_uid:
+                await session.execute(
+                    delete(TenantMember).where(TenantMember.firebase_uid == firebase_uid))
+                await session.execute(
+                    update(Tenant).where(Tenant.owner_firebase_uid == firebase_uid)
+                    .values(owner_firebase_uid=None))
             result = await session.execute(delete(User).where(User.id == user_id))
             if result.rowcount == 0:
                 return False
@@ -304,6 +315,7 @@ async def erase_account(user_id, reason=None, *, cancel_stripe=True, notify_user
         if row is None:
             raise HTTPException(status_code=404, detail="Account not found.")
         email, stripe_customer_id = row.email, row.stripe_customer_id
+        firebase_uid = row.firebase_uid
         # A reserved ledger row means metered work is in flight. Erasing now
         # would pull the output from under a job still writing it, and the
         # reservation would never settle. Minutes are refunded on failure, so
@@ -363,7 +375,8 @@ async def erase_account(user_id, reason=None, *, cancel_stripe=True, notify_user
 
     try:
         erased = await _erase_rows(
-            user_id, email, stripe_customer_id, plan, r2_deleted, reason)
+            user_id, email, stripe_customer_id, plan, r2_deleted, reason,
+            firebase_uid=firebase_uid)
     except Exception as e:
         # The content is already gone; only the account row survived. Say that
         # rather than a bare 500 — the user needs to know a retry is safe and

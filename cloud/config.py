@@ -7,10 +7,40 @@ Everything here is read lazily from environment variables so that importing the
 import os
 import math
 from functools import lru_cache
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 
 def _flag(name: str, default: str = "") -> bool:
     return os.environ.get(name, default).lower() in ("1", "true", "yes")
+
+
+# Legacy rows and callers that have not resolved a tenant yet still need a
+# valid tenant_id. A real row with this id is created at boot and in the
+# Alembic migration, so the FK always points somewhere.
+DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+DEFAULT_TENANT_BRAND = "OpenShorts"
+
+
+def normalize_database_url(url: str) -> str:
+    """Add TLS to Neon URLs when the operator did not spell it out.
+
+    Neon refuses non-TLS connections. SQLAlchemy's asyncpg dialect accepts
+    ``ssl=require`` as a URL query argument; keep any explicit ``ssl`` or
+    ``sslmode`` setting untouched, because a self-hosted serverless proxy may
+    terminate TLS differently.
+    """
+    if not url or not url.startswith("postgresql"):
+        return url
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if not (host == "neon.tech" or host.endswith(".neon.tech")):
+        return url
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    if any(k.lower() in ("ssl", "sslmode") for k in query):
+        return url
+    query["ssl"] = "require"
+    return urlunsplit((parts.scheme, parts.netloc, parts.path,
+                       urlencode(query), parts.fragment))
 
 
 def is_enabled() -> bool:
@@ -284,7 +314,24 @@ class Settings:
     # Core
     @property
     def database_url(self) -> str:
-        return os.environ.get("DATABASE_URL", "")
+        return normalize_database_url(os.environ.get("DATABASE_URL", ""))
+
+    @property
+    def tenant_id_header(self) -> str:
+        return os.environ.get("TENANT_ID_HEADER", "X-Tenant-ID")
+
+    @property
+    def tenant_domain_header(self) -> str:
+        return os.environ.get("TENANT_DOMAIN_HEADER", "X-Tenant-Domain")
+
+    @property
+    def tenant_credits_enabled(self) -> bool:
+        """Off by default so existing user-metered clouds keep working.
+
+        Turn on once tenants have been created and funded; a request that
+        resolves a tenant then has its job minutes deducted from that tenant.
+        """
+        return _flag("TENANT_CREDITS_ENABLED")
 
     @property
     def jwt_secret(self) -> str:
